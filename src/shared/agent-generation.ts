@@ -50,7 +50,8 @@ export interface AgentToolAction {
   workflow?: AgentWorkflowRegistration
 }
 export interface AgentAuthorBlueprintProposal { name: 'propose_chapter_blueprint'; arguments: Record<string, unknown> }
-export interface AgentToolClaim { action: AgentToolAction; execute: boolean }
+export interface AgentGlobalToolExecution { version: 1; token: string }
+export interface AgentToolClaim { action: AgentToolAction; execute: boolean; globalExecution?: AgentGlobalToolExecution }
 export interface AgentDomainToolReceipt {
   kind: 'config' | 'blueprint'
   toolCallId: string

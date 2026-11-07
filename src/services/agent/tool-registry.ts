@@ -88,6 +88,8 @@ export interface ToolResult {
 export interface AgentExecutionContext {
   /** Host-issued action proof; model arguments never supply generation lineage. */
   readonly agentToolAction?: import('../../shared/agent-generation').AgentToolActionRef
+  /** Main-issued, single-action authorization for a hosted global tool. */
+  readonly globalToolExecution?: import('../../shared/agent-generation').AgentGlobalToolExecution
   /** Main-only Agent lifecycle adapter, attached by the active conversation host. */
   readonly agentGeneration?: import('./agent-generation-client').AgentGenerationClient
   readonly projectSession: ProjectSessionContext | null

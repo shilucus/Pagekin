@@ -16,6 +16,7 @@ import { join } from 'path'
 import { isDeepStrictEqual } from 'node:util'
 import { VELA_HOME } from '../utils/config-utils'
 import { assertGlobalDataReady } from '../services/app-data-locator'
+import { projectRuntimeHost } from '../services/project-runtime'
 import type {
   MCPConfigLoadResult,
   MCPConnectionStatus,
@@ -23,6 +24,7 @@ import type {
   MCPServerStatus,
   MCPServerSummary,
   MCPToolDescription,
+  MCPToolCallResult,
 } from '../../src/shared/ipc-channels'
 
 // ===== 类型定义 =====
@@ -76,7 +78,35 @@ export interface MCPResourceDesc extends MCPResourceDescription {
   serverId: string
 }
 
-/** 服务器连接状态 */
+class MCPRequestError extends Error {
+  constructor(code: string, readonly commitState: 'not_committed' | 'unknown') { super(code) }
+}
+
+interface MCPRequestPending {
+  resolve: (result: unknown) => void
+  reject: (error: Error) => void
+  timer?: ReturnType<typeof setTimeout>
+  releaseEffect?: () => void
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+/** Required response shapes from the negotiated MCP 2024-11-05 schema; extensions remain allowed. */
+function isToolResult(value: unknown): boolean {
+  if (!isRecord(value) || !Array.isArray(value.content) || value.isError !== undefined && typeof value.isError !== 'boolean') return false
+  return value.content.every(item => {
+    if (!isRecord(item)) return false
+    if (item.type === 'text') return typeof item.text === 'string'
+    if (item.type === 'image') return typeof item.data === 'string' && typeof item.mimeType === 'string'
+    if (item.type !== 'resource' || !isRecord(item.resource)) return false
+    const resource = item.resource
+    return typeof resource.uri === 'string' && (resource.mimeType === undefined || typeof resource.mimeType === 'string')
+      && (typeof resource.text === 'string' || typeof resource.blob === 'string')
+  })
+}
+
 /** 服务器运行时状态 */
 interface MCPServerRuntime {
   config: MCPServerConfig
@@ -90,10 +120,7 @@ interface MCPServerRuntime {
   /** 请求 ID 计数器 */
   nextRequestId: number
   /** 待响应的请求回调 */
-  pendingRequests: Map<number, {
-    resolve: (result: unknown) => void
-    reject: (error: Error) => void
-  }>
+  pendingRequests: Map<number, MCPRequestPending>
 }
 
 // ===== MCP Manager 实现 =====
@@ -244,8 +271,7 @@ class MCPManagerImpl {
       this.notifyToolsChange()
     } catch {
       runtime.process?.kill()
-      runtime.pendingRequests.forEach(p => p.reject(new Error('MCP_CONNECT_FAILED')))
-      runtime.pendingRequests.clear()
+      this.rejectRequests(runtime, 'MCP_CONNECT_FAILED')
       runtime.status = 'error'
       runtime.error = 'MCP_CONNECT_FAILED'
       this.notifyStatusChange(config.id, 'error', runtime.error)
@@ -275,28 +301,23 @@ class MCPManagerImpl {
     })
 
     // 监听 stderr（调试日志）
-    proc.stderr?.on('data', (data: Buffer) => {
-      console.warn(`[MCP:${runtime.config.id}] stderr:`, data.toString())
+    proc.stderr?.on('data', () => {
+      console.warn('[MCP] server stderr received')
     })
 
     // 监听进程退出
     proc.on('exit', (code) => {
       console.log(`[MCP:${runtime.config.id}] 进程退出，code=${code}`)
-      if (runtime.status === 'error') return
+      this.rejectRequests(runtime, 'MCP_TRANSPORT_CLOSED', true)
+      if (this.servers.get(runtime.config.id) !== runtime || runtime.status === 'error') return
       runtime.status = 'disconnected'
       this.notifyStatusChange(runtime.config.id, 'disconnected')
     })
 
-    proc.on('error', () => {
-      if (runtime.status === 'connecting') {
-        runtime.pendingRequests.forEach(p => p.reject(new Error('MCP_CONNECT_FAILED')))
-        runtime.pendingRequests.clear()
-        return
-      }
-      runtime.status = 'error'
-      runtime.error = 'MCP_CONNECT_FAILED'
-      this.notifyStatusChange(runtime.config.id, 'error', runtime.error)
-    })
+    const transportFailed = () => this.failTransport(runtime)
+    proc.on('error', transportFailed)
+    proc.stdin?.on?.('error', transportFailed)
+    proc.stdout?.on('end', transportFailed)
   }
 
   /** 处理 JSON-RPC 消息缓冲区 */
@@ -321,13 +342,18 @@ class MCPManagerImpl {
   /** 处理收到的 JSON-RPC 消息 */
   private handleMessage(runtime: MCPServerRuntime, msg: Record<string, unknown>): void {
     // 响应消息（有 id）
-    if ('id' in msg && msg.id != null) {
+    if (msg.jsonrpc === '2.0' && typeof msg.id === 'number' && Number.isSafeInteger(msg.id) && ('result' in msg) !== ('error' in msg)) {
       const pending = runtime.pendingRequests.get(msg.id as number)
       if (pending) {
-        runtime.pendingRequests.delete(msg.id as number)
         if ('error' in msg) {
-          const err = msg.error as { message?: string }
-          pending.reject(new Error(err?.message ?? 'MCP error'))
+          if (!isRecord(msg.error) || typeof msg.error.code !== 'number' || !Number.isInteger(msg.error.code)
+            || typeof msg.error.message !== 'string') return
+        } else if (!isRecord(msg.result) || pending.releaseEffect && !isToolResult(msg.result)) return
+        runtime.pendingRequests.delete(msg.id as number)
+        if (pending.timer !== undefined) clearTimeout(pending.timer)
+        pending.releaseEffect?.()
+        if ('error' in msg) {
+          pending.reject(new MCPRequestError('MCP_TOOL_FAILED', 'unknown'))
         } else {
           pending.resolve(msg.result)
         }
@@ -336,29 +362,63 @@ class MCPManagerImpl {
     // 通知消息（无 id）— 暂时只记录日志
   }
 
+  private failTransport(runtime: MCPServerRuntime): void {
+    this.rejectRequests(runtime, 'MCP_TRANSPORT_ERROR')
+    if (runtime.status === 'connecting') return
+    runtime.status = 'error'
+    runtime.error = 'MCP_TRANSPORT_ERROR'
+    if (this.servers.get(runtime.config.id) === runtime) this.notifyStatusChange(runtime.config.id, 'error', runtime.error)
+  }
+
+  /** A transport failure stops waiting, not the already dispatched local effect. */
+  private rejectRequests(runtime: MCPServerRuntime, code: string, exited = false): void {
+    for (const [id, pending] of runtime.pendingRequests) {
+      if (pending.timer !== undefined) clearTimeout(pending.timer)
+      pending.timer = undefined
+      if (!pending.releaseEffect || exited) {
+        runtime.pendingRequests.delete(id)
+        pending.releaseEffect?.()
+      }
+      pending.reject(new MCPRequestError(code, 'unknown'))
+    }
+  }
+
   /** 发送 JSON-RPC 请求 */
-  private sendRequest(runtime: MCPServerRuntime, method: string, params?: unknown): Promise<unknown> {
+  private sendRequest(runtime: MCPServerRuntime, method: string, params?: unknown, acquireEffect?: () => () => void): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const id = runtime.nextRequestId++
-      runtime.pendingRequests.set(id, { resolve, reject })
-
-      const msg = JSON.stringify({
-        jsonrpc: '2.0',
-        id,
-        method,
-        params: params ?? {},
-      })
-
-      runtime.process?.stdin?.write(msg + '\n')
-
-      // 超时 10 秒
-      setTimeout(() => {
-        if (runtime.pendingRequests.has(id)) {
-          runtime.pendingRequests.delete(id)
-          console.warn(`[MCP:${runtime.config.id}] request timed out`, { method })
-          reject(new Error('MCP_REQUEST_TIMEOUT'))
+      let message: string, releaseEffect: (() => void) | undefined
+      const stdin = runtime.process?.stdin
+      if (!stdin) {
+        reject(new MCPRequestError('MCP_TRANSPORT_UNAVAILABLE', 'not_committed'))
+        return
+      }
+      try {
+        message = JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} })
+        if (method === 'tools/call') releaseEffect = acquireEffect ? acquireEffect() : projectRuntimeHost.acquireApplicationOperation()
+      } catch (error) {
+        const code = error instanceof Error && /^(?:PROJECT_RUNTIME_[A-Z_]+|MCP_TRANSPORT_UNAVAILABLE)$/.test(error.message)
+          ? error.message : 'MCP_REQUEST_REJECTED'
+        reject(new MCPRequestError(code, 'not_committed'))
+        return
+      }
+      const pending: MCPRequestPending = { resolve, reject, releaseEffect }
+      runtime.pendingRequests.set(id, pending)
+      // A tools/call timeout retires only the foreground waiter, never the effect lease.
+      pending.timer = setTimeout(() => {
+        if (runtime.pendingRequests.get(id) === pending) {
+          pending.timer = undefined
+          if (!releaseEffect) runtime.pendingRequests.delete(id)
+          reject(new MCPRequestError('MCP_REQUEST_TIMEOUT', 'unknown'))
         }
       }, 10000)
+      try {
+        stdin.write(message + '\n', error => {
+          if (error) this.failTransport(runtime)
+        })
+      } catch {
+        this.failTransport(runtime)
+      }
     })
   }
 
@@ -408,32 +468,31 @@ class MCPManagerImpl {
   }
 
   /**
-   * 调用 MCP Tool
+   * 调用 MCP Tool；acquireEffect 只接受主进程工厂，在实际发送前验证并取得 effect lease。
    */
-  async callTool(serverId: string, toolName: string, args: Record<string, unknown>): Promise<{
-    success: boolean
-    content: string
-    error?: string
-  }> {
+  async callTool(serverId: string, toolName: string, args: Record<string, unknown>, acquireEffect?: () => () => void): Promise<MCPToolCallResult> {
     const runtime = this.servers.get(serverId)
     if (!runtime || runtime.status !== 'connected') {
-      return { success: false, content: '', error: 'MCP_SERVER_NOT_CONNECTED' }
+      return { version: 1, success: false, content: '', commitState: 'not_committed', error: 'MCP_SERVER_NOT_CONNECTED' }
     }
 
     try {
       const result = await this.sendRequest(runtime, 'tools/call', {
         name: toolName,
         arguments: args,
-      }) as { content?: Array<{ type: string; text?: string }> }
+      }, acquireEffect) as { content?: Array<{ type: string; text?: string }>; isError?: boolean }
+
+      if (result?.isError) return { version: 1, success: false, content: '', commitState: 'unknown', error: 'MCP_TOOL_FAILED' }
 
       const textParts = (result?.content ?? [])
-        .filter(c => c.type === 'text')
-        .map(c => c.text ?? '')
+        .filter(c => c?.type === 'text' && typeof c.text === 'string')
+        .map(c => c.text)
         .join('\n')
 
-      return { success: true, content: textParts }
+      return { version: 1, success: true, content: textParts, commitState: 'committed' }
     } catch (error) {
-      return { success: false, content: '', error: String(error) }
+      return { version: 1, success: false, content: '', commitState: error instanceof MCPRequestError ? error.commitState : 'unknown',
+        error: error instanceof MCPRequestError ? error.message : 'MCP_TOOL_FAILED' }
     }
   }
 
@@ -443,8 +502,7 @@ class MCPManagerImpl {
     if (!runtime) return
 
     runtime.process?.kill()
-    runtime.pendingRequests.forEach(p => p.reject(new Error('MCP_SERVER_NOT_CONNECTED')))
-    runtime.pendingRequests.clear()
+    this.rejectRequests(runtime, 'MCP_SERVER_NOT_CONNECTED')
     this.servers.delete(serverId)
     this.notifyStatusChange(serverId, 'disconnected')
     this.notifyToolsChange()

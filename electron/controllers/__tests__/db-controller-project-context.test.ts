@@ -13,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   runtimeBusy: false,
   legacyHeld: false,
   explicitDatabase: { project: 'A' },
-  releaseIdle: vi.fn(),
+  requestClose: vi.fn(),
+  acquireWork: vi.fn(),
+  releaseWork: vi.fn(),
   acquireLegacyOperation: vi.fn(),
   releaseLegacyOperation: vi.fn(),
   captureCurrentSession: vi.fn(),
@@ -109,7 +111,8 @@ vi.mock('../../services/project-access', () => ({
 }))
 
 vi.mock('../../services/project-runtime', () => ({ projectRuntimeHost: {
-  releaseIdle: mocks.releaseIdle,
+  requestClose: mocks.requestClose,
+  acquireWork: mocks.acquireWork,
   acquireLegacyOperation: mocks.acquireLegacyOperation,
 } }))
 
@@ -311,9 +314,10 @@ beforeEach(() => {
     mocks.legacyHeld = true
     return () => { mocks.legacyHeld = false; mocks.releaseLegacyOperation() }
   })
-  mocks.releaseIdle.mockImplementation(() => {
+  mocks.requestClose.mockReset().mockImplementation(async () => {
     if (mocks.runtimeBusy) throw new Error('PROJECT_RUNTIME_BUSY')
   })
+  mocks.acquireWork.mockReset().mockImplementation(() => () => mocks.releaseWork())
   mocks.getProjectDb.mockReset()
   mocks.getProjectDataRoot.mockReturnValue('C:/projects/A/.ai-novel')
   mocks.readPortableCurrentAuthority.mockReturnValue(null)
@@ -399,6 +403,36 @@ describe('database controller project context guard', () => {
       .resolves.toEqual({ success: false, error: 'Error: PROJECT_RUNTIME_BUSY' })
     expect(mocks.invalidateCurrentSession).not.toHaveBeenCalled()
     expect(mocks.closeProjectDatabase).not.toHaveBeenCalled()
+  })
+
+  it.each(['PROJECT_RUNTIME_MAINTENANCE_BUSY', 'PROJECT_RUNTIME_CLOSE_REQUESTED'])('denies explicit core writes under %s before the repository', async code => {
+    mocks.acquireWork.mockImplementationOnce(() => { throw new Error(code) })
+    await expect(handler('db:project-core-update')({}, { premise: 'new fictional premise' }, 'C:/projects/A'))
+      .resolves.toEqual({ success: false, error: `Error: ${code}` })
+    expect(mocks.projectCoreUpdate).not.toHaveBeenCalled()
+    expect(mocks.releaseWork).not.toHaveBeenCalled()
+  })
+
+  it('holds explicit write admission through the repository and releases on failure', async () => {
+    mocks.projectCoreUpdate.mockImplementationOnce(() => {
+      expect(mocks.releaseWork).not.toHaveBeenCalled()
+      throw new Error('FICTIONAL_WRITE_FAILED')
+    })
+    await expect(handler('db:project-core-update')({}, { premise: 'new fictional premise' }, 'C:/projects/A'))
+      .resolves.toEqual({ success: false, error: 'Error: FICTIONAL_WRITE_FAILED' })
+    expect(mocks.acquireWork).toHaveBeenCalledOnce()
+    expect(mocks.releaseWork).toHaveBeenCalledOnce()
+  })
+
+  it('does not invalidate a newer B view when captured A closes after an await', async () => {
+    let release!: () => void
+    mocks.requestClose.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve }))
+    const pending = handler('db:close')({}, 'C:/projects/A')
+    expect(mocks.acquireWork).not.toHaveBeenCalled()
+    mocks.currentProjectPath = 'C:/projects/B'
+    release()
+    await expect(pending).resolves.toEqual({ success: true })
+    expect(mocks.invalidateCurrentSession).not.toHaveBeenCalled()
   })
 
   it('adds only proven current derived fields to the read view using verified portable origin', async () => {
@@ -1297,16 +1331,16 @@ describe('database controller project context guard', () => {
   it('closes only the explicitly matched project database', async () => {
     await expect(handler('db:close')({}, 'C:/projects/A'))
       .resolves.toEqual({ success: true })
-    expect(mocks.releaseIdle).toHaveBeenCalledWith(expect.objectContaining({ canonicalRoot: 'C:/projects/A' }))
+    expect(mocks.requestClose).toHaveBeenCalledWith(expect.objectContaining({ canonicalRoot: 'C:/projects/A' }))
     expect(mocks.invalidateCurrentSession).toHaveBeenCalledOnce()
 
-    mocks.releaseIdle.mockClear()
+    mocks.requestClose.mockClear()
     mocks.currentProjectPath = 'C:/projects/B'
     await expect(handler('db:close')({}, 'C:/projects/A'))
       .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_CONTEXT_CHANGED' })
     await expect(rawHandler('db:close')({}))
       .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_SESSION_REQUIRED' })
-    expect(mocks.releaseIdle).not.toHaveBeenCalled()
+    expect(mocks.requestClose).not.toHaveBeenCalled()
     expect(mocks.invalidateCurrentSession).toHaveBeenCalledOnce()
   })
 })

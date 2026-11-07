@@ -24,9 +24,12 @@ type StoredUsage = { agentActions?: Record<string, ActionState>; agentAuthorSele
 
 /** Agent navigation/control lives on existing runs and attempt receipts. No second budget or writer. */
 export class AgentGeneration {
+  private closeRequested = false
+  private readonly toolClaims = new Map<string, AgentToolActionRef>()
+
   constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository,
     private readonly scope: { projectId: string; epoch: string }, private readonly assertCurrent: () => void, private readonly host: AgentHost,
-    recoverInterrupted = true) {
+    recoverInterrupted = true, private readonly assertAdmission: () => void = assertCurrent) {
     // A renderer-owned tool may have crossed its commit point before the old owner
     // closed. Its unfinished claim is an unknown result, never permission to rerun.
     if (recoverInterrupted) this.db.transaction(() => {
@@ -40,9 +43,63 @@ export class AgentGeneration {
           if (state.domainEffect) state.observation = 'The confirmed application change was committed.'
           changed = true
         }
-        if (changed) this.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(usage), row.attempt_id)
+        if (changed) {
+          this.assertWriteAvailable()
+          this.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(usage), row.attempt_id)
+        }
       }
     }).immediate()
+  }
+
+  private assertWriteAvailable(): void {
+    if (this.closeRequested) throw new Error('GENERATION_AGENT_CLOSING')
+    this.assertAdmission()
+  }
+
+  private claimKey(ref: AgentToolActionRef): string { return JSON.stringify([ref.handle.runId, ref.attemptId, ref.toolCallId]) }
+
+  hasActiveToolClaims(): boolean { return this.toolClaims.size > 0 }
+
+  assertToolEffectAvailable(ref: AgentToolActionRef): void {
+    this.assertWriteAvailable()
+    if (!ref || !ref.handle || typeof ref.attemptId !== 'string' || typeof ref.toolCallId !== 'string')
+      throw new Error('GENERATION_AGENT_TOOL_IDENTITY_MISMATCH')
+    const claim = this.toolClaims.get(this.claimKey(ref))
+    if (!claim || !isDeepStrictEqual(claim, ref)) throw new Error('GENERATION_AGENT_TOOL_CLAIM_REQUIRED')
+    const { run, action } = this.action(ref)
+    const root = this.runs.budget(run.rootActionId).root
+    if (action.status !== 'running' || root.status !== 'active' || root.epoch !== this.scope.epoch || !this.sourcesCurrent(run))
+      throw new Error('GENERATION_AGENT_TOOL_STALE')
+    const tool = this.context(run).input.tools.find(item => item.name === action.name)
+    const inspect = action.name === 'inspect_writing_skill' && tool?.source === 'builtin' && tool.isReadOnly
+    const install = action.name === 'install_writing_skill' && tool?.source === 'builtin' && tool.requiresConfirmation && !tool.isReadOnly
+    const mcp = action.name.startsWith('mcp__') && tool?.source === 'mcp' && tool.requiresConfirmation && !tool.isReadOnly
+    if (!inspect && !install && !mcp) throw new Error('GENERATION_AGENT_TOOL_EFFECT_NOT_ALLOWED')
+  }
+
+  /** Only settle claims issued by this owner; shutdown never grants a new tool effect. */
+  requestProjectClose(): void {
+    this.closeRequested = true
+    if (!this.toolClaims.size) return
+    if (this.db.inTransaction) throw new Error('GENERATION_AGENT_TRANSACTION_ACTIVE')
+    this.db.transaction(() => {
+      for (const ref of this.toolClaims.values()) {
+        const run = this.runs.get(ref.handle.runId)
+        if (!isDeepStrictEqual(this.handle(run), ref.handle) || run.binding.projectId !== this.scope.projectId
+          || run.binding.sourceManifest.operation !== 'agent-round') throw new Error('GENERATION_AGENT_IDENTITY_MISMATCH')
+        const row = this.db.prepare('SELECT run_id,usage_receipt_json FROM generation_attempts WHERE attempt_id=?').get(ref.attemptId) as
+          { run_id: string; usage_receipt_json: string | null } | undefined
+        if (!row || row.run_id !== run.runId) throw new Error('GENERATION_AGENT_TOOL_IDENTITY_MISMATCH')
+        const usage = JSON.parse(row.usage_receipt_json ?? '{}') as StoredUsage
+        const state = usage.agentActions?.[ref.toolCallId]
+        if (!state) throw new Error('GENERATION_AGENT_TOOL_IDENTITY_MISMATCH')
+        if (state.status !== 'running') continue
+        state.status = state.domainEffect ? 'completed' : 'unknown'
+        if (state.domainEffect) state.observation = 'The confirmed application change was committed.'
+        this.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(usage), ref.attemptId)
+      }
+    }).immediate()
+    this.toolClaims.clear()
   }
 
   private handle(run: DurableGenerationRun): MainGenerationRunHandle {
@@ -113,7 +170,10 @@ export class AgentGeneration {
       return { ref: { handle: this.handle(run), attemptId: row.attempt_id, toolCallId }, name: call.name, arguments: structuredClone(state?.planningArguments ?? call.arguments),
         status: state?.status ?? 'pending', ...(state?.observation !== undefined ? { observation: state.observation } : {}), ...(state?.workflow ? { workflow: state.workflow } : {}) }
     })
-    if (normalized) this.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(usage), row.attempt_id)
+    if (normalized) {
+      this.assertWriteAvailable()
+      this.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(usage), row.attempt_id)
+    }
     for (let index = 0; index < actions.length; index++) {
       const parent = actions[index]!
       if (parent.name !== 'propose_novel_config' || parent.status !== 'completed' || usage.agentActions?.[parent.ref.toolCallId]?.domainEffect?.kind !== 'config') continue
@@ -140,6 +200,7 @@ export class AgentGeneration {
       sourceStatus: this.sourcesCurrent(latest) ? 'current' : 'conflict', nextRound, run: this.host.read(this.handle(latest)) }
   }
   begin(request: { uiActionNonce: string; modelId: string; input: AgentGenerationInput }): AgentGenerationRecovery {
+    this.assertWriteAvailable()
     this.assertCurrent()
     if (!request || Object.keys(request).some(key => !['uiActionNonce', 'modelId', 'input'].includes(key))
       || typeof request.uiActionNonce !== 'string' || !request.uiActionNonce.trim() || request.uiActionNonce.length > 256
@@ -155,6 +216,7 @@ export class AgentGeneration {
     return this.read(view.handle)
   }
   async resume(handle: MainGenerationRunHandle): Promise<AgentGenerationRecovery> {
+    this.assertWriteAvailable()
     const recovery = this.read(handle)
     if (recovery.sourceStatus !== 'current') throw new Error('GENERATION_SOURCE_CHANGED')
     const last = recovery.rounds.at(-1)!
@@ -179,6 +241,7 @@ export class AgentGeneration {
       output: 'visible-text', agentInput: structuredClone(input), agentSession: { key, roundIndex }, ...(parentRootActionId ? { parentRootActionId } : {}) }
   }
   async executeRound(request: { handle: MainGenerationRunHandle; index: number }): Promise<AgentGenerationRecovery> {
+    this.assertWriteAvailable()
     const selected = this.requireRun(request.handle), recovery = this.read(request.handle)
     if (!Number.isSafeInteger(request.index) || request.index < 0 || request.index >= 8) throw new Error('GENERATION_AGENT_ROUND_INVALID')
     const existing = recovery.rounds.find(round => round.index === request.index)
@@ -214,6 +277,7 @@ export class AgentGeneration {
     return { run, action }
   }
   private updateAction(ref: AgentToolActionRef, update: (action: AgentToolAction, run: DurableGenerationRun) => ActionState): AgentToolAction {
+    this.assertWriteAvailable()
     return this.db.transaction(() => {
       const { run, action } = this.action(ref), state = update(action, run)
       const row = this.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=? AND run_id=?').get(ref.attemptId, run.runId) as { usage_receipt_json: string }
@@ -229,6 +293,7 @@ export class AgentGeneration {
     }).immediate()
   }
   claimTool(request: { ref: AgentToolActionRef; confirmed: boolean; authorBlueprintProposals?: AgentAuthorBlueprintProposal[] }): AgentToolClaim {
+    if (this.db.inTransaction) throw new Error('GENERATION_AGENT_TRANSACTION_ACTIVE')
     if (typeof request.confirmed !== 'boolean') throw new Error('GENERATION_AGENT_CONFIRMATION_REQUIRED')
     let execute = false
     const action = this.updateAction(request.ref, (action, run) => {
@@ -255,12 +320,14 @@ export class AgentGeneration {
       execute = request.confirmed
       return request.confirmed ? { status: 'running' } : { status: 'declined', observation: 'The author declined this action.' }
     })
+    if (execute) this.toolClaims.set(this.claimKey(action.ref), structuredClone(action.ref))
     return { action, execute }
   }
   finishTool(request: { ref: AgentToolActionRef; status: 'completed' | 'failed' | 'unknown'; observation: string }): AgentToolAction {
+    if (this.db.inTransaction) throw new Error('GENERATION_AGENT_TRANSACTION_ACTIVE')
     if (!['completed', 'failed', 'unknown'].includes(request.status) || typeof request.observation !== 'string'
       || Buffer.byteLength(request.observation, 'utf8') > 256 * 1024) throw new Error('GENERATION_AGENT_TOOL_RESULT_INVALID')
-    return this.updateAction(request.ref, (action, run) => {
+    const action = this.updateAction(request.ref, (action, run) => {
       if (this.runs.budget(run.rootActionId).root.epoch !== this.scope.epoch) throw new Error('GENERATION_EPOCH_STALE')
       const stored = JSON.parse(this.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(request.ref.attemptId) as string) as StoredUsage
       const effect = stored.agentActions?.[request.ref.toolCallId]?.domainEffect
@@ -273,6 +340,8 @@ export class AgentGeneration {
       }
       return { status: request.status, observation: request.observation, ...(action.workflow ? { workflow: action.workflow } : {}) }
     })
+    this.toolClaims.delete(this.claimKey(request.ref))
+    return action
   }
   registerWorkflow(ref: AgentToolActionRef): AgentWorkflowRegistration {
     const updated = this.updateAction(ref, (action, run) => {
@@ -343,6 +412,7 @@ export class AgentGeneration {
   }
   /** Only main's existing formal writers call this inside their domain transaction. */
   withChildEffect<T>(handle: MainGenerationRunHandle, effect: () => T): T {
+    this.assertWriteAvailable()
     if (!this.db.inTransaction) throw new Error('GENERATION_AGENT_TRANSACTION_REQUIRED')
     const child = this.runs.get(handle.runId)
     if (!isDeepStrictEqual(this.handle(child), handle)) throw new Error('GENERATION_AGENT_CHILD_NOT_AUTHORIZED')
@@ -368,6 +438,7 @@ export class AgentGeneration {
     return result
   }
   recordWorkflowChild(id: string, child: MainGenerationRunHandle): void {
+    this.assertWriteAvailable()
     if (!this.db.inTransaction) throw new Error('GENERATION_AGENT_TRANSACTION_REQUIRED')
     const { action, run } = this.workflowRegistration(id)
     if (child.rootActionId !== run.rootActionId || child.projectId !== run.binding.projectId) throw new Error('GENERATION_AGENT_CHILD_NOT_AUTHORIZED')
@@ -376,6 +447,7 @@ export class AgentGeneration {
         ? current.workflow!.childHandles : [...current.workflow!.childHandles, child] } }))
   }
   commitDomainTool(ref: AgentToolActionRef): AgentDomainToolReceipt {
+    this.assertWriteAvailable()
     return this.db.transaction(() => {
       const { action, run } = this.action(ref)
       const row = this.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').get(ref.attemptId) as { usage_receipt_json: string }

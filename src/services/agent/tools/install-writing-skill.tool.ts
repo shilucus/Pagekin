@@ -32,8 +32,12 @@ export const installWritingSkillTool = buildAgentTool({
     if (context?.abortSignal?.aborted) {
       return { success: false, content: '', error: text('安装已在提交前取消', 'Installation was cancelled before commit') }
     }
+    const execution = context?.globalToolExecution
+    if (context?.agentToolAction && !execution) throw new Error('GENERATION_AGENT_GLOBAL_EXECUTION_REQUIRED')
     context?.markSideEffectStarted?.()
-    const result = await ipc.invoke('skills:install-github', sourceUrl)
+    const result = execution
+      ? await ipc.invoke('skills:install-github', sourceUrl, execution)
+      : await ipc.invoke('skills:install-github', sourceUrl)
     if (!result.success || !result.skill) {
       const detail = agentToolErrorDetail(context, result.error)
       return {

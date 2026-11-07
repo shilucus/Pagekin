@@ -13,6 +13,8 @@ import { deactivateProjectData } from '../../services/project-data-locator'
 import { createPortableTransferAuthority, mapPortableTransferAuthority,
   serializePortableTransferAuthority } from '../../services/portable-transfer-authority'
 import { readPortableCurrentAuthority } from '../../services/portable-current-authority'
+import { assertRestoreTargetOutsideRuntimes } from '../../services/project-runtime-compatibility'
+import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
 import { registerProjectController } from '../project-controller'
 
 type Handler = (...args: unknown[]) => Promise<unknown>
@@ -41,6 +43,10 @@ vi.mock('../../services/project-peek', () => ({
 }))
 vi.mock('../../services/legacy-project-copy-import', () => ({ importLegacyProjectCopy: vi.fn() }))
 vi.mock('../../i18n', () => ({ mainText: (_locale: string, _zh: string, en: string) => en }))
+vi.mock('../../utils/remove-directory', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../utils/remove-directory')>()
+  return { removeDirectoryWithWindowsRetry: vi.fn(actual.removeDirectoryWithWindowsRetry) }
+})
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof Sqlite
 const roots: string[] = []
@@ -164,6 +170,43 @@ afterEach(() => {
 })
 
 describe('registered project open native transaction boundary', () => {
+  it.each(['success', 'failure'] as const)('keeps deleted A reserved through directory %s without replacing retained B', async mode => {
+    const source = fixture(), a = currentView(source), target = fixture()
+    const b = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(target))
+    const removeDirectory = await vi.importActual<typeof import('../../utils/remove-directory')>('../../utils/remove-directory')
+    let finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    vi.mocked(removeDirectoryWithWindowsRetry).mockImplementationOnce(async root => {
+      expect(root).toBe(a.runtime.canonicalRoot)
+      await gate
+      if (mode === 'failure') throw new Error('FICTION_DIRECTORY_LOCKED')
+      await removeDirectory.removeDirectoryWithWindowsRetry(root)
+    })
+    const context = { projectId: a.session.projectId, leaseId: a.session.leaseId, projectPath: a.session.rootPath }
+    const pending = mocks.handlers.get('project:delete')!({}, source.rootPath, source.projectId, a.session.leaseId, context)
+    let winningLease: ReturnType<typeof projectAccess.beginViewSession> | undefined
+    try {
+      await vi.waitFor(() => expect(removeDirectoryWithWindowsRetry).toHaveBeenCalledWith(source.rootPath))
+      expect(a.database.open).toBe(false)
+      expect(projectRuntimeHost.getReservedRoots()).toContain(source.rootPath)
+      expect(() => projectRuntimeHost.prepareOpen({ ...source, rootPath: `${source.rootPath}${path.sep}.` }))
+        .toThrow('PROJECT_RUNTIME_MAINTENANCE_BUSY')
+      expect(() => projectRuntimeHost.assertLifecycleAvailable()).toThrow('PROJECT_RUNTIME_MAINTENANCE_BUSY')
+      expect(() => assertRestoreTargetOutsideRuntimes(path.join(source.rootPath, 'copy')))
+        .toThrow('PROJECT_RUNTIME_RESTORE_TARGET_OVERLAP')
+      winningLease = projectAccess.beginViewSession(b)
+      const release = projectRuntimeHost.acquireWork(b)
+      try { expect(b.database.prepare('SELECT 1').pluck().get()).toBe(1) } finally { release() }
+    } finally { finish(); await pending }
+    await expect(pending).resolves.toMatchObject({ success: mode === 'success',
+      directoryDeleted: mode === 'success', databaseRestored: false })
+    expect(projectRuntimeHost.getActiveView()).toBe(b)
+    expect(projectAccess.captureCurrentSession()).toEqual(winningLease)
+    expect(b.database.open).toBe(true)
+    expect(projectRuntimeHost.getReservedRoots()).not.toContain(source.rootPath)
+    expect(fs.existsSync(source.rootPath)).toBe(mode === 'failure')
+  })
+
   it.each([false, true])('rolls back real continuity adoption and core initialization if recent registration fails (retained=%s)', async retained => {
     const a = currentView(fixture()), b = fixture()
     seedTransferredTarget(b)

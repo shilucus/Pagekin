@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { isTerminalProviderFailure, safeTransportError, type GenerationTransportDiagnostics } from '../../src/shared/generation-contract';
-import { GenerationRunRepository, type OpenGenerationRunRequest, type RunBinding, type GenerationExecutionReceipt, type GenerationUsageReceipt } from '../repositories/generation-run-repository';
+import { GenerationRunRepository, textHash, type OpenGenerationRunRequest, type RunBinding, type GenerationExecutionReceipt, type GenerationUsageReceipt } from '../repositories/generation-run-repository';
+import type { GenerationRecoveryTailRepository } from '../repositories/generation-recovery-tail-repository';
 import type { ProviderUsagePolicy } from '../../src/shared/generation-contract';
 import { parseAgentResponseProtocol, projectInterruptedAgentVisibleText } from '../../src/shared/agent-response-protocol';
 import { measurePerformanceOperation, performanceStarted, recordPerformanceCount, recordPerformanceDuration, recordPerformanceMetric, recordPerformanceTextBytes } from './performance-diagnostics';
@@ -60,6 +61,9 @@ class RuntimeFeedbackAdmissionError extends Error {
 export const GENERATION_STOPPED = new DOMException('GENERATION_STOPPED', 'AbortError');
 export interface GenerationRunServiceDependencies {
     repository: GenerationRunRepository;
+    recoveryTails?: GenerationRecoveryTailRepository;
+    assertAdmission?: () => void;
+    admitReservation?: <T>(operation: () => T) => T;
     dispatch: (request: unknown, options: {
         signal: AbortSignal;
         onVisible: (event: VisibleGenerationEvent) => void;
@@ -115,6 +119,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
     }>(), pending = new Map<string, Promise<GenerationExecutionReceipt>>();
     const failedRoots = new Set<string>();
     const unsavedTails = new Map<string, GenerationUnsavedTail>();
+    const tailPrefixHashes = new Map<string, string>();
     const executeOperation = async (request: ExecuteGenerationRequest): Promise<GenerationExecutionReceipt> => {
         const requestHash = request.requestHash;
         if (!/^[a-f0-9]{64}$/u.test(requestHash))
@@ -135,6 +140,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 || request.reservedTokens < request.inputUpperBoundTokens + request.requestedOutputTokens + request.reasoningUpperBoundTokens + policy.safetyMarginTokens)
                 throw new Error('GENERATION_RESERVATION_INVALID');
             let receipt: GenerationExecutionReceipt;
+            deps.assertAdmission?.();
             try {
                 receipt = request.runtimeFeedbackAdmission
                     ? deps.repository.reserveRuntimeFeedback({ runId: request.runId, nonce: request.invocationNonce, requestHash,
@@ -142,7 +148,10 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                         usagePolicy: policy, purpose: request.purpose, replayTask: request.replayTask, budgetDecision: request.budgetDecision }, () => {
                         try { request.runtimeFeedbackAdmission!(); } catch (error) { throw new RuntimeFeedbackAdmissionError(error); }
                     })
-                    : deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask, request.budgetDecision, request.reconciliationInjected);
+                    : (deps.admitReservation ?? (operation => operation()))(() => {
+                        try { deps.assertAdmission?.(); } catch (error) { throw new RuntimeFeedbackAdmissionError(error); }
+                        return deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask, request.budgetDecision, request.reconciliationInjected);
+                    });
             }
             catch (error) {
                 if (error instanceof RuntimeFeedbackAdmissionError) throw error.original;
@@ -185,6 +194,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                     storageFailed = true;
                     unsavedTails.set(attemptId, Object.freeze({ attemptId, artifactId: receipt.artifact!.artifactId,
                         durableRevision: revision, text: text.slice(durable.length), failureCode: 'GENERATION_STORAGE_FAILED' }));
+                    tailPrefixHashes.set(attemptId, textHash(durable));
                     failedRoots.add(run.rootActionId);
                     controller.abort();
                     try {
@@ -372,6 +382,44 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             item.controller.abort(GENERATION_STOPPED); };
     return {
         open: (request: OpenGenerationRunRequest) => deps.repository.open(request), execute,
+        requestProjectClose: () => {
+            const failures: unknown[] = [];
+            const active = [...controllers.values()];
+            for (const item of active) {
+                try { item.flush(); } catch (error) { failures.push(error); }
+            }
+            for (const rootId of new Set(active.map(item => item.rootId))) {
+                try { deps.repository.pause(rootId); } catch (error) { failures.push(error); }
+            }
+            for (const item of active) item.controller.abort();
+            if (!controllers.size && !pending.size && deps.recoveryTails) {
+                for (const [attemptId, tail] of unsavedTails) {
+                    try {
+                        const prefixHash = tailPrefixHashes.get(attemptId);
+                        if (!prefixHash) throw new Error('GENERATION_TAIL_PREFIX_MISSING');
+                        const receipt = deps.repository.receipt(attemptId), artifact = receipt.artifact;
+                        if (!artifact || artifact.artifactId !== tail.artifactId || artifact.attemptId !== attemptId)
+                            throw new Error('GENERATION_RECOVERY_TAIL_SOURCE_CONFLICT');
+                        if (receipt.attempt.status === 'dispatch-marked') {
+                            const originalPrefix = artifact.revision === tail.durableRevision && textHash(artifact.text) === prefixHash;
+                            const committedSnapshot = artifact.revision === tail.durableRevision + 1 && artifact.text.endsWith(tail.text)
+                                && textHash(artifact.text.slice(0, artifact.text.length - tail.text.length)) === prefixHash;
+                            if (!originalPrefix && !committedSnapshot) throw new Error('GENERATION_RECOVERY_TAIL_SOURCE_CONFLICT');
+                            // The held attempt's logical operation has ended; a late provider cannot update it.
+                            deps.repository.settle(attemptId, null, null, 'GENERATION_STORAGE_FAILED');
+                        }
+                        deps.recoveryTails.preserve({ attemptId, artifactId: tail.artifactId,
+                            durableRevision: tail.durableRevision, text: tail.text, prefixHash });
+                        if (unsavedTails.get(attemptId) === tail) {
+                            unsavedTails.delete(attemptId);
+                            tailPrefixHashes.delete(attemptId);
+                        }
+                    } catch (error) { failures.push(error); }
+                }
+            }
+            if (unsavedTails.size) failures.push(new Error('GENERATION_UNSAVED_TAIL_PRESENT'));
+            if (failures.length) throw new AggregateError(failures, 'GENERATION_CLOSE_QUIESCE_FAILED');
+        },
         assertRetirable: () => {
             if (pending.size || controllers.size) throw new Error('GENERATION_OWNER_BUSY');
             if (unsavedTails.size) throw new Error('GENERATION_UNSAVED_TAIL_PRESENT');
@@ -394,7 +442,10 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
         listCandidates: () => deps.repository.listCandidates(),
         discardCandidate: (id: string) => {
             deps.repository.discardCandidate(id);
-            for (const [attemptId, tail] of unsavedTails) if (tail.artifactId === id) unsavedTails.delete(attemptId);
+            for (const [attemptId, tail] of unsavedTails) if (tail.artifactId === id) {
+                unsavedTails.delete(attemptId);
+                tailPrefixHashes.delete(attemptId);
+            }
         },
         pause: (rootId: string) => { deps.repository.pause(rootId); stopRoot(rootId); },
         cancel: (rootId: string) => { deps.repository.pause(rootId, true); stopRoot(rootId); },
@@ -403,7 +454,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             finally { stopRoot(rootId); }
         },
         resume: async (runId: string, next: RunBinding) => { const old = deps.repository.get(runId); if (!isDeepStrictEqual(old.binding.fingerprint, next.fingerprint) || old.binding.contextSnapshotId !== next.contextSnapshotId || !isDeepStrictEqual(old.binding.sourceManifest, next.sourceManifest) || !deps.validateRecovery || !await deps.validateRecovery(old.binding, next))
-            throw new Error('GENERATION_RECOVERY_UNAUTHORIZED'); deps.repository.resume(runId, next); return deps.repository.get(runId); },
+            throw new Error('GENERATION_RECOVERY_UNAUTHORIZED'); deps.assertAdmission?.(); deps.repository.resume(runId, next); return deps.repository.get(runId); },
         restart: (oldRootId: string, request: OpenGenerationRunRequest) => { deps.repository.pause(oldRootId, true); stopRoot(oldRootId); return deps.repository.open(request); },
         recoverInterrupted: () => deps.repository.recoverInterrupted(),
     };

@@ -11,6 +11,7 @@ import { TERMINAL_PROVIDER_FAILURE_CODES, rootBudgetExhausted, tokenLiability } 
 import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock, withoutDraftReconciliationArtifacts } from '../../src/shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
+import { GenerationRecoveryTailRepository } from '../repositories/generation-recovery-tail-repository'
 import { PlanningFeedbackService, type PlanningFeedbackGenerationInput } from './planning-feedback-service'
 import { readPlanningFeedbackTask } from './planning-feedback-generation'
 import { assertPlanningFeedbackObject, type AdoptPlanningFeedbackCandidate, type PlanningFeedbackCaptureTarget, type RelineagePlanningFeedbackCandidate, type StagePlanningFeedbackCandidate } from '../../src/shared/planning-feedback'
@@ -93,6 +94,8 @@ export interface MainGenerationOwnerDependencies {
   projectPath: string
   epoch: string
   assertCurrent: () => void
+  /** New work only; captured resources remain usable for settlement and cleanup. */
+  assertAdmission?: () => void
   leases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
   buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string; legacyRosterKey?: string; planningFeedbackInput?: PlanningFeedbackGenerationInput }, model: SafeGenerationModelReceipt, policy: MainGenerationPolicy) => RunBinding
@@ -151,22 +154,37 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const capturedProjectPath = deps.projectPath
   const runtimeFreeze = readPortableRuntimeFreeze(capturedProjectPath)
   const repository = new GenerationRunRepository(() => deps.database, Date.now, (table, recordId) => runtimeFreeze.isFrozen(table, recordId))
+  const recoveryTails = new GenerationRecoveryTailRepository(deps.database, repository, (table, id) => runtimeFreeze.isFrozen(table, id))
   const draftEffects = new GenerationDraftEffects(deps.database, repository)
   const runLeases = new Map<string, string>()
   const runtimePreparations = new Map<string, MainGenerationRunHandle>()
   const volatileReceipts = new Map<string, GenerationExecutionReceipt>()
   const pending = new Map<string, { hash: string; promise: Promise<MainGenerationExecuteReceipt> }>()
   const preparations = new Map<string, { binding: RunBinding; knowledgeSnapshot: GenerationKnowledgeSnapshot }>()
-  let closed = false
+  let closed = false, closing = false
   const assertCurrent = () => {
     if (closed || !deps.database.open) throw new Error('GENERATION_OWNER_CLOSED')
     deps.assertCurrent()
   }
+  const assertAdmission = () => {
+    if (closing) throw new Error('GENERATION_OWNER_CLOSING')
+    assertCurrent()
+    deps.assertAdmission?.()
+  }
+  const guardWork = <T extends object>(target: T, allowed: (name: string) => boolean): T => new Proxy(target, {
+    get(object, property, receiver) {
+      const value: unknown = Reflect.get(object, property, receiver)
+      if (typeof property !== 'string' || typeof value !== 'function') return value
+      if (allowed(property)) return value.bind(object)
+      if (value.constructor.name === 'AsyncFunction') return async (...args: unknown[]) => { assertAdmission(); return Reflect.apply(value, object, args) }
+      return (...args: unknown[]) => { assertAdmission(); return Reflect.apply(value, object, args) }
+    },
+  })
   const assertRetirable = () => {
     if (closed || !deps.database.open) throw new Error('GENERATION_OWNER_CLOSED')
     if (deps.assertRetirementResources) deps.assertRetirementResources()
     else deps.assertCurrent()
-    if (physicalDispatches || pending.size) throw new Error('GENERATION_OWNER_BUSY')
+    if (physicalDispatches || pending.size || agents.hasActiveToolClaims()) throw new Error('GENERATION_OWNER_BUSY')
     service.assertRetirable()
     deps.assertNoRuntimeClaims?.()
   }
@@ -323,7 +341,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       throw error
     } finally { physicalDispatches-- }
   }
-  const service = createGenerationRunService({ repository, dispatch: recordedDispatch,
+  const service = createGenerationRunService({ repository, recoveryTails, dispatch: recordedDispatch,
+    assertAdmission,
+    admitReservation: operation => deps.database.transaction(operation).immediate(),
     onReasoning: event => deps.onReasoning?.({ projectId: deps.projectId, epoch: deps.epoch, ...event }),
     validateRecovery: async (previous, next) => {
       assertCurrent()
@@ -350,6 +370,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   }
   const viewOf = (run: DurableGenerationRun): MainGenerationRunView => {
     const { budget, plotOutline, attempts } = repository.readRunView(run.runId)
+    const preservedTails = recoveryTails.list(run.runId)
     const visibleIds = new Map(attempts.filter(item => item.candidate).map(item => [item.receipt.artifact!.artifactId, { purpose: item.usage.purpose ?? 'unknown' }]))
     const receipts = attempts.map(item => volatileReceipts.get(item.receipt.attempt.attemptId) ?? item.receipt)
     const candidates = receipts
@@ -382,6 +403,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       ledger: { policy: budget.policy, tokenLiability: budget.attempts.reduce((sum, attempt) => sum + tokenLiability(attempt), 0),
         physicalRequests: budget.attempts.filter(attempt => attempt.status !== 'cancelled-before-dispatch').length,
         activeElapsedMs: budget.activeElapsedMs, blockedCode: budget.blockedCode }, artifacts, candidates,
+      ...(preservedTails.length ? { recoveryTails: preservedTails } : {}),
       unsavedTails: service.readUnsavedTails().filter(tail => budget.attempts.some(attempt => attempt.attemptId === tail.attemptId)) }
   }
   /** 本作品的全部运行，新的在前；只从库里取身份、状态与操作类型，不解析整份冻结上下文。 */
@@ -452,7 +474,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return { preparationId, knowledgeSnapshot: structuredClone(knowledgeSnapshot), selectedDrafts }
   }
   const begin = (selection: (BeginGenerationRequest | AgentBeginSelection) & { editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string; legacyRosterKey?: string; planningFeedbackInput?: PlanningFeedbackGenerationInput }, batchInitialization = false, agentInitialization = false, editorInitialization = false, finalizationInitialization = false, graphInitialization = false, legacyInitialization = false, planningInitialization = false): MainGenerationRunView => {
-    assertCurrent()
+    assertAdmission()
     if (!selection || typeof selection.operation !== 'string' || !/^[a-z0-9][a-z0-9:_-]{0,127}$/u.test(selection.operation)
       || !Array.isArray(selection.promptKeys) || selection.promptKeys.length === 0
       || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
@@ -605,6 +627,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       : { status: 'incomplete', content, finishReason, receipt: details }, run: viewOf(repository.get(receipt.run.runId)) }
   }
   const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false, graphExecution = false, legacyExecution = false, shortOutlineRetryAttemptId?: string, planningExecution = false): Promise<MainGenerationExecuteReceipt> => {
+    assertAdmission()
     const run = requireRun(request.handle, true)
     if (run.binding.sourceManifest.operation === 'planning-feedback' && !planningExecution) throw new Error('GENERATION_FEEDBACK_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.operation === 'agent-round' && !agentExecution) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
@@ -707,7 +730,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const creativeStrategy = deps.database.prepare("SELECT creative_strategy FROM project_core WHERE id='main'").pluck().get() as CreativeStrategy | undefined
     const plan = buildMainGenerationPlan(model, modelReceipt(run.binding), task, repository.budget(run.rootActionId), creativeStrategy)
     deps.beforeDispatch?.()
-    assertCurrent()
+    assertAdmission()
     const receipt = await service.execute({ runId: run.runId, invocationNonce: request.invocationNonce, requestHash,
       providerRequest: { model, task, plan, conversationId: run.rootActionId } satisfies ProviderRequest, reservedTokens: plan.reservedTokens,
       requestedOutputTokens: plan.requestedOutputTokens, inputUpperBoundTokens: plan.inputUpperBoundTokens,
@@ -716,7 +739,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       ...(run.binding.sourceManifest.importSlot || run.binding.sourceManifest.operation === 'planning-feedback' || materialDecision?.shortOutlinePromptHash || repository.readPlotOutline(run.runId) ? { replayTask: task } : {}),
       ...(reconciliationInjected ? { reconciliationInjected } : {}),
       ...(deps.mode === 'runtime-feedback' && planningExecution ? { runtimeFeedbackAdmission: () => {
-        assertCurrent()
+        assertAdmission()
         assertSourcesCurrent(handleOf(run))
         deps.runtimeFeedback!.assertDispatchAdmission(run.runId)
         const frozenModel = deps.leases.resolve(leaseId)
@@ -740,6 +763,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       false, false, false, false, false, false, request.failedAttemptId)
   }
   const resume = async (handle: MainGenerationRunHandle) => {
+    assertAdmission()
     const run = requireRun(handle)
     repository.assertBlueprintRecoveryWritable(run.runId)
     repository.assertPlotOutlineWritable(run.runId)
@@ -780,6 +804,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return viewOf(repository.replaceUnstartedBinding(run.runId, run.binding, candidate))
   }
   const assertSourcesCurrent = (handle: MainGenerationRunHandle, blueprintRange?: { startChapter: number; endChapter: number }) => {
+      assertAdmission()
       const run = requireRun(handle, true)
       if (repository.budget(run.rootActionId).root.status === 'cancelled') throw new Error('GENERATION_ACTION_CANCELLED')
       if (blueprintRange) {
@@ -1077,7 +1102,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     execute: (handle, invocationNonce, task) => execute({ handle, invocationNonce, task }, true),
     current: (run, expected) => { try { return compareGenerationSourceBindings(expected ?? run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))) } catch { return false } },
     capture: run => deps.rebuildBinding(run.binding, currentModelReceipt(run.binding)),
-  }, recoverInterrupted)
+  }, recoverInterrupted, assertAdmission)
   const requireEditorInlineRun = (handle: MainGenerationRunHandle) => {
     assertCurrent()
     if (!handle || Object.keys(handle).some(key => !['projectId', 'epoch', 'rootActionId', 'runId'].includes(key))
@@ -1110,6 +1135,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const attemptRun = deps.database.prepare('SELECT run_id FROM generation_attempts WHERE attempt_id=?').pluck()
     const tailedRuns = new Set(service.readUnsavedTails().filter(hasText)
       .flatMap(tail => { const runId = attemptRun.get(tail.attemptId); return typeof runId === 'string' ? [runId] : [] }))
+    for (const row of deps.database.prepare(`SELECT DISTINCT a.run_id FROM generation_recovery_tails t
+      JOIN generation_attempts a ON a.attempt_id=t.attempt_id`).all() as { run_id: string }[]) tailedRuns.add(row.run_id)
     const collect = {
       planning: (handle: MainGenerationRunHandle) => {
         const recovery = readContext(handle)
@@ -1129,7 +1156,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         const recovery = readContext(handle)
         if (recovery.composition || recovery.draftShortOutline?.completedOutput || recovery.draftShortOutline?.retry?.kind === 'available'
           || withoutDraftReconciliationArtifacts([...view.artifacts, ...(view.candidates ?? [])], recovery).some(hasText)
-          || view.unsavedTails?.some(hasText)) list.drafts.push({ view, recovery })
+          || view.unsavedTails?.some(hasText) || view.recoveryTails?.some(tail => tail.tailText.trim().length > 0)) list.drafts.push({ view, recovery })
       },
     }
     const runs = runSummaries()
@@ -1274,7 +1301,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (runAttempts(run.runId).length) throw new Error('GENERATION_FEEDBACK_ATTEMPT_CONFLICT')
     return execute({ handle, invocationNonce, task }, false, false, false, false, false, false, undefined, true)
   }
-  return { begin: (selection: BeginGenerationRequest) => begin(selection), bindMaterialDecision, execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent, agents,
+  const api = { begin: (selection: BeginGenerationRequest) => begin(selection), bindMaterialDecision, execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent,
+    agents: guardWork(agents, name => ['read', 'hasActiveToolClaims', 'requestProjectClose'].includes(name)),
     executeRuntimeFieldFeedback,
     beginRuntimeFieldFeedback: (request: { input: PlanningFeedbackGenerationInput; modelId: string; uiActionNonce: string }) => {
       if (deps.mode !== 'runtime-feedback') throw new Error('GENERATION_RUNTIME_FEEDBACK_ADMISSION_REQUIRED')
@@ -1770,7 +1798,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const current = viewOf(run).nonReplayable ? await resume(request.handle) : viewOf(run)
       return execute({ handle: current.handle, invocationNonce, task: request.task }, false, true)
     },
-    characterProposals: characters,
+    characterProposals: guardWork(characters, name => /^(read|list|identitySnapshot)/u.test(name)),
     approveCharacterProposal: (request: ApproveCharacterProposalRequest) => {
       assertCurrent()
       return deps.database.transaction(() => {
@@ -1916,7 +1944,15 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       volatileReceipts.delete(artifact.attemptId)
       return viewOf(run)
     },
-    hasPhysicalInFlight: () => physicalDispatches > 0 || pending.size > 0,
+    hasPhysicalInFlight: () => physicalDispatches > 0 || pending.size > 0 || agents.hasActiveToolClaims(),
+    requestProjectClose: () => {
+      if (closed) return
+      closing = true
+      const failures: unknown[] = []
+      try { service.requestProjectClose() } catch (error) { failures.push(error) }
+      try { agents.requestProjectClose() } catch (error) { failures.push(error) }
+      if (failures.length) throw new AggregateError(failures, 'GENERATION_CLOSE_QUIESCE_FAILED')
+    },
     assertRetirable,
     retireIdle: () => {
       assertRetirable()
@@ -1941,4 +1977,6 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       runtimePreparations.clear()
     },
   }
+  return guardWork(api, name => /^(read|list|find|has|cancel|pause)/u.test(name)
+    || ['execute', 'requestProjectClose', 'assertRetirable', 'retireIdle', 'suspendForProjectClose', 'rollbackRuntimeFieldFeedbackPreparation'].includes(name))
 }

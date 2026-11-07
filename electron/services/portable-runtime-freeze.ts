@@ -22,6 +22,7 @@ export type PortableRuntimeFreezeTable =
   | 'generation_roots'
   | 'generation_runs'
   | 'generation_attempts'
+  | 'generation_recovery_tails'
   | 'planning_feedback_bases'
   | 'planning_feedback_candidates'
   | 'planning_feedback_adoptions'

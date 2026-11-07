@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   createPortableProjectAssetProvider: vi.fn(),
   registerRecentProject: vi.fn(),
   assertCurrentProjectContext: vi.fn(),
+  assertViewContext: vi.fn(),
   sameCanonicalProjectRoot: vi.fn(),
   beginSession: vi.fn(),
   invalidateCurrentSession: vi.fn(),
@@ -41,13 +42,13 @@ const mocks = vi.hoisted(() => ({
   createProjectDatabase: vi.fn(),
   showSaveDialog: vi.fn(),
   showOpenDialog: vi.fn(),
-  withLegacyProjectOperation: vi.fn(),
+  acquireProjectBackupOperation: vi.fn(),
   withProjectRestoreOperation: vi.fn(),
 }))
 
 vi.mock('../../services/project-runtime-compatibility', async importOriginal => ({
   ...await importOriginal<typeof import('../../services/project-runtime-compatibility')>(),
-  withLegacyProjectOperation: mocks.withLegacyProjectOperation,
+  acquireProjectBackupOperation: mocks.acquireProjectBackupOperation,
   withProjectRestoreOperation: mocks.withProjectRestoreOperation,
 }))
 
@@ -70,6 +71,7 @@ vi.mock('../../database', () => ({
 vi.mock('../../services/project-access', () => ({
   projectAccess: {
     assertCurrentProjectContext: mocks.assertCurrentProjectContext,
+    assertViewContext: mocks.assertViewContext,
     sameCanonicalProjectRoot: mocks.sameCanonicalProjectRoot,
     beginSession: mocks.beginSession,
     invalidateCurrentSession: mocks.invalidateCurrentSession,
@@ -192,7 +194,13 @@ beforeAll(() => {
 
 beforeEach(() => {
   now = 1_000
-  mocks.withLegacyProjectOperation.mockReset().mockImplementation((_channel: string, operation: () => unknown) => operation())
+  mocks.acquireProjectBackupOperation.mockReset().mockImplementation(context => {
+    const project = mocks.assertCurrentProjectContext(context, mocks.currentProjectPath)
+    return { project, release: vi.fn(), assertCurrentContext(candidate: unknown, sourceRoot: string) {
+      const current = mocks.assertCurrentProjectContext(candidate, mocks.currentProjectPath)
+      return mocks.sameCanonicalProjectRoot(current.rootPath, sourceRoot)
+    } }
+  })
   mocks.withProjectRestoreOperation.mockReset().mockImplementation((operation: () => unknown) => operation())
   mocks.currentProjectPath = path.resolve('C:/projects/current')
   mocks.database = { identity: 'active-database' }
@@ -217,6 +225,12 @@ beforeEach(() => {
   mocks.sameCanonicalProjectRoot.mockReset().mockImplementation((left: string, right: string) => (
     path.resolve(left).toLocaleLowerCase('en-US') === path.resolve(right).toLocaleLowerCase('en-US')
   ))
+  mocks.assertViewContext.mockReset().mockImplementation(context => {
+    const project = mocks.assertCurrentProjectContext(context, mocks.currentProjectPath)
+    const runtime = projectRuntimeHost.getActiveView()
+    if (!runtime || runtime.projectId !== project.projectId) throw new Error('PROJECT_SESSION_STALE')
+    return runtime
+  })
   mocks.beginSession.mockReset()
   mocks.invalidateCurrentSession.mockReset()
   mocks.initProjectDatabase.mockReset()
@@ -332,22 +346,61 @@ describe('project archive choosers issue sender-bound grants instead of raw path
 })
 
 describe('project:archive-export', () => {
-  it('rejects retained-runtime export before consuming the chosen target grant or starting a snapshot', async () => {
+  it('rejects a busy source before consuming the chosen target grant or starting a snapshot', async () => {
     const actual = await vi.importActual<typeof import('../../services/project-runtime-compatibility')>('../../services/project-runtime-compatibility')
-    mocks.withLegacyProjectOperation.mockImplementation(actual.withLegacyProjectOperation)
+    mocks.acquireProjectBackupOperation.mockImplementation(actual.acquireProjectBackupOperation)
     const a = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(await actualProject()))
     projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(await actualProject()))
     projectRuntimeHost.activateView(a)
+    mocks.currentProjectPath = a.canonicalRoot
+    mocks.activeSession = { projectId: a.projectId, leaseId: 'lease-current', rootPath: a.canonicalRoot, projectPath: a.canonicalRoot }
+    const release = projectRuntimeHost.acquireWork(a)
     const directory = tempRoot('runtime-export-refusal-')
     const target = path.join(fs.realpathSync.native(directory), 'snapshot.ainovel')
     const grantId = newTargetGrant(target)
-    await expect(handler('project:archive-export')(event(), {
-      projectSession: projectSession(), targetArchiveGrantId: grantId,
-    })).resolves.toMatchObject({ success: false, error: 'PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE' })
+    try {
+      await expect(handler('project:archive-export')(event(), {
+        projectSession: projectSession(), targetArchiveGrantId: grantId,
+      })).resolves.toMatchObject({ success: false })
+    } finally { release() }
     expect(mocks.exportPortableProject).not.toHaveBeenCalled()
-    expect(mocks.assertCurrentProjectContext).not.toHaveBeenCalled()
+    expect(mocks.assertViewContext).toHaveBeenCalledOnce()
     expect(fs.existsSync(target)).toBe(false)
     expect(grants.resolveExactPath({ grantId, webContentsId: SENDER_ID, operation: 'create' })).toBe(target)
+  })
+
+  it('holds only captured A maintenance through an awaited export while B can become the view', async () => {
+    const actual = await vi.importActual<typeof import('../../services/project-runtime-compatibility')>('../../services/project-runtime-compatibility')
+    mocks.acquireProjectBackupOperation.mockImplementation(actual.acquireProjectBackupOperation)
+    const a = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(await actualProject()))
+    const b = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(await actualProject()))
+    projectRuntimeHost.activateView(a)
+    mocks.currentProjectPath = a.canonicalRoot
+    mocks.activeSession = { projectId: a.projectId, leaseId: 'lease-current', rootPath: a.canonicalRoot, projectPath: a.canonicalRoot }
+    const session = projectSession(), directory = tempRoot('runtime-export-maintenance-')
+    let finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    mocks.exportPortableProject.mockImplementationOnce(async input => {
+      await gate
+      expect(input.sourceProjectRoot).toBe(a.canonicalRoot)
+      expect(input.assertCurrentContext(input.projectSession, input.sourceProjectRoot)).toBe(true)
+      return archiveReceipt
+    })
+    const pending = handler('project:archive-export')(event(), { projectSession: session,
+      targetArchiveGrantId: newTargetGrant(path.join(directory, 'snapshot.ainovel')) })
+    try {
+      await vi.waitFor(() => expect(mocks.exportPortableProject).toHaveBeenCalledOnce())
+      expect(() => projectRuntimeHost.acquireWork(a)).toThrow()
+      projectRuntimeHost.activateView(b)
+      mocks.currentProjectPath = b.canonicalRoot
+      mocks.activeSession = { projectId: b.projectId, leaseId: 'lease-b', rootPath: b.canonicalRoot, projectPath: b.canonicalRoot }
+      const release = projectRuntimeHost.acquireWork(b)
+      release()
+    } finally { finish(); await pending }
+    await expect(pending).resolves.toMatchObject({ success: true })
+    expect(projectRuntimeHost.getActiveView()).toBe(b)
+    const release = projectRuntimeHost.acquireWork(a)
+    release()
   })
 
   it('binds export to the current session, the chooser grant, and the production asset provider', async () => {

@@ -10,6 +10,7 @@ import { applyM07ChapterRecycle, createM07Migration } from './m07-chapter-recycl
 import { applyM08PlanningFeedback, createM08Migration, verifyM08PlanningFeedback } from './m08-planning-feedback'
 import { applyM09PlanningFeedbackRanges, createM09Migration } from './m09-planning-feedback-ranges'
 import { applyM10RuntimeFeedbackGrants, createM10Migration } from './m10-runtime-feedback-grants'
+import { applyM11GenerationRecoveryTails, createM11Migration } from './m11-generation-recovery-tails'
 import { createM00Migration } from './m00-baseline'
 import { initializeLegacyBaselineSchema, applyBaselineTables } from './baseline-schema'
 import { ensureBaselineBlueprintTables } from './baseline-blueprint-schema'
@@ -17,7 +18,7 @@ import { SqliteSchemaAdapter, sqliteSchemaFingerprint } from './sqlite-schema-ad
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
-export const CURRENT_DESKTOP_SCHEMA_VERSION = 11
+export const CURRENT_DESKTOP_SCHEMA_VERSION = 12
 let installed: MigrationRegistry | undefined
 
 function installKnownDonorAvatarColumn(db: import('better-sqlite3').Database): void {
@@ -102,11 +103,16 @@ export function getDesktopMigrationRegistry(): MigrationRegistry {
     const m10 = createM10Migration({ database: native,
       verifyKnownSchema: db => runtimeGrantFingerprints.has(sqliteSchemaFingerprint(native(db)))
         && verifyM02CharacterIdentity(native(db)) && verifyM03ReviewCycle(native(db)) && verifyM08PlanningFeedback(native(db)) })
-    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05, m06, m07, m08, m09, m10], [
+    for (const db of references) db.transaction(() => applyM11GenerationRecoveryTails(db))()
+    const recoveryTailSchemas = schemas(12), recoveryTailFingerprints = new Set(recoveryTailSchemas.map(item => item.fingerprint))
+    const m11 = createM11Migration({ database: native,
+      verifyKnownSchema: db => recoveryTailFingerprints.has(sqliteSchemaFingerprint(native(db)))
+        && verifyM02CharacterIdentity(native(db)) && verifyM03ReviewCycle(native(db)) && verifyM08PlanningFeedback(native(db)) })
+    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05, m06, m07, m08, m09, m10, m11], [
       ...sourceSchemas, ...baselineSchemas.map(schema => ({ ...schema, version: 0 })),
       ...baselineSchemas, ...generationSchemas, ...identitySchemas,
       ...reviewCycleSchemas, ...importEffectSchemas, ...characterAssetSchemas, ...mergeSnapshotSchemas, ...recycleSchemas, ...feedbackSchemas,
-      ...feedbackRangeSchemas, ...runtimeGrantSchemas,
+      ...feedbackRangeSchemas, ...runtimeGrantSchemas, ...recoveryTailSchemas,
     ])
     return installed
   } finally { reference.close(); donor.close() }

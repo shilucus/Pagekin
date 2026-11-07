@@ -2,7 +2,7 @@ import type { GenerationOwnerChannels, GenerationOwnerEvents } from './generatio
 import type { CharacterProposalChannels } from './character-proposal'
 import type { FinalizedCharacterGenerationChannels } from './finalized-character-generation'
 import type { ReviewRevisionGenerationInvokeChannels } from './review-revision-generation'
-import type { AgentGenerationChannels } from './agent-generation'
+import type { AgentGenerationChannels, AgentGlobalToolExecution } from './agent-generation'
 import type { ImportGenerationChannels } from './import-generation'
 import type { EditorInlineGenerationChannels } from './editor-inline-generation'
 import type { FinalizationGenerationChannels } from './finalization-generation'
@@ -723,11 +723,11 @@ export interface AppDataChannels {
     return: Array<{ name: string; content: string; baseDir: string; filePath: string; bundle: import('./writing-skills').InstalledWritingSkillBundle }>
   }
   'skills:inspect-github': {
-    args: [sourceUrl: string]
+    args: [sourceUrl: string, execution?: AgentGlobalToolExecution]
     return: { success: boolean; inspection?: import('./writing-skills').RemoteWritingSkillInspection; error?: string }
   }
   'skills:install-github': {
-    args: [sourceUrl: string]
+    args: [sourceUrl: string, execution?: AgentGlobalToolExecution]
     return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
   }
   /** 主进程弹出系统对话框选择本机 SKILL.md 或 Skill 文件夹，只读检查后返回候选。 */
@@ -1355,6 +1355,14 @@ export interface MCPResourceDescription {
   serverId: string
 }
 
+export interface MCPToolCallResult {
+  version: 1
+  success: boolean
+  content: string
+  commitState: FileWriteCommitState
+  error?: string
+}
+
 export type MCPConfigLoadResult =
   | { status: 'missing'; servers: [] }
   | { status: 'loaded'; servers: MCPServerSummary[] }
@@ -1372,7 +1380,7 @@ export interface MCPChannels {
   'mcp:disconnect-all': { args: []; return: { success: boolean; error?: string } }
   'mcp:list-tools': { args: []; return: MCPToolDescription[] }
   'mcp:list-resources': { args: []; return: MCPResourceDescription[] }
-  'mcp:call-tool': { args: [serverId: string, toolName: string, args: Record<string, unknown>]; return: { success: boolean; content: string; error?: string } }
+  'mcp:call-tool': { args: [serverId: string, toolName: string, args: Record<string, unknown>, execution?: AgentGlobalToolExecution]; return: MCPToolCallResult }
   'mcp:get-servers-status': { args: []; return: MCPServerStatus[] }
   'mcp:get-config-path': { args: []; return: string }
 }

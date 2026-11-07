@@ -10,7 +10,7 @@ import { createMainGenerationOwner, safeGenerationModelReceipt } from '../main-g
 import { createModelExecutionLeaseReceipt, ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import { MAIN_GENERATION_POLICY, readMainGenerationPolicy, type MainGenerationPlan } from '../main-generation-plan'
 import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
-import type { AgentBeginSelection } from '../agent-generation'
+import { AgentGeneration, type AgentBeginSelection } from '../agent-generation'
 import type { GenerationTask } from '../../../src/services/generation/generation-harness'
 import { planningTargetInstruction } from '../../../src/shared/plot-outline-contract'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
@@ -30,6 +30,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'owner-'))
   let db = new Database(path.join(root, 'project.db'))
+  let maintenance = false
   vi.mocked(getProjectDb).mockReturnValue(db)
   db.transaction(() => initializeLegacyBaselineSchema(db))()
   migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
@@ -39,7 +40,9 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   const model: ModelProfile = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1', apiKey: 'synthetic-key', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'], capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: true, usage: true } }
   const spy = vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch ?? (async (_request, options) => { options.onVisible({ kind: 'delta', text: '我会检查。<tool_call>{"name":"read_project_state","arguments":{}}</tool_call>' }); return { finishReason: 'stop', usage: null } }))
   const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: () => JSON.stringify({key:'assistant_writing_identity',content:'冻结的合成提示词',systemRole:'写作助手'}) }
-  const makeOwner = (epoch: string, mode?: 'runtime-feedback' | 'handoff') => createMainGenerationOwner({ database: db, projectPath: root, projectId: 'project', epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: spy,
+  const makeOwner = (epoch: string, mode?: 'runtime-feedback' | 'handoff') => createMainGenerationOwner({ database: db, projectPath: root, projectId: 'project', epoch, assertCurrent: () => {},
+    assertAdmission: () => { if (maintenance) throw new Error('FICTIONAL_MAINTENANCE') },
+    leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: spy,
     ...(mode === 'runtime-feedback' ? { mode, runtimeFeedback: { assertActive: () => {}, assertDispatchAdmission: () => {} } } : {}),
     ...(mode === 'handoff' ? { recoverInterrupted: false } : {}),
     buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
@@ -51,10 +54,69 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   const request={uiActionNonce:'作者动作',modelId:model.id,input}
   const begin=()=>owner.agents.begin(request)
   const round=async()=>{const start=begin();return owner.agents.executeRound({handle:start.handle,index:0})}
-  return {get db(){return db},owner,spy,request,begin,round,reopenStorage,makeOwner,model,deps}
+  return {get db(){return db},owner,spy,request,begin,round,reopenStorage,makeOwner,model,deps,
+    setMaintenance(value: boolean) { maintenance = value } }
 }
 
 describe('Agent actual owner 与文件 SQLite',()=>{
+ it.each([
+  ['inspect_writing_skill', 'builtin', false, true, true],
+  ['install_writing_skill', 'builtin', true, false, true],
+  ['mcp__fictional__write', 'mcp', true, false, true],
+  ['install_writing_skill', 'builtin', false, false, false],
+  ['inspect_writing_skill', 'builtin', false, false, false],
+  ['mcp__fictional__write', 'mcp', true, true, false],
+  ['mcp__fictional__write', 'builtin', true, false, false],
+ ] as const)('admits only frozen eligible global effect %s (%s)',async(name,source,requiresConfirmation,isReadOnly,allowed)=>{
+  const f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:`<tool_call>${JSON.stringify({name,arguments:{source_url:'https://github.com/fiction/skill'}})}</tool_call>`});return {finishReason:'stop',usage:null}})
+  f.request.input.tools=[{name,source,requiresConfirmation,isReadOnly,description:'fictional',inputSchema:{type:'object'}}]
+  const result=await f.round(),ref=result.rounds[0]!.actions[0]!.ref
+  expect(()=>f.owner.agents.assertToolEffectAvailable(ref)).toThrow('GENERATION_AGENT_TOOL_CLAIM_REQUIRED')
+  f.owner.agents.claimTool({ref,confirmed:true})
+  const before=f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)
+  if(allowed) expect(()=>f.owner.agents.assertToolEffectAvailable(ref)).not.toThrow()
+  else expect(()=>f.owner.agents.assertToolEffectAvailable(ref)).toThrow('GENERATION_AGENT_TOOL_EFFECT_NOT_ALLOWED')
+  expect(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)).toBe(before)
+ })
+ it('requires the exact live owner claim and fences finished or closing actions',async()=>{
+  const name='install_writing_skill',f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:`<tool_call>${JSON.stringify({name,arguments:{source_url:'https://github.com/fiction/skill'}})}</tool_call>`});return {finishReason:'stop',usage:null}})
+  f.request.input.tools=[{name,source:'builtin',requiresConfirmation:true,isReadOnly:false,description:'fictional',inputSchema:{type:'object'}}]
+  const result=await f.round(),ref=result.rounds[0]!.actions[0]!.ref
+  f.owner.agents.claimTool({ref,confirmed:true})
+  expect(()=>f.owner.agents.assertToolEffectAvailable(ref)).not.toThrow()
+  expect(()=>f.owner.agents.assertToolEffectAvailable({...ref,handle:{...ref.handle,epoch:'different'}})).toThrow('GENERATION_AGENT_TOOL_CLAIM_REQUIRED')
+  expect(()=>f.owner.agents.assertToolEffectAvailable({...ref,toolCallId:'different'})).toThrow('GENERATION_AGENT_TOOL_CLAIM_REQUIRED')
+  const other=f.makeOwner('epoch-1','handoff')
+  expect(()=>other.agents.assertToolEffectAvailable(ref)).toThrow('GENERATION_AGENT_TOOL_CLAIM_REQUIRED')
+  other.retireIdle()
+  f.setMaintenance(true)
+  expect(()=>f.owner.agents.assertToolEffectAvailable(ref)).toThrow('FICTIONAL_MAINTENANCE')
+  f.setMaintenance(false)
+  f.owner.agents.finishTool({ref,status:'failed',observation:'fictional'})
+  expect(()=>f.owner.agents.assertToolEffectAvailable(ref)).toThrow('GENERATION_AGENT_TOOL_CLAIM_REQUIRED')
+  f.owner.agents.requestProjectClose()
+  expect(()=>f.owner.agents.assertToolEffectAvailable(ref)).toThrow('GENERATION_AGENT_CLOSING')
+ })
+ it.each(['source','paused'] as const)('rejects a claimed global effect after %s changes',async change=>{
+  const name='inspect_writing_skill',f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:`<tool_call>${JSON.stringify({name,arguments:{source_url:'https://github.com/fiction/skill'}})}</tool_call>`});return {finishReason:'stop',usage:null}})
+  f.request.input.tools=[{name,source:'builtin',requiresConfirmation:false,isReadOnly:true,description:'fictional',inputSchema:{type:'object'}}]
+  const result=await f.round(),ref=result.rounds[0]!.actions[0]!.ref
+  f.owner.agents.claimTool({ref,confirmed:true})
+  if(change==='source') f.db.exec("UPDATE project_core SET global_guidance='fictional changed source'")
+  else new GenerationRunRepository(()=>f.db).pause(ref.handle.rootActionId)
+  expect(()=>f.owner.agents.assertToolEffectAvailable(ref)).toThrow('GENERATION_AGENT_TOOL_STALE')
+ })
+ it('rejects an unstarted global effect after close marks its live claim unknown',async()=>{
+  const name='install_writing_skill',f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:`<tool_call>${JSON.stringify({name,arguments:{source_url:'https://github.com/fiction/skill'}})}</tool_call>`});return {finishReason:'stop',usage:null}})
+  f.request.input.tools=[{name,source:'builtin',requiresConfirmation:true,isReadOnly:false,description:'fictional',inputSchema:{type:'object'}}]
+  const result=await f.round(),ref=result.rounds[0]!.actions[0]!.ref
+  f.owner.agents.claimTool({ref,confirmed:true})
+  expect(()=>f.owner.agents.assertToolEffectAvailable(ref)).not.toThrow()
+  f.owner.agents.requestProjectClose()
+  expect(f.owner.agents.read(result.handle).rounds[0]!.actions[0]!.status).toBe('unknown')
+  expect(()=>f.owner.agents.assertToolEffectAvailable(ref)).toThrow('GENERATION_AGENT_CLOSING')
+  expect(f.spy).toHaveBeenCalledTimes(1)
+ })
  it('runtime and idle handoff owners do not recover another Agent claim',async()=>{
   const f=fixture(), result=await f.round(), ref=result.rounds[0]!.actions[0]!.ref
   expect(f.owner.agents.claimTool({ref,confirmed:true}).execute).toBe(true)
@@ -427,4 +489,178 @@ it('advances all prior Agent rounds after a confirmed config change before a chi
  expect(f.owner.agents.read(recovery.handle).sourceStatus).toBe('current')
  f.db.prepare('UPDATE project_core SET genre=?').run('外部修改')
  expect(()=>f.db.transaction(()=>f.owner.withAgentChildEffect(child.handle,()=>{throw new Error('should not write')}))()).toThrow('GENERATION_AGENT_SOURCE_CHANGED')
+})
+
+describe('Agent read normalization and claimed tool lifecycle', () => {
+  it('refuses an unnormalized planning read during maintenance without changing receipt bytes', async () => {
+    const f = fixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: '<tool_call>{"name":"start_workflow","arguments":{"workflow":"generate_blueprint"}}</tool_call>' })
+      return { finishReason: 'stop', usage: null }
+    })
+    const recovery = await f.round(), action = recovery.rounds[0]!.actions[0]!
+    const read = () => f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(action.ref.attemptId) as string
+    const original = JSON.parse(read())
+    delete original.agentActions[action.ref.toolCallId].planningArguments
+    f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(original), action.ref.attemptId)
+    const before = read(), changes = f.db.prepare('SELECT total_changes()').pluck().get()
+    f.setMaintenance(true)
+    expect(() => f.owner.agents.read(recovery.handle)).toThrow('FICTIONAL_MAINTENANCE')
+    expect(read()).toBe(before)
+    expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+    f.setMaintenance(false)
+    expect(f.owner.agents.read(recovery.handle).rounds[0]!.actions[0]!.arguments).toEqual(action.arguments)
+    expect(JSON.parse(read()).agentActions[action.ref.toolCallId].planningArguments).toEqual(action.arguments)
+    const normalized = read(), after = f.db.prepare('SELECT total_changes()').pluck().get()
+    f.setMaintenance(true)
+    expect(f.owner.agents.read(recovery.handle).rounds[0]!.actions[0]!.arguments).toEqual(action.arguments)
+    expect(read()).toBe(normalized)
+    expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(after)
+    f.setMaintenance(false)
+  })
+
+  it.each(['completed', 'failed', 'unknown'] as const)('retains a tool %s result committed before close and releases only its claim', async status => {
+    const f = fixture(), recovery = await f.round(), ref = recovery.rounds[0]!.actions[0]!.ref
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(false)
+    expect(f.owner.agents.claimTool({ ref, confirmed: true }).execute).toBe(true)
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(true)
+    expect(f.owner.hasPhysicalInFlight()).toBe(true)
+    expect(() => f.owner.assertRetirable()).toThrow('GENERATION_OWNER_BUSY')
+    expect(f.owner.agents.claimTool({ ref, confirmed: true }).execute).toBe(false)
+    const result = f.owner.agents.finishTool({ ref, status, observation: `Confirmed ${status} tool response` })
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(false)
+    expect(f.owner.hasPhysicalInFlight()).toBe(false)
+    const read = () => f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)
+    const before = read()
+    f.owner.agents.requestProjectClose()
+    f.owner.agents.requestProjectClose()
+    expect(read()).toBe(before)
+    expect(f.owner.agents.read(recovery.handle).rounds[0]!.actions[0]).toEqual(result)
+    expect(f.spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not publish or release a claim inside an uncommitted caller transaction', async () => {
+    const f = fixture(), recovery = await f.round(), ref = recovery.rounds[0]!.actions[0]!.ref
+    const read = () => f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)
+    const before = read()
+    expect(() => f.db.transaction(() => f.owner.agents.claimTool({ ref, confirmed: true })).immediate()).toThrow('GENERATION_AGENT_TRANSACTION_ACTIVE')
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(false)
+    expect(read()).toBe(before)
+    f.owner.agents.claimTool({ ref, confirmed: true })
+    const running = read()
+    expect(() => f.db.transaction(() => f.owner.agents.finishTool({ ref, status: 'completed', observation: 'Uncommitted reply' })).immediate()).toThrow('GENERATION_AGENT_TRANSACTION_ACTIVE')
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(true)
+    expect(read()).toBe(running)
+    f.owner.agents.finishTool({ ref, status: 'completed', observation: 'Native commit completed' })
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(false)
+  })
+
+  it.each(['completed', 'failed', 'unknown'] as const)('does not accept a late %s tool reply after close has persisted unknown', async status => {
+    const f = fixture(), recovery = await f.round(), ref = recovery.rounds[0]!.actions[0]!.ref
+    f.owner.agents.claimTool({ ref, confirmed: true })
+    f.owner.agents.requestProjectClose()
+    const before = f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(false)
+    expect(f.owner.agents.read(recovery.handle).rounds[0]!.actions[0]!.status).toBe('unknown')
+    expect(() => f.owner.agents.finishTool({ ref, status, observation: 'Unadmitted late result' })).toThrow('GENERATION_AGENT_CLOSING')
+    expect(() => f.owner.agents.claimTool({ ref, confirmed: true })).toThrow('GENERATION_AGENT_CLOSING')
+    expect(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)).toBe(before)
+    const restarted = f.reopenStorage()
+    expect(restarted.agents.claimTool({ ref, confirmed: true }).execute).toBe(false)
+    const replay = await restarted.agents.executeRound({ handle: recovery.handle, index: 0 })
+    expect(replay.nextRound).toBeNull()
+    expect(replay.rounds[0]!.actions[0]!.status).toBe('unknown')
+    expect(f.spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('records a non-returning tool as unknown and can retry failed close without losing the active claim', async () => {
+    const f = fixture(), recovery = await f.round(), ref = recovery.rounds[0]!.actions[0]!.ref
+    f.owner.agents.claimTool({ ref, confirmed: true })
+    f.db.exec("CREATE TEMP TRIGGER fictional_agent_close_failure BEFORE UPDATE OF usage_receipt_json ON generation_attempts BEGIN SELECT RAISE(ABORT,'fictional claim flush failed'); END")
+    const before = f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)
+    try {
+      expect(() => f.owner.agents.requestProjectClose()).toThrow('fictional claim flush failed')
+      expect(f.owner.agents.hasActiveToolClaims()).toBe(true)
+      expect(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)).toBe(before)
+      expect(() => f.owner.agents.claimTool({ ref, confirmed: true })).toThrow('GENERATION_AGENT_CLOSING')
+    } finally { f.db.exec('DROP TRIGGER fictional_agent_close_failure') }
+    f.setMaintenance(true)
+    f.owner.agents.requestProjectClose()
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(false)
+    expect(f.owner.agents.read(recovery.handle).rounds[0]!.actions[0]!.status).toBe('unknown')
+    const completed = f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)
+    f.owner.agents.requestProjectClose()
+    expect(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)).toBe(completed)
+    expect(f.spy).toHaveBeenCalledTimes(1)
+    f.setMaintenance(false)
+  })
+
+  it('does not recover another non-recovering owner claim when closing an idle observer', async () => {
+    const f = fixture(), recovery = await f.round(), ref = recovery.rounds[0]!.actions[0]!.ref
+    f.owner.agents.claimTool({ ref, confirmed: true })
+    const observer = f.makeOwner('epoch-1', 'handoff')
+    expect(observer.agents.hasActiveToolClaims()).toBe(false)
+    observer.agents.requestProjectClose()
+    expect(f.owner.agents.read(recovery.handle).rounds[0]!.actions[0]!.status).toBe('running')
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(true)
+    observer.retireIdle()
+    f.owner.agents.requestProjectClose()
+    expect(f.owner.agents.read(recovery.handle).rounds[0]!.actions[0]!.status).toBe('unknown')
+  })
+
+  it('rolls back every owned claim when a later close update fails and retains the native commit barrier', async () => {
+    const f = fixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: '<tool_call>{"name":"read_project_state","arguments":{"section":"core"}}</tool_call><tool_call>{"name":"read_project_state","arguments":{"section":"blueprints"}}</tool_call>' })
+      return { finishReason: 'stop', usage: null }
+    })
+    const recovery = await f.round(), actions = recovery.rounds[0]!.actions
+    expect(actions).toHaveLength(2)
+    for (const action of actions) expect(f.owner.agents.claimTool({ ref: action.ref, confirmed: true }).execute).toBe(true)
+    const before = f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(actions[0]!.ref.attemptId)
+    f.db.exec("CREATE TEMP TRIGGER fictional_second_claim_failure BEFORE UPDATE OF usage_receipt_json ON generation_attempts WHEN (SELECT count(*) FROM json_each(NEW.usage_receipt_json,'$.agentActions') WHERE json_extract(value,'$.status')='unknown') > 1 BEGIN SELECT RAISE(ABORT,'fictional second claim failed'); END")
+    try {
+      expect(() => f.owner.agents.requestProjectClose()).toThrow('fictional second claim failed')
+      expect(f.owner.agents.hasActiveToolClaims()).toBe(true)
+      expect(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(actions[0]!.ref.attemptId)).toBe(before)
+      expect(f.owner.agents.read(recovery.handle).rounds[0]!.actions.map(action => action.status)).toEqual(['running', 'running'])
+    } finally { f.db.exec('DROP TRIGGER fictional_second_claim_failure') }
+    expect(() => f.db.transaction(() => f.owner.agents.requestProjectClose()).immediate()).toThrow('GENERATION_AGENT_TRANSACTION_ACTIVE')
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(true)
+    expect(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(actions[0]!.ref.attemptId)).toBe(before)
+    f.owner.agents.requestProjectClose()
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(false)
+    expect(f.owner.agents.read(recovery.handle).rounds[0]!.actions.map(action => action.status)).toEqual(['unknown', 'unknown'])
+    expect(f.spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves a real domain receipt committed before close without claiming an unconfirmed effect', async () => {
+    const f = fixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: '<tool_call>{"name":"propose_novel_config","arguments":{"changes":{"genre":"fictional committed genre"}}}</tool_call>' })
+      return { finishReason: 'stop', usage: null }
+    })
+    const recovery = await f.round(), ref = recovery.rounds[0]!.actions[0]!.ref
+    f.owner.agents.claimTool({ ref, confirmed: true })
+    const receipt = f.owner.agents.commitDomainTool(ref)
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(true)
+    f.owner.agents.requestProjectClose()
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(false)
+    expect(f.owner.agents.read(recovery.handle).rounds[0]!.actions[0]).toMatchObject({ status: 'completed', observation: 'The confirmed application change was committed.' })
+    expect(f.db.prepare("SELECT genre FROM project_core WHERE id='main'").pluck().get()).toBe('fictional committed genre')
+    const stored = JSON.parse(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId) as string)
+    expect(stored.agentActions[ref.toolCallId].domainEffect).toEqual(expect.objectContaining({ beforeHash: receipt.beforeHash, afterHash: receipt.afterHash }))
+    expect(() => f.owner.agents.commitDomainTool(ref)).toThrow('GENERATION_AGENT_CLOSING')
+    expect(f.spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('guards startup recovery writes before changing a running historical claim', async () => {
+    const f = fixture(), recovery = await f.round(), ref = recovery.rounds[0]!.actions[0]!.ref
+    f.owner.agents.claimTool({ ref, confirmed: true })
+    const before = f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)
+    const unavailable = () => { throw new Error('FICTIONAL_MAINTENANCE') }
+    const unexpected = () => { throw new Error('UNEXPECTED_AGENT_HOST_CALL') }
+    expect(() => new AgentGeneration(f.db, new GenerationRunRepository(() => f.db), { projectId: 'project', epoch: 'epoch-2' }, () => {},
+      { begin: unexpected, read: unexpected, resume: async () => unexpected(), execute: async () => unexpected(), current: () => true, capture: unexpected },
+      true, unavailable)).toThrow('FICTIONAL_MAINTENANCE')
+    expect(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(ref.attemptId)).toBe(before)
+    expect(f.owner.agents.hasActiveToolClaims()).toBe(true)
+  })
 })

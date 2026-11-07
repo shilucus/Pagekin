@@ -16,7 +16,7 @@ import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
 import { createProjectDatabase } from '../../database'
 import { projectAccess } from '../../services/project-access'
 import { projectRuntimeHost } from '../../services/project-runtime'
-import { assertRestoreTargetOutsideRuntimes } from '../../services/project-runtime-compatibility'
+import { acquireProjectBackupOperation, assertRestoreTargetOutsideRuntimes } from '../../services/project-runtime-compatibility'
 
 vi.mock('../../utils/remove-directory', async importOriginal => {
   const actual = await importOriginal<typeof import('../../utils/remove-directory')>()
@@ -85,7 +85,17 @@ function fixture(overrides: Partial<CloudBackupControllerDependencies> = {}) {
   const ipc = { handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)) }
   const deps: CloudBackupControllerDependencies = {
     ipc,
-    acquireBackupOperation: vi.fn(() => () => undefined),
+    acquireBackupOperation: vi.fn(context => {
+      const project = deps.assertCurrentProjectContext(context, deps.getCurrentProjectPath())
+      return {
+        project,
+        assertCurrentContext(candidate: CloudBackupProjectSessionContext, sourceRoot: string) {
+          const current = deps.assertCurrentProjectContext(candidate, deps.getCurrentProjectPath())
+          return deps.sameCanonicalProjectRoot(current.rootPath, sourceRoot)
+        },
+        release: vi.fn(),
+      }
+    }),
     acquireRestoreOperation: vi.fn(() => () => undefined),
     assertRestoreTargetAvailable: vi.fn(),
     credentialStore: {
@@ -183,21 +193,65 @@ describe('registerCloudBackupController', () => {
     return project
   }
 
-  it('rejects a multi-runtime backup before staging, credentials, archive or network effects', async () => {
-    const f = fixture({ acquireBackupOperation: () => projectRuntimeHost.acquireLegacyOperation('cloud-backup:backup') })
+  it('rejects a busy source before staging, credentials, archive or network effects', async () => {
+    const f = fixture({ acquireBackupOperation: acquireProjectBackupOperation })
     const a = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(runtimeProject(f.root, 'fictional-a')))
     projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(runtimeProject(f.root, 'fictional-b')))
-    projectRuntimeHost.activateView(a)
+    const active = projectAccess.beginViewSession(a)
+    const currentSession = { projectId: active.projectId, leaseId: active.leaseId, projectPath: active.rootPath }
+    const releaseWork = projectRuntimeHost.acquireWork(a)
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    await expect(f.invoke('cloud-backup:backup', {
-      operationId: OPERATION, projectSession: session, disclosureConfirmed: true,
-    })).resolves.toMatchObject({ success: false, errorCode: 'CLOUD_BACKUP_FAILED' })
+    try {
+      await expect(f.invoke('cloud-backup:backup', {
+        operationId: OPERATION, projectSession: currentSession, disclosureConfirmed: true,
+      })).resolves.toMatchObject({ success: false, errorCode: 'CLOUD_BACKUP_FAILED' })
+    } finally { releaseWork() }
     expect(f.deps.getGlobalDataRoot).not.toHaveBeenCalled()
     expect(f.deps.credentialStore.resolveSecret).not.toHaveBeenCalled()
     expect(f.deps.exportPortableProject).not.toHaveBeenCalled()
     expect(f.deps.webDav.appendGeneration).not.toHaveBeenCalled()
     expect(fs.existsSync(path.join(f.root, 'cloud-backup-staging'))).toBe(false)
     expect(JSON.stringify(warning.mock.calls)).not.toContain(f.root)
+  })
+
+  it('keeps captured A locked through upload and staging cleanup while B becomes the view', async () => {
+    const f = fixture({ acquireBackupOperation: acquireProjectBackupOperation })
+    const a = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(runtimeProject(f.root, 'fictional-a')))
+    const b = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(runtimeProject(f.root, 'fictional-b')))
+    const active = projectAccess.beginViewSession(a)
+    const currentSession = { projectId: active.projectId, leaseId: active.leaseId, projectPath: active.rootPath }
+    const exportImplementation = vi.mocked(f.deps.exportPortableProject).getMockImplementation()!
+    vi.mocked(f.deps.exportPortableProject).mockImplementationOnce(async input => {
+      expect(input.sourceProjectRoot).toBe(a.canonicalRoot)
+      projectAccess.beginViewSession(b)
+      expect(input.assertCurrentContext(currentSession, a.canonicalRoot)).toBe(true)
+      return exportImplementation(input)
+    })
+    let finishUpload!: () => void
+    const uploadGate = new Promise<void>(resolve => { finishUpload = resolve })
+    vi.mocked(f.deps.webDav.appendGeneration).mockImplementationOnce(async () => {
+      await uploadGate
+      return generation
+    })
+    const removeDirectory = await vi.importActual<typeof import('../../utils/remove-directory')>('../../utils/remove-directory')
+    vi.mocked(removeDirectoryWithWindowsRetry).mockImplementationOnce(async directory => {
+      expect(() => projectRuntimeHost.acquireWork(a)).toThrow('PROJECT_RUNTIME_MAINTENANCE_BUSY')
+      expect(projectRuntimeHost.getActiveView()).toBe(b)
+      await removeDirectory.removeDirectoryWithWindowsRetry(directory)
+    })
+    const pending = f.invoke('cloud-backup:backup', { operationId: OPERATION,
+      projectSession: currentSession, disclosureConfirmed: true })
+    try {
+      await vi.waitFor(() => expect(f.deps.webDav.appendGeneration).toHaveBeenCalledOnce())
+      expect(projectRuntimeHost.getActiveView()).toBe(b)
+      expect(() => projectRuntimeHost.acquireWork(a)).toThrow('PROJECT_RUNTIME_MAINTENANCE_BUSY')
+      const releaseB = projectRuntimeHost.acquireWork(b)
+      releaseB()
+    } finally { finishUpload(); await pending }
+    await expect(pending).resolves.toMatchObject({ success: true })
+    expect(projectRuntimeHost.getActiveView()).toBe(b)
+    const releaseA = projectRuntimeHost.acquireWork(a)
+    releaseA()
   })
 
   it('holds a zero-active restore lifecycle interlock through cancellation and cleanup', async () => {

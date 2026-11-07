@@ -453,7 +453,8 @@ async function runHostedAgentLoop(generate: LLMGenerateFn, callbacks: AgentEngin
             info.status = 'failed'; info.error = ui(`未知工具：${action.name}`, `Unknown tool: ${action.name}`)
           } else {
             const result = await executeToolWithTimeout(tool.execute, action.arguments, Object.freeze({
-              ...context, agentToolAction: action.ref, markSideEffectStarted: () => { sideEffectStarted = true },
+              ...context, agentToolAction: action.ref, globalToolExecution: claim.globalExecution,
+              markSideEffectStarted: () => { sideEffectStarted = true },
             }), TOOL_TIMEOUT_MS, context.writingLanguage, tool.isReadOnly, () => sideEffectStarted, signal)
             const unknown = !tool.isReadOnly && result.commitState === 'unknown'
             const observation = result.success ? truncateResult(action.name, result, TOOL_RESULT_MAX_CHARS, context.writingLanguage, MAX_TOOL_ROUNDS - 1 - roundIndex)

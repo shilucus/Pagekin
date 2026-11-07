@@ -136,6 +136,53 @@ const grantCount = (f: ReturnType<typeof fixture>) => f.db.prepare('SELECT COUNT
 const candidateCount = (f: ReturnType<typeof fixture>) => f.db.prepare('SELECT COUNT(*) FROM planning_feedback_candidates').pluck().get()
 
 describe('runtime feedback authority publication and ownership', () => {
+  it('seals once, revokes and settles unknown while a physical provider remains outstanding', async () => {
+    const started = deferred<void>(), response = deferred<ReturnType<typeof providerResult>>()
+    let signal!: AbortSignal
+    const f = fixture(async (_request, options) => { signal = options.signal; started.resolve(); return response.promise })
+    const prepared = f.prepare(), execution = f.authority.execute(f.subject, prepared.reference)
+    try {
+      await started.promise
+      f.authority.requestProjectClose()
+      f.authority.requestProjectClose()
+      expect(signal.aborted).toBe(true)
+      const receipt = await execution
+      expect(receipt.grant.state).toBe('revoked')
+      expect(receipt.attempts[0]?.status).toBe('unknown')
+      expect(receipt.candidate).toBeNull()
+      expect(f.authority.hasPhysicalInFlight()).toBe(true)
+      expect(f.authority.readReceipt(f.subject, receiptRef(prepared.reference))).toEqual(receipt)
+      expect(await f.authority.execute(f.subject, prepared.reference)).toEqual(receipt)
+      expect(f.authority.revoke(f.subject, prepared.reference)).toEqual(receipt)
+      expect(() => f.authority.prepare(f.subject, f.request(), () => {})).toThrow('RUNTIME_FEEDBACK_OWNER_CLOSING')
+      expect(f.dispatch).toHaveBeenCalledTimes(1)
+      response.resolve(providerResult())
+      await vi.waitFor(() => expect(f.authority.hasPhysicalInFlight()).toBe(false))
+      expect(candidateCount(f)).toBe(0)
+    } finally { response.resolve(providerResult()); await execution.catch(() => undefined) }
+  })
+
+  it('aborts despite revoke persistence failure, retains the claim and retries the same close', async () => {
+    const started = deferred<void>(), response = deferred<ReturnType<typeof providerResult>>()
+    let signal!: AbortSignal
+    const f = fixture(async (_request, options) => { signal = options.signal; started.resolve(); return response.promise })
+    const prepared = f.prepare(), execution = f.authority.execute(f.subject, prepared.reference)
+    try {
+      await started.promise
+      f.db.exec("CREATE TRIGGER close_revoke_failure BEFORE UPDATE OF state ON runtime_feedback_grants BEGIN SELECT RAISE(ABORT,'fictional revoke failure'); END")
+      expect(() => f.authority.requestProjectClose()).toThrow('RUNTIME_FEEDBACK_CLOSE_QUIESCE_FAILED')
+      expect(signal.aborted).toBe(true)
+      expect(() => f.authority.assertRetirable()).toThrow()
+      f.db.exec('DROP TRIGGER close_revoke_failure')
+      f.authority.requestProjectClose()
+      const receipt = await execution
+      expect(receipt.grant.state).toBe('revoked')
+      expect(receipt.attempts[0]?.status).toBe('unknown')
+      expect(f.dispatch).toHaveBeenCalledTimes(1)
+      response.resolve(providerResult())
+      await vi.waitFor(() => expect(f.authority.hasPhysicalInFlight()).toBe(false))
+    } finally { f.db.exec('DROP TRIGGER IF EXISTS close_revoke_failure'); response.resolve(providerResult()); await execution.catch(() => undefined) }
+  })
   it('publishes no execution capability or caller subscription until the real native COMMIT has returned', async () => {
     const f = fixture(), request = f.request()
     let beforeCommit: RuntimeFeedbackReference | undefined, capturedRunId = ''
@@ -469,7 +516,7 @@ describe('runtime feedback authority publication and ownership', () => {
     }
   })
 
-  it('does not retire a claim-free owner while its real service retains an unsaved artifact tail', async () => {
+  it('retains a failed tail until storage recovers, then exposes historical escrow without a new grant', async () => {
     const f = fixture(), prepared = f.prepare()
     const snapshot = vi.spyOn(GenerationRunRepository.prototype, 'snapshot').mockImplementation(() => { throw new Error('fictional disk full') })
     const result = await f.authority.execute(f.subject, prepared.reference)
@@ -479,8 +526,24 @@ describe('runtime feedback authority publication and ownership', () => {
     expect(f.authority.hasPhysicalInFlight()).toBe(false)
     expect(() => f.authority.assertRetirable()).toThrow('GENERATION_UNSAVED_TAIL_PRESENT')
     expect(() => f.authority.retireIdle()).toThrow('GENERATION_UNSAVED_TAIL_PRESENT')
+    f.db.exec("CREATE TRIGGER reject_tail_escrow BEFORE INSERT ON generation_recovery_tails BEGIN SELECT RAISE(FAIL,'fictional disk failure'); END")
+    expect(() => f.authority.requestProjectClose()).toThrow('RUNTIME_FEEDBACK_CLOSE_QUIESCE_FAILED')
+    expect(() => f.authority.requestProjectClose()).toThrow('RUNTIME_FEEDBACK_CLOSE_QUIESCE_FAILED')
+    expect(f.authority.readReceipt(f.subject, receiptRef(prepared.reference))).toEqual(result)
+    expect(Object.hasOwn(result, 'unsavedTails')).toBe(false)
+    expect('discardCandidate' in f.authority).toBe(false)
     expect(f.dispatch).toHaveBeenCalledTimes(1)
     expect(f.db.prepare('SELECT blocked_code FROM generation_roots WHERE root_action_id=(SELECT root_action_id FROM generation_runs WHERE run_id=?)')
       .pluck().get(prepared.receipt.grant.runId)).toBe('GENERATION_STORAGE_FAILED')
+    f.subject.destroy()
+    f.db.exec('DROP TRIGGER reject_tail_escrow')
+    f.authority.requestProjectClose()
+    const history = readRuntimeFeedbackReceipt(f.runtime, prepared.reference.grantId, f.assertCapturedResources)
+    expect(history.recoveryTails).toHaveLength(1)
+    expect(history.recoveryTails![0]).toMatchObject({ kind: 'preserved-partial', tailText: 'Fictional candidate' })
+    expect(history.grant.state).toBe('revoked')
+    expect(history.candidate).toBeNull()
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+    expect(() => f.authority.requestProjectClose()).not.toThrow()
   })
 })

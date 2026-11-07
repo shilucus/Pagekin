@@ -7,7 +7,8 @@ import { createCanonicalProjectManifest } from '../../../src/shared/project-form
 import type { TrustedProject } from '../project-access'
 import { deactivateProjectData } from '../project-data-locator'
 import { ProjectRuntimeHost, projectRuntimeHost } from '../project-runtime'
-import { assertRestoreTargetOutsideRuntimes, withProjectRestoreOperation } from '../project-runtime-compatibility'
+import { projectAccess } from '../project-access'
+import { acquireProjectBackupOperation, assertRestoreTargetOutsideRuntimes, withProjectRestoreOperation } from '../project-runtime-compatibility'
 
 const containers: string[] = []
 const isolatedHosts: ProjectRuntimeHost[] = []
@@ -48,6 +49,41 @@ afterEach(() => {
 })
 
 describe('canonical restore target/runtime exclusion', () => {
+  it('keeps a closed delete target reserved against restore overlap while B remains available', () => {
+    const a = fixture(), b = fixture(), first = open(a.project), second = open(b.project)
+    projectRuntimeHost.activateView(first)
+    const maintenance = projectRuntimeHost.acquireMaintenance(first, 'delete')
+    try {
+      maintenance.closeIdle()
+      expect(first.database.open).toBe(false)
+      expect(projectRuntimeHost.getOpenRuntimes()).not.toContain(first)
+      expect(() => assertRestoreTargetOutsideRuntimes(first.canonicalRoot)).toThrow('PROJECT_RUNTIME_RESTORE_TARGET_OVERLAP')
+      expect(() => assertRestoreTargetOutsideRuntimes(path.join(first.canonicalRoot, 'copy'))).toThrow('PROJECT_RUNTIME_RESTORE_TARGET_OVERLAP')
+      expect(() => assertRestoreTargetOutsideRuntimes(a.container)).toThrow('PROJECT_RUNTIME_RESTORE_TARGET_OVERLAP')
+      const release = projectRuntimeHost.acquireWork(second)
+      release()
+    } finally { maintenance.release() }
+    expect(() => assertRestoreTargetOutsideRuntimes(first.canonicalRoot)).not.toThrow()
+  })
+
+  it('freezes backup authorization to A resources across a B view switch until release', () => {
+    const a = fixture(), b = fixture(), first = open(a.project), second = open(b.project)
+    const lease = projectAccess.beginViewSession(first)
+    const session = { projectId: lease.projectId, leaseId: lease.leaseId, projectPath: lease.rootPath }
+    const maintenance = acquireProjectBackupOperation(session)
+    try {
+      expect(() => projectRuntimeHost.acquireWork(first)).toThrow()
+      projectAccess.beginViewSession(second)
+      expect(maintenance.assertCurrentContext(session, first.canonicalRoot)).toBe(true)
+      expect(maintenance.assertCurrentContext({ ...session, projectId: second.projectId }, first.canonicalRoot)).toBe(false)
+      expect(maintenance.assertCurrentContext(session, second.canonicalRoot)).toBe(false)
+      expect(first.database.prepare('SELECT 1').pluck().get()).toBe(1)
+      const release = projectRuntimeHost.acquireWork(second)
+      release()
+    } finally { maintenance.release() }
+    const release = projectRuntimeHost.acquireWork(first)
+    release()
+  })
   it('rejects the runtime itself, its child, and an ancestor containing it', () => {
     const { project, container } = fixture(), runtime = open(project)
     expect(() => assertRestoreTargetOutsideRuntimes(runtime.canonicalRoot)).toThrow('PROJECT_RUNTIME_RESTORE_TARGET_OVERLAP')

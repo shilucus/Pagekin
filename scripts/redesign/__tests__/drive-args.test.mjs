@@ -148,6 +148,14 @@ it('runtime feedback is an independent extra scenario, not a baseline-all sessio
   assert.equal(parseArgs(['--scenario', 'runtime-feedback-v1']).scenario, 'runtime-feedback-v1')
 })
 
+it('runtime lifecycle is an independent fake-model extra scenario', () => {
+  assert.equal(EXTRA_SCENARIOS['runtime-lifecycle-v1']?.shell, 'stage')
+  assert.equal(EXTRA_SCENARIOS['runtime-lifecycle-v1']?.model, true)
+  assert.equal(SCENARIOS['runtime-lifecycle-v1'], undefined)
+  assert.equal(parseArgs(['--scenario', 'runtime-lifecycle-v1']).scenario, 'runtime-lifecycle-v1')
+  assert.throws(() => parseArgs(['--scenario', 'runtime-lifecycle-v1', '--real-model']))
+})
+
 it('启动参数固定中文界面，非中文宿主上场景照样按中文找控件', () => {
   const roots = createIsolatedRoots(tempParent())
   const args = launchArgs(roots)

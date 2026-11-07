@@ -22,6 +22,8 @@ import {
 import { mainText } from '../i18n'
 import { VELA_HOME, writeJsonFile } from '../utils/config-utils'
 import { assertGlobalDataReady } from '../services/app-data-locator'
+import { projectRuntimeHost } from '../services/project-runtime'
+import { acquireAgentGlobalToolOperation } from '../services/agent-global-tool-admission'
 import {
   loadLocalWritingSkill,
   MAX_FOLDER_DEPTH,
@@ -437,8 +439,10 @@ export function registerAppDataController(): void {
     return skills
   })
 
-  ipcMain.handle('skills:inspect-github', async (_event, sourceUrl: string) => {
+  ipcMain.handle('skills:inspect-github', async (event, sourceUrl: string, execution: unknown) => {
+    let release: (() => void) | undefined
     try {
+      release = acquireAgentGlobalToolOperation(event?.sender, execution, { kind: 'inspect-writing-skill', sourceUrl })
       if (typeof sourceUrl !== 'string' || sourceUrl.length > 2_048) {
         throw new Error(text('GitHub 地址无效', 'The GitHub URL is invalid'))
       }
@@ -449,13 +453,15 @@ export function registerAppDataController(): void {
       })
       return { success: true, inspection }
     } catch (error) {
-      if (typeof sourceUrl === 'string') inspectedWritingSkills.delete(sourceUrl)
+      if (release && typeof sourceUrl === 'string') inspectedWritingSkills.delete(sourceUrl)
       return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
+    } finally { release?.() }
   })
 
-  ipcMain.handle('skills:install-github', async (_event, sourceUrl: string) => {
+  ipcMain.handle('skills:install-github', async (event, sourceUrl: string, execution: unknown) => {
+    let release: (() => void) | undefined
     try {
+      release = acquireAgentGlobalToolOperation(event?.sender, execution, { kind: 'install-writing-skill', sourceUrl })
       if (typeof sourceUrl !== 'string' || sourceUrl.length > 2_048) {
         throw new Error(text('GitHub 地址无效', 'The GitHub URL is invalid'))
       }
@@ -481,11 +487,13 @@ export function registerAppDataController(): void {
       return { success: true, skill: installUserWritingSkill(inspection, raw) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
+    } finally { release?.() }
   })
 
   ipcMain.handle('skills:pick-local', async (event: SkillEvent, kind: LocalWritingSkillSourceKind) => {
+    let release: (() => void) | undefined
     try {
+      release = projectRuntimeHost.acquireApplicationOperation()
       if (!validSender(event)) throw new Error(text('请求来源无效', 'The request sender is invalid'))
       if (kind !== 'file' && kind !== 'folder') throw new Error(text('导入方式无效', 'The import kind is invalid'))
       const selection = await showOpenDialogInLastDirectory('writing-skill', kind === 'folder'
@@ -513,11 +521,12 @@ export function registerAppDataController(): void {
       return { success: true, cancelled: false, inspection }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
+    } finally { release?.() }
   })
 
   ipcMain.handle('skills:install-local', async (event: SkillEvent, candidateId: string) => {
     try {
+      projectRuntimeHost.assertApplicationWorkAvailable()
       if (!validSender(event)) throw new Error(text('请求来源无效', 'The request sender is invalid'))
       const pending = localCandidates.get(event.sender.id)
       if (!pending || pending.candidateId !== candidateId) {
@@ -543,6 +552,7 @@ export function registerAppDataController(): void {
 
   ipcMain.handle('skills:uninstall-user', async (_event, name: string) => {
     try {
+      projectRuntimeHost.assertApplicationWorkAvailable()
       const directory = writingSkillDirectory(name)
       const skillsRoot = path.join(VELA_HOME, 'skills')
       if (!fs.existsSync(skillsRoot)) return { success: true }

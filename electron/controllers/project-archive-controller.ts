@@ -11,19 +11,17 @@ import type {
   PortableProjectRestoreRequest,
 } from '../../src/shared/ipc-channels'
 import { CANONICAL_PROJECT_DATABASE, CANONICAL_PROJECT_DIRECTORY } from '../../src/shared/project-format'
-import { getCurrentProjectPath } from '../database'
 import {
   ExternalFileGrantService,
   externalFileGrants,
   type IssuedExternalFileGrant,
 } from '../services/external-file-grant-service'
-import { projectAccess } from '../services/project-access'
 import { exportPortableProject } from '../services/project-archive-service'
 import { createPortableProjectAssetProvider } from '../services/portable-project-assets'
 import { restorePortableProject } from '../services/project-restore-service'
 import { registerRecentProject } from './project-controller'
 import { mainText } from '../i18n'
-import { assertRestoreTargetOutsideRuntimes, withLegacyProjectOperation, withProjectRestoreOperation } from '../services/project-runtime-compatibility'
+import { acquireProjectBackupOperation, assertRestoreTargetOutsideRuntimes, withProjectRestoreOperation } from '../services/project-runtime-compatibility'
 
 const require = createRequire(import.meta.url)
 
@@ -202,11 +200,9 @@ export function registerProjectArchiveController(
 
   ipcMain.handle('project:archive-export', async (event: ArchiveGrantEvent, request: PortableProjectExportRequest) => {
     try {
-      return await withLegacyProjectOperation('project:archive-export', async () => {
-        const active = projectAccess.assertCurrentProjectContext(
-          request.projectSession,
-          getCurrentProjectPath(),
-        )
+      const maintenance = acquireProjectBackupOperation(request.projectSession)
+      try {
+        const active = maintenance.project
         const targetArchivePath = resolveGrantedPath(grants, event, request.targetArchiveGrantId, 'create')
         const receipt = await exportPortableProject({
           sourceProjectRoot: active.rootPath,
@@ -214,13 +210,10 @@ export function registerProjectArchiveController(
           targetArchivePath,
           attemptParentPath: path.dirname(path.resolve(targetArchivePath)),
           assets: portableAssets,
-          assertCurrentContext(context, sourceProjectRoot) {
-            const current = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
-            return projectAccess.sameCanonicalProjectRoot(current.rootPath, sourceProjectRoot)
-          },
+          assertCurrentContext: maintenance.assertCurrentContext,
         })
         return { success: true as const, receipt }
-      })
+      } finally { maintenance.release() }
     } catch (error) {
       return failure(error)
     }

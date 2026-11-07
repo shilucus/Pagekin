@@ -450,6 +450,28 @@ it('preserves schema 10 rows in the pre-grants domain when upgrading to the inst
  expect(upgraded.domain.tableCounts.runtime_feedback_grants).toBeUndefined()
  expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
 })
+it('preserves schema 11 rows in the pre-recovery-tail domain when upgrading to the installed lane', async () => {
+ const f=fixture()
+ const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:11})
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
+ expect(upgraded.preRecoveryTailsDomain).toEqual(before.domain)
+ expect(upgraded.domain.tableCounts.generation_recovery_tails).toBeUndefined()
+ expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
+it('rolls back a failed recovery-tail migration and retains the schema 11 author copy for retry', async () => {
+ const f=fixture()
+ const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:11})
+ const original=fs.readFileSync(f.target), registry=getDesktopMigrationRegistry()
+ const failing={...registry,implementations:registry.implementations.map(step=>step.id==='M11'
+  ? {...step,migrate:(reader: Parameters<typeof step.migrate>[0])=>{step.migrate(reader);throw new Error('tail-migration-interruption')}} : step)}
+ expect(()=>upgradeProjectSqlite({databasePath:f.target,registry:failing})).toThrow('tail-migration-interruption')
+ expect(probeProjectSqlite({databasePath:f.target})).toEqual(before)
+ expect(fs.readFileSync(f.target)).toEqual(original)
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.preRecoveryTailsDomain).toEqual(before.domain)
+ expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
+})
 it('rolls back a failed grants migration and retains the schema 10 author copy for retry', async () => {
  const f=fixture()
  const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:10})

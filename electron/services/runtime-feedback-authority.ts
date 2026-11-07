@@ -3,6 +3,7 @@ import type { MainGenerationRunHandle } from '../../src/services/generation/gene
 import { assertRuntimeFeedbackRequest, type PrepareRuntimeFeedbackRequest, type RuntimeFeedbackChannels,
   type RuntimeFeedbackReceipt, type RuntimeFeedbackReference } from '../../src/shared/runtime-feedback-contract'
 import { GenerationRunRepository, textHash } from '../repositories/generation-run-repository'
+import { GenerationRecoveryTailRepository } from '../repositories/generation-recovery-tail-repository'
 import { PlanningFeedbackRepository } from '../repositories/planning-feedback-repository'
 import { RuntimeFeedbackGrantRepository, type RuntimeFeedbackGrant } from '../repositories/runtime-feedback-grant-repository'
 import type { createMainGenerationOwner, MainGenerationOwnerDependencies } from './main-generation-owner'
@@ -18,7 +19,7 @@ export interface RuntimeFeedbackSubject {
 type NarrowOwner = Pick<ReturnType<typeof createMainGenerationOwner>,
   'beginRuntimeFieldFeedback' | 'rollbackRuntimeFieldFeedbackPreparation' | 'executeRuntimeFieldFeedback'
   | 'stageRuntimeFieldFeedback' | 'cancelRuntimeFieldFeedback'
-  | 'hasPhysicalInFlight' | 'assertRetirable' | 'retireIdle' | 'suspendForProjectClose'>
+  | 'hasPhysicalInFlight' | 'assertRetirable' | 'retireIdle' | 'requestProjectClose' | 'suspendForProjectClose'>
 
 export interface RuntimeFeedbackAuthorityOptions {
   runtime: ProjectRuntime
@@ -57,6 +58,7 @@ export function readRuntimeFeedbackReceipt(runtime: ProjectRuntime, grantId: str
   const grant = grants.get(grantId)
   if (!grant) fail('GRANT_MISSING')
   const runs = new GenerationRunRepository(() => runtime.database, Date.now, (table, id) => frozen.isFrozen(table, id))
+  const recoveryTails = new GenerationRecoveryTailRepository(runtime.database, runs, (table, id) => frozen.isFrozen(table, id)).list(grant.runId)
   const feedback = new PlanningFeedbackRepository(runtime.database, { projectId: runtime.projectId,
     assertCurrent: assertCapturedResources, isFrozen: (table, id) => frozen.isFrozen(table, id),
     assertGenerationCurrent: () => fail('HISTORY_READ_ONLY') })
@@ -67,7 +69,8 @@ export function readRuntimeFeedbackReceipt(runtime: ProjectRuntime, grantId: str
   return { grant: { grantId: grant.grantId, projectId: grant.projectId, revision: grant.revision, target: grant.target,
     baseId: grant.baseId, parentCandidateId: grant.parentCandidateId, runId: grant.runId, state: grant.state,
     candidateId: grant.candidateId }, attempts,
-  candidate: grant.candidateId ? feedback.getCandidate(grant.candidateId) : null, nonReplayable: true }
+  candidate: grant.candidateId ? feedback.getCandidate(grant.candidateId) : null,
+  ...(recoveryTails.length ? { recoveryTails } : {}), nonReplayable: true }
 }
 
 /** A private single-producer facade. Durable rows and renderer references are not bearer authority. */
@@ -78,6 +81,7 @@ export class RuntimeFeedbackAuthority {
   private readonly issuances = new Map<string, Issuance>()
   private readonly observedSubjects = new WeakSet<RuntimeFeedbackSubject>()
   private retired = false
+  private closing = false
 
   constructor(private readonly options: RuntimeFeedbackAuthorityOptions) {
     this.runtime = options.runtime
@@ -99,6 +103,7 @@ export class RuntimeFeedbackAuthority {
   }
 
   private active(runId: string): Issuance {
+    if (this.closing) fail('OWNER_CLOSING')
     this.options.assertAdmission()
     this.options.assertCapturedResources()
     const issuance = [...this.issuances.values()].find(value => value.handle.runId === runId)
@@ -171,6 +176,7 @@ export class RuntimeFeedbackAuthority {
     assertFreshView: () => void): RuntimeFeedbackChannels['runtime-feedback:v1:prepare']['return'] {
     assertRuntimeFeedbackRequest('runtime-feedback:v1:prepare', request)
     if (this.retired) fail('OWNER_RETIRED')
+    if (this.closing) fail('OWNER_CLOSING')
     assertFreshView()
     this.options.assertAdmission()
     this.options.assertCapturedResources()
@@ -272,6 +278,20 @@ export class RuntimeFeedbackAuthority {
   }
 
   hasPhysicalInFlight(): boolean { return this.owner.hasPhysicalInFlight() }
+  requestProjectClose(): void {
+    this.closing = true
+    const failures: unknown[] = []
+    for (const issuance of this.issuances.values()) {
+      if (!issuance.claim) continue
+      try { this.revokeIssuance(issuance, true) }
+      catch (error) {
+        failures.push(error)
+        try { this.requestCancel(issuance) } catch (cancelError) { failures.push(cancelError) }
+      }
+    }
+    try { this.owner.requestProjectClose() } catch (error) { failures.push(error) }
+    if (failures.length) throw new AggregateError(failures, 'RUNTIME_FEEDBACK_CLOSE_QUIESCE_FAILED')
+  }
   hasIssuance(grantId: string): boolean { return this.issuances.has(grantId) }
   assertRetirable(): void { this.owner.assertRetirable() }
   prepareRetirement(): void {

@@ -1,4 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
+import type { MCPChannels, MCPToolCallResult } from '../../shared/ipc-channels'
+import type { AgentGlobalToolExecution, AgentToolAction } from '../../shared/agent-generation'
+import { runAgentLoop } from '../../services/agent/agent-engine'
+import { AgentGenerationClient } from '../../services/agent/agent-generation-client'
+import { toolRegistry, type AgentExecutionContext } from '../../services/agent/tool-registry'
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -10,17 +15,46 @@ vi.mock('../../services/ipc-client', () => ({
   ipc: { invoke: mocks.invoke },
 }))
 
-vi.mock('../../services/agent/tool-registry', () => ({
-  toolRegistry: {
-    register: mocks.register,
-    unregisterBySource: mocks.unregisterBySource,
-  },
-}))
+vi.mock('../../services/agent/tool-registry', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../services/agent/tool-registry')>()
+  const register = actual.toolRegistry.register.bind(actual.toolRegistry)
+  const unregisterBySource = actual.toolRegistry.unregisterBySource.bind(actual.toolRegistry)
+  actual.toolRegistry.register = mocks.register.mockImplementation(register)
+  actual.toolRegistry.unregisterBySource = mocks.unregisterBySource.mockImplementation(unregisterBySource)
+  return actual
+})
 
 import { useLocaleStore } from '../locale-store'
 import { useMCPStore } from '../mcp-store'
 
 const originalLocale = useLocaleStore.getState().locale
+const remoteToolName = 'mcp__safe-id__write_remote'
+const execution: AgentGlobalToolExecution = { version: 1, token: 'fictional-main-issued-proof' }
+const actionRef: AgentToolAction['ref'] = {
+  handle: { projectId: 'fictional-project', epoch: 'fictional-epoch', rootActionId: 'fictional-root', runId: 'fictional-run' },
+  attemptId: 'fictional-attempt', toolCallId: 'fictional-tool-call',
+}
+
+function registerRemoteTool() {
+  useMCPStore.setState({ tools: [{ name: 'write_remote', description: 'Writes fictional remote state',
+    inputSchema: { type: 'object' }, serverId: 'safe-id' }] })
+  useMCPStore.getState().registerMCPToolsToRegistry()
+  return toolRegistry.get(remoteToolName)!
+}
+
+function context(): AgentExecutionContext {
+  return { projectSession: null, selectedModelId: 'fictional-model', uiLocale: 'en-US', writingLanguage: 'en-US' }
+}
+
+function callbacks() {
+  return { onTextChunk: vi.fn(), onToolCallStart: vi.fn(), onToolCallComplete: vi.fn(),
+    onToolCallConfirmRequired: vi.fn(async () => true), onDone: vi.fn(), onError: vi.fn() }
+}
+
+afterEach(() => {
+  toolRegistry.unregisterBySource('mcp')
+  vi.useRealTimers()
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -100,6 +134,142 @@ describe('renderer MCP trust boundary', () => {
       requiresConfirmation: true,
       isReadOnly: false,
     }))
+  })
+
+  it('uses the versioned commit-state result and keeps the execution proof optional for direct callers', () => {
+    expectTypeOf<MCPChannels['mcp:call-tool']['return']>().toEqualTypeOf<MCPToolCallResult>()
+    expectTypeOf<MCPChannels['mcp:call-tool']['args']>()
+      .toEqualTypeOf<[serverId: string, toolName: string, args: Record<string, unknown>, execution?: AgentGlobalToolExecution]>()
+  })
+
+  it('rejects a hosted call without main proof before marking or sending, ignoring a model-supplied proof', async () => {
+    const tool = registerRemoteTool(), markSideEffectStarted = vi.fn()
+    await expect(tool.execute({ globalToolExecution: execution }, { ...context(), agentToolAction: actionRef, markSideEffectStarted }))
+      .rejects.toThrow('GENERATION_AGENT_GLOBAL_EXECUTION_REQUIRED')
+    expect(markSideEffectStarted).not.toHaveBeenCalled()
+    expect(mocks.invoke).not.toHaveBeenCalled()
+  })
+
+  it('passes hosted main proof separately from model arguments immediately after marking dispatch', async () => {
+    const tool = registerRemoteTool(), markSideEffectStarted = vi.fn()
+    const args = { globalToolExecution: { version: 1, token: 'fictional-model-forgery' } }
+    mocks.invoke.mockResolvedValueOnce({ version: 1, success: true, content: '', commitState: 'committed' })
+    await tool.execute(args, { ...context(), agentToolAction: actionRef, globalToolExecution: execution, markSideEffectStarted })
+    expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith('mcp:call-tool', 'safe-id', 'write_remote', args, execution)
+    expect(markSideEffectStarted).toHaveBeenCalledOnce()
+    expect(markSideEffectStarted.mock.invocationCallOrder[0]).toBeLessThan(mocks.invoke.mock.invocationCallOrder[0]!)
+  })
+
+  it.each(['not_committed', 'committed', 'unknown'] as const)('marks dispatch and preserves the %s receipt unchanged', async commitState => {
+    const tool = registerRemoteTool(), markSideEffectStarted = vi.fn()
+    mocks.invoke.mockResolvedValueOnce({ version: 1, success: commitState === 'committed', content: 'Fictional response', commitState })
+    await expect(tool.execute({ value: 'fictional' }, { ...context(), markSideEffectStarted }))
+      .resolves.toMatchObject({ success: commitState === 'committed', content: 'Fictional response', commitState })
+    expect(markSideEffectStarted).toHaveBeenCalledOnce()
+    expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith('mcp:call-tool', 'safe-id', 'write_remote', { value: 'fictional' })
+    expect(markSideEffectStarted.mock.invocationCallOrder[0]).toBeLessThan(mocks.invoke.mock.invocationCallOrder[0]!)
+  })
+
+  it('rejects an already aborted call before marking or sending any remote side effect', async () => {
+    const tool = registerRemoteTool(), controller = new AbortController(), markSideEffectStarted = vi.fn()
+    controller.abort()
+    await expect(tool.execute({}, { ...context(), agentToolAction: actionRef, abortSignal: controller.signal, markSideEffectStarted }))
+      .rejects.toMatchObject({ name: 'AbortError' })
+    expect(markSideEffectStarted).not.toHaveBeenCalled()
+    expect(mocks.invoke).not.toHaveBeenCalled()
+  })
+
+  it.each(['unknown-receipt', 'rejected-receipt'] as const)('stops the Agent without resending an MCP %s', async mode => {
+    registerRemoteTool()
+    if (mode === 'unknown-receipt') mocks.invoke.mockResolvedValueOnce({ version: 1,
+      success: false, content: '', commitState: 'unknown', error: 'fictional receipt unavailable' })
+    else mocks.invoke.mockRejectedValueOnce(new Error('fictional IPC closed after dispatch'))
+    const ui = callbacks(), generate = vi.fn()
+      .mockResolvedValueOnce(`<tool_call>{"name":"${remoteToolName}","arguments":{}}</tool_call>`)
+      .mockResolvedValueOnce(`<tool_call>{"name":"${remoteToolName}","arguments":{}}</tool_call>`)
+    await runAgentLoop('system', [], 'fictional remote write', 'fictional-model', generate, ui, undefined, context())
+    expect(ui.onToolCallConfirmRequired).toHaveBeenCalledOnce()
+    expect(mocks.invoke).toHaveBeenCalledOnce()
+    expect(generate).toHaveBeenCalledOnce()
+    expect(ui.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({ status: 'result_unknown', commitState: 'unknown' }))
+    expect(ui.onDone).toHaveBeenCalledWith(expect.stringContaining('stopped to avoid a duplicate write'), expect.anything(), expect.anything())
+  })
+
+  it('keeps a sent MCP timeout unknown and ignores its late receipt without another round', async () => {
+    vi.useFakeTimers()
+    registerRemoteTool()
+    let finish!: (result: MCPToolCallResult) => void
+    mocks.invoke.mockImplementationOnce(() => new Promise<MCPToolCallResult>(resolve => { finish = resolve }))
+    const ui = callbacks(), generate = vi.fn()
+      .mockResolvedValueOnce(`<tool_call>{"name":"${remoteToolName}","arguments":{}}</tool_call>`)
+      .mockResolvedValueOnce('must not continue')
+    const run = runAgentLoop('system', [], 'fictional remote write', 'fictional-model', generate, ui, undefined, context())
+    try {
+      await vi.advanceTimersByTimeAsync(30_000)
+      await run
+      expect(mocks.invoke).toHaveBeenCalledOnce()
+      expect(generate).toHaveBeenCalledOnce()
+      expect(ui.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({ status: 'result_unknown', commitState: 'unknown' }))
+    } finally {
+      finish({ version: 1, success: true, content: 'Fictional late receipt', commitState: 'committed' })
+      await run
+    }
+    expect(ui.onToolCallComplete).toHaveBeenCalledOnce()
+    expect(generate).toHaveBeenCalledOnce()
+  })
+
+  it.each(['unknown-receipt', 'rejected-receipt', 'missing-proof'] as const)('honors the hosted claim proof boundary for MCP %s', async mode => {
+    const tool = registerRemoteTool()
+    if (mode === 'unknown-receipt') mocks.invoke.mockResolvedValueOnce({ version: 1,
+      success: false, content: '', commitState: 'unknown' })
+    else if (mode === 'rejected-receipt') mocks.invoke.mockRejectedValueOnce(new Error('fictional IPC closed after dispatch'))
+    const session = { projectId: 'fictional-project', leaseId: 'fictional-lease', projectPath: 'C:/synthetic/mcp-project' }
+    const host = new AgentGenerationClient(session)
+    const action: AgentToolAction = { name: remoteToolName, arguments: {}, status: 'pending', ref: {
+      handle: { projectId: session.projectId, epoch: 'fictional-epoch', rootActionId: 'fictional-root', runId: 'fictional-run' },
+      attemptId: 'fictional-attempt', toolCallId: 'fictional-tool-call' } }
+    const assertTool = vi.spyOn(host, 'assertTool').mockImplementation(() => {})
+    const claim = vi.spyOn(host, 'claimTool').mockResolvedValue({ action: { ...action, status: 'running' }, execute: true,
+      globalExecution: mode === 'missing-proof' ? undefined : execution })
+    const finish = vi.spyOn(host, 'finishTool').mockImplementation(async request => ({ ...action, status: request.status }))
+    const ui = callbacks(), generate = vi.fn().mockResolvedValueOnce({ index: 0, handle: action.ref.handle,
+      status: 'completed', visibleText: '', protocolText: '', actions: [action] })
+      .mockResolvedValueOnce({ index: 1, handle: action.ref.handle, status: 'completed', visibleText: '', protocolText: '', actions: [] })
+    try {
+      await runAgentLoop('ignored', [], 'ignored', 'ignored', generate, ui, undefined,
+        { ...context(), projectSession: session, agentGeneration: host, globalToolExecution: { version: 1, token: 'fictional-stale-context-proof' } })
+      expect(assertTool).toHaveBeenCalledExactlyOnceWith(tool)
+      expect(ui.onToolCallConfirmRequired).toHaveBeenCalledOnce()
+      expect(claim).toHaveBeenCalledExactlyOnceWith(action.ref, true, undefined)
+      if (mode === 'missing-proof') {
+        expect(finish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ref: action.ref, status: 'failed' }))
+        expect(mocks.invoke).not.toHaveBeenCalled()
+        expect(generate).toHaveBeenCalledTimes(2)
+        expect(ui.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed', commitState: 'not_committed' }))
+      } else {
+        expect(finish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ref: action.ref, status: 'unknown' }))
+        expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith('mcp:call-tool', 'safe-id', 'write_remote', {}, execution)
+        expect(generate).toHaveBeenCalledOnce()
+        expect(ui.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({ status: 'result_unknown', commitState: 'unknown' }))
+      }
+    } finally {
+      assertTool.mockRestore()
+      claim.mockRestore()
+      finish.mockRestore()
+      host.close()
+    }
+  })
+
+  it('reports cancellation during confirmation as not committed without sending the MCP request', async () => {
+    registerRemoteTool()
+    const controller = new AbortController(), ui = callbacks()
+    ui.onToolCallConfirmRequired.mockImplementationOnce(async () => { controller.abort(); return true })
+    const generate = vi.fn().mockResolvedValueOnce(`<tool_call>{"name":"${remoteToolName}","arguments":{}}</tool_call>`)
+    await runAgentLoop('system', [], 'fictional remote write', 'fictional-model', generate, ui, controller.signal, context())
+    expect(ui.onToolCallConfirmRequired).toHaveBeenCalledOnce()
+    expect(mocks.invoke).not.toHaveBeenCalled()
+    expect(generate).toHaveBeenCalledOnce()
+    expect(ui.onToolCallComplete).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed', commitState: 'not_committed' }))
   })
 })
 

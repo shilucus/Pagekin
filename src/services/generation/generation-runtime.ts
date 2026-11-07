@@ -98,12 +98,24 @@ export interface MainGenerationReasoningEvent extends MainGenerationRunHandle {
   attemptId: string
   text: string
 }
+export interface GenerationPreservedTail {
+  kind: 'preserved-partial'
+  attemptId: string
+  artifactId: string
+  durableRevision: number
+  durableText: string
+  prefixHash: string
+  tailText: string
+  tailHash: string
+  preservedAt: string
+}
 export interface MainGenerationRunView {
   plotOutline?: import('../../shared/plot-outline-contract').PlotOutlineProgress
   budgetDiagnostics?: readonly import('./task-budget-planner').GenerationBudgetDiagnostic[]
   operation?: string
   candidates?: readonly (MainGenerationSnapshot & { fingerprint: FrozenInputFingerprint; nonReplayable: true })[]
   unsavedTails?: readonly { attemptId: string; artifactId: string; durableRevision: number; text: string; failureCode: string }[]
+  recoveryTails?: readonly GenerationPreservedTail[]
   ledger?: { policy: RootBudget; tokenLiability: number; physicalRequests: number; activeElapsedMs: number; blockedCode: string | null }
   handle: MainGenerationRunHandle
   /** Read-only compatibility projection from the persistent main ledger. */

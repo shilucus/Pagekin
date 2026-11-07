@@ -69,13 +69,16 @@ const mocks = vi.hoisted(() => ({
   runtimeBusy: false,
   legacyHeld: false,
   restoreHeld: false,
+  maintenanceRoots: new Set<string>(),
   pendingRuntimeTicket: false,
+  closeRequestedRoots: new Set<string>(),
   runtimeHost: {
-    prepareOpen: vi.fn(), commitOpen: vi.fn(), abortOpen: vi.fn(), assertOpen: vi.fn(),
+    prepareOpen: vi.fn(), commitOpen: vi.fn(), abortOpen: vi.fn(), assertOpen: vi.fn(), assertWorkAvailable: vi.fn(),
     assertCompatibilityOpenAvailable: vi.fn(), prepareCompatibilityOpen: vi.fn(), prepareRetainedOpen: vi.fn(),
     getActiveView: vi.fn(), getOpenRuntimes: vi.fn(), activateView: vi.fn(), releaseIdle: vi.fn(),
     acquireLegacyOperation: vi.fn(),
     acquireRestoreOperation: vi.fn(), assertLifecycleAvailable: vi.fn(),
+    acquireMaintenance: vi.fn(), getReservedRoots: vi.fn(),
   },
   /** 作者在设置里保存过的界面语言；没保存时主进程按系统语言选。 */
   storedLocale: undefined as undefined | 'zh-CN' | 'en-US',
@@ -295,10 +298,30 @@ beforeEach(() => {
   mocks.runtimeBusy = false
   mocks.legacyHeld = false
   mocks.restoreHeld = false
+  mocks.maintenanceRoots.clear()
   mocks.pendingRuntimeTicket = false
+  mocks.closeRequestedRoots.clear()
   mocks.runtimeHost.assertLifecycleAvailable.mockImplementation(() => {
     if (mocks.legacyHeld) throw new Error('PROJECT_RUNTIME_LEGACY_OPERATION_BUSY')
     if (mocks.restoreHeld) throw new Error('PROJECT_RUNTIME_RESTORE_BUSY')
+    if (mocks.maintenanceRoots.size) throw new Error('PROJECT_RUNTIME_MAINTENANCE_BUSY')
+  })
+  mocks.runtimeHost.getReservedRoots.mockImplementation(() => [...mocks.maintenanceRoots])
+  mocks.runtimeHost.acquireMaintenance.mockImplementation((runtime: FictionRuntime) => {
+    mocks.runtimeHost.assertLifecycleAvailable()
+    mocks.runtimeHost.assertOpen(runtime)
+    if (mocks.runtimeBusy || mocks.pendingRuntimeTicket) throw new Error('PROJECT_RUNTIME_BUSY')
+    mocks.maintenanceRoots.add(runtime.canonicalRoot)
+    return {
+      closeIdle: () => {
+        if (runtime.phase !== 'open') throw new Error('PROJECT_RUNTIME_BUSY')
+        runtime.phase = 'closed'
+        runtime.database.open = false
+        mocks.runtimes.delete(runtime.canonicalRoot)
+        if (mocks.currentProjectPath === runtime.canonicalRoot) mocks.currentProjectPath = ''
+      },
+      release: () => { mocks.maintenanceRoots.delete(runtime.canonicalRoot) },
+    }
   })
   mocks.runtimeHost.acquireRestoreOperation.mockImplementation(() => {
     mocks.runtimeHost.assertLifecycleAvailable()
@@ -310,6 +333,11 @@ beforeEach(() => {
   mocks.runtimeHost.getOpenRuntimes.mockImplementation(() => [...mocks.runtimes.values()])
   mocks.runtimeHost.assertOpen.mockImplementation((runtime: FictionRuntime) => {
     if (mocks.runtimes.get(runtime.canonicalRoot) !== runtime || runtime.phase !== 'open') throw new Error('PROJECT_RUNTIME_NOT_OPEN')
+  })
+  mocks.runtimeHost.assertWorkAvailable.mockImplementation((runtime: FictionRuntime) => {
+    mocks.runtimeHost.assertOpen(runtime)
+    if (mocks.closeRequestedRoots.has(runtime.canonicalRoot)) throw new Error('PROJECT_RUNTIME_CLOSE_REQUESTED')
+    if (mocks.maintenanceRoots.has(runtime.canonicalRoot)) throw new Error('PROJECT_RUNTIME_MAINTENANCE_BUSY')
   })
   mocks.runtimeHost.prepareOpen.mockImplementation((project: { rootPath: string }) => {
     mocks.runtimeHost.assertLifecycleAvailable()
@@ -348,7 +376,9 @@ beforeEach(() => {
     if (!ticket.reused && ticket.runtime.phase === 'opening') mocks.runtimes.delete(ticket.runtime.canonicalRoot)
   })
   mocks.runtimeHost.activateView.mockImplementation((runtime: FictionRuntime | null) => {
-    mocks.runtimeHost.assertLifecycleAvailable()
+    if (mocks.legacyHeld) throw new Error('PROJECT_RUNTIME_LEGACY_OPERATION_BUSY')
+    if (mocks.restoreHeld) throw new Error('PROJECT_RUNTIME_RESTORE_BUSY')
+    if (runtime && mocks.maintenanceRoots.has(runtime.canonicalRoot)) throw new Error('PROJECT_RUNTIME_MAINTENANCE_BUSY')
     mocks.currentProjectPath = runtime?.canonicalRoot ?? ''
   })
   mocks.runtimeHost.releaseIdle.mockImplementation((runtime: FictionRuntime) => {
@@ -1340,6 +1370,22 @@ describe('project controller project identity', () => {
     expect(mocks.transaction).toHaveBeenCalled()
   })
 
+  it.each(['project:save', 'project:update-config'] as const)('blocks %s before persistence during maintenance or close intent', async channel => {
+    const data = { path: projectA, sessionLease: 'lease-project-A', name: 'Project A', novelConfig: { genre: 'fantasy' } }
+    const runtime = mocks.runtimes.get(projectA)!
+    const maintenance = mocks.runtimeHost.acquireMaintenance(runtime, 'backup')
+    try {
+      await expect(handler(channel)({}, 'project-A', data, projectA, projectSession()))
+        .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_RUNTIME_MAINTENANCE_BUSY' })
+    } finally { maintenance.release() }
+    mocks.closeRequestedRoots.add(projectA)
+    await expect(handler(channel)({}, 'project-A', data, projectA, projectSession()))
+      .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_RUNTIME_CLOSE_REQUESTED' })
+    expect(mocks.runtimeHost.assertWorkAvailable).toHaveBeenCalledTimes(2)
+    expect(mocks.projectCoreUpdate).not.toHaveBeenCalled()
+    expect(mocks.writeJsonFile).not.toHaveBeenCalled()
+  })
+
   it('persists the project creative strategy independently from model settings', async () => {
     const data = {
       path: projectA,
@@ -1444,9 +1490,8 @@ describe('project controller project identity', () => {
     expect(mocks.projectAccess.assertCurrentProjectContext).not.toHaveBeenCalled()
   })
 
-  it.each(['multiple', 'busy', 'pending', 'closing', 'legacy', 'restore'] as const)('denies %s deletion before native close or directory effects', async state => {
+  it.each(['busy', 'pending', 'closing', 'legacy', 'restore'] as const)('denies %s deletion before native close or directory effects', async state => {
     const runtimeA = mocks.runtimes.get(projectA)!
-    if (state === 'multiple') mocks.runtimes.set(projectB, fictionRuntime(projectB))
     if (state === 'busy') mocks.runtimeBusy = true
     if (state === 'pending') mocks.pendingRuntimeTicket = true
     if (state === 'closing') runtimeA.phase = 'closing'
@@ -1462,9 +1507,15 @@ describe('project controller project identity', () => {
   })
 
   it('reports a quarantined release failure without deleting the folder or reopening its handle', async () => {
-    mocks.runtimeHost.releaseIdle.mockImplementationOnce((runtime: FictionRuntime) => {
-      runtime.phase = 'closing'
-      throw new Error('fiction KB close failure')
+    mocks.runtimeHost.acquireMaintenance.mockImplementationOnce((runtime: FictionRuntime) => {
+      mocks.maintenanceRoots.add(runtime.canonicalRoot)
+      return {
+        closeIdle: () => {
+          runtime.phase = 'closing'
+          throw new Error('fiction KB close failure')
+        },
+        release: () => { mocks.maintenanceRoots.delete(runtime.canonicalRoot) },
+      }
     })
     await expect(handler('project:delete')({}, projectA, 'project-A', 'lease-project-A', projectSession()))
       .resolves.toMatchObject({ success: false, directoryDeleted: false, databaseRestored: false,
@@ -1472,31 +1523,53 @@ describe('project controller project identity', () => {
     expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
     expect(mocks.runtimeHost.prepareOpen).not.toHaveBeenCalled()
     expect(mocks.runtimeHost.acquireRestoreOperation).not.toHaveBeenCalled()
+    expect(mocks.maintenanceRoots.size).toBe(0)
   })
 
   it('does not replace a new winning view when deletion failure recovery can no longer own the view', async () => {
     const winner = fictionRuntime(projectC)
-    mocks.runtimeHost.acquireRestoreOperation.mockImplementationOnce(() => {
-      mocks.restoreHeld = true
-      return () => {
-        mocks.restoreHeld = false
-        mocks.runtimes.set(projectC, winner)
-        mocks.projectAccess.beginViewSession(winner)
-      }
+    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(async () => {
+      expect(mocks.maintenanceRoots.has(projectA)).toBe(true)
+      mocks.runtimes.set(projectC, winner)
+      mocks.projectAccess.beginViewSession(winner)
+      throw new Error('directory locked')
     })
-    mocks.removeDirectoryWithWindowsRetry.mockRejectedValueOnce(new Error('directory locked'))
     await expect(handler('project:delete')({}, projectA, 'project-A', 'lease-project-A', projectSession()))
       .resolves.toMatchObject({ success: false, directoryDeleted: false, databaseRestored: false })
     expect(mocks.runtimeHost.getActiveView()).toBe(winner)
     expect(mocks.activeSession).toMatchObject({ projectId: 'project-C', leaseId: 'lease-project-C-1' })
     expect(mocks.runtimeHost.prepareOpen).not.toHaveBeenCalled()
     expect(mocks.projectAccess.invalidateCurrentSession).not.toHaveBeenCalled()
+    expect(mocks.maintenanceRoots.size).toBe(0)
+  })
+
+  it('reserves only deleted A across the directory await and keeps retained B as the winning view', async () => {
+    const original = mocks.runtimes.get(projectA)!
+    const b = fictionRuntime(projectB)
+    mocks.runtimes.set(projectB, b)
+    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(async (target: string) => {
+      expect(original.database.open).toBe(false)
+      expect(b.database.open).toBe(true)
+      expect(mocks.maintenanceRoots.has(projectA)).toBe(true)
+      expect(() => mocks.runtimeHost.prepareOpen({ rootPath: projectA })).toThrow('PROJECT_RUNTIME_MAINTENANCE_BUSY')
+      mocks.projectAccess.beginViewSession(b)
+      await Promise.resolve()
+      expect(mocks.runtimeHost.getActiveView()).toBe(b)
+      mocks.existingPaths.delete(target)
+    })
+    await expect(handler('project:delete')({}, projectA, 'project-A', 'lease-project-A', projectSession()))
+      .resolves.toMatchObject({ success: true, directoryDeleted: true, databaseRestored: false })
+    expect(mocks.runtimeHost.getActiveView()).toBe(b)
+    expect(b.database.open).toBe(true)
+    expect(mocks.maintenanceRoots.size).toBe(0)
+    expect(mocks.closeProjectDatabase).not.toHaveBeenCalled()
+    expect(mocks.projectAccess.invalidateCurrentSession).not.toHaveBeenCalled()
   })
 
   it('restores only the released idle target with a fresh lease after deletion fails', async () => {
     const original = mocks.runtimes.get(projectA)!
     mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(async () => {
-      expect(mocks.restoreHeld).toBe(true)
+      expect(mocks.maintenanceRoots.has(projectA)).toBe(true)
       expect(mocks.currentProjectPath).toBe('')
       throw new Error('directory locked')
     })
@@ -1509,9 +1582,10 @@ describe('project controller project identity', () => {
     })
     expect(mocks.initCalls).toEqual([projectA])
     expect(mocks.removeDirectoryWithWindowsRetry).toHaveBeenCalledWith(projectA)
-    expect(mocks.runtimeHost.releaseIdle).toHaveBeenCalledWith(original)
+    expect(original.database.open).toBe(false)
     expect(mocks.runtimes.get(projectA)).not.toBe(original)
     expect(mocks.restoreHeld).toBe(false)
+    expect(mocks.maintenanceRoots.size).toBe(0)
     expect(mocks.currentProjectPath).toBe(projectA)
     expect(mocks.projectAccess.invalidateCurrentSession).not.toHaveBeenCalled()
   })
@@ -1533,7 +1607,7 @@ describe('project controller project identity', () => {
 
   it('reports committed deletion even if recent-list cleanup fails', async () => {
     mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(async (target: string) => {
-      expect(mocks.restoreHeld).toBe(true)
+      expect(mocks.maintenanceRoots.has(projectA)).toBe(true)
       mocks.existingPaths.delete(target)
     })
     mocks.writeJsonFile.mockImplementationOnce(() => { throw new Error('recent list locked') })

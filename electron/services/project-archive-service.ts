@@ -98,6 +98,7 @@ const HISTORY_ID_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.f
   finalized_draft_import_operations: ['operation_id'],
   generation_artifacts: ['artifact_id'],
   generation_attempts: ['attempt_id'],
+  generation_recovery_tails: ['attempt_id'],
   generation_roots: ['root_action_id'],
   generation_runs: ['run_id'],
   import_effect_ledger: ['run_id', 'stage', 'batch_id'],

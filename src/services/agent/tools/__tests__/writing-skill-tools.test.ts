@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProjectSessionContext } from '../../../../shared/ipc-channels'
-import { toolRegistry } from '../../tool-registry'
+import type { AgentGlobalToolExecution, AgentToolActionRef } from '../../../../shared/agent-generation'
+import { toolRegistry, type AgentExecutionContext } from '../../tool-registry'
 
 const invoke = vi.fn()
 const saveWritingSkillBinding = vi.fn()
@@ -22,6 +23,13 @@ const projectSession: ProjectSessionContext = {
   projectPath: 'C:/novels/project-1',
   leaseId: 'lease-1',
 }
+const actionRef: AgentToolActionRef = {
+  handle: { projectId: projectSession.projectId, epoch: 'fictional-epoch', rootActionId: 'fictional-root', runId: 'fictional-run' },
+  attemptId: 'fictional-attempt', toolCallId: 'fictional-tool-call',
+}
+const execution: AgentGlobalToolExecution = { version: 1, token: 'fictional-main-issued-proof' }
+const hostedContext: AgentExecutionContext = { projectSession, selectedModelId: null, uiLocale: 'en-US',
+  writingLanguage: 'en-US', agentToolAction: actionRef }
 
 describe('writing skill agent tools', () => {
   beforeEach(() => {
@@ -64,6 +72,43 @@ describe('writing skill agent tools', () => {
       content: 'forged prompt',
     })).resolves.toMatchObject({ success: true })
     expect(invoke).toHaveBeenNthCalledWith(1, 'skills:install-github', 'https://github.com/acme/skill')
+  })
+
+  it.each(['inspect', 'install'] as const)('rejects hosted %s without main proof before sending, even with a model-supplied proof', async kind => {
+    const tool = kind === 'inspect' ? (await import('../inspect-writing-skill.tool')).inspectWritingSkillTool
+      : (await import('../install-writing-skill.tool')).installWritingSkillTool
+    const markSideEffectStarted = vi.fn()
+    await expect(tool.execute({ source_url: 'https://github.com/acme/skill', globalToolExecution: execution },
+      { ...hostedContext, markSideEffectStarted })).rejects.toThrow('GENERATION_AGENT_GLOBAL_EXECUTION_REQUIRED')
+    expect(markSideEffectStarted).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it.each(['inspect', 'install'] as const)('passes only the context proof as the last %s IPC argument', async kind => {
+    const tool = kind === 'inspect' ? (await import('../inspect-writing-skill.tool')).inspectWritingSkillTool
+      : (await import('../install-writing-skill.tool')).installWritingSkillTool
+    const markSideEffectStarted = vi.fn()
+    invoke.mockResolvedValue({ success: false, error: 'fictional main rejection' })
+    await tool.execute({ source_url: 'https://github.com/acme/skill', globalToolExecution: { version: 1, token: 'fictional-model-forgery' } },
+      { ...hostedContext, globalToolExecution: execution, markSideEffectStarted })
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(`skills:${kind}-github`, 'https://github.com/acme/skill', execution)
+    if (kind === 'install') {
+      expect(markSideEffectStarted).toHaveBeenCalledOnce()
+      expect(markSideEffectStarted.mock.invocationCallOrder[0]).toBeLessThan(invoke.mock.invocationCallOrder[0]!)
+    } else expect(markSideEffectStarted).not.toHaveBeenCalled()
+  })
+
+  it.each(['inspect', 'install'] as const)('checks cancellation before a missing hosted %s proof', async kind => {
+    const tool = kind === 'inspect' ? (await import('../inspect-writing-skill.tool')).inspectWritingSkillTool
+      : (await import('../install-writing-skill.tool')).installWritingSkillTool
+    const controller = new AbortController(), markSideEffectStarted = vi.fn()
+    controller.abort()
+    const result = tool.execute({ source_url: 'https://github.com/acme/skill' },
+      { ...hostedContext, abortSignal: controller.signal, markSideEffectStarted })
+    if (kind === 'inspect') await expect(result).rejects.toMatchObject({ name: 'AbortError' })
+    else await expect(result).resolves.toMatchObject({ success: false, error: 'Installation was cancelled before commit' })
+    expect(markSideEffectStarted).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('binds a compatible installed skill to one confirmed project stage', async () => {

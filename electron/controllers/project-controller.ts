@@ -756,6 +756,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
 
       const db = runtime.database
       db.transaction(() => {
+        projectRuntimeHost.assertWorkAvailable(runtime)
         ProjectCoreRepository.update(coreUpdate, db)
       })()
 
@@ -794,6 +795,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const runtime = assertRequiredProjectSession(_projectId, data, getCurrentProjectPath(), context)
       if (data.novelConfig) {
+        projectRuntimeHost.assertWorkAvailable(runtime)
         ProjectCoreRepository.update({
           genre: data.novelConfig.genre,
           subGenre: data.novelConfig.subGenre,
@@ -868,19 +870,17 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     ) => {
     let runtime: ProjectRuntime | undefined
     let resolvedPath: string
-    let releaseRestore: (() => void) | undefined
+    let maintenance: ReturnType<typeof projectRuntimeHost.acquireMaintenance> | undefined
     try {
       runtime = projectAccess.assertViewContext(context)
       resolvedPath = projectAccess.authorizeDeletion({
         projectId: runtime.projectId,
         leaseId: context!.leaseId,
       }, projectPath)
-      const live = projectRuntimeHost.getOpenRuntimes()
-      if (live.length !== 1 || live[0] !== runtime) throw new Error('PROJECT_RUNTIME_MAINTENANCE_UNAVAILABLE')
-      projectRuntimeHost.assertLifecycleAvailable()
-      projectRuntimeHost.releaseIdle(runtime)
-      releaseRestore = projectRuntimeHost.acquireRestoreOperation()
+      maintenance = projectRuntimeHost.acquireMaintenance(runtime, 'delete')
+      maintenance.closeIdle()
     } catch (error) {
+      maintenance?.release()
       const databaseRestored = runtime
         ? runtime.phase === 'open' && projectRuntimeHost.getActiveView() === runtime && getProjectDb() === runtime.database
         : getProjectDb() !== null
@@ -898,7 +898,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     } catch (error) {
       deletionError = error
     } finally {
-      releaseRestore()
+      maintenance.release()
     }
 
     const directoryDeleted = !fs.existsSync(resolvedPath)
@@ -906,7 +906,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       let prepared: PreparedRuntimeOpen | undefined
       let committed: ProjectRuntime | undefined
       try {
-        // The restore interlock is released first. Never replace a winner
+        // The target reservation is released first. Never replace a winner
         // that obtained the view before this synchronous recovery starts.
         if (projectRuntimeHost.getActiveView() !== null) throw new Error('PROJECT_SESSION_STALE')
         prepared = projectRuntimeHost.prepareOpen({ kind: 'manifest', projectId: runtime.projectId,

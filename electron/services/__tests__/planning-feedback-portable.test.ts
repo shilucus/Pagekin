@@ -268,7 +268,7 @@ describe('planning feedback portable history', () => {
     }
   })
 
-  it.each([8, 9, 10] as const)('restores a schema-%s package without re-encoding v1 history and can export current schema', async version => {
+  it.each([8, 9, 10, 11] as const)('restores a schema-%s package without re-encoding v1 history and can export current schema', async version => {
     const f = fixture()
     const oldBase = repository(f.root, f.projectId).captureBase('coreOutline')
     closeProjectDatabase()
@@ -276,6 +276,8 @@ describe('planning feedback portable history', () => {
     try {
       db.transaction(() => initializeLegacyBaselineSchema(db))()
       migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), version)
+      // Captured by root from the immutable 546486a82832cf1c63d6754b98c9be5ebc28371a source closure.
+      if (version === 11) expect(sqliteSchemaFingerprint(db)).toBe('3b151d5a40e96963f9f0e467823df87ece9002bc37de80b67c967f35122d2c7a')
       if (version >= 9) {
         if (version === 9) expect(sqliteSchemaFingerprint(db)).toBe('361b1c5416492d9e4a827119aaf8bcfdea25ecd52fc26e65207c77f901e780d2')
         expect(JSON.stringify(oldBase.source)).toBe(schema9V1SourceJson)
@@ -332,8 +334,11 @@ describe('planning feedback portable history', () => {
       originProjectId: f.projectId, snapshotGeneration: `schema${version}-history`, createdAt: '2026-11-07T00:00:00.000Z',
       declaredUncompressedBytes: total, declaredCompressedBytes: total, entries: sources.map(item => item.entry),
       semanticCounts: {}, omittedItems: [], transferReceiptIds: [receiptId], historyProjectionIds: records.map(record => record.projectionId) } })
+    const originalArchive = fs.readFileSync(archivePath)
     const target = path.join(f.base, `schema${version}-restored`)
     const restored = await restorePortableProject({ archivePath, targetProjectRoot: target })
+    expect(fs.readFileSync(oldDatabasePath)).toEqual(databaseBytes)
+    expect(fs.readFileSync(archivePath)).toEqual(originalArchive)
     initProjectDatabase(target)
     expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
     if (version === 8) expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM planning_feedback_candidates').pluck().get()).toBe(0)

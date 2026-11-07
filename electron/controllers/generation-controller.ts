@@ -39,6 +39,7 @@ import { withKnowledgeSourceGate } from '../services/knowledge-source-gate'
 import { KnowledgeBaseUnavailableError, knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { getEmbeddingConfig } from './kb-controller'
 import { recordPerformanceComputedMetric, recordPerformanceCount } from '../services/performance-diagnostics'
+import { isAgentGlobalToolAction, issueAgentGlobalToolExecution, revokeAgentGlobalToolExecutions } from '../services/agent-global-tool-admission'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
 type OwnerChannels = PlanningFeedbackChannels & LegacyRosterGenerationChannels & GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
@@ -126,6 +127,20 @@ export function registerGenerationController(options: {
   const hasPhysical = (entry: LegacyOwnerEntry | RuntimeOwnerEntry | undefined) => entry?.mode === 'legacy'
     ? entry.owner.hasPhysicalInFlight() : entry?.authority.hasPhysicalInFlight() ?? false
   projectRuntimeHost.registerBusyPredicate(runtime => (activeHandlers.get(runtime) ?? 0) > 0 || hasPhysical(owners.get(runtime.database)))
+  projectRuntimeHost.onCloseRequested(runtime => {
+    revokeAgentGlobalToolExecutions(runtime)
+    const failures: unknown[] = []
+    const entry = owners.get(runtime.database)
+    try {
+      if (entry?.mode === 'legacy') entry.owner.requestProjectClose()
+      else entry?.authority.requestProjectClose()
+    } catch (error) { failures.push(error) }
+    for (const authority of receiptAuthorities.get(runtime.database) ?? []) {
+      if (entry?.mode === 'runtime-feedback' && entry.authority === authority) continue
+      try { authority.requestProjectClose() } catch (error) { failures.push(error) }
+    }
+    if (failures.length) throw new AggregateError(failures, 'GENERATION_PROJECT_CLOSE_FAILED')
+  })
   onProjectDatabaseBeforeClose(({ database }) => {
     const entry = owners.get(database)
     if (entry) {
@@ -170,6 +185,7 @@ export function registerGenerationController(options: {
       } }
     return createMainGenerationOwner({ database: runtime.database, projectId: runtime.projectId,
       projectPath: runtime.canonicalRoot, epoch, assertCurrent, assertRetirementResources: capturedResources(runtime),
+      assertAdmission: () => projectRuntimeHost.assertWorkAvailable(runtime),
       leases: options.modelExecutionLeases, loadModel: options.loadModel, beforeDispatch: options.applyProxyConfig,
       transferOrigin: () => readPortableCurrentAuthority({ database: runtime.database,
         projectStorageRoot: runtime.projectStorageRoot, projectId: runtime.projectId })?.originProjectId,
@@ -180,12 +196,13 @@ export function registerGenerationController(options: {
       ...extra, ...delivery })
   }
   const authorizedRuntimeFeedback = (runtime: ProjectRuntime): RuntimeFeedbackAuthority => {
+    projectRuntimeHost.assertTaskAvailable(runtime)
     const entry = owners.get(runtime.database)
     if (entry?.mode === 'runtime-feedback') return entry.authority
     if (entry) assertRetirable(runtime, entry)
     const authority = new RuntimeFeedbackAuthority({ runtime,
       assertOpen: () => projectRuntimeHost.assertOpen(runtime), assertCapturedResources: capturedResources(runtime),
-      assertAdmission: () => { projectRuntimeHost.assertLifecycleAvailable(); projectRuntimeHost.assertOpen(runtime) },
+      assertAdmission: () => projectRuntimeHost.assertTaskAvailable(runtime),
       createOwner: hooks => makeOwner(runtime, runtime.executionEpoch, () => projectRuntimeHost.assertOpen(runtime),
         { mode: 'runtime-feedback', recoverInterrupted: false, ...hooks }) })
     if (entry) {
@@ -208,6 +225,7 @@ export function registerGenerationController(options: {
     let entry = owners.get(database)
     const handoff = Boolean(entry && (entry.mode !== 'legacy' || entry.session.projectId !== session.projectId || entry.session.leaseId !== session.leaseId))
     if (!entry || handoff) {
+      projectRuntimeHost.assertWorkAvailable(runtime)
       if (entry) assertRetirable(runtime, entry)
       const captured = Object.freeze({ ...session })
       const subscribers = new Set<WebContents>()
@@ -336,7 +354,8 @@ export function registerGenerationController(options: {
     return context
   }
   function register<C extends keyof OwnerChannels>(channel: C, arity: number,
-    handler: (owner: Owner, ...args: OwnerChannels[C]['args']) => OwnerChannels[C]['return'] | Promise<OwnerChannels[C]['return']>) {
+    handler: (owner: Owner, ...args: OwnerChannels[C]['args']) => OwnerChannels[C]['return'] | Promise<OwnerChannels[C]['return']>,
+    afterResult?: (result: OwnerChannels[C]['return'], owner: Owner, event: IpcMainInvokeEvent) => OwnerChannels[C]['return']) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
       try {
         const session = raw.pop()
@@ -348,7 +367,7 @@ export function registerGenerationController(options: {
         try {
           const result = await handler(owner, ...raw as OwnerChannels[C]['args'])
           if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
-          return result
+          return afterResult ? afterResult(result, owner, event) : result
         } finally {
           const remaining = activeHandlers.get(runtime)! - 1
           if (remaining) activeHandlers.set(runtime, remaining)
@@ -449,8 +468,16 @@ export function registerGenerationController(options: {
   register('editor-inline:cancel', 1, (owner, request) => owner.cancelEditorInline(request.handle))
   register('agent-generation:resume', 1, (owner, request) => owner.agents.resume(request.handle))
   register('agent-generation:round', 1, (owner, request) => owner.agents.executeRound(request))
-  register('agent-generation:claim-tool', 1, (owner, request) => owner.agents.claimTool(request))
-  register('agent-generation:finish-tool', 1, (owner, request) => owner.agents.finishTool(request))
+  register('agent-generation:claim-tool', 1, (owner, request) => owner.agents.claimTool(request), (claim, owner, event) => {
+    if (!claim.execute || !isAgentGlobalToolAction(claim.action)) return claim
+    const ref = structuredClone(claim.action.ref)
+    return { ...claim, globalExecution: issueAgentGlobalToolExecution({ sender: event.sender, runtime: ownerRuntimes.get(owner)!,
+      action: claim.action, assertClaim: () => owner.agents.assertToolEffectAvailable(ref) }) }
+  })
+  register('agent-generation:finish-tool', 1, (owner, request) => owner.agents.finishTool(request), (action, owner) => {
+    revokeAgentGlobalToolExecutions(ownerRuntimes.get(owner)!, action.ref)
+    return action
+  })
   register('agent-generation:register-workflow', 1, (owner, request) => owner.agents.registerWorkflow(request.ref))
   register('agent-generation:commit-domain-tool', 1, (owner, request) => owner.agents.commitDomainTool(request.ref))
   register('generation:execute', 1, async (owner, request) => {

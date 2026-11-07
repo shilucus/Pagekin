@@ -14,6 +14,11 @@ type IpcHandler = (...args: unknown[]) => Promise<unknown>
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, IpcHandler>(),
   pickedPaths: [] as string[],
+  applicationSealed: false,
+  applicationOperations: 0,
+  admissionCalls: [] as { sender: unknown; execution: unknown; effect: unknown }[],
+  denyAgentExecution: false,
+  deniedExecution: undefined as unknown,
 }))
 
 vi.mock('electron', () => ({
@@ -22,6 +27,25 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn((channel: string, handler: IpcHandler) => mocks.handlers.set(channel, handler)) },
 }))
 vi.mock('../../i18n', () => ({ mainText: (_locale: string, _zh: string, en: string) => en }))
+vi.mock('../../services/project-runtime', () => ({ projectRuntimeHost: {
+  assertApplicationWorkAvailable: () => { if (mocks.applicationSealed) throw new Error('PROJECT_RUNTIME_CLOSE_REQUESTED') },
+  acquireApplicationOperation: () => {
+    if (mocks.applicationSealed) throw new Error('PROJECT_RUNTIME_CLOSE_REQUESTED')
+    mocks.applicationOperations++
+    let released = false
+    return () => { if (!released) { released = true; mocks.applicationOperations-- } }
+  },
+} }))
+vi.mock('../../services/agent-global-tool-admission', () => ({
+  acquireAgentGlobalToolOperation: (sender: unknown, execution: unknown, effect: unknown) => {
+    mocks.admissionCalls.push({ sender, execution, effect })
+    if (execution !== undefined && (mocks.denyAgentExecution || execution === mocks.deniedExecution)) throw new Error('GENERATION_AGENT_GLOBAL_EXECUTION_STALE')
+    if (mocks.applicationSealed) throw new Error('PROJECT_RUNTIME_CLOSE_REQUESTED')
+    mocks.applicationOperations++
+    let released = false
+    return () => { if (!released) { released = true; mocks.applicationOperations-- } }
+  },
+}))
 // 设置页经由 Skill 注册中心读取 skills:list-user；这里把渲染层的 IPC 直接接到主进程处理器上。
 vi.mock('../../../src/services/ipc-client', () => ({
   ipc: { invoke: (channel: string, ...args: unknown[]) => handler(channel)({}, ...args) },
@@ -115,6 +139,11 @@ describe('writing skill app-data boundary', () => {
   beforeEach(async () => {
     vi.resetModules()
     mocks.handlers.clear()
+    mocks.applicationSealed = false
+    mocks.applicationOperations = 0
+    mocks.admissionCalls = []
+    mocks.denyAgentExecution = false
+    mocks.deniedExecution = undefined
     velaHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-writing-skills-'))
     fixtureRoot = velaHome
     pickRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-skill-pick-'))
@@ -132,6 +161,117 @@ describe('writing skill app-data boundary', () => {
     delete process.env.AI_NOVEL_APP_DATA_HOME
     fs.rmSync(fixtureRoot, { recursive: true, force: true })
     fs.rmSync(pickRoot, { recursive: true, force: true })
+  })
+
+  it('passes the exact sender and execution envelope to each Skill admission before network access', async () => {
+    const execution = { reference: 'fictional-agent-proof' }
+    const caller = { sender: { id: 123, isDestroyed: () => false } }
+    await expect(handler('skills:inspect-github')(caller, sourceUrl, execution)).resolves.toMatchObject({ success: true })
+    await expect(handler('skills:install-github')(caller, sourceUrl, execution)).resolves.toMatchObject({ success: true })
+    expect(mocks.admissionCalls).toEqual([
+      { sender: caller.sender, execution, effect: { kind: 'inspect-writing-skill', sourceUrl } },
+      { sender: caller.sender, execution, effect: { kind: 'install-writing-skill', sourceUrl } },
+    ])
+    expect(mocks.applicationOperations).toBe(0)
+  })
+
+  it('rejects stale execution before fetching, while a senderless manual request keeps its original contract', async () => {
+    mocks.denyAgentExecution = true
+    const fetchMock = vi.mocked(fetch)
+    await expect(handler('skills:inspect-github')(rendererEvent, sourceUrl, { reference: 'stale' }))
+      .resolves.toMatchObject({ success: false, error: 'GENERATION_AGENT_GLOBAL_EXECUTION_STALE' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(mocks.applicationOperations).toBe(0)
+    await expect(handler('skills:inspect-github')({}, sourceUrl)).resolves.toMatchObject({ success: true })
+    expect(mocks.admissionCalls.at(-1)).toEqual({ sender: undefined, execution: undefined,
+      effect: { kind: 'inspect-writing-skill', sourceUrl } })
+    fetchMock.mockClear()
+    await expect(handler('skills:install-github')(rendererEvent, sourceUrl, { reference: 'stale' }))
+      .resolves.toMatchObject({ success: false, error: 'GENERATION_AGENT_GLOBAL_EXECUTION_STALE' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fs.existsSync(path.join(velaHome, 'skills', 'safe-prose'))).toBe(false)
+  })
+
+  it('keeps a manual inspection when a stale Agent inspection of the same URL is denied', async () => {
+    await expect(handler('skills:inspect-github')({}, sourceUrl)).resolves.toMatchObject({ success: true })
+    const fetchMock = vi.mocked(fetch)
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const stale = { version: 1, token: 'fictional-stale' }
+    mocks.deniedExecution = stale
+    await expect(handler('skills:inspect-github')(rendererEvent, sourceUrl, stale))
+      .resolves.toMatchObject({ success: false, error: 'GENERATION_AGENT_GLOBAL_EXECUTION_STALE' })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    await expect(handler('skills:install-github')({}, sourceUrl)).resolves.toMatchObject({ success: true })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fs.existsSync(path.join(velaHome, 'skills', 'safe-prose', 'SKILL.md'))).toBe(true)
+    expect(mocks.applicationOperations).toBe(0)
+  })
+
+  it('holds the main lease through a confirmed install body await even after the sender disappears', async () => {
+    await handler('skills:inspect-github')({}, sourceUrl)
+    const body = await skillResponse().text()
+    let started!: () => void, release!: (value: string) => void
+    const entered = new Promise<void>(resolve => { started = resolve })
+    const gate = new Promise<string>(resolve => { release = resolve })
+    const response = skillResponse()
+    vi.spyOn(response, 'text').mockImplementation(() => { started(); return gate })
+    const fetchMock = vi.fn(async () => response)
+    vi.stubGlobal('fetch', fetchMock)
+    let destroyed = false
+    const operation = handler('skills:install-github')({ sender: { id: 7, isDestroyed: () => destroyed } }, sourceUrl)
+    try {
+      await entered
+      destroyed = true
+      mocks.applicationSealed = true
+      expect(mocks.applicationOperations).toBe(1)
+      expect(fs.existsSync(path.join(velaHome, 'skills', 'safe-prose'))).toBe(false)
+      await expect(handler('skills:inspect-github')({}, sourceUrl)).resolves.toMatchObject({ success: false })
+      expect(fetchMock).toHaveBeenCalledOnce()
+      release(body)
+      await expect(operation).resolves.toMatchObject({ success: true })
+      expect(mocks.applicationOperations).toBe(0)
+      expect(fs.existsSync(path.join(velaHome, 'skills', 'safe-prose', 'SKILL.md'))).toBe(true)
+    } finally { release(body); await operation }
+  })
+
+  it.each(['fetch', 'body', 'installation'] as const)('releases the application lease when %s fails', async failure => {
+    await handler('skills:inspect-github')({}, sourceUrl)
+    if (failure === 'fetch') vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('fictional fetch failure') }))
+    if (failure === 'body') {
+      const response = skillResponse()
+      vi.spyOn(response, 'text').mockRejectedValue(new Error('fictional body failure'))
+      vi.stubGlobal('fetch', vi.fn(async () => response))
+    }
+    if (failure === 'installation') {
+      fs.mkdirSync(path.join(velaHome, 'skills', 'safe-prose'), { recursive: true })
+    }
+    await expect(handler('skills:install-github')({}, sourceUrl)).resolves.toMatchObject({ success: false })
+    expect(mocks.applicationOperations).toBe(0)
+  })
+
+  it('keeps the dialog lease until its await finishes and rejects sealed new writes', async () => {
+    const local = writeLocalSkill('valid-before-seal', { 'SKILL.md': agentSkill, 'references/voice.md': 'fictional voice',
+      'references/pacing.md': 'fictional pacing' })
+    const prior = await pickLocal('folder', local)
+    expect(prior.inspection).toBeDefined()
+    const installed = path.join(velaHome, 'skills', 'safe-prose')
+    fs.mkdirSync(installed, { recursive: true })
+    fs.writeFileSync(path.join(installed, 'SKILL.md'), 'existing fictional skill')
+    const { dialog } = await import('electron')
+    let release!: (value: { canceled: boolean; filePaths: string[] }) => void
+    const gate = new Promise<{ canceled: boolean; filePaths: string[] }>(resolve => { release = resolve })
+    vi.mocked(dialog.showOpenDialog).mockImplementationOnce(() => gate as never)
+    const picked = handler('skills:pick-local')(rendererEvent, 'file')
+    expect(mocks.applicationOperations).toBe(1)
+    mocks.applicationSealed = true
+    await expect(handler('skills:install-local')(rendererEvent, prior.inspection!.candidateId)).resolves.toMatchObject({ success: false })
+    await expect(handler('skills:uninstall-user')({}, 'safe-prose')).resolves.toMatchObject({ success: false })
+    await expect(handler('skills:pick-local')(rendererEvent, 'file')).resolves.toMatchObject({ success: false })
+    expect(fs.existsSync(path.join(velaHome, 'skills', 'scene-voice'))).toBe(false)
+    expect(fs.readFileSync(path.join(installed, 'SKILL.md'), 'utf8')).toBe('existing fictional skill')
+    release({ canceled: true, filePaths: [] })
+    await expect(picked).resolves.toMatchObject({ success: true, cancelled: true })
+    expect(mocks.applicationOperations).toBe(0)
   })
 
   it('imports a generic Agent Skill folder and merges the references it cites', async () => {

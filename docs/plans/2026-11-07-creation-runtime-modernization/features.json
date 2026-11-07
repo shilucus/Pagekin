@@ -216,7 +216,32 @@
       ],
       "rollback": "拒绝新后台入口，维持关闭保护和维护隔离；保留WAL/SHM/outbox/恢复诊断。",
       "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "status": "completed", "passes": true, "evidence": [
+        {
+          "type": "contract_review",
+          "sourceSha": "546486a82832cf1c63d6754b98c9be5ebc28371a",
+          "artifactOrReceipt": "stage-3c-evidence.md#team-and-review",
+          "environment": "Independent requirements/authority gpt-6.1-terra/high and lifecycle/storage/portable inherited-session reviewers; read-only integrated review",
+          "result": "All three RUNTIME-003 criteria and package-local contract/storage gates accepted; ADR-0031 separates admission from actual drain, retains canonical maintenance reservations and records non-executable tail history",
+          "limitations": "Parent plus 76 frozen source/test hashes identifies tested bytes. No new UI, second writer/OS fencing, generic workflow driver, human approval or future-package gate acceptance."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "546486a82832cf1c63d6754b98c9be5ebc28371a",
+          "artifactOrReceipt": "stage-3c-evidence.md#actual-commands",
+          "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0; isolated fictional native SQLite projects and fake MCP child transport",
+          "result": "67 files 1756/1756, zero failed/pending; lifecycle/maintenance, registered delayed Agent effects, physical timeout/unknown, M11 COMMIT/rollback and two-generation portable frozen history; typecheck/lint/i18n/source build exit 0",
+          "limitations": "Focused impact union, not full repository or browser suite. Fake MCP child has no real external effect. Earlier failures retained. Existing author-global renderer trust boundary and absent escrow UI remain explicit."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "546486a82832cf1c63d6754b98c9be5ebc28371a",
+          "artifactOrReceipt": "stage-3c-evidence.md#actual-commands",
+          "environment": "Windows x64; existing Electron 44.9.3 / embedded Node 24.22.0 / Chromium 152; isolated fictional A/B projects and local fake model",
+          "result": "runtime-lifecycle-v1 exit 0, one guarded/fixture request, close waits for actual held transport, sealed writes refused, unknown not resent, B preserved, archive/delete receipts, normal quit and empty external/write/ignored/residual arrays",
+          "limitations": "Actual registered IPC, not author-facing UI. Native window-close and backup/writer interleaving have deterministic evidence only; screenshot inspected and network observation ends before quit. No real-model quality or platform qualification."
+        }
+      ]
     },
     {
       "id": "DRIVER-001",

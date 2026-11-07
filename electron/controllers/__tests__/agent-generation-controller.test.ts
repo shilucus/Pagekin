@@ -21,6 +21,7 @@ import { registerGenerationController } from '../generation-controller'
 import { registerDatabaseController } from '../db-controller'
 import { ModelExecutionLeaseRegistry } from '../../services/model-execution-lease'
 import { projectAccess } from '../../services/project-access'
+import { projectRuntimeHost } from '../../services/project-runtime'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb } from '../../database'
 import { WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS } from '../../../test/helpers/windows-runner-io-stall'
 
@@ -84,8 +85,10 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('No unstubbed network access is permitted') }))
   sender.send.mockClear()
 }, WINDOWS_RUNNER_IO_STALL_TIMEOUT_MS)
-afterEach(() => {
-  closeProjectDatabase(); projectAccess.invalidateCurrentSession(); vi.unstubAllGlobals(); vi.restoreAllMocks()
+afterEach(async () => {
+  await projectRuntimeHost.requestCloseAll({ shutdown: false })
+  projectRuntimeHost.finishWindowClose()
+  projectAccess.invalidateCurrentSession(); vi.unstubAllGlobals(); vi.restoreAllMocks()
   useProjectStore.setState({ currentProject: null })
   useWorkflowStore.setState({ activeRuns: [], history: [] })
   if (!path.resolve(root).startsWith(path.resolve(base))) throw new Error('Synthetic cleanup outside owned temp root')

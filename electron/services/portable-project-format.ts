@@ -1,14 +1,14 @@
 import type Database from 'better-sqlite3'
-import { getDesktopMigrationRegistry } from '../migrations/desktop-registry'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../migrations/desktop-registry'
 import { verifySchema } from '../migrations/runner'
 import { LIVE_ROW_VIEWS, logicalTableName } from '../migrations/m07-chapter-recycle'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 import fieldPolicyDocument from './portable-project-field-policy.json'
 
 export const PORTABLE_PROJECT_FORMAT_VERSION = 1 as const
-export const PORTABLE_SOURCE_SCHEMA_VERSION = 11 as const
+export const PORTABLE_SOURCE_SCHEMA_VERSION = CURRENT_DESKTOP_SCHEMA_VERSION
 /** Old packages are verified at their declared version before the isolated restore copy is migrated. */
-export const PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS = Object.freeze([7, 8, 9, 10, PORTABLE_SOURCE_SCHEMA_VERSION] as const)
+export const PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS = Object.freeze([7, 8, 9, 10, 11, PORTABLE_SOURCE_SCHEMA_VERSION] as const)
 export type PortableSourceSchemaVersion = typeof PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS[number]
 
 export type PortableFieldDisposition = 'preserve-domain' | 'historical-nonreplayable'
@@ -19,7 +19,7 @@ export interface PortableFieldPolicy {
   disposition: PortableFieldDisposition
   validator: string
   consumer: string
-  origin: 'signed-s01' | 'm01-m05-delta' | 'm06-delta' | 'm07-delta' | 'm08-delta' | 'm09-delta' | 'm10-delta' | 'registered-donor'
+  origin: 'signed-s01' | 'm01-m05-delta' | 'm06-delta' | 'm07-delta' | 'm08-delta' | 'm09-delta' | 'm10-delta' | 'm11-delta' | 'registered-donor'
   signedDisposition: string | null
 }
 
@@ -37,6 +37,7 @@ const m08Tables = new Set<string>(fieldPolicyDocument.m08Tables)
 const m09Tables = new Set<string>(fieldPolicyDocument.m09Tables)
 const m09Fields = new Set<string>(fieldPolicyDocument.m09Fields)
 const m10Tables = new Set<string>(fieldPolicyDocument.m10Tables)
+const m11Tables = new Set<string>(fieldPolicyDocument.m11Tables)
 const deltaCharacterFields = new Set<string>(fieldPolicyDocument.deltaCharacterFields)
 const optionalFields = new Set<string>(fieldPolicyDocument.optionalFields)
 const signedOverrides = fieldPolicyDocument.signedOverrides as Record<string, string>
@@ -56,7 +57,7 @@ function loadFieldPolicy(): ReadonlyMap<string, PortableFieldPolicy> {
       const rule = rules[code]
       const key = `${table}.${field}`
       const delta = optionalFields.has(key) || deltaTables.has(table) || m06Tables.has(table) || m07Fields.has(key) || m08Tables.has(table)
-        || m09Tables.has(table) || m09Fields.has(key) || m10Tables.has(table)
+        || m09Tables.has(table) || m09Fields.has(key) || m10Tables.has(table) || m11Tables.has(table)
         || table === 'characters' && deltaCharacterFields.has(field)
       const signedDisposition = delta ? null : signedOverrides[key] ?? signedDefaults[code]
       if (!field || !rule || rule.length !== 3 || !PORTABLE_FIELD_DISPOSITIONS.has(rule[0])
@@ -66,7 +67,7 @@ function loadFieldPolicy(): ReadonlyMap<string, PortableFieldPolicy> {
       }
       result.set(key, Object.freeze({ disposition: rule[0], validator: rule[1], consumer: rule[2],
         origin: optionalFields.has(key) ? 'registered-donor'
-          : m10Tables.has(table) ? 'm10-delta' : m09Tables.has(table) || m09Fields.has(key) ? 'm09-delta'
+          : m11Tables.has(table) ? 'm11-delta' : m10Tables.has(table) ? 'm10-delta' : m09Tables.has(table) || m09Fields.has(key) ? 'm09-delta'
             : m08Tables.has(table) ? 'm08-delta' : m06Tables.has(table) ? 'm06-delta'
             : m07Fields.has(key) ? 'm07-delta' : delta ? 'm01-m05-delta' : 'signed-s01', signedDisposition }))
     }
@@ -96,7 +97,7 @@ const liveRowViews = new Set<string>(LIVE_ROW_VIEWS.map(item => item.view))
  * Read-only bidirectional schema gate. sqlite_* implementation objects are deliberately outside the portable contract.
  * Views carry no data; only M07's live views are admitted, and verifySchema's fingerprint pins their exact SQL.
  * A schema-7 source predates M07: no views, the managed tables under their original names, and none of M07's drafts columns.
- * Schema 8 includes M07, 9 adds field feedback, 10 adds outline ranges, and 11 adds runtime grants.
+ * Schema 8 includes M07, 9 adds field feedback, 10 adds outline ranges, 11 adds runtime grants, and 12 adds recovery tails.
  * Policy uses original logical names on all readable versions.
  */
 export function assertPortableSourceSchema(database: Database.Database,
@@ -108,7 +109,8 @@ export function assertPortableSourceSchema(database: Database.Database,
   const expected = new Map([...fieldPolicy].filter(([key]) => (version >= 8 || !m07Fields.has(key))
     && (version >= 9 || !m08Tables.has(key.split('.')[0]!))
     && (version >= 10 || !m09Tables.has(key.split('.')[0]!) && !m09Fields.has(key))
-    && (version >= 11 || !m10Tables.has(key.split('.')[0]!))))
+    && (version >= 11 || !m10Tables.has(key.split('.')[0]!))
+    && (version >= 12 || !m11Tables.has(key.split('.')[0]!))))
   const admittedViews = version >= 8 ? liveRowViews : new Set<string>()
   const actual = new Set<string>()
   const objects = database.prepare("SELECT name,type FROM pragma_table_list WHERE schema='main' AND name NOT LIKE 'sqlite_%' ORDER BY name")

@@ -2,6 +2,7 @@ import type { PlanningFeedbackCandidate, PlanningFeedbackCoreTarget } from './pl
 import { assertPlanningFeedbackId, assertPlanningFeedbackInstructions, assertPlanningFeedbackObject } from './planning-feedback'
 import type { BeginPlanningFeedbackRequest } from './planning-feedback-ipc'
 import type { PhysicalAttempt } from './generation-contract'
+import type { GenerationPreservedTail } from '../services/generation/generation-runtime'
 
 export const RUNTIME_FEEDBACK_CHANNELS = Object.freeze([
   'runtime-feedback:v1:prepare', 'runtime-feedback:v1:execute', 'runtime-feedback:v1:revoke',
@@ -39,6 +40,7 @@ export interface RuntimeFeedbackReceipt {
   }
   attempts: { attemptId: string; status: PhysicalAttempt['status']; artifactId: string | null }[]
   candidate: PlanningFeedbackCandidate | null
+  recoveryTails?: readonly GenerationPreservedTail[]
   nonReplayable: true
 }
 

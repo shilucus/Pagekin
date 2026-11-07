@@ -60,6 +60,7 @@ export function registerIPCHandlers() {
       let runtime
       try {
         runtime = projectAccess.assertViewContext(context)
+        projectRuntimeHost.assertWorkAvailable(runtime)
       } catch { return null }
       const service = new CharacterAssetService({ projectId: context.projectId, sessionLease: context.leaseId,
         storageRoot: runtime.projectStorageRoot, database: runtime.database })

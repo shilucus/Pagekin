@@ -107,6 +107,7 @@ afterEach(() => {
 
 describe('character avatar production lifecycle', () => {
   it('records a crash leftover only after the current project session is validated', () => {
+    const admission = vi.spyOn(projectRuntimeHost, 'assertWorkAvailable').mockImplementation(() => {})
     const avatarDirectory = path.join(mocks.storageRoot, 'avatars')
     fs.mkdirSync(avatarDirectory)
     fs.writeFileSync(path.join(avatarDirectory, 'crash.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
@@ -117,16 +118,19 @@ describe('character avatar production lifecycle', () => {
     mocks.assertViewContext.mockImplementationOnce(() => { throw new Error('stale session') })
     expect(resolve({}, context)).toBeNull()
     expect(scan).not.toHaveBeenCalled()
+    expect(admission).not.toHaveBeenCalled()
     expect(mocks.database!.prepare('SELECT COUNT(*) AS count FROM character_avatar_unresolved').get()).toEqual({ count: 0 })
 
     mocks.assertViewContext.mockReturnValue({ projectStorageRoot: mocks.storageRoot, database: mocks.database })
     expect(resolve({}, context)).toBeInstanceOf(CharacterAssetService)
     expect(scan).toHaveBeenCalledTimes(1)
+    expect(admission).toHaveBeenCalledOnce()
     expect(mocks.database!.prepare('SELECT disposition,source_reference FROM character_avatar_unresolved').get())
       .toEqual({ disposition: 'orphan', source_reference: 'runtime-crash' })
   })
 
   it('surfaces recovery scan failure after validation instead of returning a usable service', () => {
+    vi.spyOn(projectRuntimeHost, 'assertWorkAvailable').mockImplementation(() => {})
     mocks.assertViewContext.mockReturnValue({ projectStorageRoot: mocks.storageRoot, database: mocks.database })
     vi.spyOn(CharacterAssetService.prototype, 'recordReclaimableOrphans').mockImplementation(() => {
       throw new Error('orphan scan failed')
@@ -135,6 +139,21 @@ describe('character avatar production lifecycle', () => {
 
     expect(() => mocks.avatarDependencies!.resolveService({}, context)).toThrow('orphan scan failed')
     expect(mocks.assertViewContext).toHaveBeenCalledOnce()
+  })
+
+  it('denies avatar resolution and its orphan writes during target maintenance without denying another runtime', () => {
+    registerIPCHandlers()
+    const a = openRuntime(), b = openRuntime()
+    const scan = vi.spyOn(CharacterAssetService.prototype, 'recordReclaimableOrphans')
+    const maintenance = projectRuntimeHost.acquireMaintenance(a, 'backup')
+    try {
+      mocks.assertViewContext.mockReturnValue(a)
+      expect(mocks.avatarDependencies!.resolveService({}, context)).toBeNull()
+      expect(scan).not.toHaveBeenCalled()
+      mocks.assertViewContext.mockReturnValue(b)
+      expect(mocks.avatarDependencies!.resolveService({}, context)).toBeInstanceOf(CharacterAssetService)
+      expect(scan).toHaveBeenCalledOnce()
+    } finally { maintenance.release() }
   })
 
   it('wires the real KB busy predicate before owner/hooks/native close, including the caller own gate', async () => {

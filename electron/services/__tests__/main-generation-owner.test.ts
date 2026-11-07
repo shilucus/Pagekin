@@ -122,6 +122,138 @@ function acceptOutline(owner: ReturnType<typeof fixture>['owner'], handle: Param
   const text = joinPlotOutlineEntries(progress.composition?.text ?? '', progress.cursor.text)
   return owner.composeVisible(handle, [...(progress.composition?.artifactIds ?? []), ...progress.cursor.artifactIds], textHash(text), PLOT_OUTLINE_PROTOCOL)
 }
+
+describe('early project close', () => {
+  it('settles only the failed held attempt as unknown before escrow while physical transport remains busy', async () => {
+    let started!: () => void, release!: () => void
+    const entered = new Promise<void>(resolve => { started = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let lateVisible!: (text: string) => void
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: 'Retained fictional suffix' })
+      lateVisible = text => options.onVisible({ kind: 'delta', text })
+      started(); await gate
+      return { usage: null, finishReason: 'stop' }
+    })
+    const f = fixture(dispatch), view = f.owner.begin(f.begin)
+    const other = f.owner.begin({ ...f.begin, uiActionNonce: 'unrelated' })
+    const repository = new GenerationRunRepository(() => f.db)
+    const unrelated = repository.reserve(other.handle.runId, 'unrelated', textHash('unrelated'), 200, 100)
+    repository.markDispatched(unrelated.attempt.attemptId)
+    const unrelatedBefore = f.db.prepare('SELECT * FROM generation_attempts WHERE attempt_id=?').get(unrelated.attempt.attemptId)
+    const execution = f.owner.execute({ handle: view.handle, invocationNonce: 'snapshot-and-settle-fail', task })
+    try {
+      await entered
+      f.db.exec("CREATE TRIGGER reject_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'fictional disk failure'); END")
+      f.db.exec("CREATE TRIGGER reject_settle BEFORE UPDATE OF attempt_json ON generation_attempts BEGIN SELECT RAISE(FAIL,'fictional disk failure'); END")
+      expect(() => f.owner.requestProjectClose()).toThrow('GENERATION_CLOSE_QUIESCE_FAILED')
+      const result = await execution, tail = result.run.unsavedTails![0]!
+      const attemptBefore = f.db.prepare('SELECT attempt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(tail.attemptId) as string
+      expect(JSON.parse(attemptBefore).status).toBe('dispatch-marked')
+      expect(f.owner.hasPhysicalInFlight()).toBe(true)
+      expect(() => f.owner.requestProjectClose()).toThrow('GENERATION_CLOSE_QUIESCE_FAILED')
+      expect(f.owner.read(view.handle).unsavedTails![0].text).toBe(tail.text)
+      f.db.exec('DROP TRIGGER reject_snapshot; DROP TRIGGER reject_settle')
+      expect(() => f.owner.requestProjectClose()).not.toThrow()
+      expect(f.owner.hasPhysicalInFlight()).toBe(true)
+      const attemptAfter = f.db.prepare('SELECT attempt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(tail.attemptId) as string
+      expect(JSON.parse(attemptAfter).status).toBe('unknown')
+      expect(f.db.prepare('SELECT * FROM generation_attempts WHERE attempt_id=?').get(unrelated.attempt.attemptId)).toEqual(unrelatedBefore)
+      expect(f.owner.read(view.handle).recoveryTails![0]).toMatchObject({ durableText: '', tailText: tail.text, prefixHash: textHash('') })
+      lateVisible(' MUST NOT APPEAR')
+      expect(f.owner.read(view.handle).recoveryTails![0].tailText).toBe('Retained fictional suffix')
+      expect(dispatch).toHaveBeenCalledTimes(1)
+      release()
+      await vi.waitFor(() => expect(f.owner.hasPhysicalInFlight()).toBe(false))
+      expect(() => f.owner.requestProjectClose()).not.toThrow()
+    } finally {
+      release()
+      f.db.exec('DROP TRIGGER IF EXISTS reject_snapshot; DROP TRIGGER IF EXISTS reject_settle')
+      await execution.catch(() => undefined)
+    }
+  })
+  it('escrows a terminal unsaved suffix and keeps it discoverable after owner recreation', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: 'Fictional unsaved suffix' })
+      return { usage: null, finishReason: 'stop' }
+    })
+    const f = fixture(dispatch), view = f.owner.begin(f.begin)
+    f.db.exec("CREATE TRIGGER reject_close_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'fictional disk failure'); END")
+    const result = await f.owner.execute({ handle: view.handle, invocationNonce: 'escrow', task })
+    const artifact = result.run.artifacts[0]
+    expect(result.run.unsavedTails?.[0]?.text).toBe('Fictional unsaved suffix')
+    f.db.exec('DROP TRIGGER reject_close_snapshot')
+    const before = f.db.prepare('SELECT * FROM generation_artifacts WHERE artifact_id=?').get(artifact.artifactId)
+    expect(() => f.owner.requestProjectClose()).not.toThrow()
+    expect(f.owner.read(view.handle).unsavedTails).toEqual([])
+    expect(f.owner.read(view.handle).recoveryTails?.[0]).toMatchObject({ kind: 'preserved-partial',
+      tailText: 'Fictional unsaved suffix', prefixHash: textHash('') })
+    expect(f.db.prepare('SELECT * FROM generation_artifacts WHERE artifact_id=?').get(artifact.artifactId)).toEqual(before)
+    expect(f.owner.listRecovery().drafts.some(item => item.view.handle.runId === view.handle.runId)).toBe(true)
+    f.owner.suspendForProjectClose()
+    const reopened = f.reopen()
+    expect(reopened.listRecovery().drafts.find(item => item.view.handle.runId === view.handle.runId)?.view.recoveryTails?.[0]
+      .tailText).toBe('Fictional unsaved suffix')
+    expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('rejects legacy discard during close and preserves the tail until escrow succeeds', async () => {
+    let started!: () => void, release!: () => void
+    const entered = new Promise<void>(resolve => { started = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: 'unsaved author-visible text' }); started(); await gate
+      return { usage: null, finishReason: 'stop' }
+    })
+    const f = fixture(dispatch), view = f.owner.begin(f.begin)
+    const execution = f.owner.execute({ handle: view.handle, invocationNonce: 'close-tail', task })
+    try {
+      await entered
+      f.db.exec("CREATE TRIGGER reject_close_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'fictional disk failure'); END")
+      expect(() => f.owner.requestProjectClose()).toThrow('GENERATION_CLOSE_QUIESCE_FAILED')
+      const result = await execution
+      const tail = result.run.unsavedTails![0]!
+      expect(tail.text).toBe('unsaved author-visible text')
+      expect(f.owner.read(view.handle).unsavedTails?.[0]?.text).toBe(tail.text)
+      expect(() => f.owner.discardCandidate(view.handle, tail.artifactId)).toThrow('GENERATION_OWNER_CLOSING')
+      release()
+      await vi.waitFor(() => expect(f.owner.hasPhysicalInFlight()).toBe(false))
+      f.db.exec('DROP TRIGGER reject_close_snapshot')
+      f.db.exec("CREATE TRIGGER reject_tail_escrow BEFORE INSERT ON generation_recovery_tails BEGIN SELECT RAISE(FAIL,'fictional disk failure'); END")
+      expect(() => f.owner.requestProjectClose()).toThrow('GENERATION_CLOSE_QUIESCE_FAILED')
+      const artifactBefore = f.db.prepare('SELECT * FROM generation_artifacts WHERE artifact_id=?').get(tail.artifactId)
+      expect(() => f.owner.discardCandidate(view.handle, tail.artifactId)).toThrow('GENERATION_OWNER_CLOSING')
+      expect(f.db.prepare('SELECT * FROM generation_artifacts WHERE artifact_id=?').get(tail.artifactId)).toEqual(artifactBefore)
+      expect(f.owner.read(view.handle).unsavedTails?.[0]?.text).toBe(tail.text)
+      expect(() => f.owner.begin({ ...f.begin, uiActionNonce: 'new-work' })).toThrow('GENERATION_OWNER_CLOSING')
+      f.db.exec('DROP TRIGGER reject_tail_escrow')
+      expect(() => f.owner.requestProjectClose()).not.toThrow()
+      expect(f.owner.read(view.handle).unsavedTails).toEqual([])
+      expect(f.owner.read(view.handle).recoveryTails?.[0]?.tailText).toBe(tail.text)
+      expect(f.db.prepare('SELECT * FROM generation_artifacts WHERE artifact_id=?').get(tail.artifactId)).toEqual(artifactBefore)
+      expect(() => f.owner.suspendForProjectClose()).not.toThrow()
+      expect(dispatch).toHaveBeenCalledTimes(1)
+    } finally {
+      release()
+      f.db.exec('DROP TRIGGER IF EXISTS reject_close_snapshot')
+      f.db.exec('DROP TRIGGER IF EXISTS reject_tail_escrow')
+      await execution.catch(() => undefined)
+    }
+  })
+  it('blocks new work while retaining read access and the existing lease until final close', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(), f = fixture(dispatch)
+    const run = f.owner.begin(f.begin)
+    const before = f.db.prepare('SELECT * FROM generation_runs WHERE run_id=?').get(run.handle.runId)
+    f.owner.requestProjectClose()
+    f.owner.requestProjectClose()
+    expect(f.owner.read(run.handle).handle).toEqual(run.handle)
+    expect(() => f.owner.begin({ ...f.begin, uiActionNonce: 'after-close' })).toThrow('GENERATION_OWNER_CLOSING')
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'after-close', task })).rejects.toThrow('GENERATION_OWNER_CLOSING')
+    expect(() => f.owner.assertSourcesCurrent(run.handle)).toThrow('GENERATION_OWNER_CLOSING')
+    expect(f.db.prepare('SELECT * FROM generation_runs WHERE run_id=?').get(run.handle.runId)).toEqual(before)
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(f.db.open).toBe(true)
+  })
+})
 const outlineEntry = (chapter: number) => `## 第${chapter}章：线索${chapter}\n林岚确认第${chapter}份证词，与同伴商议下一步。`
 /**
  * 旧版本开跑时不查章号顺序：冻结来源与正式大纲都换成 legacy，整份绑定（指纹、上下文快照、来源引用）按它重算，

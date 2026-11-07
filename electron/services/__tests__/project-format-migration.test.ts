@@ -6,6 +6,7 @@ import * as lance from '@lancedb/lancedb'
 import { Field, Schema, Utf8, Int32 } from 'apache-arrow'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { GenerationRunRepository } from '../../repositories/generation-run-repository'
+import { GenerationRecoveryTailRepository, type PreserveGenerationTailInput } from '../../repositories/generation-recovery-tail-repository'
 import { PlanningFeedbackRepository } from '../../repositories/planning-feedback-repository'
 import { m05CharacterAssetMigrationAdapter, type M05CharacterAssetReceipt } from '../../migrations/m05-character-assets'
 import { probeProjectSqlite, backupProjectSqlite, verifyProjectSqlite } from '../sqlite-project-migration'
@@ -342,11 +343,12 @@ it.each(['missing-old-projection', 'missing-asset-projection', 'changed-current-
   expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
 })
 
-it.each([8, 9, 10])('checks old feedback-domain cutover from schema %s', async sourceVersion => {
- for (const mode of ['valid', 'missing', 'tampered', 'grant-pollution'] as const) {
+it.each([8, 9, 10, 11])('checks old feedback-domain cutover from schema %s', async sourceVersion => {
+ for (const mode of ['valid', 'missing', 'tampered', 'grant-pollution', 'tail-pollution'] as const) {
   const options = fixture()
   const projectionKey = sourceVersion === 8 ? 'preFeedbackDomain'
-    : sourceVersion === 9 ? 'preFeedbackRangesDomain' : 'preGrantsDomain'
+    : sourceVersion === 9 ? 'preFeedbackRangesDomain' : sourceVersion === 10 ? 'preGrantsDomain' : 'preRecoveryTailsDomain'
+  let tailInput: PreserveGenerationTailInput | undefined
   const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
   const sourcePath = path.join(options.legacy, 'vela.db')
   fs.unlinkSync(sourcePath)
@@ -360,11 +362,25 @@ it.each([8, 9, 10])('checks old feedback-domain cutover from schema %s', async s
     if (sourceVersion === 9) source.prepare(`INSERT INTO planning_feedback_bases
       (base_id,schema_version,project_id,target,source_revision,source_hash,source_json,value,value_hash,created_at)
       VALUES('old-base',1,?,'coreOutline',1,'old-source-hash','{}','Original outline','old-value-hash',1)`).run(options.projectId)
+    if (mode === 'tail-pollution') {
+      const runs = new GenerationRunRepository(() => source, () => 100), proof = 'a'.repeat(64)
+      const run = runs.open({ projectId: options.projectId, epoch: 'fictional-source-epoch', operation: 'planning-feedback',
+        uiActionNonce: 'fictional-source-action', frozenInputHash: proof, contextSnapshotId: 'fictional-source-context',
+        sourceRefs: [], sourceManifest: { operation: 'planning-feedback' }, fingerprint: { chapterBriefHash: proof,
+          authorGuidanceHash: proof, dependencyHash: proof, contextSnapshotHash: proof, templateHash: proof,
+          skillSnapshotHash: proof, modelLeaseRevision: proof, policyHash: proof, outputContractHash: proof },
+        budget: { maxPhysicalRequests: 1, maxTokenLiability: 100, maxOutputPerRequest: 50, maxActiveElapsedMs: 1000 } })
+      const reserved = runs.reserve(run.runId, 'fictional-source-invocation', proof, 100, 50)
+      runs.markDispatched(reserved.attempt.attemptId)
+      const artifact = runs.snapshot(reserved.attempt.attemptId, 0, 'Fictional durable prefix')
+      runs.settle(reserved.attempt.attemptId, null, 'error')
+      tailInput = { attemptId: reserved.attempt.attemptId, artifactId: artifact.artifactId,
+        durableRevision: artifact.revision, prefixHash: artifact.textHash, text: 'Unexpected staging-only tail' }
+    }
   } finally { source.close() }
   const original = fs.readFileSync(sourcePath)
   const before = probeProjectSqlite({ databasePath: sourcePath })
   expect(before.schemaVersion).toBe(sourceVersion)
-  expect(CURRENT_DESKTOP_SCHEMA_VERSION).toBe(11)
   const captured: { upgraded?: Awaited<ReturnType<typeof backupProjectSqlite>> } = {}
   options.dependencies.probeSqlite = databasePath => probeProjectSqlite({ databasePath })
   options.dependencies.backupSqlite = async (sourceDatabasePath, targetDatabasePath) => {
@@ -406,6 +422,17 @@ it.each([8, 9, 10])('checks old feedback-domain cutover from schema %s', async s
       return receipt
     }
   }
+  if (mode === 'tail-pollution') {
+    const migrateAssets = options.dependencies.characterAssets.migrate
+    options.dependencies.characterAssets.migrate = async input => {
+      const receipt = await migrateAssets(input), target = new Database(input.stagingDatabasePath)
+      try {
+        const runs = new GenerationRunRepository(() => target, () => 100)
+        new GenerationRecoveryTailRepository(target, runs).preserve(tailInput!)
+      } finally { target.close() }
+      return receipt
+    }
+  }
   const checkpoints: string[] = []
   const result = await migrateProjectFormat({ ...options, checkpoint: stage => { checkpoints.push(stage) } })
   expect(captured.upgraded?.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
@@ -414,7 +441,7 @@ it.each([8, 9, 10])('checks old feedback-domain cutover from schema %s', async s
   else expect(captured.upgraded?.domain).toEqual(before.domain)
   expect(captured.upgraded?.domain.tableCounts.planning_feedback_core_revision).toBe(1)
   if (mode !== 'valid') {
-    expect(result).toMatchObject({ state: 'blocked', code: mode === 'grant-pollution'
+    expect(result).toMatchObject({ state: 'blocked', code: mode === 'grant-pollution' || mode === 'tail-pollution'
       ? 'PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED' : 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' })
     expect(checkpoints).not.toContain('legacy-renamed')
     expect(checkpoints).not.toContain('target-renamed')

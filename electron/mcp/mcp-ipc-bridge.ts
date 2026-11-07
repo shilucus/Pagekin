@@ -7,6 +7,17 @@
 
 import { ipcMain } from 'electron'
 import { mcpManager } from './mcp-manager'
+import { projectRuntimeHost } from '../services/project-runtime'
+import { acquireAgentGlobalToolOperation } from '../services/agent-global-tool-admission'
+
+async function withApplicationOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const release = projectRuntimeHost.acquireApplicationOperation()
+  try { return await operation() } finally { release() }
+}
+
+function lifecycleError(error: unknown, fallback: string): string {
+  return error instanceof Error && /^PROJECT_RUNTIME_[A-Z_]+$/.test(error.message) ? error.message : fallback
+}
 
 /**
  * 注册所有 MCP IPC 处理器
@@ -16,15 +27,15 @@ export function registerMCPHandlers(): void {
   // 加载配置文件
   ipcMain.handle('mcp:load-config', async () => {
     try {
-      const result = await mcpManager.loadConfig()
+      const result = await withApplicationOperation(() => mcpManager.loadConfig())
       if (result.status === 'error') return { success: false, ...result }
       return { success: true, ...result }
-    } catch {
+    } catch (error) {
       return {
         success: false,
         status: 'error' as const,
         servers: [],
-        error: 'MCP_CONFIG_INVALID',
+        error: lifecycleError(error, 'MCP_CONFIG_INVALID'),
       }
     }
   })
@@ -32,10 +43,10 @@ export function registerMCPHandlers(): void {
   // 连接服务器
   ipcMain.handle('mcp:connect', async (_event, serverId: string) => {
     try {
-      await mcpManager.connect(serverId)
+      await withApplicationOperation(() => mcpManager.connect(serverId))
       return { success: true }
-    } catch {
-      return { success: false, error: 'MCP_CONNECT_FAILED' }
+    } catch (error) {
+      return { success: false, error: lifecycleError(error, 'MCP_CONNECT_FAILED') }
     }
   })
 
@@ -44,8 +55,8 @@ export function registerMCPHandlers(): void {
     try {
       await mcpManager.disconnect(serverId)
       return { success: true }
-    } catch (error) {
-      return { success: false, error: String(error) }
+    } catch {
+      return { success: false, error: 'MCP_DISCONNECT_FAILED' }
     }
   })
 
@@ -54,8 +65,8 @@ export function registerMCPHandlers(): void {
     try {
       await mcpManager.disconnectAll()
       return { success: true }
-    } catch (error) {
-      return { success: false, error: String(error) }
+    } catch {
+      return { success: false, error: 'MCP_DISCONNECT_FAILED' }
     }
   })
 
@@ -70,8 +81,9 @@ export function registerMCPHandlers(): void {
   })
 
   // 调用 MCP Tool
-  ipcMain.handle('mcp:call-tool', async (_event, serverId: string, toolName: string, args: Record<string, unknown>) => {
-    return await mcpManager.callTool(serverId, toolName, args)
+  ipcMain.handle('mcp:call-tool', async (event, serverId: string, toolName: string, args: Record<string, unknown>, execution: unknown) => {
+    return await mcpManager.callTool(serverId, toolName, args,
+      () => acquireAgentGlobalToolOperation(event.sender, execution, { kind: 'mcp', serverId, toolName, args }))
   })
 
   // 获取服务器状态

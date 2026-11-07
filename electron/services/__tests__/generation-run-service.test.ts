@@ -3,7 +3,9 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { M01_GENERATION_SQL } from '../../migrations/m01-generation-runs';
+import { M11_GENERATION_RECOVERY_TAILS_SQL } from '../../migrations/m11-generation-recovery-tails';
 import { GenerationRunRepository, textHash, type OpenGenerationRunRequest } from '../../repositories/generation-run-repository';
+import { GenerationRecoveryTailRepository } from '../../repositories/generation-recovery-tail-repository';
 import { createGenerationRunService, settleProviderUsage, type ExecuteGenerationRequest, type GenerationProviderUsage, type GenerationRunServiceDependencies } from '../generation-run-service';
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3');
 const handles: import('better-sqlite3').Database[] = [];
@@ -15,6 +17,7 @@ function fixture() {
     handles.push(db);
     db.pragma('foreign_keys=ON');
     db.exec(M01_GENERATION_SQL);
+    db.exec(M11_GENERATION_RECOVERY_TAILS_SQL);
     let now = 1000;
     const repository = new GenerationRunRepository(() => db, () => now);
     const h = textHash('frozen'), fingerprint = { chapterBriefHash: h, authorGuidanceHash: h, dependencyHash: h, contextSnapshotHash: h, templateHash: h, skillSnapshotHash: h, modelLeaseRevision: h, policyHash: h, outputContractHash: h };
@@ -25,6 +28,89 @@ function fixture() {
 }
 const usage: GenerationProviderUsage = { promptTokens: 50, completionTokens: 50, totalTokens: 100, reasoningTokens: 20, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true };
 describe('runtime feedback admission', () => {
+    it('does not preserve an unsaved tail until its logical attempt has settled', async () => {
+        const f = fixture(), run = f.repository.open(f.open), recoveryTails = new GenerationRecoveryTailRepository(f.db, f.repository);
+        const preserve = vi.spyOn(recoveryTails, 'preserve');
+        let finish!: (value: { usage: typeof usage; finishReason: string }) => void;
+        const service = createGenerationRunService({ repository: f.repository, recoveryTails, dispatch: (_request, options) => {
+            options.onVisible({ kind: 'delta', text: 'held suffix' });
+            return new Promise(resolve => { finish = resolve; });
+        } });
+        const execution = service.execute(f.request(run.runId));
+        vi.spyOn(f.repository, 'snapshot').mockImplementation(() => { throw new Error('fictional disk full'); });
+        expect(() => service.requestProjectClose()).toThrow('GENERATION_CLOSE_QUIESCE_FAILED');
+        expect(preserve).not.toHaveBeenCalled();
+        await execution;
+        expect(() => service.requestProjectClose()).not.toThrow();
+        expect(preserve).toHaveBeenCalledOnce();
+        expect(recoveryTails.list(run.runId)[0].tailText).toBe('held suffix');
+        finish({ usage, finishReason: 'stop' });
+        await Promise.resolve();
+    });
+    it('preserves the exact durable prefix and unsaved suffix only after terminal settlement and successful commit', async () => {
+        const f = fixture(), run = f.repository.open(f.open), prefix = 'a'.repeat(4096), suffix = 'fictional tail\r\n';
+        const recoveryTails = new GenerationRecoveryTailRepository(f.db, f.repository);
+        const original = f.repository.snapshot.bind(f.repository);
+        vi.spyOn(f.repository, 'snapshot').mockImplementation((attemptId, revision, text) => {
+            if (text.endsWith(suffix)) throw new Error('fictional disk full');
+            return original(attemptId, revision, text);
+        });
+        const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+            options.onVisible({ kind: 'delta', text: prefix });
+            options.onVisible({ kind: 'delta', text: suffix });
+            return { usage, finishReason: 'stop' };
+        });
+        const service = createGenerationRunService({ repository: f.repository, recoveryTails, dispatch });
+        const receipt = await service.execute(f.request(run.runId));
+        expect(receipt.unsavedTail).toBe(suffix);
+        const before = f.repository.receipt(receipt.attempt.attemptId);
+        f.db.exec("CREATE TRIGGER reject_escrow BEFORE INSERT ON generation_recovery_tails BEGIN SELECT RAISE(FAIL,'fictional disk full'); END");
+        expect(() => service.requestProjectClose()).toThrow('GENERATION_CLOSE_QUIESCE_FAILED');
+        expect(service.readUnsavedTails()[0].text).toBe(suffix);
+        expect(recoveryTails.list(run.runId)).toEqual([]);
+        f.db.exec('DROP TRIGGER reject_escrow');
+        expect(() => service.requestProjectClose()).not.toThrow();
+        expect(service.readUnsavedTails()).toEqual([]);
+        expect(recoveryTails.list(run.runId)).toMatchObject([{ kind: 'preserved-partial', durableText: prefix,
+            prefixHash: textHash(prefix), tailText: suffix, tailHash: textHash(suffix) }]);
+        expect(f.repository.receipt(receipt.attempt.attemptId)).toEqual(before);
+        expect(() => service.requestProjectClose()).not.toThrow();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+    it('rechecks legacy admission inside the native reservation transaction without recording storage failure', async () => {
+        const f = fixture(), run = f.repository.open(f.open), dispatch = vi.fn();
+        let checks = 0;
+        const service = createGenerationRunService({ repository: f.repository, dispatch,
+            assertAdmission: () => { if (++checks === 2) { expect(f.db.inTransaction).toBe(true); throw new Error('FICTIONAL_CLOSING'); } },
+            admitReservation: operation => f.db.transaction(operation).immediate() });
+        await expect(service.execute(f.request(run.runId))).rejects.toThrow('FICTIONAL_CLOSING');
+        expect(f.repository.budget(run.rootActionId).attempts).toHaveLength(0);
+        expect(f.repository.budget(run.rootActionId).blockedCode).toBeNull();
+        expect(dispatch).not.toHaveBeenCalled();
+    });
+    it('quiesces only its own in-flight work and keeps a failed flush tail while aborting', async () => {
+        const f = fixture(), run = f.repository.open(f.open);
+        const unrelated = f.repository.open({ ...f.open, uiActionNonce: 'other' });
+        const unrelatedAttempt = f.repository.reserve(unrelated.runId, 'other', textHash('other'), 200, 100);
+        f.repository.markDispatched(unrelatedAttempt.attempt.attemptId);
+        const unrelatedBefore = f.db.prepare('SELECT * FROM generation_attempts WHERE attempt_id=?').get(unrelatedAttempt.attempt.attemptId);
+        let signal!: AbortSignal, finish!: (value: { usage: typeof usage; finishReason: string }) => void;
+        const service = createGenerationRunService({ repository: f.repository, dispatch: (_request, options) => {
+            signal = options.signal; options.onVisible({ kind: 'delta', text: 'unsaved prefix' });
+            return new Promise(resolve => { finish = resolve; });
+        } });
+        const execution = service.execute(f.request(run.runId));
+        vi.spyOn(f.repository, 'snapshot').mockImplementation(() => { throw new Error('fictional flush failure'); });
+        expect(() => service.requestProjectClose()).toThrow('GENERATION_CLOSE_QUIESCE_FAILED');
+        expect(signal.aborted).toBe(true);
+        expect(service.readUnsavedTails()[0]?.text).toBe('unsaved prefix');
+        expect(f.db.prepare('SELECT * FROM generation_attempts WHERE attempt_id=?').get(unrelatedAttempt.attempt.attemptId)).toEqual(unrelatedBefore);
+        const settled = await execution;
+        expect(settled.failureCode).toBe('GENERATION_STORAGE_FAILED');
+        expect(() => service.requestProjectClose()).toThrow('GENERATION_CLOSE_QUIESCE_FAILED');
+        finish({ usage, finishReason: 'stop' });
+        await Promise.resolve();
+    });
     it('aborts the admitted request even when cancellation persistence fails and retains an unsaved tail', async () => {
         const f = fixture(), run = f.repository.open(f.open);
         let finish!: (value: { usage: typeof usage; finishReason: string }) => void;

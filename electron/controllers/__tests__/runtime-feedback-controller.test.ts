@@ -424,4 +424,57 @@ describe('runtime feedback registered IPC', () => {
     expect(fetch).not.toHaveBeenCalled()
     expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
   })
+
+  it('seals true close, preserves cleanup receipts and B admission, and releases A only after physical settlement', async () => {
+    const prepared = await prepare(), runtimeA = projectRuntimeHost.getActiveView()!
+    const projectB = projectAccess.createProject(root, 'Fiction B')
+    createProjectDatabase(projectB.rootPath)
+    otherRuntime = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareRetainedOpen(projectB))
+    otherRuntime.database.exec("INSERT INTO project_core(id,project_name,core_outline) VALUES('main','Fiction B','B original')")
+    let start!: () => void, release!: () => void
+    const started = new Promise<void>(resolve => { start = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const fetch = vi.fn(async () => {
+      start(); await gate
+      return { ok: true, body: new ReadableStream({ start(controller) { controller.close() } }) }
+    })
+    vi.stubGlobal('fetch', fetch)
+    const execution = call('runtime-feedback:v1:execute', prepared.reference)
+    try {
+      await started
+      await expect(projectRuntimeHost.requestClose(runtimeA, { timeoutMs: 0 })).rejects.toThrow('PROJECT_RUNTIME_CLOSE_TIMEOUT')
+      expect(runtimeA.database.open).toBe(true)
+      expect(() => projectRuntimeHost.acquireWork(runtimeA)).toThrow('PROJECT_RUNTIME_CLOSE_REQUESTED')
+      const receipt = await execution
+      expect(receipt.grant.state).toBe('revoked')
+      expect(receipt.attempts).toHaveLength(1)
+      expect(receipt.attempts[0].status).toBe('unknown')
+      expect(receipt.candidate).toBeNull()
+      expect(await call('runtime-feedback:v1:read-receipt', {
+        projectId: prepared.reference.projectId, grantId: prepared.reference.grantId,
+      })).toEqual(receipt)
+      expect(await call('runtime-feedback:v1:execute', prepared.reference)).toEqual(receipt)
+      const leaseB = projectAccess.beginViewSession(otherRuntime)
+      session = { projectId: leaseB.projectId, projectPath: leaseB.rootPath, leaseId: leaseB.leaseId }
+      const preparedB = await prepare()
+      expect(preparedB.reference.projectId).toBe(projectB.projectId)
+      expect(fetch).toHaveBeenCalledOnce()
+      release()
+      await projectRuntimeHost.requestClose(runtimeA)
+      expect(runtimeA.database.open).toBe(false)
+      expect(projectRuntimeHost.getActiveView()).toBe(otherRuntime)
+      expect(projectAccess.assertViewContext(session)).toBe(otherRuntime)
+      const reopened = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareRetainedOpen(project))
+      const leaseA = projectAccess.beginViewSession(reopened)
+      session = { projectId: leaseA.projectId, projectPath: leaseA.rootPath, leaseId: leaseA.leaseId }
+      const history = await call('runtime-feedback:v1:read-history', { grantId: prepared.reference.grantId }, sender, session)
+      expect(history.attempts[0].status).toBe('unknown')
+      expect((await call('runtime-feedback:v1:prepare', prepared.request, sender, session)).reference).toBeNull()
+      expect(fetch).toHaveBeenCalledOnce()
+    } finally {
+      release()
+      await execution.catch(() => undefined)
+      if (runtimeA.database.open) await projectRuntimeHost.requestClose(runtimeA)
+    }
+  })
 })

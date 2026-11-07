@@ -28,7 +28,12 @@ export const inspectWritingSkillTool = buildAgentTool({
     if (typeof sourceUrl !== 'string' || !sourceUrl.trim()) {
       return { success: false, content: '', error: text('缺少 source_url', 'The source_url argument is required') }
     }
-    const result = await ipc.invoke('skills:inspect-github', sourceUrl)
+    context?.abortSignal?.throwIfAborted()
+    const execution = context?.globalToolExecution
+    if (context?.agentToolAction && !execution) throw new Error('GENERATION_AGENT_GLOBAL_EXECUTION_REQUIRED')
+    const result = execution
+      ? await ipc.invoke('skills:inspect-github', sourceUrl, execution)
+      : await ipc.invoke('skills:inspect-github', sourceUrl)
     if (!result.success || !result.inspection) {
       const detail = agentToolErrorDetail(context, result.error)
       return {

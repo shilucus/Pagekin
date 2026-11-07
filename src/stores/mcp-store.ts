@@ -172,11 +172,18 @@ export const useMCPStore = create<MCPState>()((set, get) => ({
         requiresConfirmation: true, // MCP Tool 默认需要确认（保守策略）
         isReadOnly: false,
         userFacingName: `${mcpTool.name} (${mcpTool.serverId})`,
-        execute: async (args) => {
-          const result = await ipc.invoke('mcp:call-tool', mcpTool.serverId, mcpTool.name, args)
+        execute: async (args, context) => {
+          context?.abortSignal?.throwIfAborted()
+          const execution = context?.globalToolExecution
+          if (context?.agentToolAction && !execution) throw new Error('GENERATION_AGENT_GLOBAL_EXECUTION_REQUIRED')
+          context?.markSideEffectStarted?.()
+          const result = execution
+            ? await ipc.invoke('mcp:call-tool', mcpTool.serverId, mcpTool.name, args, execution)
+            : await ipc.invoke('mcp:call-tool', mcpTool.serverId, mcpTool.name, args)
           return {
             success: result.success,
             content: result.content,
+            commitState: result.commitState,
             error: result.error && displayedErrorMessage(useLocaleStore.getState().locale, result.error),
           }
         },

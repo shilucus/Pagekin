@@ -30,7 +30,7 @@ import { getGlobalDataRoot } from '../services/app-data-locator'
 import { externalFileGrants } from '../services/external-file-grant-service'
 import { projectAccess } from '../services/project-access'
 import { projectRuntimeHost } from '../services/project-runtime'
-import { assertRestoreTargetOutsideRuntimes } from '../services/project-runtime-compatibility'
+import { acquireProjectBackupOperation, assertRestoreTargetOutsideRuntimes, type ProjectBackupOperation } from '../services/project-runtime-compatibility'
 import {
   exportPortableProject,
   type ExportPortableProjectInput,
@@ -110,7 +110,7 @@ export interface CloudBackupControllerDependencies {
   registerRecentProject(project: RecentProject): void
   idFactory(): string
   now(): Date
-  acquireBackupOperation(): () => void
+  acquireBackupOperation(context: CloudBackupProjectSessionContext | undefined): ProjectBackupOperation
   acquireRestoreOperation(): () => void
   assertRestoreTargetAvailable(targetProjectRoot: string): void
 }
@@ -266,7 +266,7 @@ function productionDependencies(): CloudBackupControllerDependencies {
     registerRecentProject,
     idFactory: randomUUID,
     now: () => new Date(),
-    acquireBackupOperation: () => projectRuntimeHost.acquireLegacyOperation('cloud-backup:backup'),
+    acquireBackupOperation: acquireProjectBackupOperation,
     acquireRestoreOperation: () => projectRuntimeHost.acquireRestoreOperation(),
     assertRestoreTargetAvailable: assertRestoreTargetOutsideRuntimes,
   }
@@ -276,9 +276,16 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
   const deps = injected ?? productionDependencies()
   const operations = new Map<string, AbortController>()
 
-  const runOperation = async <T>(rawId: unknown, operation: (signal: AbortSignal, id: string) => Promise<T>, kind: 'backup' | 'restore' = 'backup') => {
+  const runOperation = async <T>(rawId: unknown, operation: (signal: AbortSignal, id: string, backup?: ProjectBackupOperation) => Promise<T>,
+    kind: 'backup' | 'restore' = 'backup', backupContext?: unknown) => {
     let release: () => void
-    try { release = kind === 'backup' ? deps.acquireBackupOperation() : deps.acquireRestoreOperation() }
+    let backup: ProjectBackupOperation | undefined
+    try {
+      if (kind === 'backup') {
+        backup = deps.acquireBackupOperation(projectSession(backupContext))
+        release = () => backup!.release()
+      } else release = deps.acquireRestoreOperation()
+    }
     catch (error) { return failure(error) }
     try {
       let id: string
@@ -287,7 +294,7 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
       const controller = new AbortController()
       operations.set(id, controller)
       try {
-        return await operation(controller.signal, id)
+        return await operation(controller.signal, id, backup)
       } catch (error) {
         return failure(error, id)
       } finally {
@@ -385,10 +392,10 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
       try { return record(rawRequest) } catch { return null }
     })()
     if (!request) return failure(new CloudBackupControllerError('CLOUD_BACKUP_INPUT_INVALID'))
-    return runOperation(request.operationId, async (signal, id) => {
+    return runOperation(request.operationId, async (signal, id, backup) => {
       if (request.disclosureConfirmed !== true) fail('CLOUD_BACKUP_DISCLOSURE_CONFIRMATION_REQUIRED')
       const currentSession = projectSession(request.projectSession)
-      const active = deps.assertCurrentProjectContext(currentSession, deps.getCurrentProjectPath())
+      const active = backup!.project
       const binding = deps.bindingStore.get(active.projectId)
       if (!binding || binding.mode === 'unconfigured') fail('CLOUD_BACKUP_NOT_CONFIGURED')
       if (binding.mode !== 'writable') fail('CLOUD_BACKUP_BINDING_READ_ONLY')
@@ -410,17 +417,14 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
             targetArchivePath: archivePath,
             attemptParentPath: stagingRoot,
             assets: deps.portableAssets,
-            assertCurrentContext(context, sourceProjectRoot) {
-              const checked = deps.assertCurrentProjectContext(context, deps.getCurrentProjectPath())
-              return deps.sameCanonicalProjectRoot(checked.rootPath, sourceProjectRoot)
-            },
+            assertCurrentContext: backup!.assertCurrentContext,
           })
         } catch {
           if (signal.aborted) fail('CLOUD_BACKUP_CANCELLED')
           throw new CloudBackupControllerError('CLOUD_BACKUP_ARCHIVE_FAILED')
         }
         if (signal.aborted) fail('CLOUD_BACKUP_CANCELLED')
-        deps.assertCurrentProjectContext(currentSession, deps.getCurrentProjectPath())
+        if (!backup!.assertCurrentContext(currentSession, active.rootPath)) fail('CLOUD_BACKUP_ARCHIVE_FAILED')
         const currentBinding = deps.bindingStore.get(active.projectId)
         if (!currentBinding || currentBinding.mode === 'unconfigured') fail('CLOUD_BACKUP_NOT_CONFIGURED')
         if (currentBinding.mode !== 'writable') fail('CLOUD_BACKUP_BINDING_READ_ONLY')
@@ -472,7 +476,7 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
       } finally {
         await removeStagingRoot(dataRoot, id, stagingRoot)
       }
-    })
+    }, 'backup', request.projectSession)
   })
 
   deps.ipc.handle('cloud-backup:list', async (_event, rawRequest) => {

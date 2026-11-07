@@ -146,10 +146,12 @@ function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabas
     const context = isProjectSessionContext(candidate) ? candidate : undefined
     if (context) args.pop()
     let releaseLegacy: (() => void) | undefined
+    let releaseWork: (() => void) | undefined
     let mayReadDatabase = false
     try {
       const runtime = projectAccess.assertViewContext(context)
       if (explicitRuntime) {
+        if (channel !== 'db:close' && MUTATING_DATABASE_CHANNELS.has(channel)) releaseWork = projectRuntimeHost.acquireWork(runtime)
         return await (handler as (runtime: ProjectRuntime, event: unknown, ...handlerArgs: unknown[]) => unknown)(runtime, event, ...args)
       }
       releaseLegacy = projectRuntimeHost.acquireLegacyOperation(channel)
@@ -166,6 +168,7 @@ function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabas
       if (importFailure) throw new Error(importFailure.error)
       throw error
     } finally {
+      releaseWork?.()
       releaseLegacy?.()
     }
   })
@@ -181,8 +184,10 @@ export function registerDatabaseController() {
   const ipcMain = { handle: registerProjectDatabaseHandler }
   registerRuntimeDatabaseHandler('db:close', async (runtime, _event, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(runtime.canonicalRoot, expectedProjectPath)
-    projectRuntimeHost.releaseIdle(runtime)
-    projectAccess.invalidateCurrentSession()
+    const session = projectAccess.captureCurrentSession()
+    await projectRuntimeHost.requestClose(runtime)
+    const current = projectAccess.captureCurrentSession()
+    if (current?.projectId === session?.projectId && current?.leaseId === session?.leaseId) projectAccess.invalidateCurrentSession()
     return { success: true }
   })
 
