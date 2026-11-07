@@ -1,0 +1,30 @@
+{
+  "parent": "66e1faf93c208e443f2535a5b8e55ac90504150f",
+  "stage": "5A",
+  "files": [
+    {
+      "path": "electron/services/main-process-scheduler.ts",
+      "sha256": "7B088A50F16899CC71A3AF3A28EC01B22555B5F596761DE7F993F6ABBE542683"
+    },
+    {
+      "path": "electron/services/main-resource-claims.ts",
+      "sha256": "4D71A1F8A7C94A463079174721890E6650FB307501504670D6971EA59DA999D4"
+    },
+    {
+      "path": "electron/services/scheduler-network-subject.ts",
+      "sha256": "31004E59909384E5E591D4A8DFC9C371E8126707316FF747A06A7C88D961DCFD"
+    },
+    {
+      "path": "electron/services/__tests__/main-process-scheduler.test.ts",
+      "sha256": "8CD443090FF838AE01F9DA13D540CA03BF212DA3E5650F3DF1D05FBD3039198D"
+    },
+    {
+      "path": "electron/services/__tests__/main-resource-claims.test.ts",
+      "sha256": "608945E1FFFA5C19C5D11E96A23C1ADA9170E4F32CF7FF6E7DFA2BADBF4400B6"
+    },
+    {
+      "path": "electron/services/__tests__/scheduler-network-subject.test.ts",
+      "sha256": "98E28306D6E99556C654D2966CED8B3B8D96EE41BD3EE03EB854B0E82ED0A1B2"
+    }
+  ]
+}
