@@ -133,6 +133,45 @@ it('包装的源码在主进程里重建后同样拒绝不在名单里的请求'
   assert.deepEqual(sink.externalRequests, ['https://api.openai.com'])
 })
 
+it('fake and loopback fetch attempts retain status and timing without request content', async () => {
+  const rebuilt = (0, eval)(`(${guardFetch.toString()})`)
+  const sink = { externalRequests: [], modelRequests: [] }
+  const calls = []
+  const guarded = rebuilt(async (input, options) => {
+    calls.push([input, options])
+    return { status: calls.length === 1 ? 200 : 429 }
+  }, fetchRoute, FAKE, sink)
+  const options = { method: 'POST', body: 'fictional-prompt-not-in-evidence' }
+  await guarded('https://api.openai.com/v1/chat/completions', options)
+  await guarded('http://127.0.0.1:4567/v1/embeddings', options)
+  assert.deepEqual(calls.map(([input]) => input), [
+    'http://127.0.0.1:4567/v1/chat/completions', 'http://127.0.0.1:4567/v1/embeddings',
+  ])
+  assert.equal(calls.every(([, value]) => value === options), true)
+  assert.deepEqual(sink.modelRequests.map(({ path, status }) => [path, status]), [
+    ['/v1/chat/completions', 200], ['/v1/embeddings', 429],
+  ])
+  for (const entry of sink.modelRequests) {
+    assert.deepEqual(Object.keys(entry).sort(), ['ms', 'path', 'status'])
+    assert.ok(Number.isFinite(entry.ms) && entry.ms >= 0)
+  }
+  assert.equal(JSON.stringify(sink).includes(options.body), false)
+  assert.deepEqual(sink.externalRequests, [])
+})
+
+it('failed fixture fetch stays in the attempt denominator and refused routes do not dispatch', async () => {
+  const sink = { externalRequests: [], modelRequests: [] }
+  let calls = 0
+  const failure = new TypeError('private failure detail')
+  const guarded = guardFetch(async () => { calls++; throw failure }, fetchRoute, FAKE, sink)
+  await assert.rejects(guarded('https://api.openai.com/v1/chat/completions'), error => error === failure)
+  await assert.rejects(guarded('https://unapproved.example/v1/chat/completions'), /DRIVE_EXTERNAL_FETCH_REFUSED/)
+  assert.equal(calls, 1)
+  assert.equal(sink.modelRequests.length, 1)
+  assert.deepEqual([sink.modelRequests[0].path, sink.modelRequests[0].status], ['/v1/chat/completions', 'TypeError'])
+  assert.equal(JSON.stringify(sink).includes(failure.message), false)
+})
+
 it('删不掉的模型配置记下路径与错误码，其余照删，不抛', () => {
   const dir = tempDir()
   for (const name of ['a', 'b']) {

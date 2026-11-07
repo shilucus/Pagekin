@@ -8,6 +8,7 @@ import type { CreativeStrategy, GenerationReasoningStage } from '../../shared/re
 import { projectSessionContextFromProject } from '../../shared/project-session-context'
 import type { RootBudget } from '../../shared/generation-contract'
 import { hashAuthorText, isContentHash } from '../../shared/source-ref'
+import type { PerformanceMetric } from '../../shared/performance-baseline'
 import { ipc } from '../ipc-client'
 import { useLLMStore } from '../../stores/llm-store'
 import { useProjectStore } from '../../stores/project-store'
@@ -153,6 +154,32 @@ function sameHandle(left: MainGenerationRunHandle, right: MainGenerationRunHandl
     return typeof left[field] === 'string' && Boolean(left[field].trim()) && left[field] === right[field]
   })
 }
+type RendererPerformanceMetric = Extract<PerformanceMetric, `renderer.${string}`>
+function rendererPerformanceObservation() {
+  try {
+    const sink = (globalThis as Record<symbol, unknown>)[Symbol.for('pagekin.performance-baseline.renderer')] as {
+      record(name: RendererPerformanceMetric, value: number): void
+      now(): number
+    } | undefined
+    if (!sink || typeof sink.record !== 'function' || typeof sink.now !== 'function') return undefined
+    const record = (name: RendererPerformanceMetric, value: number) => {
+      try { if (Number.isFinite(value) && value >= 0) sink.record(name, value) } catch { /* Diagnostics never affect projection. */ }
+    }
+    const now = (): number | null => {
+      try { const value = sink.now(); return Number.isFinite(value) && value >= 0 ? value : null } catch { return null }
+    }
+    return {
+      record, now,
+      duration(name: RendererPerformanceMetric, started: number | null) {
+        const ended = started === null ? null : now()
+        if (started !== null && ended !== null) record(name, Math.max(0, ended - started))
+      },
+      bytes(snapshot: MainGenerationSnapshot) {
+        try { record('renderer.snapshot.utf8_bytes', new TextEncoder().encode(JSON.stringify(snapshot)).byteLength) } catch { /* Do not retain payloads. */ }
+      },
+    }
+  } catch { return undefined }
+}
 export async function createMainOwnedGenerationRuntime(options: MainOwnedGenerationRuntimeOptions, injected?: MainGenerationTransport): Promise<MainOwnedGenerationRuntime> {
   const transport = injected ?? defaultMainTransport
   if (!transport) throw new Error('MAIN_GENERATION_TRANSPORT_REQUIRED')
@@ -162,6 +189,7 @@ export async function createMainOwnedGenerationRuntime(options: MainOwnedGenerat
   let closed = false
   let projectionError: unknown
   let queue = Promise.resolve()
+  let observedPending = 0
   const snapshots = new Map<string, MainGenerationSnapshot>()
   const assertView = (view: MainGenerationRunView) => {
     if (!sameHandle(handle, view.handle)) throw new Error('MAIN_RUN_IDENTITY_MISMATCH')
@@ -169,35 +197,61 @@ export async function createMainOwnedGenerationRuntime(options: MainOwnedGenerat
   }
   const accept = (snapshot: MainGenerationSnapshot) => {
     const captured = { ...snapshot }
+    const observation = rendererPerformanceObservation()
+    const enqueued = observation?.now() ?? null
+    if (observation) {
+      observation.record('renderer.snapshot.calls', 1)
+      observation.bytes(captured)
+      observation.record('renderer.snapshot.queue', ++observedPending)
+    }
     queue = queue.then(async () => {
-      if (closed) return
-      if (!sameHandle(handle, captured) || !captured.artifactId?.trim() || !captured.attemptId?.trim()
-        || !Number.isSafeInteger(captured.revision) || captured.revision < 0
-        || !Number.isSafeInteger(captured.durableRevision) || captured.durableRevision < 0 || captured.durableRevision > captured.revision
-        || !['running', 'completed', 'failed', 'cancelled', 'unknown'].includes(captured.status)
-        || typeof captured.text !== 'string' || !isContentHash(captured.textHash) || await hashAuthorText(captured.text) !== captured.textHash) throw new Error('INVALID_MAIN_SNAPSHOT')
-      if (closed) return
-      const previous = snapshots.get(captured.artifactId)
-      if (previous) {
-        if (previous.attemptId !== captured.attemptId) throw new Error('MAIN_ARTIFACT_ATTEMPT_CHANGED')
-        // Delivery order can differ from commit order. Older acknowledged views never replace newer ones.
-        if (captured.revision < previous.revision) return
-        // A terminal read can overtake its last running notification without changing the artifact.
-        if (previous.status !== 'running' && captured.status === 'running'
-          && captured.revision === previous.revision && captured.durableRevision === previous.durableRevision
-          && captured.text === previous.text && captured.textHash === previous.textHash) return
-        const cancelledSettledArtifact = (previous.status === 'failed' || previous.status === 'unknown') && captured.status === 'cancelled'
-          && captured.revision === previous.revision && captured.durableRevision === previous.durableRevision
-          && captured.text === previous.text && captured.textHash === previous.textHash
-        if (previous.status !== 'running' && !cancelledSettledArtifact && (captured.status !== previous.status || captured.textHash !== previous.textHash || captured.revision !== previous.revision)
-          || captured.durableRevision < previous.durableRevision || !captured.text.startsWith(previous.text)
-          || captured.revision === previous.revision && captured.textHash !== previous.textHash) throw new Error('MAIN_SNAPSHOT_REGRESSION')
-        if (!captured.diagnostics || previous.diagnostics && captured.diagnostics.elapsedMs < previous.diagnostics.elapsedMs) captured.diagnostics = previous.diagnostics
-        if (captured.revision === previous.revision && captured.durableRevision === previous.durableRevision && captured.status === previous.status
-          && JSON.stringify(captured.diagnostics) === JSON.stringify(previous.diagnostics)) return
+      const started = observation?.now() ?? null
+      observation?.duration('renderer.snapshot.queue_ms', enqueued)
+      try {
+        if (closed) return
+        if (!sameHandle(handle, captured) || !captured.artifactId?.trim() || !captured.attemptId?.trim()
+          || !Number.isSafeInteger(captured.revision) || captured.revision < 0
+          || !Number.isSafeInteger(captured.durableRevision) || captured.durableRevision < 0 || captured.durableRevision > captured.revision
+          || !['running', 'completed', 'failed', 'cancelled', 'unknown'].includes(captured.status)
+          || typeof captured.text !== 'string' || !isContentHash(captured.textHash)) throw new Error('INVALID_MAIN_SNAPSHOT')
+        const hashStarted = observation?.now() ?? null
+        let contentHash: string
+        try { contentHash = await hashAuthorText(captured.text) }
+        finally { observation?.duration('renderer.snapshot.hash_ms', hashStarted) }
+        if (contentHash !== captured.textHash) throw new Error('INVALID_MAIN_SNAPSHOT')
+        if (closed) return
+        const previous = snapshots.get(captured.artifactId)
+        if (previous) {
+          if (previous.attemptId !== captured.attemptId) throw new Error('MAIN_ARTIFACT_ATTEMPT_CHANGED')
+          // Delivery order can differ from commit order. Older acknowledged views never replace newer ones.
+          if (captured.revision < previous.revision) return
+          // A terminal read can overtake its last running notification without changing the artifact.
+          if (previous.status !== 'running' && captured.status === 'running'
+            && captured.revision === previous.revision && captured.durableRevision === previous.durableRevision
+            && captured.text === previous.text && captured.textHash === previous.textHash) return
+          const cancelledSettledArtifact = (previous.status === 'failed' || previous.status === 'unknown') && captured.status === 'cancelled'
+            && captured.revision === previous.revision && captured.durableRevision === previous.durableRevision
+            && captured.text === previous.text && captured.textHash === previous.textHash
+          if (previous.status !== 'running' && !cancelledSettledArtifact && (captured.status !== previous.status || captured.textHash !== previous.textHash || captured.revision !== previous.revision)
+            || captured.durableRevision < previous.durableRevision || !captured.text.startsWith(previous.text)
+            || captured.revision === previous.revision && captured.textHash !== previous.textHash) throw new Error('MAIN_SNAPSHOT_REGRESSION')
+          if (!captured.diagnostics || previous.diagnostics && captured.diagnostics.elapsedMs < previous.diagnostics.elapsedMs) captured.diagnostics = previous.diagnostics
+          if (captured.revision === previous.revision && captured.durableRevision === previous.durableRevision && captured.status === previous.status
+            && JSON.stringify(captured.diagnostics) === JSON.stringify(previous.diagnostics)) {
+            observation?.record('renderer.snapshot.duplicate', 1)
+            return
+          }
+        }
+        snapshots.set(captured.artifactId, Object.freeze(captured))
+        observation?.record('renderer.snapshot.accepted', 1)
+        options.onSnapshot?.(captured)
+      } finally {
+        if (observation) {
+          observedPending--
+          observation.duration('renderer.snapshot.processing_ms', started)
+          observation.duration('renderer.snapshot.total_ms', enqueued)
+        }
       }
-      snapshots.set(captured.artifactId, Object.freeze(captured))
-      options.onSnapshot?.(captured)
     }).catch(error => { projectionError = error })
   }
   const unsubscribe = transport.subscribe(handle, accept)

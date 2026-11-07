@@ -6,15 +6,31 @@ import path from 'node:path'
 import process from 'node:process'
 import { afterEach, it, vi } from 'vitest'
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { profileWrites, snapshotRealProfiles } from '../drive.mjs'
+import { profileWrites, realProfileDirectories, snapshotRealProfiles } from '../drive.mjs'
 
 const parents = []
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   for (const parent of parents.splice(0)) fs.rmSync(parent, { recursive: true, force: true })
 })
 
 const GPU_CACHES = ['GPUCache', 'DawnWebGPUCache', 'DawnGraphiteCache']
+
+it('monitors the default business-data sibling as well as Electron profiles', () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'drive-business-root-'))
+  parents.push(parent)
+  vi.stubEnv('APPDATA', parent)
+  vi.spyOn(os, 'homedir').mockReturnValue(parent)
+  const directories = realProfileDirectories()
+  const businessRoot = path.join(parent, 'ai-novel-writer-data')
+  assert.deepEqual(directories, [path.join(parent, '.vela'), path.join(parent, 'ai-novel-writer'), businessRoot, path.join(parent, 'AI小说作家')])
+  const before = snapshotRealProfiles(directories)
+  fs.mkdirSync(businessRoot)
+  const config = path.join(businessRoot, 'config.json')
+  fs.writeFileSync(config, '{}')
+  assert.deepEqual(profileWrites(before), { externalWrites: [businessRoot, config].sort(), externalWritesIgnored: [] })
+})
 
 /** 一个已经用过的配置目录：三个 GPU 缓存各有 data_1，根上有 Preferences 与 Local State。 */
 function usedProfile() {

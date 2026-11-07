@@ -41,6 +41,7 @@ import { clearProjectCustomPrompts } from '../../../src/services/prompt-template
 import { exportPortableProject } from '../../services/project-archive-service'
 import { restorePortableProject } from '../../services/project-restore-service'
 import { readPortableRuntimeFreeze } from '../../services/portable-runtime-freeze'
+import * as performanceDiagnostics from '../../services/performance-diagnostics'
 
 const model: ModelProfile = { id: 'fixture', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
   baseUrl: 'https://api.openai.com/v1', apiKey: 'synthetic-only', maxTokens: 1024, temperature: 0.7, purposes: ['generation'] }
@@ -689,6 +690,45 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     expect(JSON.stringify(result)).not.toContain('临时推理')
     expect(JSON.stringify(result)).not.toContain(model.apiKey)
     expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it.each(['0', '1'] as const)('records snapshot application payload bytes only when diagnostics are %s', async enabled => {
+    vi.stubEnv('PAGEKIN_PERFORMANCE_BASELINE', enabled)
+    const before = performanceDiagnostics.readPerformanceDiagnostics().metrics
+    try {
+      stream('中文候选', '不计入快照的推理')
+      const run = await invoke('generation:begin', request)
+      const result = await invoke('generation:execute', { handle: run.handle, invocationNonce: 'diagnostic-payload',
+        task: { purpose: 'draft', output: 'visible-text', messages: [{ role: 'user', content: '中文正文' }] } })
+      const snapshots = sender.send.mock.calls.filter(([channel]) => channel === 'generation:snapshot')
+      expect(snapshots.length).toBeGreaterThan(0)
+      const after = performanceDiagnostics.readPerformanceDiagnostics().metrics
+      const expectedCalls = enabled === '1' ? snapshots.length : 0
+      const expectedBytes = enabled === '1' ? snapshots.reduce((sum, [, payload]) => sum + Buffer.byteLength(JSON.stringify(payload), 'utf8'), 0) : 0
+      expect((after['ipc.snapshot.calls']?.sum ?? 0) - (before['ipc.snapshot.calls']?.sum ?? 0)).toBe(expectedCalls)
+      expect((after['ipc.snapshot.utf8_bytes']?.sum ?? 0) - (before['ipc.snapshot.utf8_bytes']?.sum ?? 0)).toBe(expectedBytes)
+      expect(result.outcome.content).toBe('中文候选')
+      expect(JSON.stringify(after)).not.toContain('中文候选')
+      expect(JSON.stringify(after)).not.toContain(model.apiKey)
+    } finally { vi.unstubAllEnvs() }
+  })
+  it.each(['count', 'bytes'] as const)('does not change successful snapshot delivery when diagnostic %s recording throws', async failure => {
+    const count = performanceDiagnostics.recordPerformanceCount
+    const computed = performanceDiagnostics.recordPerformanceComputedMetric
+    const counter = vi.spyOn(performanceDiagnostics, 'recordPerformanceCount').mockImplementation((name, amount) => {
+      if (failure === 'count' && name === 'ipc.snapshot.calls') throw new Error('private diagnostic failure')
+      count(name, amount)
+    })
+    const bytes = vi.spyOn(performanceDiagnostics, 'recordPerformanceComputedMetric').mockImplementation((name, sample) => {
+      if (failure === 'bytes' && name === 'ipc.snapshot.utf8_bytes') throw new Error('private diagnostic failure')
+      computed(name, sample)
+    })
+    stream('中文候选')
+    const run = await invoke('generation:begin', request)
+    const result = await invoke('generation:execute', { handle: run.handle, invocationNonce: 'diagnostic-failure',
+      task: { purpose: 'draft', output: 'visible-text', messages: [{ role: 'user', content: '中文正文' }] } })
+    expect(result.outcome.content).toBe('中文候选')
+    expect(sender.send).toHaveBeenCalledWith('generation:snapshot', expect.objectContaining({ text: '中文候选', status: 'completed' }))
+    expect(failure === 'count' ? counter : bytes).toHaveBeenCalled()
   })
   it('logs an uncoded failure without request arguments before returning the generic code', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})

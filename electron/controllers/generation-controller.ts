@@ -33,6 +33,7 @@ import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-kn
 import { withKnowledgeSourceGate } from '../services/knowledge-source-gate'
 import { KnowledgeBaseUnavailableError, knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { getEmbeddingConfig } from './kb-controller'
+import { recordPerformanceComputedMetric, recordPerformanceCount } from '../services/performance-diagnostics'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
 type OwnerChannels = LegacyRosterGenerationChannels & GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
@@ -143,7 +144,13 @@ export function registerGenerationController(options: {
           modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
         onSnapshot: snapshot => { for (const subscriber of subscribers) {
           if (subscriber.isDestroyed()) subscribers.delete(subscriber)
-          else subscriber.send('generation:snapshot', snapshot)
+          else {
+            subscriber.send('generation:snapshot', snapshot)
+            try {
+              recordPerformanceCount('ipc.snapshot.calls')
+              recordPerformanceComputedMetric('ipc.snapshot.utf8_bytes', () => Buffer.byteLength(JSON.stringify(snapshot), 'utf8'))
+            } catch { /* Snapshot delivery does not depend on diagnostics. */ }
+          }
         } },
         onReasoning: reasoning => { for (const subscriber of subscribers) {
           if (subscriber.isDestroyed()) subscribers.delete(subscriber)

@@ -1,4 +1,5 @@
 import { safeTransportError, type GenerationTransportDiagnostics } from '../../src/shared/generation-contract'
+import { recordPerformanceComputedMetric, recordPerformanceCount, recordPerformanceMetric } from '../services/performance-diagnostics'
 
 /**
  * 一次流式请求的传输诊断：各 provider 共用同一份形状与上报节奏。
@@ -7,12 +8,15 @@ import { safeTransportError, type GenerationTransportDiagnostics } from '../../s
 export class StreamTransportDiagnostics {
   private readonly started = performance.now()
   private notifiedAt = -Infinity
+  private firstReasoningRecorded = false
+  private firstVisibleRecorded = false
   /** 请求或读流被传输层拒绝；provider 据此交出 LLM_STREAM_NETWORK_FAILED，而不是笼统的失败。 */
   networkFailure = false
   private readonly value: GenerationTransportDiagnostics = { startedAt: Date.now(), elapsedMs: 0,
     firstResponseMs: null, lastResponseMs: null, lastOutputMs: null, phase: 'request', visibleEvents: 0, reasoningEvents: 0 }
 
   constructor(private readonly onDiagnostics?: (diagnostics: GenerationTransportDiagnostics) => void) {
+    recordPerformanceCount('transport.sessions')
     this.notify()
   }
 
@@ -28,6 +32,8 @@ export class StreamTransportDiagnostics {
   }
 
   async response(request: Promise<Response>): Promise<Response> {
+    // Providers pass fetch(...) here after URL, headers and body construction.
+    recordPerformanceCount('transport.requests')
     let res: Response
     try {
       res = await request
@@ -37,6 +43,8 @@ export class StreamTransportDiagnostics {
       throw error
     }
     this.value.phase = 'response'
+    recordPerformanceComputedMetric('transport.headers.ms', () => this.elapsed())
+    if (res.status === 429) recordPerformanceCount('transport.http_429')
     if (Number.isInteger(res.status)) this.value.httpStatus = res.status
     this.notify(true)
     return res
@@ -58,6 +66,7 @@ export class StreamTransportDiagnostics {
       const elapsed = this.elapsed()
       const firstResponse = this.value.firstResponseMs === null
       this.value.firstResponseMs ??= elapsed
+      if (firstResponse) recordPerformanceMetric('transport.first_response.ms', elapsed)
       this.value.lastResponseMs = elapsed
       this.notify(firstResponse)
     }
@@ -68,6 +77,15 @@ export class StreamTransportDiagnostics {
     const firstOutput = this.value.lastOutputMs === null
     this.value[kind]++
     this.value.lastOutputMs = this.elapsed()
+    if (kind === 'visibleEvents') {
+      recordPerformanceCount('transport.visible.events')
+      if (!this.firstVisibleRecorded) recordPerformanceMetric('transport.first_visible.ms', this.value.lastOutputMs)
+      this.firstVisibleRecorded = true
+    } else {
+      recordPerformanceCount('transport.reasoning.events')
+      if (!this.firstReasoningRecorded) recordPerformanceMetric('transport.first_reasoning.ms', this.value.lastOutputMs)
+      this.firstReasoningRecorded = true
+    }
     this.notify(firstOutput)
   }
 
@@ -78,18 +96,21 @@ export class StreamTransportDiagnostics {
 
   /** 不经异常就结束的失败，例如 HTTP 错误或没有响应体。 */
   fail(code: string): void {
+    if (!this.value.endReason) recordPerformanceCount('transport.failed')
     this.value.endReason = 'failed'
     this.value.errorCode = code
     this.notify()
   }
 
   completed(): void {
+    if (!this.value.endReason) recordPerformanceCount('transport.completed')
     this.value.phase = 'complete'
     this.value.endReason = 'completed'
     this.notify()
   }
 
   interrupted(error: unknown, aborted: boolean): void {
+    if (!this.value.endReason) recordPerformanceCount(aborted ? 'transport.cancelled' : 'transport.failed')
     Object.assign(this.value, safeTransportError(error))
     this.value.endReason = aborted ? 'cancelled' : 'failed'
     this.notify()

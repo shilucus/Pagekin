@@ -4,6 +4,7 @@ import { countDraftUnits } from '../../src/shared/draft-units'
 import { createImportRunChapterBatchCheckpointId, parseImportRunChapterBatchCheckpointId } from '../../src/shared/import-run'
 import type { ImportGenerationContext, ImportGenerationSlot } from '../../src/shared/import-generation'
 import { ProjectCoreRepository } from '../repositories/project-core-repository'
+import { measurePerformanceOperation, performanceStarted, recordPerformanceComputedMetric, recordPerformanceCount, recordPerformanceDuration } from './performance-diagnostics'
 
 export function validateImportGenerationSlot(slot: ImportGenerationSlot): void {
   if (!slot || typeof slot !== 'object' || Array.isArray(slot) || Object.keys(slot).some(key => !['runId', 'stage', 'batchId'].includes(key))
@@ -18,19 +19,33 @@ export function importGenerationSlotKey(slot: ImportGenerationSlot): string {
 }
 /** Read immutable import material from the captured database, not renderer samples. */
 export function captureImportGenerationContext(db: Database.Database, slot: ImportGenerationSlot): ImportGenerationContext {
+  recordPerformanceCount('source.capture.calls')
+  const started = performanceStarted()
+  try { return captureImportGenerationContextAuthority(db, slot) }
+  catch (error) { recordPerformanceCount('source.capture.failed'); throw error }
+  finally { recordPerformanceDuration('source.capture.ms', started) }
+}
+
+function captureImportGenerationContextAuthority(db: Database.Database, slot: ImportGenerationSlot): ImportGenerationContext {
   validateImportGenerationSlot(slot)
   const run = db.prepare('SELECT manifest_fingerprint,manifest_chapter_count,manifest_word_count FROM import_runs WHERE id=?').get(slot.runId) as {
     manifest_fingerprint: string; manifest_chapter_count: number; manifest_word_count: number
   } | undefined
   if (!run || !/^[a-f0-9]{64}$/.test(run.manifest_fingerprint)) throw new Error('GENERATION_IMPORT_MANIFEST_REQUIRED')
   const range = slot.stage === 'blueprints' ? parseImportRunChapterBatchCheckpointId(slot.batchId) : null
-  const rows = db.prepare('SELECT chapter_number,title,content_snapshot,content_fingerprint FROM import_run_chapters WHERE run_id=? ORDER BY chapter_number').all(slot.runId) as {
+  const rows = measurePerformanceOperation('source.read.ms', () => db.prepare('SELECT chapter_number,title,content_snapshot,content_fingerprint FROM import_run_chapters WHERE run_id=? ORDER BY chapter_number').all(slot.runId)) as {
     chapter_number: number; title: string; content_snapshot: string; content_fingerprint: string
   }[]
-  const selected = range ? rows.filter(row => row.chapter_number >= range.startChapter && row.chapter_number <= range.endChapter)
+  recordPerformanceCount('source.read.chapters', rows.length)
+  recordPerformanceComputedMetric('source.read.utf8_bytes', () => rows.reduce((sum, row) => sum + Buffer.byteLength(row.content_snapshot, 'utf8'), 0))
+  const selected = measurePerformanceOperation('source.select.ms', () => range ? rows.filter(row => row.chapter_number >= range.startChapter && row.chapter_number <= range.endChapter)
     : slot.stage === 'global' ? rows.filter((_, index) => index === 0 || index === rows.length - 1)
-      : rows.filter((_, index) => rows.length <= 5 || index < 3 || index >= rows.length - 2)
-  if (!selected.length || selected.some(row => textHash(row.content_snapshot) !== row.content_fingerprint)) throw new Error('GENERATION_IMPORT_CONTENT_CHANGED')
+      : rows.filter((_, index) => rows.length <= 5 || index < 3 || index >= rows.length - 2))
+  recordPerformanceCount(`source.selected.${slot.stage}.chapters`, selected.length)
+  recordPerformanceComputedMetric('source.selected.utf8_bytes', () => selected.reduce((sum, row) => sum + Buffer.byteLength(row.content_snapshot, 'utf8'), 0))
+  measurePerformanceOperation('source.validate.ms', () => {
+    if (!selected.length || selected.some(row => textHash(row.content_snapshot) !== row.content_fingerprint)) throw new Error('GENERATION_IMPORT_CONTENT_CHANGED')
+  })
   const chapters = selected.map(row => ({ number: row.chapter_number, title: row.title, content: row.content_snapshot,
     contentFingerprint: row.content_fingerprint, wordCount: countDraftUnits(row.content_snapshot) }))
   if (range && createImportRunChapterBatchCheckpointId(chapters) !== slot.batchId) throw new Error('GENERATION_IMPORT_CHECKPOINT_CHANGED')

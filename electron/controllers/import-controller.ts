@@ -37,6 +37,7 @@ import { getCurrentProjectPath, getProjectDb } from '../database'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { ImportRunRepository } from '../repositories/import-run-repository'
+import { measurePerformanceOperation, performanceStarted, recordPerformanceCount, recordPerformanceDuration } from '../services/performance-diagnostics'
 import {
   EPUB_MAX_ARCHIVE_ENTRIES,
   EPUB_MAX_ENTRY_BYTES,
@@ -225,7 +226,7 @@ interface ParsedChapter {
 }
 
 function sha256(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex')
+  return measurePerformanceOperation('import.hash.ms', () => createHash('sha256').update(value, 'utf8').digest('hex'))
 }
 
 function sourceMediaType(displayName: string): string {
@@ -326,6 +327,8 @@ export function registerImportController(
     request?: ImportPurpose | ImportNovelFileSelectionRequest,
     projectSession?: ProjectSessionContext,
   ) => {
+    const inspectionStarted = performanceStarted()
+    recordPerformanceCount('import.inspect.calls')
     event.sender.once('destroyed', () => {
       grantService.revokeWebContents(event.sender.id)
       inspectionStore.revokeForWebContents(event.sender.id)
@@ -363,7 +366,10 @@ export function registerImportController(
         properties: ['openFile', 'multiSelections'],
       })
       assertFrozenProject()
-      if (result.canceled || result.filePaths.length === 0) return null
+      if (result.canceled || result.filePaths.length === 0) {
+        recordPerformanceCount('import.inspect.cancelled')
+        return null
+      }
       inspectionStore.revokeForWebContents(event.sender.id)
       if (result.filePaths.length > limits.maxSourceFiles) {
         throw new Error('IMPORT_SOURCE_COUNT_EXCEEDED')
@@ -490,20 +496,25 @@ export function registerImportController(
           let contentBytes: number
           let content = ''
           if (isEpub) {
+            const readStarted = performanceStarted()
             const archive = await fileSystem.readBytes(capability, remainingBytes)
+            recordPerformanceDuration('import.read.ms', readStarted)
+            recordPerformanceCount('import.read.archive_bytes', archive.byteLength)
             assertFrozenProject()
+            const extractionStarted = performanceStarted()
             const extracted = await extractEpubChapters(archive, {
               maxEntries: EPUB_MAX_ARCHIVE_ENTRIES,
               maxEntryBytes: Math.min(EPUB_MAX_ENTRY_BYTES, remainingBytes),
               maxExtractedBytes: Math.min(EPUB_MAX_EXTRACTED_BYTES, remainingBytes),
             })
+            recordPerformanceDuration('import.parse.ms', extractionStarted)
             contentBytes = reserveSourceBytes(extracted.map(chapter => chapter.content).join(''))
             parsed = extracted.flatMap((chapter, index) => {
-              if (hasChapterHeadings(chapter.content)) {
-                return splitSingleFileContent(
+              if (measurePerformanceOperation('import.parse.ms', () => hasChapterHeadings(chapter.content))) {
+                return measurePerformanceOperation('import.parse.ms', () => splitSingleFileContent(
                   chapter.content,
                   limits.maxChapters - chapterCount,
-                )
+                ))
               }
               return [{
                 number: index + 1,
@@ -513,9 +524,12 @@ export function registerImportController(
               }]
             })
           } else {
+            const readStarted = performanceStarted()
             content = await fileSystem.readText(capability, remainingBytes)
+            recordPerformanceDuration('import.read.ms', readStarted)
             assertFrozenProject()
             contentBytes = reserveSourceBytes(content)
+            recordPerformanceCount('import.read.utf8_bytes', contentBytes)
             content = content.trim()
             if (!content) {
               emptySourceFound = true
@@ -529,8 +543,8 @@ export function registerImportController(
               }
               continue
             }
-            parsed = hasChapterHeadings(content)
-              ? splitSingleFileContent(content, limits.maxChapters - chapterCount)
+            parsed = measurePerformanceOperation('import.parse.ms', () => hasChapterHeadings(content))
+              ? measurePerformanceOperation('import.parse.ms', () => splitSingleFileContent(content, limits.maxChapters - chapterCount))
               : [{
                   number: extractChapterNumber(path.basename(sourceFileName, path.extname(sourceFileName))) || 1,
                   title: path.basename(sourceFileName, path.extname(sourceFileName)),
@@ -587,7 +601,7 @@ export function registerImportController(
               }
             })
             assertFrozenProject()
-            ImportRunRepository.commitParsedSource(parsingRun.id, opaqueSourceId, sourceChapters)
+            measurePerformanceOperation('import.save.ms', () => ImportRunRepository.commitParsedSource(parsingRun.id, opaqueSourceId, sourceChapters))
           }
           content = ''
         } catch (error) {
@@ -615,6 +629,7 @@ export function registerImportController(
       }
 
       if (emptySourceFound) {
+        recordPerformanceCount('import.inspect.failed')
         const error = responseLocale === 'en-US'
           ? 'One or more selected files are empty. Add novel text and choose the unfinished files again.'
           : responseLocale === 'zh-CN'
@@ -627,6 +642,7 @@ export function registerImportController(
       }
 
       if (titleOnlySourceFound) {
+        recordPerformanceCount('import.inspect.failed')
         return {
           success: false,
           error: importText(
@@ -639,7 +655,7 @@ export function registerImportController(
 
       if (parsingRun) {
         assertFrozenProject()
-        return { success: true, preparation: ImportRunRepository.finalizeParsing(parsingRun.id) }
+        return { success: true, preparation: measurePerformanceOperation('import.save.ms', () => ImportRunRepository.finalizeParsing(parsingRun.id)) }
       }
 
       // Preview numbers are renderer-only. Stable global numbers are assigned
@@ -662,9 +678,10 @@ export function registerImportController(
 
       return {
         success: true,
-        inspection: inspectionStore.create({ webContentsId: event.sender.id, purpose, sources, chapters: numbered }),
+        inspection: measurePerformanceOperation('import.save.ms', () => inspectionStore.create({ webContentsId: event.sender.id, purpose, sources, chapters: numbered })),
       }
     } catch (error) {
+      recordPerformanceCount('import.inspect.failed')
       inspectionStore.revokeForWebContents(event.sender.id)
       const message = error instanceof Error ? error.message : String(error)
       const duplicateChapter = /^AUTHOR_MANUSCRIPT_DUPLICATE_CHAPTER:(\d+)$/u.exec(message)
@@ -677,6 +694,8 @@ export function registerImportController(
             )
           : importSelectionErrorMessage(error, responseLocale, limits),
       }
+    } finally {
+      recordPerformanceDuration('import.inspect.ms', inspectionStarted)
     }
   })
 }

@@ -3,6 +3,7 @@ import { createGenerationRuntime as createFacade, createMainOwnedGenerationRunti
 import type { GenerationOutcome, GenerationTask } from '../generation-harness'
 import { hashAuthorText } from '../../../shared/source-ref'
 import { useLLMStore } from '../../../stores/llm-store'
+import { createPerformanceBaseline } from '../../../shared/performance-baseline'
 
 const handle: MainGenerationRunHandle = { projectId: '项目甲', epoch: '打开甲', rootActionId: '动作甲', runId: '运行甲' }
 const task: GenerationTask = { purpose: '正文', output: 'visible-text', messages: [{ role: 'user', content: '续写铜钥匙的故事' }] }
@@ -26,8 +27,91 @@ function fixture() {
 async function snapshot(text = '雨夜', revision = 1, durableRevision = revision): Promise<MainGenerationSnapshot> {
   return { ...handle, artifactId: '候选甲', attemptId: '请求甲', text, revision, durableRevision, textHash: await hashAuthorText(text), status: 'running' }
 }
+function installPerformanceObservation(sink: unknown) {
+  const key = Symbol.for('pagekin.performance-baseline.renderer')
+  const previous = Object.getOwnPropertyDescriptor(globalThis, key)
+  Object.defineProperty(globalThis, key, { configurable: true, value: sink })
+  return () => {
+    if (previous) Object.defineProperty(globalThis, key, previous)
+    else Reflect.deleteProperty(globalThis, key)
+  }
+}
 
 describe('main owned generation facade', () => {
+  it('does not encode diagnostic payloads or read a clock without an observer', async () => {
+    const restore = installPerformanceObservation(undefined)
+    const f = fixture(), value = await snapshot(), shown = vi.fn()
+    const encode = vi.spyOn(TextEncoder.prototype, 'encode')
+    const now = vi.spyOn(performance, 'now')
+    const runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)
+    try {
+      f.emit(value); await runtime.read()
+      expect(encode).toHaveBeenCalledExactlyOnceWith(value.text)
+      expect(now).not.toHaveBeenCalled()
+      expect(shown).toHaveBeenCalledExactlyOnceWith(value)
+    } finally { await runtime.close(); encode.mockRestore(); now.mockRestore(); restore() }
+  })
+  it('records only aggregate numeric snapshot metrics without changing deduplication', async () => {
+    const baseline = createPerformanceBaseline()
+    let tick = 0
+    const restore = installPerformanceObservation({ record: baseline.record, now: () => ++tick })
+    const f = fixture(), first = await snapshot(), next = await snapshot('雨夜来信', 2), shown = vi.fn()
+    const runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)
+    try {
+      f.emit(first); f.emit(first); f.emit(next); await runtime.read()
+      const summary = baseline.snapshot()
+      expect(summary.metrics['renderer.snapshot.calls']).toMatchObject({ count: 3, sum: 3 })
+      expect(summary.metrics['renderer.snapshot.utf8_bytes']?.sum).toBe([first, first, next]
+        .reduce((sum, value) => sum + new TextEncoder().encode(JSON.stringify(value)).byteLength, 0))
+      expect(summary.metrics['renderer.snapshot.queue']?.max).toBe(3)
+      expect(summary.metrics['renderer.snapshot.hash_ms']?.count).toBe(3)
+      expect(summary.metrics['renderer.snapshot.processing_ms']?.count).toBe(3)
+      expect(summary.metrics['renderer.snapshot.total_ms']?.count).toBe(3)
+      expect(summary.metrics['renderer.snapshot.duplicate']?.sum).toBe(1)
+      expect(summary.metrics['renderer.snapshot.accepted']?.sum).toBe(2)
+      expect(shown.mock.calls.map(([value]) => value.text)).toEqual([first.text, next.text])
+      const serialized = JSON.stringify(summary)
+      for (const privateValue of [first.text, handle.projectId, handle.runId, first.artifactId]) expect(serialized).not.toContain(privateValue)
+    } finally { await runtime.close(); restore() }
+  })
+  it('measures hash blocking and the existing serialized queue without adding hash work', async () => {
+    const baseline = createPerformanceBaseline()
+    let tick = 0
+    const restore = installPerformanceObservation({ record: baseline.record, now: () => tick })
+    const f = fixture(), first = await snapshot(), next = await snapshot('雨夜来信', 2)
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(first.text))
+    let release!: (value: ArrayBuffer) => void
+    const gate = new Promise<ArrayBuffer>(resolve => { release = resolve })
+    const hashing = vi.spyOn(crypto.subtle, 'digest').mockImplementationOnce(() => gate)
+    const shown = vi.fn(), runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)
+    try {
+      f.emit(first); await Promise.resolve()
+      expect(hashing).toHaveBeenCalledTimes(1)
+      tick = 30; f.emit(next)
+      tick = 70; release(digest); await runtime.read()
+      const metrics = baseline.snapshot().metrics
+      expect(metrics['renderer.snapshot.hash_ms']?.max).toBe(70)
+      expect(metrics['renderer.snapshot.queue_ms']?.max).toBe(40)
+      expect(metrics['renderer.snapshot.queue']?.max).toBe(2)
+      expect(hashing).toHaveBeenCalledTimes(2)
+      expect(shown.mock.calls.map(([value]) => value.text)).toEqual([first.text, next.text])
+    } finally { release(digest); await runtime.close(); hashing.mockRestore(); restore() }
+  })
+  it.each(['clock', 'record', 'access'] as const)('isolates a throwing diagnostic %s from snapshot validation', async failure => {
+    const sink = failure === 'access' ? { get record() { throw new Error('private diagnostic failure') } }
+      : { record: () => { if (failure === 'record') throw new Error('private diagnostic failure') },
+        now: () => { if (failure === 'clock') throw new Error('private diagnostic failure'); return 0 } }
+    const restore = installPerformanceObservation(sink)
+    const f = fixture(), value = await snapshot(), shown = vi.fn()
+    const runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)
+    try {
+      f.emit(value); await runtime.read()
+      expect(shown).toHaveBeenCalledExactlyOnceWith(value)
+      f.emit({ ...value, textHash: 'f'.repeat(64) })
+      await expect(runtime.read()).rejects.toThrow('INVALID_MAIN_SNAPSHOT')
+      expect(shown).toHaveBeenCalledTimes(1)
+    } finally { await runtime.close(); restore() }
+  })
   it.each(['completed', 'failed', 'cancelled', 'unknown'] as const)('ignores an unchanged late running snapshot after %s and permits the next request', async status => {
     const f = fixture(), shown = vi.fn()
     const runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)

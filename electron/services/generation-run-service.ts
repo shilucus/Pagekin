@@ -3,6 +3,7 @@ import { isTerminalProviderFailure, safeTransportError, type GenerationTransport
 import { GenerationRunRepository, type OpenGenerationRunRequest, type RunBinding, type GenerationExecutionReceipt, type GenerationUsageReceipt } from '../repositories/generation-run-repository';
 import type { ProviderUsagePolicy } from '../../src/shared/generation-contract';
 import { parseAgentResponseProtocol, projectInterruptedAgentVisibleText } from '../../src/shared/agent-response-protocol';
+import { measurePerformanceOperation, performanceStarted, recordPerformanceCount, recordPerformanceDuration, recordPerformanceMetric, recordPerformanceTextBytes } from './performance-diagnostics';
 export type { OpenGenerationRunRequest, RunBinding, DurableGenerationRun, GenerationExecutionReceipt, GenerationBudgetReceipt } from '../repositories/generation-run-repository';
 export interface VisibleGenerationEvent {
     kind: 'delta' | 'cumulative';
@@ -109,7 +110,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
     }>(), pending = new Map<string, Promise<GenerationExecutionReceipt>>();
     const failedRoots = new Set<string>();
     const unsavedTails = new Map<string, GenerationUnsavedTail>();
-    const execute = async (request: ExecuteGenerationRequest): Promise<GenerationExecutionReceipt> => {
+    const executeOperation = async (request: ExecuteGenerationRequest): Promise<GenerationExecutionReceipt> => {
         const requestHash = request.requestHash;
         if (!/^[a-f0-9]{64}$/u.test(requestHash))
             throw new Error('GENERATION_REQUEST_HASH_INVALID');
@@ -149,8 +150,11 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             let diagnostics: GenerationTransportDiagnostics | undefined;
             let diagnosticsAt = performance.now();
             let agentProtocolText = '';
+            let providerInvoked = false, usageObserved = false;
             const events = new Map<string, string>();
             const notify = () => { try {
+                recordPerformanceCount('generation.notify.calls');
+                recordPerformanceTextBytes('generation.notify.durable_utf8_bytes', durable);
                 deps.onSnapshot?.({ attemptId, visibleText: text, durableText: durable, durableRevision: revision, storageFailed, diagnostics });
             }
             catch { /* UI notification cannot alter durable accounting */ } };
@@ -158,11 +162,14 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 if (storageFailed || text === durable)
                     return;
                 try {
-                    const artifact = deps.repository.snapshot(attemptId, revision, text);
+                    recordPerformanceCount('generation.snapshot.calls');
+                    recordPerformanceTextBytes('generation.snapshot.utf8_bytes', text);
+                    const artifact = measurePerformanceOperation('generation.snapshot.ms', () => deps.repository.snapshot(attemptId, revision, text));
                     revision = artifact.revision;
                     durable = artifact.text;
                 }
                 catch {
+                    recordPerformanceCount('generation.snapshot.failed');
                     storageFailed = true;
                     unsavedTails.set(attemptId, Object.freeze({ attemptId, artifactId: receipt.artifact!.artifactId,
                         durableRevision: revision, text: text.slice(durable.length), failureCode: 'GENERATION_STORAGE_FAILED' }));
@@ -208,6 +215,9 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                     failedRoots.add(run.rootActionId);
                 } controller.abort(GENERATION_STOPPED); }, remaining);
                 const cancelled = new Promise<never>((_resolve, reject) => { const abort = () => reject(new Error('GENERATION_CANCELLED')); controller.signal.addEventListener('abort', abort, { once: true }); removeAbortListener = () => controller.signal.removeEventListener('abort', abort); });
+                const providerStarted = performanceStarted();
+                recordPerformanceCount('generation.dispatch.calls');
+                providerInvoked = true;
                 const provider = deps.dispatch(request.providerRequest, { signal: controller.signal, onDiagnostics: value => {
                         if (terminal || storageFailed || controller.signal.aborted) return;
                         diagnostics = { ...value };
@@ -215,6 +225,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                         notify();
                     }, onReasoning: chunk => {
                         if (terminal || storageFailed || controller.signal.aborted || !chunk) return;
+                        recordPerformanceCount('generation.reasoning.events');
                         try { deps.onReasoning?.({ runId: run.runId, rootActionId: run.rootActionId, attemptId, text: chunk }); }
                         catch { /* A display-only event cannot alter durable generation. */ }
                     }, onVisible: event => {
@@ -251,14 +262,27 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                             return;
                         }
                         text = next;
+                        recordPerformanceCount('generation.visible.events');
                         notify();
                         if (Buffer.byteLength(text) - Buffer.byteLength(durable) >= 4096)
                             flush();
                     } });
-                const result = await Promise.race([provider, cancelled]);
+                let result: GenerationDispatchResult;
+                try { result = await Promise.race([provider, cancelled]); }
+                catch (error) { recordPerformanceCount('generation.provider.failed'); throw error; }
+                // This is logical provider wait, not the lifetime of a remote request ignoring abort.
+                finally { recordPerformanceDuration('generation.provider.ms', providerStarted); }
                 if (controller.signal.aborted)
                     throw new Error('GENERATION_CANCELLED');
                 let usage = streamFailed ? null : settleProviderUsage(result.usage, policy);
+                usageObserved = true;
+                recordPerformanceCount(usage?.trusted ? 'generation.usage.known' : 'generation.usage.unknown');
+                if (usage?.trusted) {
+                    if (usage.inputTokens != null) recordPerformanceMetric('generation.usage.input_tokens', usage.inputTokens);
+                    if (usage.completionTokens != null) recordPerformanceMetric('generation.usage.completion_tokens', usage.completionTokens);
+                    if (usage.reasoningTokens != null) recordPerformanceMetric('generation.usage.reasoning_tokens', usage.reasoningTokens);
+                    if (usage.actualTokens != null) recordPerformanceMetric('generation.usage.total_tokens', usage.actualTokens);
+                }
                 if (request.agentToolNames && result.finishReason === 'stop' && !streamFailed) {
                     const parsed = parseAgentResponseProtocol(agentProtocolText, request.agentToolNames);
                     text = parsed.visibleText;
@@ -299,6 +323,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 }
             }
             finally {
+                if (providerInvoked && !usageObserved) recordPerformanceCount('generation.usage.unknown');
                 terminal = true;
                 if (timer)
                     clearInterval(timer);
@@ -315,12 +340,20 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             return finalReceipt;
         })();
         pending.set(key, operation);
+        recordPerformanceMetric('generation.pending', pending.size);
         try {
             return await operation;
         }
         finally {
             pending.delete(key);
+            recordPerformanceMetric('generation.pending', pending.size);
         }
+    };
+    const execute = async (request: ExecuteGenerationRequest): Promise<GenerationExecutionReceipt> => {
+        recordPerformanceCount('generation.execute.calls');
+        const started = performanceStarted();
+        try { return await executeOperation(request); }
+        finally { recordPerformanceDuration('generation.execute.ms', started); }
     };
     const stopRoot = (rootId: string) => { for (const item of controllers.values())
         if (item.rootId === rootId)

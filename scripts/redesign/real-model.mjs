@@ -45,19 +45,18 @@ export function guardFetch(originalFetch, route, policy, sink) {
       sink.externalRequests.push(url.origin)
       throw new Error('DRIVE_EXTERNAL_FETCH_REFUSED')
     }
-    if (decision === 'fake') return originalFetch(`http://127.0.0.1:${policy.fakePort}${url.pathname}`, options)
-    if (policy.realOrigin === null) return originalFetch(input, options)
     const started = Date.now()
     const record = status => sink.modelRequests.push({ path: url.pathname, status, ms: Date.now() - started })
     let response
     try {
-      response = await originalFetch(input, { ...options, redirect: 'manual' })
+      response = await originalFetch(decision === 'fake' ? `http://127.0.0.1:${policy.fakePort}${url.pathname}` : input,
+        policy.realOrigin === null ? options : { ...options, redirect: 'manual' })
     } catch (error) {
       record(String(error?.name ?? 'error'))
       throw error
     }
     record(response.status)
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
+    if (policy.realOrigin !== null && [301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get('location')
       sink.externalRequests.push(location ? new URL(location, url).origin : `${url.origin}（重定向没有 Location）`)
       throw new Error('DRIVE_EXTERNAL_FETCH_REFUSED')

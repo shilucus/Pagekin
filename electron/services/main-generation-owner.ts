@@ -56,6 +56,7 @@ import { buildLegacyRosterJsonRepairTask, buildLegacyRosterReplacementTask, pars
 import { validateGraphGenerationInput, readGraphGenerationContext } from './graph-generation-source'
 import { planningTargetInstruction, parsePlanningTargetUnits, renderPlotOutlineRange, plotOutlineRecoveryDraft, plotOutlineSourceInvalid, validPlotOutlineAuthorPrefix, type PlotOutlineSource, type PlotOutlineProgress, type PlotOutlineRecovery, type PlotOutlineAuthorEditReceipt } from '../../src/shared/plot-outline-contract'
 import { ProjectCoreRepository, type ProjectCoreSynopsisExpected, type ProjectCoreSynopsisCommitRequest } from '../repositories/project-core-repository'
+import { measurePerformanceOperation, recordPerformanceCount, recordPerformanceTextBytes } from './performance-diagnostics'
 // 尝试 id 都由 randomUUID 生成；recoverFrom 还拼进 nonce，只收 UUID，免得拼出别的尝试的 nonce。
 const ATTEMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
 const graphOperations = { plot: 'plot-tree-snapshot', plan: 'narrative-thread-plan-candidate', event: 'narrative-thread-event-candidate' } as const
@@ -295,8 +296,13 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     onSnapshot: event => {
       if (closed || event.storageFailed) return
-      const snapshot = snapshotOf(repository.receipt(event.attemptId))
-      if (snapshot) deps.onSnapshot?.({ ...snapshot, ...(event.diagnostics ? { diagnostics: event.diagnostics } : {}) })
+      recordPerformanceCount('generation.receipt.calls')
+      const snapshot = snapshotOf(measurePerformanceOperation('generation.receipt.ms', () => repository.receipt(event.attemptId)))
+      if (snapshot) {
+        recordPerformanceCount('generation.publish.calls')
+        recordPerformanceTextBytes('generation.publish.utf8_bytes', snapshot.text)
+        deps.onSnapshot?.({ ...snapshot, ...(event.diagnostics ? { diagnostics: event.diagnostics } : {}) })
+      }
     },
   })
   service.recoverInterrupted()

@@ -15,6 +15,7 @@ import { changedFiles, fetchRoute, filesContaining, fileStamps, guardFetch, REAL
   summarizeModelRequests } from './real-model.mjs'
 import { assertNodeRunsTypeScript } from './node-version.mjs'
 import { dismissCompletionToasts, dismissStartupNotice, firstInteractiveControl, waitForShell } from './pages/shell.mjs'
+import { PERFORMANCE_SCENARIOS } from './performance-scenarios.mjs'
 
 const asEntryPoint = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 // 场景模块会 import 应用里的 .ts：静态 import 会在任何代码运行前报 ERR_UNKNOWN_FILE_EXTENSION，所以先查再动态加载。
@@ -41,7 +42,7 @@ const VIEWPORT = { width: 1440, height: 900 }
 const THEMES = ['light', 'dark']
 const SHELLS = ['writer', 'stage']
 const ROOT_NAMES = ['legacy', 'canonical', 'userData', 'home', 'appData', 'localAppData', 'temp', 'projects']
-const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS, ...F491_SCENARIOS, ...F484_SCENARIOS, ...ST504_SCENARIOS, ...F512_SCENARIOS, ...SM517_SCENARIOS, ...BPG_SCENARIOS, ...IMPORT_INFER_SCENARIOS, ...RBK_SCENARIOS, ...F537_SCENARIOS, ...F555_SCENARIOS, ...D77_SCENARIOS, ...REOPEN_SCENARIOS, ...I552_SCENARIOS, ...A573_SCENARIOS, ...F571_SCENARIOS, ...RTUX_SCENARIOS, ...TRASH_SCENARIOS, ...REAL_SCENARIOS, ...F593_SCENARIOS }
+const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS, ...F491_SCENARIOS, ...F484_SCENARIOS, ...ST504_SCENARIOS, ...F512_SCENARIOS, ...SM517_SCENARIOS, ...BPG_SCENARIOS, ...IMPORT_INFER_SCENARIOS, ...RBK_SCENARIOS, ...F537_SCENARIOS, ...F555_SCENARIOS, ...D77_SCENARIOS, ...REOPEN_SCENARIOS, ...I552_SCENARIOS, ...A573_SCENARIOS, ...F571_SCENARIOS, ...RTUX_SCENARIOS, ...TRASH_SCENARIOS, ...REAL_SCENARIOS, ...F593_SCENARIOS, ...PERFORMANCE_SCENARIOS }
 /** 计时会话：先在同一隔离目录预启动一次写好外观（书房计时另建 20 部作品），再计之后那次冷启动。 */
 const TIMED_SESSIONS = new Set(['startup-timing', 'library-timing'])
 /** 空闲内存：与启动计时同样先预启动一次，第二次冷启动到可交互后静置，再按间隔采样全部进程的内存。 */
@@ -110,9 +111,9 @@ function scratchParent() {
 }
 
 /** 用户真实配置目录。运行前后逐个比较其中的条目，证明隔离目录之外没有写入。 */
-function realProfileDirectories() {
+export function realProfileDirectories() {
   const appData = process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming')
-  return [path.join(os.homedir(), '.vela'), path.join(appData, 'ai-novel-writer'), path.join(appData, 'AI小说作家')]
+  return [path.join(os.homedir(), '.vela'), path.join(appData, 'ai-novel-writer'), path.join(appData, 'ai-novel-writer-data'), path.join(appData, 'AI小说作家')]
 }
 
 /** 本机开着的书童约每 5 分钟刷新一次这几个 Chromium 缓存里文件的修改时间，所以它们的变化不能说明隔离失效，只列进 externalWritesIgnored。 */
@@ -237,10 +238,11 @@ export function sessionIsClean({ failedAt, sessionErrors, residualProcesses, ext
   return failedAt === null && sessionErrors.length === 0 && residualProcesses?.length === 0 && externalWrites?.length === 0
 }
 
-async function launch({ roots, appRoot, fetchPolicy = { fakePort: null, realOrigin: null }, diagnostics, failureBase, shelfBooks = 0, renderTiming = false }) {
+async function launch({ roots, appRoot, fetchPolicy = { fakePort: null, realOrigin: null }, diagnostics, failureBase, shelfBooks = 0, renderTiming = false, performanceBaseline = false }) {
   assertBuilt(appRoot)
   const launchedAt = Date.now()
-  const env = { ...isolatedEnvironment(roots), ...(renderTiming ? { DRIVE_RENDER_TIMING: String(shelfBooks || 1) } : {}) }
+  const env = { ...isolatedEnvironment(roots), ...(renderTiming ? { DRIVE_RENDER_TIMING: String(shelfBooks || 1) } : {}),
+    ...(performanceBaseline ? { PAGEKIN_PERFORMANCE_BASELINE: '1' } : {}) }
   const app = await electron.launch({ cwd: appRoot, args: launchArgs(roots), env, timeout: TIMEOUT })
   let page
   try {
@@ -251,11 +253,15 @@ async function launch({ roots, appRoot, fetchPolicy = { fakePort: null, realOrig
       globalThis.__driveModelRequests = sink.modelRequests
       globalThis.fetch = (0, eval)(`(${guard})`)(globalThis.fetch, (0, eval)(`(${route})`), policy, sink)
     }, { route: fetchRoute.toString(), guard: guardFetch.toString(), policy: fetchPolicy })
-    app.process().stdout?.on('data', chunk => diagnostics.push(`[main:stdout] ${String(chunk).trimEnd()}`))
-    app.process().stderr?.on('data', chunk => diagnostics.push(`[main:stderr] ${String(chunk).trimEnd()}`))
+    if (!performanceBaseline) {
+      app.process().stdout?.on('data', chunk => diagnostics.push(`[main:stdout] ${String(chunk).trimEnd()}`))
+      app.process().stderr?.on('data', chunk => diagnostics.push(`[main:stderr] ${String(chunk).trimEnd()}`))
+    }
     page = await app.firstWindow({ timeout: TIMEOUT })
-    page.on('console', message => diagnostics.push(`[renderer:${message.type()}] ${message.text()}`))
-    page.on('pageerror', error => diagnostics.push(`[renderer:pageerror] ${error.stack ?? error.message}`))
+    if (!performanceBaseline) {
+      page.on('console', message => diagnostics.push(`[renderer:${message.type()}] ${message.text()}`))
+      page.on('pageerror', error => diagnostics.push(`[renderer:pageerror] ${error.stack ?? error.message}`))
+    }
     await firstInteractiveControl(page).waitFor({ state: 'visible', timeout: TIMEOUT })
     const interactiveAt = Date.now()
     const { readyToShow } = await app.evaluate(() => globalThis.__driveTiming)
@@ -503,7 +509,9 @@ export function scanRunForSecret(results, out, outBefore, secret, remove = remov
 async function runSession(sessionName, names, options, realKey = null, roots = createIsolatedRoots(scratchParent())) {
   const before = snapshotRealProfiles()
   const diagnostics = []
-  const fake = names.some(name => SCENARIOS[name]?.model) ? await startFakeModel(diagnostics) : null
+  const performanceBaseline = names.some(name => SCENARIOS[name]?.performance)
+  // Performance artifacts never inherit the fixture's prompt-prefix console log.
+  const fake = names.some(name => SCENARIOS[name]?.model) ? await startFakeModel(performanceBaseline ? [] : diagnostics) : null
   const base = name => path.join(options.out, `${name}-${options.theme}`)
   const results = names.map(scenario => ({ scenario, theme: options.theme }))
   const shared = { session: sessionName, isolationRoot: roots.root }
@@ -521,7 +529,7 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
     const shelfBooks = sessionName === 'library-timing' ? SHELF_BOOKS : 0
     const failureBase = base(sessionName)
     if (PREPARED_SESSIONS.has(sessionName)) await prepareProfile({ roots, appRoot: options.appRoot, diagnostics, failureBase }, { theme: options.theme, shell }, shelfBooks)
-    launched = await launch({ roots, appRoot: options.appRoot, fetchPolicy: fetchPolicy(), diagnostics, failureBase, shelfBooks, renderTiming: TIMED_SESSIONS.has(sessionName) })
+    launched = await launch({ roots, appRoot: options.appRoot, fetchPolicy: fetchPolicy(), diagnostics, failureBase, shelfBooks, renderTiming: TIMED_SESSIONS.has(sessionName), performanceBaseline })
     shared.timing = launched.timing
     const shellShown = page => page.locator('[data-shell-presentation]').first().getAttribute('data-shell-presentation')
     if (PREPARED_SESSIONS.has(sessionName)) {
@@ -546,7 +554,7 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
           if (killed) await kill(launched.app)
           else assert.equal((await quit(launched.app)).forced, false, '重启前应用没有正常退出')
           await beforeLaunch?.()
-          launched = await launch({ roots, appRoot, fetchPolicy: fetchPolicy(), diagnostics, failureBase })
+          launched = await launch({ roots, appRoot, fetchPolicy: fetchPolicy(), diagnostics, failureBase, performanceBaseline })
           currentAppRoot = appRoot
           Object.assign(context, launched)
           await recording?.resume(context.page)
@@ -585,6 +593,7 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
     else {
       failedAt = current
       results[current].error = messageOf(error)
+      if (performanceBaseline && error?.performanceBaseline) results[current].measured = error.performanceBaseline
     }
     await captureFailure(launched?.page, base(current === null ? sessionName : names[current]))
     options = { ...options, console: true }
