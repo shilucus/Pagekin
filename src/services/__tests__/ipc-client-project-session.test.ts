@@ -4,6 +4,7 @@ import {
   setActiveProjectSessionContext,
 } from '../../shared/project-session-context'
 import { ipc } from '../ipc-client'
+import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../shared/project-runtime-contract'
 
 const invoke = vi.fn()
 
@@ -76,6 +77,18 @@ describe('project-scoped IPC session transport', () => {
       'chapter.txt',
       'content',
     )
+  })
+  it('retained-view admission uses its target grant and never borrows an active project lease', async () => {
+    const target = { grantId: 'fictional-open-grant', displayName: 'Fictional project' }
+    invoke.mockResolvedValue({ success: true })
+    await ipc.invoke(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-request', null)
+    expect(invoke).toHaveBeenLastCalledWith(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-request', null)
+    setActiveProjectSessionContext(null)
+    await ipc.invoke(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-next-request', null)
+    expect(invoke).toHaveBeenLastCalledWith(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-next-request', null)
+    await expect(ipc.invokeWithProjectSession({ projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' },
+      PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-forged-request', null)).rejects.toThrow('通道不属于项目会话范围')
+    expect(invoke).toHaveBeenCalledTimes(2)
   })
 
   it('requires a project session for planning-feedback channels instead of treating them as app-data', async () => {

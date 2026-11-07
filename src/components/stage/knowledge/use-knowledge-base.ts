@@ -19,7 +19,7 @@ import { useLLMStore } from '../../../stores/llm-store'
 import { routeModelId } from '../../../services/model-routing'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { navigate } from '../../../stores/navigation/navigation-intents'
-import { useProjectStore } from '../../../stores/project-store'
+import { isDeleteRecoverySession, useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore, workflowResourceConflictMessage } from '../../../stores/workflow-store'
 import { workflowMainProcessError } from '../../../services/workflows/workflow-project-session'
 import { captureProjectSession, isProjectSessionCurrent } from '../../project-session-gate'
@@ -165,7 +165,7 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
   const draft = draftSlot ? draftSlot[0] : localDraft
   const setDraft = draftSlot ? draftSlot[1] : writeLocalDraft
   const readDraft = draftSlot ? draftSlot[2] : readLocalDraft
-  const openedSession = useRef<string | null>(null)
+  const openedSession = useRef<ProjectSessionContext | null>(null)
   const restoredDraft = useRef<KnowledgeDraft | null>(draft)
   const selectedDocId = draft.docId
   const documentCopy = draft.copy
@@ -220,9 +220,11 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
   // 只在换了作品或重新打开时清空；同一次打开里作品数据换成新对象（后台写回设定）不清，未保存的改动留着。
   useEffect(() => {
     if (!projectPath || !sessionLease) return
-    const sessionKey = JSON.stringify([projectPath, sessionLease])
-    const switched = openedSession.current !== null && openedSession.current !== sessionKey
-    openedSession.current = sessionKey
+    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!session) return
+    const switched = openedSession.current !== null && !sameProjectSessionContext(openedSession.current, session)
+    const recovered = isDeleteRecoverySession(openedSession.current, session)
+    openedSession.current = session
     let mounted = true
     Promise.resolve().then(() => {
       if (!mounted) return
@@ -231,7 +233,7 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
         setDocumentsLoaded(false)
         setStats(EMPTY_STATS)
         clearResults()
-        setDraft(EMPTY_DRAFT)
+        if (!recovered) setDraft(EMPTY_DRAFT)
         resetIndex()
         setLoadError('')
         setClearing(false)
@@ -286,6 +288,7 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
       if (!isProjectSessionCurrent(session)) return
       if (!result.success) { toast.error(knowledgeFailureMessage(useLocaleStore.getState().locale, result, '保存失败', 'Save failed.')); return }
       if (readDraft() === saving) await openDocument(docId, true)
+      if (!isProjectSessionCurrent(session)) return
       clearResults()
       toast.success(text('项目副本已保存；更新检索后，写作时才能查到新内容', 'Project copy saved. Update search so writing can find the new text.'))
     } catch (error) {
@@ -306,8 +309,11 @@ export function useKnowledgeBase(draftSlot?: KnowledgeDraftSlot) {
       if (!isProjectSessionCurrent(session)) return
       if (!result.success || !result.docId) { toast.error(knowledgeFailureMessage(useLocaleStore.getState().locale, result, '更新检索失败', 'Could not update search.')); return }
       await loadData()
+      if (!isProjectSessionCurrent(session)) return
       await loadStatus()
+      if (!isProjectSessionCurrent(session)) return
       if (readDraft() === reindexing) await openDocument(result.docId, true)
+      if (!isProjectSessionCurrent(session)) return
       clearResults()
       toast.success(text('检索已更新，写作时能查到新内容', 'Search updated. Writing can now find the new text.'))
     } catch (error) {

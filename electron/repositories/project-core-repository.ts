@@ -142,8 +142,8 @@ export class ProjectCoreRepository {
     static init(
         projectName: string,
         writingLanguage: WritingLanguage = DEFAULT_WRITING_LANGUAGE,
+        db = getProjectDb(),
     ): void {
-        const db = getProjectDb()
         if (!db) return
 
         db.prepare(`

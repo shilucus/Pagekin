@@ -1,6 +1,7 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
-import { closeProjectDatabase, getCurrentProjectPath, getProjectDb } from '../database'
+import { getCurrentProjectPath, getProjectDb } from '../database'
+import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import { assertGenerationSourcesCurrent, assertGenerationSynopsisCommit, commitGenerationPlotOutlineAuthorEdit, commitGenerationBlueprintAuthorEdit, assertImportGenerationSourcesCurrent, recordGenerationDirectoryCommit, withGenerationAgentChildEffect } from './generation-controller'
 import { projectAccess } from '../services/project-access'
@@ -130,26 +131,33 @@ const MUTATING_DATABASE_CHANNELS = new Set([
 /** 导入对话框与导入运行卡片原样显示这些通道的报错（#474 B1），失败时按导入运行的语言写成说明。 */
 const IMPORT_CHANNEL = /^db:import-(?:run|global-facts)-/u
 
-function importChannelLocale(args: unknown[]): Locale {
+function importChannelLocale(args: unknown[], mayReadDatabase = true): Locale {
   const [first] = args
   if (typeof first === 'object' && first !== null) {
     const request = first as { runId?: unknown; locale?: unknown }
-    return importRunLocale(request.runId, request.locale)
+    return importRunLocale(mayReadDatabase ? request.runId : undefined, request.locale)
   }
-  return importRunLocale(first)
+  return importRunLocale(mayReadDatabase ? first : undefined)
 }
 
-function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabaseHandler): void {
+function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabaseHandler, explicitRuntime = false): void {
   ipcMain.handle(channel, async (event, ...args: unknown[]) => {
     const candidate = args.at(-1)
     const context = isProjectSessionContext(candidate) ? candidate : undefined
     if (context) args.pop()
+    let releaseLegacy: (() => void) | undefined
+    let mayReadDatabase = false
     try {
-      projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
+      const runtime = projectAccess.assertViewContext(context)
+      if (explicitRuntime) {
+        return await (handler as (runtime: ProjectRuntime, event: unknown, ...handlerArgs: unknown[]) => unknown)(runtime, event, ...args)
+      }
+      releaseLegacy = projectRuntimeHost.acquireLegacyOperation(channel)
+      mayReadDatabase = true
       return await (handler as (event: unknown, ...handlerArgs: unknown[]) => unknown)(event, ...args)
     } catch (error) {
       const importFailure = IMPORT_CHANNEL.test(channel)
-        ? explainImportRunFailure(error, () => importChannelLocale(args))
+        ? explainImportRunFailure(error, () => importChannelLocale(args, mayReadDatabase))
         : undefined
       if (MUTATING_DATABASE_CHANNELS.has(channel)) {
         return importFailure ? { success: false, ...importFailure } : { success: false, error: String(error) }
@@ -157,16 +165,23 @@ function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabas
       // 读通道的异常经 Electron 只带过去 message，说明直接写进 message。
       if (importFailure) throw new Error(importFailure.error)
       throw error
+    } finally {
+      releaseLegacy?.()
     }
   })
+}
+
+function registerRuntimeDatabaseHandler(channel: string,
+  handler: (runtime: ProjectRuntime, event: unknown, ...args: never[]) => unknown): void {
+  registerProjectDatabaseHandler(channel, handler as unknown as ProjectDatabaseHandler, true)
 }
 
 export function registerDatabaseController() {
   // 所有 db:* 都通过同一会话门禁；下面现有 handler 保留业务参数与错误语义。
   const ipcMain = { handle: registerProjectDatabaseHandler }
-  ipcMain.handle('db:close', async (_event, expectedProjectPath: string) => {
-    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    closeProjectDatabase()
+  registerRuntimeDatabaseHandler('db:close', async (runtime, _event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(runtime.canonicalRoot, expectedProjectPath)
+    projectRuntimeHost.releaseIdle(runtime)
     projectAccess.invalidateCurrentSession()
     return { success: true }
   })
@@ -174,19 +189,20 @@ export function registerDatabaseController() {
   // ============================================================
   // 1. project_core — 项目主台账
   // ============================================================
-  ipcMain.handle('db:project-core-get', async (_event, expectedProjectPath: string) => {
-    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return ProjectCoreRepository.get()
+  registerRuntimeDatabaseHandler('db:project-core-get', async (runtime, _event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(runtime.canonicalRoot, expectedProjectPath)
+    return ProjectCoreRepository.get(runtime.database)
   })
 
-  ipcMain.handle('db:project-core-update', async (
+  registerRuntimeDatabaseHandler('db:project-core-update', async (
+    runtime,
     _event,
     data: Partial<ProjectCoreData>,
     expectedProjectPath: string,
   ) => {
     try {
-      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      ProjectCoreRepository.update(data)
+      assertRequiredExpectedProjectPath(runtime.canonicalRoot, expectedProjectPath)
+      ProjectCoreRepository.update(data, runtime.database)
       return { success: true }
     } catch (err) {
       console.error('[db:project-core-update] 失败:', err)

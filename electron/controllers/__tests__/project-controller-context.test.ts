@@ -3,6 +3,15 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { appErrorMessage } from '../../../src/i18n/app-errors'
 
 type IpcHandler = (...args: unknown[]) => Promise<unknown>
+interface FictionRuntime {
+  projectId: string
+  canonicalRoot: string
+  projectStorageRoot: string
+  database: { rootPath: string; open: boolean; transaction: (operation: () => unknown) => (() => unknown) & { immediate: () => unknown } }
+  databaseIdentity: object
+  executionEpoch: string
+  phase: string
+}
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, IpcHandler>(),
@@ -18,10 +27,11 @@ const mocks = vi.hoisted(() => ({
   projectCoreInit: vi.fn(),
   projectCoreUpdate: vi.fn(),
   closeProjectDatabase: vi.fn(),
-  transaction: vi.fn((operation: () => void) => operation),
+  transaction: vi.fn((operation: () => unknown) => Object.assign(operation, { immediate: operation })),
   writeJsonFile: vi.fn(),
   recentProjects: [] as Array<{ name: string; path: string; updatedAt: string; projectId?: string }>,
   rmSync: vi.fn(),
+  mkdirSync: vi.fn(),
   removeDirectoryWithWindowsRetry: vi.fn(),
   showMessageBox: vi.fn(),
   importLegacyProjectCopy: vi.fn(),
@@ -37,6 +47,9 @@ const mocks = vi.hoisted(() => ({
     probeExistingProject: vi.fn(),
     adoptLegacyProject: vi.fn(),
     beginSession: vi.fn(),
+    beginViewSession: vi.fn(),
+    commitViewSession: vi.fn(),
+    assertViewContext: vi.fn(),
     captureCurrentSession: vi.fn(),
     sameCanonicalProjectRoot: vi.fn(),
     assertCurrentSession: vi.fn(),
@@ -51,6 +64,19 @@ const mocks = vi.hoisted(() => ({
     leaseId: string
   },
   leaseSequence: 0,
+  runtimes: new Map<string, FictionRuntime>(),
+  retainedRuntimes: new Set<FictionRuntime>(),
+  runtimeBusy: false,
+  legacyHeld: false,
+  restoreHeld: false,
+  pendingRuntimeTicket: false,
+  runtimeHost: {
+    prepareOpen: vi.fn(), commitOpen: vi.fn(), abortOpen: vi.fn(), assertOpen: vi.fn(),
+    assertCompatibilityOpenAvailable: vi.fn(), prepareCompatibilityOpen: vi.fn(), prepareRetainedOpen: vi.fn(),
+    getActiveView: vi.fn(), getOpenRuntimes: vi.fn(), activateView: vi.fn(), releaseIdle: vi.fn(),
+    acquireLegacyOperation: vi.fn(),
+    acquireRestoreOperation: vi.fn(), assertLifecycleAvailable: vi.fn(),
+  },
   /** 作者在设置里保存过的界面语言；没保存时主进程按系统语言选。 */
   storedLocale: undefined as undefined | 'zh-CN' | 'en-US',
   systemLocale: 'zh-CN',
@@ -78,10 +104,11 @@ vi.mock('electron', () => ({
 vi.mock('node:fs', () => ({
   default: {
     existsSync: vi.fn((target: string) => mocks.existingPaths.has(path.resolve(target))),
-    mkdirSync: vi.fn(),
+    mkdirSync: mocks.mkdirSync,
     rmSync: mocks.rmSync,
     statSync: vi.fn(() => ({ isDirectory: () => true })),
     writeFileSync: vi.fn(),
+    realpathSync: { native: vi.fn((target: string) => path.resolve(target)) },
   },
 }))
 
@@ -89,10 +116,14 @@ vi.mock('../../database', () => ({
   closeProjectDatabase: mocks.closeProjectDatabase.mockImplementation(() => {
     mocks.currentProjectPath = ''
   }),
-  getCurrentProjectPath: () => mocks.currentProjectPath || null,
-  getProjectDb: () => mocks.currentProjectPath
-    ? { transaction: mocks.transaction }
-    : null,
+  getCurrentProjectPath: () => {
+    const runtime = mocks.runtimes.get(mocks.currentProjectPath)
+    return runtime?.phase === 'open' && runtime.database.open ? runtime.canonicalRoot : null
+  },
+  getProjectDb: () => {
+    const runtime = mocks.runtimes.get(mocks.currentProjectPath)
+    return runtime?.phase === 'open' && runtime.database.open ? runtime.database : null
+  },
 
   createProjectDatabase: vi.fn((projectPath: string) => { mocks.createCalls.push(path.resolve(projectPath)) }),
   initProjectDatabase: vi.fn((projectPath: string) => {
@@ -105,6 +136,14 @@ vi.mock('../../database', () => ({
     }
     mocks.currentProjectPath = resolved
   }),
+}))
+
+vi.mock('../../services/project-runtime', () => ({
+  projectRuntimeHost: mocks.runtimeHost,
+  ProjectRuntimePreviousCloseError: class ProjectRuntimePreviousCloseError extends Error {
+    readonly code = 'PROJECT_RUNTIME_PREVIOUS_CLOSE_FAILED'
+    constructor(error: unknown) { super(`PROJECT_RUNTIME_PREVIOUS_CLOSE_FAILED: ${String(error)}`) }
+  },
 }))
 
 vi.mock('../../vector-store', () => ({
@@ -123,17 +162,18 @@ vi.mock('../../utils/config-utils', () => ({
 
 vi.mock('../../repositories/project-core-repository', () => ({
   ProjectCoreRepository: {
-    get: mocks.projectCoreGet.mockImplementation(() => {
+    get: mocks.projectCoreGet.mockImplementation((database?: { rootPath: string }) => {
+      const rootPath = database?.rootPath ?? mocks.currentProjectPath
       const callback = mocks.onCoreGet
       if (callback) {
         mocks.onCoreGet = null
         callback()
       }
-      if (mocks.failCorePaths.has(mocks.currentProjectPath)) {
-        throw new Error(`cannot read ${mocks.currentProjectPath}`)
+      if (mocks.failCorePaths.has(rootPath)) {
+        throw new Error(`cannot read ${rootPath}`)
       }
       return {
-        projectName: path.basename(mocks.currentProjectPath),
+        projectName: path.basename(rootPath),
         genre: '',
         subGenre: '',
         targetAudience: '',
@@ -197,6 +237,13 @@ vi.mock('../../repositories/finalization-repository', () => ({
 
 import { registerProjectController } from '../project-controller'
 
+function fictionRuntime(rootPath: string): FictionRuntime {
+  return { projectId: `project-${path.basename(rootPath)}`, canonicalRoot: rootPath,
+    projectStorageRoot: path.join(rootPath, '.ai-novel'),
+    database: { rootPath, open: true, transaction: mocks.transaction }, databaseIdentity: {},
+    executionEpoch: `epoch-${path.basename(rootPath)}`, phase: 'open' }
+}
+
 function selectedProject(projectPath: string) {
   return { grantId: `selected:${projectPath}`, displayName: path.basename(projectPath) }
 }
@@ -244,6 +291,74 @@ beforeEach(() => {
   mocks.failInitPaths = new Set()
   mocks.onCoreGet = null
   mocks.leaseSequence = 0
+  mocks.runtimes = new Map([[projectA, fictionRuntime(projectA)]])
+  mocks.runtimeBusy = false
+  mocks.legacyHeld = false
+  mocks.restoreHeld = false
+  mocks.pendingRuntimeTicket = false
+  mocks.runtimeHost.assertLifecycleAvailable.mockImplementation(() => {
+    if (mocks.legacyHeld) throw new Error('PROJECT_RUNTIME_LEGACY_OPERATION_BUSY')
+    if (mocks.restoreHeld) throw new Error('PROJECT_RUNTIME_RESTORE_BUSY')
+  })
+  mocks.runtimeHost.acquireRestoreOperation.mockImplementation(() => {
+    mocks.runtimeHost.assertLifecycleAvailable()
+    if ([...mocks.runtimes.values()].some(runtime => runtime.phase !== 'open') || mocks.pendingRuntimeTicket) throw new Error('PROJECT_RUNTIME_BUSY')
+    mocks.restoreHeld = true
+    return () => { mocks.restoreHeld = false }
+  })
+  mocks.runtimeHost.getActiveView.mockImplementation(() => mocks.runtimes.get(mocks.currentProjectPath) ?? null)
+  mocks.runtimeHost.getOpenRuntimes.mockImplementation(() => [...mocks.runtimes.values()])
+  mocks.runtimeHost.assertOpen.mockImplementation((runtime: FictionRuntime) => {
+    if (mocks.runtimes.get(runtime.canonicalRoot) !== runtime || runtime.phase !== 'open') throw new Error('PROJECT_RUNTIME_NOT_OPEN')
+  })
+  mocks.runtimeHost.prepareOpen.mockImplementation((project: { rootPath: string }) => {
+    mocks.runtimeHost.assertLifecycleAvailable()
+    const root = path.resolve(project.rootPath)
+    const existing = mocks.runtimes.get(root)
+    if (existing) return { runtime: existing, reused: true }
+    mocks.initCalls.push(root)
+    mocks.createdVelaDirectories.add(path.join(root, '.vela'))
+    if (mocks.failInitPaths.has(root)) throw new Error(`cannot initialize ${root}`)
+    const runtime = fictionRuntime(root)
+    runtime.phase = 'opening'
+    mocks.runtimes.set(root, runtime)
+    return { runtime, reused: false }
+  })
+  mocks.retainedRuntimes.clear()
+  mocks.runtimeHost.assertCompatibilityOpenAvailable.mockImplementation(() => {
+    mocks.runtimeHost.assertLifecycleAvailable()
+    const active = mocks.runtimes.get(mocks.currentProjectPath)
+    if (mocks.runtimes.size > 1 || (mocks.runtimes.size === 1 && !active)) throw new Error('PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE')
+    if (active && (active.phase !== 'open' || mocks.retainedRuntimes.has(active))) throw new Error('PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE')
+    if (mocks.runtimeBusy || mocks.pendingRuntimeTicket) throw new Error('PROJECT_RUNTIME_BUSY')
+  })
+  mocks.runtimeHost.prepareCompatibilityOpen.mockImplementation((project: { rootPath: string }) => {
+    mocks.runtimeHost.assertCompatibilityOpenAvailable()
+    const previous = mocks.runtimes.get(mocks.currentProjectPath)
+    return { ...mocks.runtimeHost.prepareOpen(project), previous }
+  })
+  mocks.runtimeHost.prepareRetainedOpen.mockImplementation((project: { rootPath: string }) => ({
+    ...mocks.runtimeHost.prepareOpen(project), retained: true,
+  }))
+  mocks.runtimeHost.commitOpen.mockImplementation((ticket: { runtime: FictionRuntime }) => {
+    ticket.runtime.phase = 'open'
+    return ticket.runtime
+  })
+  mocks.runtimeHost.abortOpen.mockImplementation((ticket: { runtime: FictionRuntime; reused: boolean }) => {
+    if (!ticket.reused && ticket.runtime.phase === 'opening') mocks.runtimes.delete(ticket.runtime.canonicalRoot)
+  })
+  mocks.runtimeHost.activateView.mockImplementation((runtime: FictionRuntime | null) => {
+    mocks.runtimeHost.assertLifecycleAvailable()
+    mocks.currentProjectPath = runtime?.canonicalRoot ?? ''
+  })
+  mocks.runtimeHost.releaseIdle.mockImplementation((runtime: FictionRuntime) => {
+    mocks.runtimeHost.assertLifecycleAvailable()
+    if (mocks.runtimeBusy || mocks.pendingRuntimeTicket || runtime.phase !== 'open') throw new Error('PROJECT_RUNTIME_BUSY')
+    runtime.phase = 'closed'
+    runtime.database.open = false
+    mocks.runtimes.delete(runtime.canonicalRoot)
+    if (mocks.currentProjectPath === runtime.canonicalRoot) mocks.currentProjectPath = ''
+  })
   mocks.activeSession = {
     kind: 'manifest',
     projectId: 'project-A',
@@ -284,6 +399,24 @@ beforeEach(() => {
     } as const
     mocks.activeSession = session
     return session
+  })
+  mocks.projectAccess.beginViewSession.mockImplementation((runtime: FictionRuntime) => {
+    const lease = mocks.projectAccess.beginSession({ kind: 'manifest', projectId: runtime.projectId, rootPath: runtime.canonicalRoot })
+    mocks.runtimeHost.activateView(runtime)
+    return lease
+  })
+  mocks.projectAccess.commitViewSession.mockImplementation((ticket: { runtime: FictionRuntime; previous?: FictionRuntime; retained?: boolean }, operation: (runtime: FictionRuntime) => unknown) => {
+    const previous = mocks.activeSession
+    const session = mocks.projectAccess.beginSession({ kind: 'manifest', projectId: ticket.runtime.projectId,
+      rootPath: ticket.runtime.canonicalRoot })
+    mocks.activeSession = previous
+    const value = operation(ticket.runtime)
+    ticket.runtime.phase = 'open'
+    mocks.runtimeHost.activateView(ticket.runtime)
+    mocks.activeSession = session
+    if (ticket.retained) mocks.retainedRuntimes.add(ticket.runtime)
+    if (ticket.previous && ticket.previous !== ticket.runtime) mocks.runtimeHost.releaseIdle(ticket.previous)
+    return { session, value }
   })
   mocks.projectAccess.captureCurrentSession.mockImplementation(() => (
     mocks.activeSession ? { ...mocks.activeSession } : null
@@ -337,6 +470,13 @@ beforeEach(() => {
     }
     return path.resolve(projectPath)
   })
+  mocks.projectAccess.assertViewContext.mockImplementation((context: unknown) => {
+    mocks.projectAccess.assertCurrentProjectContext(context, mocks.currentProjectPath || null)
+    const runtime = mocks.runtimes.get(mocks.currentProjectPath)
+    if (!runtime) throw new Error('PROJECT_SESSION_DATABASE_MISMATCH')
+    mocks.runtimeHost.assertOpen(runtime)
+    return runtime
+  })
   mocks.projectAccess.invalidateCurrentSession.mockImplementation(() => {
     mocks.activeSession = null
   })
@@ -349,6 +489,101 @@ beforeEach(() => {
 })
 
 describe('native dialogs follow the interface language (#474)', () => {
+  it('opens B through the ordinary UI route and releases only the previous idle compatibility A', async () => {
+    const previous = mocks.runtimes.get(projectA)!
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'ordinary-open-B'))
+      .resolves.toMatchObject({ success: true, activeProjectPath: projectB })
+    expect(mocks.runtimeHost.prepareCompatibilityOpen).toHaveBeenCalled()
+    expect(mocks.runtimeHost.prepareRetainedOpen).not.toHaveBeenCalled()
+    expect(mocks.runtimeHost.releaseIdle).toHaveBeenCalledWith(previous)
+    expect([...mocks.runtimes.keys()]).toEqual([projectB])
+  })
+
+  it.each(['multiple', 'busy', 'pending', 'closing', 'retained', 'legacy', 'restore'] as const)('refuses ordinary open before grants or target effects when the prior runtime is %s', async state => {
+    const previous = mocks.runtimes.get(projectA)!
+    if (state === 'multiple') mocks.runtimes.set(projectC, fictionRuntime(projectC))
+    if (state === 'busy') mocks.runtimeBusy = true
+    if (state === 'pending') mocks.pendingRuntimeTicket = true
+    if (state === 'closing') previous.phase = 'closing'
+    if (state === 'retained') mocks.retainedRuntimes.add(previous)
+    if (state === 'legacy') mocks.legacyHeld = true
+    if (state === 'restore') mocks.restoreHeld = true
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), `ordinary-refused-${state}`))
+      .resolves.toMatchObject({ success: false })
+    expect(mocks.resolveDirectoryPath).not.toHaveBeenCalled()
+    expect(mocks.projectAccess.probeExistingProject).not.toHaveBeenCalled()
+    expect(mocks.runtimeHost.prepareOpen).not.toHaveBeenCalled()
+    expect(mocks.runtimeHost.releaseIdle).not.toHaveBeenCalled()
+    expect(mocks.runtimes.get(projectA)).toBe(previous)
+    expect(mocks.currentProjectPath).toBe(projectA)
+  })
+
+  it.each(['legacy', 'restore'] as const)('rejects create before grants, directories or DB creation while %s admission is held', async held => {
+    mocks.legacyHeld = held === 'legacy'
+    mocks.restoreHeld = held === 'restore'
+    await expect(handler('project:create')({ sender: { id: 17 } }, {
+      name: 'C', parentGrantId: `selected:${path.resolve('C:/projects')}`, genre: 'fantasy', targetAudience: 'all',
+    }, `create-held-${held}`)).resolves.toMatchObject({ success: false, activeProjectPath: projectA })
+    expect(mocks.projectAccess.createProject).not.toHaveBeenCalled()
+    expect(mocks.resolveDirectoryPath).not.toHaveBeenCalled()
+    expect(mocks.mkdirSync).not.toHaveBeenCalled()
+    expect(mocks.createCalls).toEqual([])
+    expect(mocks.runtimeHost.prepareOpen).not.toHaveBeenCalled()
+  })
+
+  it('keeps A database identity, epoch and lease unchanged throughout failed B preparation', async () => {
+    const runtimeA = mocks.runtimes.get(projectA)!
+    const originalLease = mocks.activeSession
+    mocks.failCorePaths.add(projectB)
+    mocks.onCoreGet = () => {
+      expect(mocks.currentProjectPath).toBe(projectA)
+      expect(mocks.runtimeHost.getActiveView()).toBe(runtimeA)
+      expect(mocks.activeSession).toBe(originalLease)
+    }
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'failed-B-isolation'))
+      .resolves.toMatchObject({ success: false, activeProjectPath: projectA, dbReady: true })
+    expect(mocks.runtimes.get(projectA)).toBe(runtimeA)
+    expect(runtimeA.databaseIdentity).toBe(mocks.runtimes.get(projectA)!.databaseIdentity)
+    expect(runtimeA.executionEpoch).toBe('epoch-A')
+    expect(mocks.activeSession).toBe(originalLease)
+    expect(mocks.runtimes.has(projectB)).toBe(false)
+    expect(mocks.initCalls).toEqual([projectB])
+    expect(mocks.runtimeHost.releaseIdle).not.toHaveBeenCalled()
+  })
+
+  it.each(['failed', 'stale'] as const)('does not revive A when C becomes the view during an older %s B open', async mode => {
+    const runtimeA = mocks.runtimes.get(projectA)!
+    const runtimeC = fictionRuntime(projectC)
+    let queuedC: Promise<unknown> | undefined
+    if (mode === 'failed') mocks.failCorePaths.add(projectB)
+    mocks.onCoreGet = () => {
+      mocks.runtimes.set(projectC, runtimeC)
+      mocks.projectAccess.beginViewSession(runtimeC)
+      if (mode === 'stale') queuedC = handler('project-runtime:v1:open-view')({ sender: { id: 17 } }, selectedProject(projectC), 'winner-C-after-B')
+    }
+    const result = await handler('project-runtime:v1:open-view')({ sender: { id: 17 } }, selectedProject(projectB), `older-${mode}-B`)
+    expect(result).toMatchObject({ success: false, activeProjectPath: projectC, databaseRestored: true, dbReady: true })
+    expect(mocks.runtimeHost.getActiveView()).toBe(runtimeC)
+    expect(mocks.activeSession).toMatchObject({ projectId: 'project-C', rootPath: projectC })
+    expect(mocks.runtimes.get(projectA)).toBe(runtimeA)
+    expect(mocks.runtimeHost.releaseIdle).not.toHaveBeenCalled()
+    expect(mocks.projectAccess.invalidateCurrentSession).not.toHaveBeenCalled()
+    if (queuedC) await expect(queuedC).resolves.toMatchObject({ success: true, project: { id: 'project-C' } })
+  })
+
+  it('reuses same-book native identity and epoch while rotating only the view lease', async () => {
+    await handler('project-runtime:v1:open-view')({ sender: { id: 17 } }, selectedProject(projectB), 'reuse-B-first')
+    const runtimeB = mocks.runtimes.get(projectB)!
+    const lease = mocks.activeSession?.leaseId
+    await handler('project-runtime:v1:open-view')({ sender: { id: 17 } }, selectedProject(projectB), 'reuse-B-second')
+    expect(mocks.runtimes.get(projectB)).toBe(runtimeB)
+    expect(mocks.runtimeHost.getActiveView()).toBe(runtimeB)
+    expect(mocks.activeSession?.leaseId).not.toBe(lease)
+    expect(runtimeB.executionEpoch).toBe('epoch-B')
+    expect(mocks.initCalls).toEqual([projectB])
+    expect(mocks.runtimes.has(projectA)).toBe(true)
+  })
+
   it('falls back to the system language when no interface language was saved', async () => {
     mocks.storedLocale = undefined
     mocks.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
@@ -508,12 +743,16 @@ describe('project controller project identity', () => {
     logged.mockRestore()
   })
 
-  it('does not repair duplicate finalizations in a project whose open then fails', async () => {
+  it('aborts an uncommitted target before business writes if view lease preparation fails', async () => {
     mocks.projectAccess.beginSession.mockImplementationOnce(() => { throw new Error('PROJECT_SESSION_BEGIN_FAILED') })
 
     await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'open-fails-B', projectA))
       .resolves.toMatchObject({ success: false })
     expect(mocks.repairDuplicateFinalizations).not.toHaveBeenCalled()
+    expect(mocks.runtimeHost.releaseIdle).not.toHaveBeenCalled()
+    expect(mocks.runtimeHost.abortOpen).toHaveBeenCalledWith(expect.objectContaining({ runtime: expect.objectContaining({ canonicalRoot: projectB }) }))
+    expect(mocks.currentProjectPath).toBe(projectA)
+    expect(mocks.activeSession?.leaseId).toBe('lease-project-A')
   })
 
   it('opens a complete imported target after its publish ACK is lost and adds it to recent projects', async () => {
@@ -581,7 +820,7 @@ describe('project controller project identity', () => {
       databaseRestored: true,
       dbReady: true,
     })
-    expect(mocks.initCalls).toEqual([projectB, projectA, projectD, projectA])
+    expect(mocks.initCalls).toEqual([projectB, projectD])
     expect(mocks.currentProjectPath).toBe(projectA)
   })
 
@@ -602,10 +841,10 @@ describe('project controller project identity', () => {
 
     // `initProjectDatabase` creates `<root>/.vela/vela.db` in production. A
     // renderer-supplied ordinary directory must never reach that authority.
-    expect(mocks.initCalls).toEqual([projectD, projectA])
+    expect(mocks.initCalls).toEqual([projectD])
     expect(mocks.initCalls).not.toContain(ordinaryDirectory)
     expect(mocks.createdVelaDirectories).not.toContain(path.join(ordinaryDirectory, '.vela'))
-    expect(mocks.projectAccess.captureCurrentSession).toHaveBeenCalledOnce()
+    expect(mocks.projectAccess.captureCurrentSession).toHaveBeenCalled()
     expect(mocks.activeSession).toMatchObject({
       rootPath: projectA,
       leaseId: 'lease-project-A',
@@ -636,10 +875,10 @@ describe('project controller project identity', () => {
       dbReady: true,
     })
 
-    expect(mocks.initCalls).toEqual([projectC, projectA])
+    expect(mocks.initCalls).toEqual([projectC])
     expect(mocks.initCalls).not.toContain(ordinaryDirectory)
     expect(mocks.createdVelaDirectories).not.toContain(path.join(ordinaryDirectory, '.vela'))
-    expect(mocks.projectAccess.captureCurrentSession).toHaveBeenCalledOnce()
+    expect(mocks.projectAccess.captureCurrentSession).toHaveBeenCalled()
   })
 
   it('returns a typed storage-path error before initializing a rejected project database', async () => {
@@ -666,7 +905,7 @@ describe('project controller project identity', () => {
       dbReady: true,
     })
 
-    expect(mocks.initCalls).toEqual([projectA])
+    expect(mocks.initCalls).toEqual([])
     expect(mocks.initCalls).not.toContain(projectC)
   })
 
@@ -687,7 +926,7 @@ describe('project controller project identity', () => {
       dbReady: true,
     })
 
-    expect(mocks.initCalls).toEqual([projectA])
+    expect(mocks.initCalls).toEqual([])
     expect(mocks.initCalls).not.toContain(ordinaryDirectory)
   })
 
@@ -744,7 +983,7 @@ describe('project controller project identity', () => {
       expect(result).not.toHaveProperty('legacyImportSource')
       expect(mocks.issueDirectory).not.toHaveBeenCalled()
       expect(mocks.initCalls).not.toContain(projectB)
-      expect(mocks.initCalls).toEqual([projectA])
+      expect(mocks.initCalls).toEqual([])
       expect(mocks.currentProjectPath).toBe(projectA)
     },
   )
@@ -760,13 +999,14 @@ describe('project controller project identity', () => {
       databaseRestored: true,
       dbReady: true,
     })
-    expect(mocks.initCalls).toEqual([projectA])
+    expect(mocks.initCalls).toEqual([])
     expect(mocks.initCalls).not.toContain(ordinaryDirectory)
   })
 
   it('creates from a first-ever neutral runtime, returns to no database or lease, then opens explicitly', async () => {
     mocks.currentProjectPath = ''
     mocks.activeSession = null
+    mocks.runtimes.clear()
 
     const created = await handler('project:create')(
       { sender: { id: 17 } },
@@ -818,6 +1058,7 @@ describe('project controller project identity', () => {
   it('initializes a new project with the writing language selected at creation time', async () => {
     mocks.currentProjectPath = ''
     mocks.activeSession = null
+    mocks.runtimes.clear()
 
     await expect(handler('project:create')(
       { sender: { id: 17 } },
@@ -831,12 +1072,13 @@ describe('project controller project identity', () => {
       'request-create-English-novel',
     )).resolves.toMatchObject({ success: true })
 
-    expect(mocks.projectCoreInit).toHaveBeenCalledWith('English novel', 'en-US')
+    expect(mocks.projectCoreInit).toHaveBeenCalledWith('English novel', 'en-US', expect.objectContaining({ rootPath: path.resolve('C:/projects/English novel') }))
   })
 
   it('restores a failed first-ever create to neutral without touching an ordinary renderer path or reviving a lease', async () => {
     mocks.currentProjectPath = ''
     mocks.activeSession = null
+    mocks.runtimes.clear()
     mocks.existingPaths.add(ordinaryDirectory)
     mocks.projectCoreUpdate.mockImplementationOnce(() => {
       throw new Error('cannot initialize project core')
@@ -866,7 +1108,7 @@ describe('project controller project identity', () => {
     expect(mocks.createdVelaDirectories).not.toContain(path.join(ordinaryDirectory, '.vela'))
     expect(mocks.currentProjectPath).toBe('')
     expect(mocks.activeSession).toBeNull()
-    expect(mocks.projectAccess.beginSession).not.toHaveBeenCalled()
+    expect(mocks.projectAccess.beginViewSession).not.toHaveBeenCalled()
   })
 
   it('uses the captured trusted root for a stale open instead of creating a database below rendererProjectPath', async () => {
@@ -892,12 +1134,12 @@ describe('project controller project identity', () => {
       databaseRestored: true,
       dbReady: true,
     })
-    expect(mocks.initCalls).toEqual([projectB, projectA, projectD, projectA])
+    expect(mocks.initCalls).toEqual([projectB, projectD])
     expect(mocks.initCalls).not.toContain(ordinaryDirectory)
     expect(mocks.createdVelaDirectories).not.toContain(path.join(ordinaryDirectory, '.vela'))
   })
 
-  it('fails closed rather than reviving an old same-root lease after that lease expires during recovery', async () => {
+  it('preserves a newer same-root view lease when an older target fails', async () => {
     mocks.failCorePaths.add(projectD)
     mocks.onCoreGet = () => {
       // Same root, but a later open has already issued a new lease. The old
@@ -916,18 +1158,18 @@ describe('project controller project identity', () => {
     )).resolves.toMatchObject({
       success: false,
       requestToken: 'request-open-D-expired-rollback',
-      activeProjectPath: null,
-      databaseRestored: false,
-      dbReady: false,
+      activeProjectPath: projectA,
+      databaseRestored: true,
+      dbReady: true,
     })
 
     expect(mocks.initCalls).toEqual([projectD])
     expect(mocks.projectAccess.assertCurrentSession).toHaveBeenCalledWith(expect.objectContaining({
       leaseId: 'lease-project-A',
     }))
-    expect(mocks.closeProjectDatabase).toHaveBeenCalledOnce()
-    expect(mocks.projectAccess.invalidateCurrentSession).toHaveBeenCalledOnce()
-    expect(mocks.activeSession).toBeNull()
+    expect(mocks.closeProjectDatabase).not.toHaveBeenCalled()
+    expect(mocks.projectAccess.invalidateCurrentSession).not.toHaveBeenCalled()
+    expect(mocks.activeSession?.leaseId).toBe('lease-project-A-new')
   })
 
   it('fails closed when a failed open has no trusted rollback snapshot', async () => {
@@ -941,16 +1183,16 @@ describe('project controller project identity', () => {
     )).resolves.toMatchObject({
       success: false,
       requestToken: 'request-open-D-no-rollback-snapshot',
-      activeProjectPath: null,
+      activeProjectPath: projectA,
       databaseRestored: false,
       dbReady: false,
       error: expect.stringContaining('PROJECT_ROLLBACK_UNTRUSTED'),
     })
 
-    expect(mocks.initCalls).toEqual([projectD])
+    expect(mocks.initCalls).toEqual([])
     expect(mocks.createdVelaDirectories).not.toContain(path.join(ordinaryDirectory, '.vela'))
-    expect(mocks.closeProjectDatabase).toHaveBeenCalledOnce()
-    expect(mocks.projectAccess.invalidateCurrentSession).toHaveBeenCalledOnce()
+    expect(mocks.closeProjectDatabase).not.toHaveBeenCalled()
+    expect(mocks.projectAccess.invalidateCurrentSession).not.toHaveBeenCalled()
   })
 
   it('serializes create with open and prevents a stale create from initializing a new database', async () => {
@@ -983,7 +1225,7 @@ describe('project controller project identity', () => {
     expect(mocks.currentProjectPath).toBe(projectB)
   })
 
-  it('fails closed when open fails and trusted rollback cannot restore the previous project', async () => {
+  it('does not reopen or refence A when B fails even if reopening A would fail', async () => {
     mocks.failCorePaths.add(projectD)
     mocks.failInitPaths.add(projectA)
 
@@ -993,17 +1235,17 @@ describe('project controller project identity', () => {
     )).resolves.toMatchObject({
       success: false,
       requestToken: 'request-open-D',
-      activeProjectPath: null,
-      databaseRestored: false,
-      dbReady: false,
-      error: expect.stringMatching(/cannot read[\s\S]*cannot initialize/),
+      activeProjectPath: projectA,
+      databaseRestored: true,
+      dbReady: true,
+      error: expect.stringContaining('cannot read'),
     })
-    expect(mocks.projectAccess.beginSession).not.toHaveBeenCalled()
-    expect(mocks.closeProjectDatabase).toHaveBeenCalledOnce()
-    expect(mocks.projectAccess.invalidateCurrentSession).toHaveBeenCalledOnce()
+    expect(mocks.projectAccess.beginViewSession).not.toHaveBeenCalled()
+    expect(mocks.closeProjectDatabase).not.toHaveBeenCalled()
+    expect(mocks.projectAccess.invalidateCurrentSession).not.toHaveBeenCalled()
   })
 
-  it('fails closed when create fails and trusted rollback cannot restore the previous project', async () => {
+  it('leaves A open after failed creation without reopening its database', async () => {
     mocks.projectCoreUpdate.mockImplementationOnce(() => {
       throw new Error('cannot initialize project core')
     })
@@ -1022,14 +1264,14 @@ describe('project controller project identity', () => {
     )).resolves.toMatchObject({
       success: false,
       requestToken: 'request-create-C-fail',
-      activeProjectPath: null,
-      databaseRestored: false,
-      dbReady: false,
-      error: expect.stringMatching(/cannot initialize project core[\s\S]*cannot initialize/),
+      activeProjectPath: projectA,
+      databaseRestored: true,
+      dbReady: true,
+      error: expect.stringContaining('cannot initialize project core'),
     })
-    expect(mocks.projectAccess.beginSession).not.toHaveBeenCalled()
-    expect(mocks.closeProjectDatabase).toHaveBeenCalledOnce()
-    expect(mocks.projectAccess.invalidateCurrentSession).toHaveBeenCalledOnce()
+    expect(mocks.projectAccess.beginViewSession).not.toHaveBeenCalled()
+    expect(mocks.closeProjectDatabase).not.toHaveBeenCalled()
+    expect(mocks.projectAccess.invalidateCurrentSession).not.toHaveBeenCalled()
   })
 
   it('rejects missing or stale project identities before project config writes', async () => {
@@ -1113,7 +1355,7 @@ describe('project controller project identity', () => {
       .resolves.toMatchObject({ success: true })
     expect(mocks.projectCoreUpdate).toHaveBeenCalledWith(expect.objectContaining({
       creativeStrategy: 'consistency-first',
-    }))
+    }), mocks.runtimes.get(projectA)!.database)
   })
 
   it('persists the project writing language independently from the application locale', async () => {
@@ -1131,7 +1373,7 @@ describe('project controller project identity', () => {
       .resolves.toMatchObject({ success: true })
     expect(mocks.projectCoreUpdate).toHaveBeenCalledWith(expect.objectContaining({
       writingLanguage: 'en-US',
-    }))
+    }), mocks.runtimes.get(projectA)!.database)
   })
 
   it('does not reset a saved creative strategy during an unrelated partial config write', async () => {
@@ -1183,7 +1425,7 @@ describe('project controller project identity', () => {
     expect(mocks.projectCoreUpdate).toHaveBeenCalledWith(expect.objectContaining({
       projectName: 'Project A',
       characterStates: 'committed',
-    }))
+    }), mocks.runtimes.get(projectA)!.database)
   })
 
   it('removes a missing project from recent navigation without deleting project data', async () => {
@@ -1202,27 +1444,81 @@ describe('project controller project identity', () => {
     expect(mocks.projectAccess.assertCurrentProjectContext).not.toHaveBeenCalled()
   })
 
-  it('reopens the active database and reports failure when the project directory remains', async () => {
-    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(() => {
+  it.each(['multiple', 'busy', 'pending', 'closing', 'legacy', 'restore'] as const)('denies %s deletion before native close or directory effects', async state => {
+    const runtimeA = mocks.runtimes.get(projectA)!
+    if (state === 'multiple') mocks.runtimes.set(projectB, fictionRuntime(projectB))
+    if (state === 'busy') mocks.runtimeBusy = true
+    if (state === 'pending') mocks.pendingRuntimeTicket = true
+    if (state === 'closing') runtimeA.phase = 'closing'
+    if (state === 'legacy') mocks.legacyHeld = true
+    if (state === 'restore') mocks.restoreHeld = true
+    await expect(handler('project:delete')({}, projectA, 'project-A', 'lease-project-A', projectSession()))
+      .resolves.toMatchObject({ success: false, directoryDeleted: false, databaseRestored: state !== 'closing' })
+    expect(mocks.runtimes.get(projectA)).toBe(runtimeA)
+    expect(mocks.currentProjectPath).toBe(projectA)
+    expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
+    expect(mocks.closeProjectDatabase).not.toHaveBeenCalled()
+    expect(mocks.projectAccess.invalidateCurrentSession).not.toHaveBeenCalled()
+  })
+
+  it('reports a quarantined release failure without deleting the folder or reopening its handle', async () => {
+    mocks.runtimeHost.releaseIdle.mockImplementationOnce((runtime: FictionRuntime) => {
+      runtime.phase = 'closing'
+      throw new Error('fiction KB close failure')
+    })
+    await expect(handler('project:delete')({}, projectA, 'project-A', 'lease-project-A', projectSession()))
+      .resolves.toMatchObject({ success: false, directoryDeleted: false, databaseRestored: false,
+        error: 'Error: fiction KB close failure' })
+    expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
+    expect(mocks.runtimeHost.prepareOpen).not.toHaveBeenCalled()
+    expect(mocks.runtimeHost.acquireRestoreOperation).not.toHaveBeenCalled()
+  })
+
+  it('does not replace a new winning view when deletion failure recovery can no longer own the view', async () => {
+    const winner = fictionRuntime(projectC)
+    mocks.runtimeHost.acquireRestoreOperation.mockImplementationOnce(() => {
+      mocks.restoreHeld = true
+      return () => {
+        mocks.restoreHeld = false
+        mocks.runtimes.set(projectC, winner)
+        mocks.projectAccess.beginViewSession(winner)
+      }
+    })
+    mocks.removeDirectoryWithWindowsRetry.mockRejectedValueOnce(new Error('directory locked'))
+    await expect(handler('project:delete')({}, projectA, 'project-A', 'lease-project-A', projectSession()))
+      .resolves.toMatchObject({ success: false, directoryDeleted: false, databaseRestored: false })
+    expect(mocks.runtimeHost.getActiveView()).toBe(winner)
+    expect(mocks.activeSession).toMatchObject({ projectId: 'project-C', leaseId: 'lease-project-C-1' })
+    expect(mocks.runtimeHost.prepareOpen).not.toHaveBeenCalled()
+    expect(mocks.projectAccess.invalidateCurrentSession).not.toHaveBeenCalled()
+  })
+
+  it('restores only the released idle target with a fresh lease after deletion fails', async () => {
+    const original = mocks.runtimes.get(projectA)!
+    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(async () => {
+      expect(mocks.restoreHeld).toBe(true)
+      expect(mocks.currentProjectPath).toBe('')
       throw new Error('directory locked')
     })
-
     await expect(handler('project:delete')({}, projectA, 'project-A', 'lease-project-A', projectSession())).resolves.toMatchObject({
       success: false,
       directoryDeleted: false,
       databaseRestored: true,
-      error: expect.stringContaining('directory locked'),
+      error: 'Error: directory locked',
+      restoredSession: { projectId: 'project-A', leaseId: 'lease-project-A-1', projectPath: projectA },
     })
-    expect(mocks.initCalls).toContain(projectA)
+    expect(mocks.initCalls).toEqual([projectA])
+    expect(mocks.removeDirectoryWithWindowsRetry).toHaveBeenCalledWith(projectA)
+    expect(mocks.runtimeHost.releaseIdle).toHaveBeenCalledWith(original)
+    expect(mocks.runtimes.get(projectA)).not.toBe(original)
+    expect(mocks.restoreHeld).toBe(false)
     expect(mocks.currentProjectPath).toBe(projectA)
     expect(mocks.projectAccess.invalidateCurrentSession).not.toHaveBeenCalled()
   })
 
-  it('reports that the database was not restored after a failed active-project delete', async () => {
-    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(() => {
-      throw new Error('directory locked')
-    })
+  it('reports no restored database when the confirmed target cannot reopen after failed deletion', async () => {
     mocks.failInitPaths.add(projectA)
+    mocks.removeDirectoryWithWindowsRetry.mockRejectedValueOnce(new Error('directory locked'))
 
     await expect(handler('project:delete')({}, projectA, 'project-A', 'lease-project-A', projectSession())).resolves.toMatchObject({
       success: false,
@@ -1231,16 +1527,16 @@ describe('project controller project identity', () => {
       error: expect.stringMatching(/directory locked[\s\S]*cannot initialize/),
     })
     expect(mocks.currentProjectPath).toBe('')
+    expect(mocks.restoreHeld).toBe(false)
+    expect(mocks.activeSession).toBeNull()
   })
 
-  it('reports deletion success when the directory commit succeeds but recent-list cleanup fails', async () => {
-    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce((target: string) => {
-      mocks.existingPaths.delete(path.resolve(target))
+  it('reports committed deletion even if recent-list cleanup fails', async () => {
+    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(async (target: string) => {
+      expect(mocks.restoreHeld).toBe(true)
+      mocks.existingPaths.delete(target)
     })
-    mocks.writeJsonFile.mockImplementationOnce(() => {
-      throw new Error('recent list locked')
-    })
-
+    mocks.writeJsonFile.mockImplementationOnce(() => { throw new Error('recent list locked') })
     await expect(handler('project:delete')({}, projectA, 'project-A', 'lease-project-A', projectSession())).resolves.toMatchObject({
       success: true,
       directoryDeleted: true,
@@ -1250,6 +1546,20 @@ describe('project controller project identity', () => {
     expect(mocks.currentProjectPath).toBe('')
     expect(mocks.projectAccess.invalidateCurrentSession).toHaveBeenCalledOnce()
     expect(mocks.removeDirectoryWithWindowsRetry).toHaveBeenCalledWith(projectA)
+    expect(mocks.restoreHeld).toBe(false)
+  })
+
+  it('treats an absent directory as committed deletion even if removal reports a late error', async () => {
+    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(async (target: string) => {
+      mocks.existingPaths.delete(target)
+      throw new Error('fiction late removal error')
+    })
+    await expect(handler('project:delete')({}, projectA, 'project-A', 'lease-project-A', projectSession()))
+      .resolves.toMatchObject({ success: true, directoryDeleted: true, databaseRestored: false,
+        warning: expect.stringContaining('fiction late removal error') })
+    expect(mocks.runtimeHost.prepareOpen).not.toHaveBeenCalled()
+    expect(mocks.activeSession).toBeNull()
+    expect(mocks.restoreHeld).toBe(false)
   })
 
   it('rejects deletion without a current project session context before touching the filesystem', async () => {
@@ -1292,13 +1602,13 @@ describe('project controller project identity', () => {
     expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
   })
 
-  it('cleans the local cloud binding only after the project directory deletion commits', async () => {
+  it('cleans the cloud binding only after the directory deletion commits', async () => {
     const removeDeletedProjectBinding = vi.fn()
     registerProjectController({ removeDeletedProjectBinding })
-    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce((target: string) => {
-      mocks.existingPaths.delete(path.resolve(target))
+    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce(async (target: string) => {
+      expect(removeDeletedProjectBinding).not.toHaveBeenCalled()
+      mocks.existingPaths.delete(target)
     })
-
     await expect(handler('project:delete')(
       {},
       projectA,
@@ -1335,6 +1645,39 @@ describe('legacy project copy import target grant', () => {
     expect(mocks.importLegacyProjectCopy).toHaveBeenCalledExactlyOnceWith({
       sourceRoot: legacyRoot, targetRoot: grantedTarget,
     })
+  })
+
+  it('admits an isolated copy with no active runtime without manufacturing a current-project lease', async () => {
+    mocks.currentProjectPath = ''
+    mocks.activeSession = null
+    mocks.runtimes.clear()
+    await expect(handler('project:import-legacy-copy')(sender, `selected:${legacyRoot}`, 'restore-target-grant'))
+      .resolves.toMatchObject({ state: 'ready', targetRoot: grantedTarget })
+    expect(mocks.restoreHeld).toBe(false)
+    expect(mocks.projectAccess.beginViewSession).not.toHaveBeenCalled()
+    expect(mocks.activeSession).toBeNull()
+  })
+
+  it('permits an outside copy but rejects an overlapping target with multiple retained runtimes', async () => {
+    mocks.runtimes.set(projectB, fictionRuntime(projectB))
+    await expect(handler('project:import-legacy-copy')(sender, `selected:${legacyRoot}`, 'restore-target-grant'))
+      .resolves.toMatchObject({ state: 'ready', targetRoot: grantedTarget })
+    mocks.importLegacyProjectCopy.mockClear()
+    mocks.resolveExactPath.mockReturnValueOnce(path.join(projectB, 'nested-copy'))
+    await expect(handler('project:import-legacy-copy')(sender, `selected:${legacyRoot}`, 'overlapping-target-grant'))
+      .resolves.toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_PATH_INVALID' })
+    expect(mocks.importLegacyProjectCopy).not.toHaveBeenCalled()
+    expect(mocks.currentProjectPath).toBe(projectA)
+    expect(mocks.restoreHeld).toBe(false)
+  })
+
+  it('denies a held lifecycle before confirmation or consuming the target grant', async () => {
+    mocks.legacyHeld = true
+    await expect(handler('project:import-legacy-copy')(sender, `selected:${legacyRoot}`, 'restore-target-grant'))
+      .rejects.toThrow('PROJECT_RUNTIME_LEGACY_OPERATION_BUSY')
+    expect(mocks.showMessageBox).not.toHaveBeenCalled()
+    expect(mocks.resolveExactPath).not.toHaveBeenCalled()
+    expect(mocks.importLegacyProjectCopy).not.toHaveBeenCalled()
   })
 
   it('never reaches the importer when the grant is refused or the argument is not a grant id', async () => {

@@ -47,7 +47,7 @@ function fixture(dispatch: GenerationRunServiceDependencies['dispatch']) {
     capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: false, usage: true } }
   const sourceDeps = { db, projectStorageRoot, globalDataRoot,
     readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => JSON.stringify(getBuiltinPromptTemplate(key, language)), readBuiltinSkill: readBuiltinWritingSkill }
-  const owner = createMainGenerationOwner({ database: db, projectId: 'project', epoch: 'epoch-1', assertCurrent: () => {},
+  const owner = createMainGenerationOwner({ database: db, projectPath: root, projectId: 'project', epoch: 'epoch-1', assertCurrent: () => {},
     leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch,
     buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDeps, { ...selection, projectId: 'project', epoch: 'epoch-1',
       modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,

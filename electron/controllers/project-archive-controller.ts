@@ -23,6 +23,7 @@ import { createPortableProjectAssetProvider } from '../services/portable-project
 import { restorePortableProject } from '../services/project-restore-service'
 import { registerRecentProject } from './project-controller'
 import { mainText } from '../i18n'
+import { assertRestoreTargetOutsideRuntimes, withLegacyProjectOperation, withProjectRestoreOperation } from '../services/project-runtime-compatibility'
 
 const require = createRequire(import.meta.url)
 
@@ -201,23 +202,25 @@ export function registerProjectArchiveController(
 
   ipcMain.handle('project:archive-export', async (event: ArchiveGrantEvent, request: PortableProjectExportRequest) => {
     try {
-      const active = projectAccess.assertCurrentProjectContext(
-        request.projectSession,
-        getCurrentProjectPath(),
-      )
-      const targetArchivePath = resolveGrantedPath(grants, event, request.targetArchiveGrantId, 'create')
-      const receipt = await exportPortableProject({
-        sourceProjectRoot: active.rootPath,
-        projectSession: request.projectSession,
-        targetArchivePath,
-        attemptParentPath: path.dirname(path.resolve(targetArchivePath)),
-        assets: portableAssets,
-        assertCurrentContext(context, sourceProjectRoot) {
-          const current = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
-          return projectAccess.sameCanonicalProjectRoot(current.rootPath, sourceProjectRoot)
-        },
+      return await withLegacyProjectOperation('project:archive-export', async () => {
+        const active = projectAccess.assertCurrentProjectContext(
+          request.projectSession,
+          getCurrentProjectPath(),
+        )
+        const targetArchivePath = resolveGrantedPath(grants, event, request.targetArchiveGrantId, 'create')
+        const receipt = await exportPortableProject({
+          sourceProjectRoot: active.rootPath,
+          projectSession: request.projectSession,
+          targetArchivePath,
+          attemptParentPath: path.dirname(path.resolve(targetArchivePath)),
+          assets: portableAssets,
+          assertCurrentContext(context, sourceProjectRoot) {
+            const current = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
+            return projectAccess.sameCanonicalProjectRoot(current.rootPath, sourceProjectRoot)
+          },
+        })
+        return { success: true as const, receipt }
       })
-      return { success: true as const, receipt }
     } catch (error) {
       return failure(error)
     }
@@ -225,25 +228,28 @@ export function registerProjectArchiveController(
 
   ipcMain.handle('project:archive-restore', async (event: ArchiveGrantEvent, request: PortableProjectRestoreRequest) => {
     try {
-      const archivePath = resolveGrantedPath(grants, event, request.archiveGrantId, 'read')
-      const targetProjectRoot = resolveGrantedPath(grants, event, request.targetGrantId, 'create')
-      const receipt = await restorePortableProject({ archivePath, targetProjectRoot })
-      try {
-        registerRecentProject({
-          name: readRestoredProjectName(receipt.targetProjectRoot),
-          path: receipt.targetProjectRoot,
-          projectId: receipt.targetProjectId,
-          updatedAt: new Date().toISOString(),
-        })
-        return { success: true as const, receipt, recentProjectUpdated: true }
-      } catch {
-        return {
-          success: true as const,
-          receipt,
-          recentProjectUpdated: false,
-          warning: 'PROJECT_RECENT_LIST_UPDATE_FAILED',
+      return await withProjectRestoreOperation(async () => {
+        const archivePath = resolveGrantedPath(grants, event, request.archiveGrantId, 'read')
+        const targetProjectRoot = resolveGrantedPath(grants, event, request.targetGrantId, 'create')
+        assertRestoreTargetOutsideRuntimes(targetProjectRoot)
+        const receipt = await restorePortableProject({ archivePath, targetProjectRoot })
+        try {
+          registerRecentProject({
+            name: readRestoredProjectName(receipt.targetProjectRoot),
+            path: receipt.targetProjectRoot,
+            projectId: receipt.targetProjectId,
+            updatedAt: new Date().toISOString(),
+          })
+          return { success: true as const, receipt, recentProjectUpdated: true }
+        } catch {
+          return {
+            success: true as const,
+            receipt,
+            recentProjectUpdated: false,
+            warning: 'PROJECT_RECENT_LIST_UPDATE_FAILED',
+          }
         }
-      }
+      })
     } catch (error) {
       return failure(error)
     }

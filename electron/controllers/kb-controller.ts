@@ -11,6 +11,7 @@ import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { mainText } from '../i18n'
 import { getCurrentProjectPath } from '../database'
+import { withLegacyProjectOperation } from '../services/project-runtime-compatibility'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { externalFileGrants } from '../services/external-file-grant-service'
@@ -238,7 +239,7 @@ function registerKnowledgeBaseHandler<Args extends unknown[]>(
     const projectSession = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
     try {
       assertKnowledgeBaseStoragePathSupported(projectSession.rootPath)
-      const result = await handler(event, ...(args as Args))
+      const result = await withLegacyProjectOperation(channel, () => handler(event, ...(args as Args)))
       return isLegacyMigrationBlockedResult(result) ? legacyMigrationBlockedFailure() : result
     } catch (error) {
       if (isLegacyMigrationBlockedError(error)) return legacyMigrationBlockedFailure()

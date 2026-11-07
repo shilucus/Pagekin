@@ -13,6 +13,7 @@ import type {
 } from '../../src/shared/character-avatar'
 import { mainText } from '../i18n'
 import type { CharacterAssetService } from '../services/character-asset-service'
+import { projectRuntimeHost } from '../services/project-runtime'
 
 interface AvatarEvent {
   sender?: { id?: number; isDestroyed?: () => boolean }
@@ -80,6 +81,10 @@ export function registerCharacterAvatarController(deps: CharacterAvatarControlle
 
   ipcMain.handle('character-avatar:choose', (event: AvatarEvent, characterId: string, context: ProjectSessionContext): Promise<CharacterAvatarChooseResponse> => serialize(async () => {
     if (!validSender(event)) return { success: false, error: failure('INVALID_SENDER') }
+    let release: () => void
+    try { release = projectRuntimeHost.acquireLegacyOperation('character-avatar:choose') }
+    catch { return { success: false, error: failure('PROJECT_NOT_OPEN') } }
+    try {
     const service = serviceFor(deps, event, context)
     if (!service) return { success: false, error: failure('PROJECT_NOT_OPEN') }
     enterScope(context)
@@ -92,6 +97,7 @@ export function registerCharacterAvatarController(deps: CharacterAvatarControlle
     if (selection.filePaths.length !== 1) return { success: false, error: failure('IMAGE_READ_FAILED') }
     try { return { success: true, cancelled: false, image: await service.previewFile(characterId, selection.filePaths[0]!) } }
     catch (error) { return { success: false, error: failure(errorCode(error)) } }
+    } finally { release() }
   }))
 
   ipcMain.handle('character-avatar:commit', (event: AvatarEvent, characterId: string, base64: string, context: ProjectSessionContext): Promise<CharacterAvatarCommitResponse> => serialize(async () => {

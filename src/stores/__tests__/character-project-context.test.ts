@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ProjectData } from '../../shared/ipc-channels'
+import type { ProjectData, ProjectSessionContext } from '../../shared/ipc-channels'
 import { EMPTY_CARD, useCharacterStore, type CharacterCard } from '../character-store'
 import { useEditorStore } from '../editor-store'
 import { useProjectStore } from '../project-store'
@@ -120,6 +120,55 @@ beforeEach(() => {
 })
 
 describe('character store project context', () => {
+  it('rebinds an explicit same-book recovery without losing card/avatar edits and rejects the old pending load', async () => {
+    const value = project(PROJECT_A)
+    const previous = { projectId: value.id, projectPath: value.path, leaseId: value.sessionLease! }
+    const restored = { ...previous, leaseId: 'recovered-character-lease' }
+    invoke.mockResolvedValueOnce([character('A 角色')])
+    await useCharacterStore.getState().load(PROJECT_A)
+    useCharacterStore.getState().updateField('id:A 角色', 'notes', 'unsaved character notes')
+    useCharacterStore.getState().stageAvatar('id:A 角色', { kind: 'remove' }, previous)
+    const before = useCharacterStore.getState(), ledger = useEditorStore.getState().draftLedgers
+    const oldRead = deferred<unknown>()
+    invoke.mockReturnValueOnce(oldRead.promise)
+    const loading = useCharacterStore.getState().load(PROJECT_A, previous)
+    useCharacterStore.getState().rebindRecoveredSession(previous, restored)
+    useProjectStore.setState({ currentProject: { ...value, sessionLease: restored.leaseId } })
+    oldRead.resolve([character('obsolete late role')])
+    await loading
+
+    expect(useCharacterStore.getState().characters).toBe(before.characters)
+    expect(useCharacterStore.getState().avatarDrafts).toBe(before.avatarDrafts)
+    expect(useCharacterStore.getState()).toMatchObject({ dataProjectSession: restored,
+      selectedId: before.selectedId, selectedName: before.selectedName,
+      rosterRevision: before.rosterRevision, identityRevision: before.identityRevision,
+      loadingProjectSession: null, loadingProjectKey: null })
+    expect(useEditorStore.getState().draftLedgers).toBe(ledger)
+
+    invoke.mockResolvedValueOnce([character('A 角色')])
+    await useCharacterStore.getState().load(PROJECT_A, restored)
+    expect(useCharacterStore.getState().characters[0].notes).toBe('unsaved character notes')
+    expect(useCharacterStore.getState().avatarDrafts).toBe(before.avatarDrafts)
+  })
+
+  it.each(['another-project', 'another-root', 'same-lease', 'empty-lease', 'stale-current'] as const)(
+    'does not rebind character buffers for invalid recovery %s', async kind => {
+      const value = project(PROJECT_A)
+      const previous: ProjectSessionContext = { projectId: value.id, projectPath: value.path, leaseId: value.sessionLease! }
+      const restored: ProjectSessionContext = { ...previous, leaseId: 'fresh-character-lease' }
+      if (kind === 'another-project') restored.projectId = 'other'
+      if (kind === 'another-root') restored.projectPath = PROJECT_B
+      if (kind === 'same-lease') restored.leaseId = previous.leaseId
+      if (kind === 'empty-lease') restored.leaseId = ' '
+      invoke.mockResolvedValueOnce([character('A 角色')])
+      await useCharacterStore.getState().load(PROJECT_A)
+      const before = useCharacterStore.getState()
+      if (kind === 'stale-current') useProjectStore.setState({ currentProject: project(PROJECT_B) })
+      useCharacterStore.getState().rebindRecoveredSession(previous, restored)
+      expect(useCharacterStore.getState()).toBe(before)
+    },
+  )
+
   it('normalizes a legacy draft role before rebasing it into renderer state', async () => {
     const persistedCharacter = { ...character('旧角色'), role: 'supporting' as const }
     const legacyDraftCharacter = { ...persistedCharacter } as Partial<CharacterCard>

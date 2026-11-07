@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CharacterAssetService } from '../../services/character-asset-service'
 
 type Handler = (...args: unknown[]) => Promise<unknown> | unknown
-const mocks = vi.hoisted(() => ({ handlers: new Map<string, Handler>(), showOpenDialog: vi.fn() }))
+const mocks = vi.hoisted(() => ({ handlers: new Map<string, Handler>(), showOpenDialog: vi.fn(), acquire: vi.fn() }))
+vi.mock('../../services/project-runtime', () => ({ projectRuntimeHost: { acquireLegacyOperation: mocks.acquire } }))
 vi.mock('electron', () => ({
   app: { getLocale: () => 'zh-CN' },
   dialog: { showOpenDialog: mocks.showOpenDialog },
@@ -28,9 +29,29 @@ function fakeService() {
   }
 }
 
-beforeEach(() => { mocks.handlers.clear(); mocks.showOpenDialog.mockReset() })
+beforeEach(() => { mocks.handlers.clear(); mocks.showOpenDialog.mockReset(); mocks.acquire.mockReset().mockReturnValue(() => undefined) })
 
 describe('character avatar controller', () => {
+  it('refuses a busy legacy picker before resolving a service or opening a dialog', async () => {
+    const resolveService = vi.fn(() => fakeService() as unknown as CharacterAssetService)
+    mocks.acquire.mockImplementation(() => { throw new Error('PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE') })
+    registerCharacterAvatarController({ resolveService })
+    await expect(mocks.handlers.get('character-avatar:choose')!(event, 'stable-a', context)).resolves.toMatchObject({
+      success: false, error: { code: 'PROJECT_NOT_OPEN' },
+    })
+    expect(resolveService).not.toHaveBeenCalled()
+    expect(mocks.showOpenDialog).not.toHaveBeenCalled()
+  })
+
+  it('releases the picker interlock on cancellation', async () => {
+    const release = vi.fn()
+    mocks.acquire.mockReturnValue(release)
+    registerCharacterAvatarController({ resolveService: () => fakeService() as unknown as CharacterAssetService })
+    mocks.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    await mocks.handlers.get('character-avatar:choose')!(event, 'stable-a', context)
+    expect(release).toHaveBeenCalledOnce()
+  })
+
   it('registers choose/commit/batch/remove and treats picker cancellation as no mutation', async () => {
     const service = fakeService()
     registerCharacterAvatarController({ resolveService: () => service as unknown as CharacterAssetService })

@@ -5,6 +5,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 type IpcHandler = (...args: unknown[]) => Promise<unknown>
 
+// Host admission is covered by the real-runtime controller integration suite.
+vi.mock('../../services/project-runtime-compatibility', () => ({
+  withLegacyProjectOperation: async (_channel: string, operation: () => unknown) => operation(),
+}))
+
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, IpcHandler>(),
   run: vi.fn(),

@@ -74,7 +74,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
     const capturedDb = db, capturedEpoch = epoch
     const sourceDeps = { db: capturedDb, projectStorageRoot, globalDataRoot,
       readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => JSON.stringify(getBuiltinPromptTemplate(key, language)), readBuiltinSkill: readBuiltinWritingSkill }
-    return createMainGenerationOwner({ database: capturedDb, projectId: 'project', epoch: capturedEpoch,
+    return createMainGenerationOwner({ database: capturedDb, projectPath: root, projectId: 'project', epoch: capturedEpoch,
       assertCurrent: () => { if (!current || capturedEpoch !== epoch || capturedDb !== db) throw new Error('GENERATION_EPOCH_STALE') },
       leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch,
       onReasoning,

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
-import { useProjectStore } from '../../stores/project-store'
+import { isDeleteRecoverySession, useProjectStore } from '../../stores/project-store'
 import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
 import { routeModelId } from '../../services/model-routing'
 import { useWorkflowStore } from '../../stores/workflow-store'
@@ -36,6 +36,7 @@ export function novelConfigSessionKey(currentProject: ProjectData | null, projec
  */
 export function useNovelConfigForm(projectKey: string) {
   const currentProject = useProjectStore(s => s.currentProject)
+  const renderedProjectSession = captureProjectSession(currentProject)
   const updateNovelConfig = useProjectStore(s => s.updateNovelConfig)
   const saveProject = useProjectStore(s => s.saveProject)
   // addLog 用 getState() 命令式调用，不订阅 workflow store，避免流式生成时高频更新导致表单重渲染。
@@ -54,12 +55,12 @@ export function useNovelConfigForm(projectKey: string) {
   const dirty = useEditorStore(state => state.tabs.some(
     tab => tab.type === 'config' && tab.projectKey === projectKey && tab.dirty,
   ))
-  const exitSaveRef = useRef<(propagateFailure?: boolean) => Promise<boolean>>(async () => false)
+  const exitSaveRef = useRef<(propagateFailure?: boolean, recoverExitSession?: boolean) => Promise<boolean>>(async () => false)
   useEffect(() => {
     registerEditorExitSaveHandler({
       type: 'config',
       projectKey,
-      save: async () => { await exitSaveRef.current(true) },
+      save: async () => { await exitSaveRef.current(true, true) },
     })
   }, [projectKey])
 
@@ -73,10 +74,19 @@ export function useNovelConfigForm(projectKey: string) {
   }
 
   /** Store 已是最新数据，这里只持久化到磁盘。返回是否写进了这次打开的作品：没发出、作品已切换或写入失败都是 false。 */
-  const save = async (propagateFailure = false): Promise<boolean> => {
-    const projectSession = captureProjectSession(currentProject)
-    if (!config || useSavesInFlight.getState()[sessionKey] || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return false
-    useSavesInFlight.setState({ [sessionKey]: true })
+  const save = async (propagateFailure = false, recoverExitSession = false): Promise<boolean> => {
+    let projectSession = renderedProjectSession
+    if (!config || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return false
+    if (!isProjectSessionCurrent(projectSession)) {
+      const restored = captureProjectSession(useProjectStore.getState().currentProject)
+      const retainedTab = useEditorStore.getState().tabs.find(tab => tab.type === 'config'
+        && tab.projectKey === projectKey && !tab.planningRecovery && tab.projectSessionLease === restored?.leaseId)
+      if (!recoverExitSession || !restored || !retainedTab || !isDeleteRecoverySession(projectSession, restored)) return false
+      projectSession = restored
+    }
+    const saveSessionKey = `${projectSession.projectId}:${projectSession.leaseId}`
+    if (useSavesInFlight.getState()[saveSessionKey]) return false
+    useSavesInFlight.setState({ [saveSessionKey]: true })
     setSaveOutcome('idle')
     try {
       const saved = await saveProject(projectSession)
@@ -98,7 +108,7 @@ export function useNovelConfigForm(projectKey: string) {
       if (propagateFailure) throw error
       return false
     } finally {
-      useSavesInFlight.setState({ [sessionKey]: false })
+      useSavesInFlight.setState({ [saveSessionKey]: false })
     }
   }
   useEffect(() => {

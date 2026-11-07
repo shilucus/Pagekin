@@ -46,7 +46,7 @@ export function importGenerationFixture(cleanup: (() => void)[], chapterCount: n
   const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: (key: string) => JSON.stringify({ key, content: '冻结的合成提示词', systemRole: '写作助手' }) }
   const owners: Owner[] = []
   const openOwner = (epoch: string) => {
-    const owner = createMainGenerationOwner({ database: db, projectId: project.projectId, epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: spy,
+    const owner = createMainGenerationOwner({ database: db, projectId: project.projectId, projectPath: root, epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: spy,
       buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: project.projectId, epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
       rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding })
     owners.push(owner)

@@ -8,7 +8,7 @@ vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNI
 import { appearanceWrite, assertBuilt, captureFailure, driveSessions, finishRealSession, harvestModelLog, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs,
   releaseSessionRoot, scanRunForSecret, sessionIsClean, writeConsoleLog } from '../drive.mjs'
 import { fileStamps } from '../real-model.mjs'
-import { BASELINE_SESSIONS, SCENARIOS } from '../scenarios.mjs'
+import { BASELINE_SESSIONS, EXTRA_SCENARIOS, SCENARIOS } from '../scenarios.mjs'
 
 const parents = []
 afterEach(() => { for (const parent of parents.splice(0)) fs.rmSync(parent, { recursive: true, force: true }) })
@@ -68,6 +68,12 @@ it('子进程环境的全部可写根都指向隔离目录', () => {
 
 it('baseline-all 的会话恰好覆盖每个场景一次', () => {
   assert.deepEqual(Object.values(BASELINE_SESSIONS).flat().sort(), Object.keys(SCENARIOS).sort())
+})
+
+it('runtime routing is an independent extra scenario, not a baseline-all session', () => {
+  assert.equal(EXTRA_SCENARIOS['runtime-routing-v1']?.shell, 'stage')
+  assert.equal(SCENARIOS['runtime-routing-v1'], undefined)
+  assert.equal(parseArgs(['--scenario', 'runtime-routing-v1']).scenario, 'runtime-routing-v1')
 })
 
 it('启动参数固定中文界面，非中文宿主上场景照样按中文找控件', () => {

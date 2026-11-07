@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { EditorTab } from '../../stores/editor-store'
+import { getActiveProjectSessionContext, setActiveProjectSessionContext } from '../../shared/project-session-context'
+import { commitFinalizationSnapshot } from '../finalization-client'
 import {
   captureFinalizationSnapshot,
   reconcileFinalizationCompletion,
@@ -33,6 +35,31 @@ function draftTab(overrides: Partial<EditorTab> = {}): EditorTab {
 }
 
 describe('finalization editor snapshot seam', () => {
+  it('rejects the old snapshot and completion after failed-delete reopening while a fresh draft snapshot remains possible', async () => {
+    const previous = getActiveProjectSessionContext()
+    const invoke = vi.fn()
+    const fresh = { ...SESSION, leaseId: 'lease-after-failed-delete' }
+    const oldSnapshot = captureFinalizationSnapshot({ tab: draftTab(), projectSession: SESSION, chapterTitle: '第一章' })
+    const reopenedTab = draftTab({ projectSessionLease: fresh.leaseId })
+    const completion = {
+      finalizationId: 'old-finalization', contentHash: 'old-hash', contentRevision: oldSnapshot.contentRevision,
+      draftId: 17, projectPath: PROJECT_PATH, projectSession: SESSION, publicationStatus: 'published' as const,
+    }
+    try {
+      vi.stubGlobal('window', { aiNovelAPI: { invoke } })
+      setActiveProjectSessionContext(fresh)
+      await expect(commitFinalizationSnapshot(oldSnapshot)).rejects.toThrow()
+      expect(invoke).not.toHaveBeenCalled()
+      expect(reconcileFinalizationCompletion(reopenedTab, oldSnapshot, completion)).toBe(reopenedTab)
+      expect(reopenedTab).toMatchObject({ dirty: true, draftStatus: 'draft', content: oldSnapshot.content })
+      const freshSnapshot = captureFinalizationSnapshot({ tab: reopenedTab, projectSession: fresh, chapterTitle: '第一章' })
+      expect(freshSnapshot).toMatchObject({ projectSession: fresh, content: oldSnapshot.content, draftId: 17 })
+      expect(oldSnapshot.projectSession).toEqual(SESSION)
+    } finally {
+      setActiveProjectSessionContext(previous)
+      vi.unstubAllGlobals()
+    }
+  })
   it('commits a positive source revision for a first edit and preserves a later edit', () => {
     const first = draftTab({ contentRevision: 0 })
     const snapshot = captureFinalizationSnapshot({

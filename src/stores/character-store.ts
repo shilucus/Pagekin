@@ -220,6 +220,7 @@ interface CharacterState {
   lastError: string | null
 
   load: (projectPath?: string, expectedProjectSession?: ProjectSessionContext) => Promise<void>
+  rebindRecoveredSession: (previous: ProjectSessionContext, restored: ProjectSessionContext) => void
   beginProjectLoad: (projectPath: string) => void
   reset: () => void
   setSelectedId: (id: string | null) => void
@@ -292,6 +293,27 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
   loadingProjectKey: null,
   loadingProjectSession: null,
   lastError: null,
+
+  rebindRecoveredSession: (previous, restored) => {
+    if (!isCharacterProjectSessionCurrent(previous)
+      || previous.projectId !== restored.projectId
+      || !sameProjectPathKey(previous.projectPath, restored.projectPath)
+      || !restored.leaseId.trim() || previous.leaseId === restored.leaseId) return
+    const state = get()
+    const ownsData = sameProjectSessionContext(state.dataProjectSession, previous)
+    const ownsLoad = sameProjectSessionContext(state.loadingProjectSession, previous)
+    if (!ownsData && !ownsLoad) return
+    // This handoff invalidates old reads without discarding the author buffer;
+    // ordinary project loading retains its separate reset behavior.
+    characterLoadSequence++
+    set({
+      ...(ownsData ? { dataProjectSession: Object.freeze({ ...restored }) } : {}),
+      loadingProjectKey: null,
+      loadingProjectSession: null,
+      saving: false,
+      identityBusy: false,
+    })
+  },
 
   load: async (projectPath, expectedProjectSession) => {
     const projectSession = currentCharacterProjectSession(projectPath, expectedProjectSession)

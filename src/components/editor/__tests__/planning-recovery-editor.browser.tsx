@@ -563,6 +563,36 @@ describe('planning recovery editors', () => {
       await act(async () => { await expect(saveDirtyEditorChangesForExit(session.projectPath)).rejects.toThrow() })
       expect(invoke.mock.calls.some(([name]) => name === channel)).toBe(false); noModel()
     })
+    it(`${kind} retains the recovery proof and buffer when failed-delete reopening rejects the old handle`, async () => {
+      context = fixture(kind); await render(kind); await edit(validText())
+      const before = useEditorStore.getState().tabs[0]
+      const proof = structuredClone(before.planningRecovery)
+      const originalInvoke = invoke.getMockImplementation() as (name: string, ...args: unknown[]) => unknown
+      const fresh = { ...session, leaseId: 'lease-after-failed-delete' }
+      invoke.mockImplementation(async (name: string, ...args: unknown[]) => {
+        if (name === 'generation:read-context' && args.at(-1) && (args.at(-1) as typeof session).leaseId === fresh.leaseId) {
+          throw new Error('GENERATION_PROJECT_SESSION_MISMATCH')
+        }
+        return originalInvoke(name, ...args)
+      })
+      await act(async () => {
+        setActiveProjectSessionContext(fresh)
+        useProjectStore.setState({ currentProject: { ...project, sessionLease: fresh.leaseId } })
+      })
+      const retained = useEditorStore.getState().tabs[0]
+      expect(retained).toMatchObject({ content: validText(), dirty: true, planningRecovery: proof })
+      expect(retained.planningSaveOperationId).toBe(before.planningSaveOperationId)
+      await act(async () => { await expect(saveDirtyEditorChangesForExit(session.projectPath)).rejects.toThrow() })
+      const continuation = button('继续生成缺少的章节')
+      if (!continuation.disabled) await act(async () => continuation.click())
+      if (kind === 'outline') {
+        expect(invoke.mock.calls.some(([name, request, projectSession]) => name === 'generation:read-context'
+          && request.handle.runId === handle.runId && projectSession.leaseId === fresh.leaseId)).toBe(true)
+      }
+      expect(invoke.mock.calls.some(([name]) => name === channel)).toBe(false)
+      noModel()
+      expect(useEditorStore.getState().tabs[0]).toMatchObject({ content: validText(), dirty: true, planningRecovery: proof })
+    })
     it(`${kind} explicitly continues zero-prefix with frozen target and original source`, async () => {
       context = fixture(kind); await render(kind); noModel()
       await act(async () => button('继续生成缺少的章节').click())

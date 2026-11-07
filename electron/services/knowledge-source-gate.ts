@@ -5,6 +5,11 @@ const held = new AsyncLocalStorage<ReadonlyMap<string, { active: boolean }>>()
 const tails = new Map<string, Promise<void>>()
 const normalized = (root: string) => process.platform === 'win32' ? path.resolve(root).toLowerCase() : path.resolve(root)
 
+/** Closing resources must also reject the caller's own still-held gate. */
+export function isKnowledgeSourceBusy(projectStorageRoot: string): boolean {
+  return tails.has(normalized(projectStorageRoot))
+}
+
 export function assertKnowledgeSourceIdle(projectStorageRoot: string): void {
   const key = normalized(projectStorageRoot)
   if (tails.has(key) && !held.getStore()?.get(key)?.active) throw new Error('GENERATION_KNOWLEDGE_BUSY')

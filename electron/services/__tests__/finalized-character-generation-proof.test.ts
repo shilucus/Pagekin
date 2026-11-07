@@ -49,7 +49,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   }))
   const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: (key: string) => JSON.stringify({ key, content: '合成冻结模板 {{chapter_content}} {{existing_cards_json}}' }) }
   let current = true
-  const owner = createMainGenerationOwner({ database: db, projectId: 'project', epoch: 'epoch',
+  const owner = createMainGenerationOwner({ database: db, projectPath: root, projectId: 'project', epoch: 'epoch',
     assertCurrent: () => { if (!current) throw new Error('GENERATION_EPOCH_STALE') },
     leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: dispatchSpy,
     buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch: 'epoch',

@@ -16,6 +16,7 @@ import { reopenFinalizedChapter } from '../services/chapter-reopen-service'
 import { ReplacementImpactRepository } from '../repositories/replacement-impact-repository'
 import { removeReplacedKnowledge, removeReplacedManuscripts } from '../services/replaced-final-cleanup'
 import { projectAccess } from '../services/project-access'
+import { withLegacyProjectOperation } from '../services/project-runtime-compatibility'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 
 type ChapterLifecycleHandler = (event: unknown, ...args: never[]) => unknown
@@ -30,12 +31,12 @@ export function registerChapterLifecycleController(
       if (context) args.pop()
       try {
         const lease = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
-        return await (handler as (event: unknown, ...handlerArgs: unknown[]) => unknown)(
+        return await withLegacyProjectOperation(channel, () => (handler as (event: unknown, ...handlerArgs: unknown[]) => unknown)(
           event,
           ...args,
           lease.rootPath,
           lease.projectId,
-        )
+        ))
       } catch (error) {
         return {
           success: false,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { formatResourceUri, parseResourceUri, resourceWriteAllowed } from '../../shared/project-paths'
-import { useProjectStore } from '../../stores/project-store'
+import { isDeleteRecoverySession, useProjectStore } from '../../stores/project-store'
 import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
 import { useWorkflowStore, workflowResourceKey, type WorkflowDefinition, type WorkflowRun } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -149,6 +149,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     state => state.tabs.find(tab => tab.id === tabId && tab.projectKey === projectKey),
   )
   const currentProject = useProjectStore(s => s.currentProject)
+  const renderedProjectSession = captureProjectSession(currentProject)
   const text = useLocaleStore(s => s.text)
   const projectMatches = currentProject?.path === projectKey
   const tabDraftStatus = editorTab?.draftStatus
@@ -233,12 +234,18 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
   }
 
   /** 保存（ai-novel://draft/ 走 DB，其他走 FS） */
-  const save = async (draftContent: string, propagateFailure = false) => {
-    const projectSession = captureProjectSession(currentProject)
+  const save = async (draftContent: string, propagateFailure = false, recoverExitSession = false) => {
+    let projectSession = renderedProjectSession
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     const targetTab = useEditorStore.getState().tabs.find(
       tab => tab.id === tabId && tab.projectKey === projectKey,
     )
+    if (!isProjectSessionCurrent(projectSession)) {
+      const restored = captureProjectSession(useProjectStore.getState().currentProject)
+      if (!recoverExitSession || !restored || !isDeleteRecoverySession(projectSession, restored)
+        || targetTab?.planningRecovery || targetTab?.projectSessionLease !== restored.leaseId) return
+      projectSession = restored
+    }
     if (
       !targetTab
       || (targetTab.draftStatus && DRAFT_STATUS_INFO[targetTab.draftStatus].readOnly)
@@ -293,7 +300,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       tabId,
       type: 'chapter',
       projectKey,
-      save: () => exitSaveRef.current(currentBodyRef.current, true),
+      save: () => exitSaveRef.current(currentBodyRef.current, true, true),
     })
   }, [projectKey, tabId])
 

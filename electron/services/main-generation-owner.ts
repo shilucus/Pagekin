@@ -11,7 +11,6 @@ import { TERMINAL_PROVIDER_FAILURE_CODES, rootBudgetExhausted, tokenLiability } 
 import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock, withoutDraftReconciliationArtifacts } from '../../src/shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
-import { getCurrentProjectPath } from '../database'
 import { PlanningFeedbackService, type PlanningFeedbackGenerationInput } from './planning-feedback-service'
 import { readPlanningFeedbackTask } from './planning-feedback-generation'
 import { assertPlanningFeedbackObject, type AdoptPlanningFeedbackCandidate, type PlanningFeedbackCaptureTarget, type RelineagePlanningFeedbackCandidate, type StagePlanningFeedbackCandidate } from '../../src/shared/planning-feedback'
@@ -80,6 +79,7 @@ export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt):
 export interface MainGenerationOwnerDependencies {
   database: Database.Database
   projectId: string
+  projectPath: string
   epoch: string
   assertCurrent: () => void
   leases: ModelExecutionLeaseRegistry
@@ -130,7 +130,7 @@ async function dispatchProvider(value: unknown, options: Parameters<GenerationRu
 
 /** One owner per captured database/session. No renderer budget, lease or hash is authoritative. */
 export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies) {
-  const capturedProjectPath = getCurrentProjectPath()
+  const capturedProjectPath = deps.projectPath
   const runtimeFreeze = readPortableRuntimeFreeze(capturedProjectPath)
   const repository = new GenerationRunRepository(() => deps.database, Date.now, (table, recordId) => runtimeFreeze.isFrozen(table, recordId))
   const draftEffects = new GenerationDraftEffects(deps.database, repository)
@@ -264,6 +264,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const providerDispatch = deps.dispatch ?? dispatchProvider
   /** 还没结束的请求；关闭作品时在关库前把它们记成已取消。 */
   const unrecordedCalls = new Set<() => void>()
+  let physicalDispatches = 0
   /** 每次真正发出的模型请求都记入运行侧页的 AI 调用记录，每次只记一行；记录只作诊断，写不进去也不改变生成结果。 */
   const recordedDispatch: GenerationRunServiceDependencies['dispatch'] = async (request, options) => {
     const { model, task } = request as ProviderRequest, startedAt = Date.now()
@@ -283,6 +284,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     const recordCancelled = () => record(false, null, 'cancelled')
     unrecordedCalls.add(recordCancelled)
+    physicalDispatches++
     try {
       const result = await providerDispatch(request, options)
       record(result.finishReason === 'stop', result.usage, result.finishReason === 'stop' ? undefined : `finish:${result.finishReason ?? 'unknown'}`)
@@ -291,7 +293,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (options.signal.reason === GENERATION_STOPPED) recordCancelled()
       else record(false, null, error instanceof Error ? error.message : String(error))
       throw error
-    }
+    } finally { physicalDispatches-- }
   }
   const service = createGenerationRunService({ repository, dispatch: recordedDispatch,
     onReasoning: event => deps.onReasoning?.({ projectId: deps.projectId, epoch: deps.epoch, ...event }),
@@ -1818,6 +1820,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       volatileReceipts.delete(artifact.attemptId)
       return viewOf(run)
     },
+    hasPhysicalInFlight: () => physicalDispatches > 0 || pending.size > 0,
     suspendForProjectClose: () => {
       preparations.clear()
       finalizedCharacters.close()

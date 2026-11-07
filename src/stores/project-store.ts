@@ -21,6 +21,7 @@ import { useLocaleStore } from './locale-store'
 import { requireIpcSuccess } from '../services/ipc-result'
 import {
   projectPathKey,
+  isProjectSessionContext,
   projectSessionContextFromProject,
   sameProjectPathKey,
   sameProjectSessionContext,
@@ -51,6 +52,16 @@ let openProjectRequestSequence = 0
 let recentProjectsRequestSequence = 0
 let closeProjectInFlight: Promise<boolean> | null = null
 let projectRecoveryInFlight: Promise<void> | null = null
+let deleteRecoverySession: Readonly<{
+  sources: readonly ProjectSessionContext[]
+  restored: ProjectSessionContext
+}> | null = null
+
+/** Buffer handoff only; IPC still authorizes the new lease in main. */
+export function isDeleteRecoverySession(previous: ProjectSessionContext | null, restored: ProjectSessionContext): boolean {
+  return sameProjectSessionContext(restored, deleteRecoverySession?.restored)
+    && Boolean(deleteRecoverySession?.sources.some(source => sameProjectSessionContext(previous, source)))
+}
 
 type ProjectTransitionDecision = 'clean' | 'saved' | 'discard'
 type PreparedProjectTransition = Readonly<{
@@ -1140,6 +1151,9 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     try {
       const { useWorkflowStore } = await import('./workflow-store')
       await useWorkflowStore.getState().cancelProjectWorkflowsAndWait(activeProject.path)
+      const [{ useCharacterStore }, { useDraftStore }] = await Promise.all([
+        import('./character-store'), import('./draft-store'),
+      ])
       if (!sameProjectSessionContext(
         projectSession,
         projectSessionContextFromProject(get().currentProject),
@@ -1156,21 +1170,22 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         projectSessionContextFromProject(get().currentProject),
       )) return false
       if (!result.success) {
+        const restored = result.restoredSession
+        const invalidRestore = restored !== undefined && (!isProjectSessionContext(restored)
+          || restored.projectId !== projectSession.projectId
+          || !sameProjectPathKey(restored.projectPath, projectSession.projectPath)
+          || !restored.leaseId.trim() || restored.leaseId === projectSession.leaseId
+          || result.databaseRestored !== true || result.directoryDeleted !== false)
         if (
-          result.databaseRestored === false
+          (result.databaseRestored === false || invalidRestore)
           && sameProjectSessionContext(
             projectSession,
             projectSessionContextFromProject(get().currentProject),
           )
         ) {
-          // 删除失败后主进程数据库也未能恢复，继续保留可写界面会制造
-          // “看似打开、实际无数据库”的危险半状态。先解除所有项目绑定。
+          // No editable current session remains, but failed deletion must not
+          // discard tabs, character/avatar buffers or editor draft ledgers.
           set({ currentProject: null, fileTree: [] })
-          try {
-            await callProjectClosed(projectPath)
-          } catch (cleanupError) {
-            console.error('[project-store.deleteProject] 数据库恢复失败后的界面清理失败:', cleanupError)
-          }
           alertError(`${projectError(
             result.error,
             '项目目录删除失败。',
@@ -1182,6 +1197,41 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
             title: projectText('删除失败，项目已停用', 'Deletion failed; the project was disabled'),
           })
           return false
+        }
+        if (restored) {
+          const current = get().currentProject
+          if (!current || !sameProjectSessionContext(projectSession, projectSessionContextFromProject(current))) return false
+          const fresh = Object.freeze({ projectId: restored.projectId,
+            projectPath: restored.projectPath, leaseId: restored.leaseId })
+          const characters = useCharacterStore.getState()
+          const reloadCharacters = !sameProjectSessionContext(characters.dataProjectSession, projectSession)
+            && sameProjectSessionContext(characters.loadingProjectSession, projectSession)
+          useCharacterStore.getState().rebindRecoveredSession(projectSession, fresh)
+          const drafts = useDraftStore.getState()
+          if (sameProjectSessionContext(drafts.dataProjectSession, projectSession)) {
+            useDraftStore.setState({ dataProjectSession: fresh, loading: false,
+              loadingProjectKey: null, loadingProjectSession: null })
+          }
+          useEditorStore.setState(state => ({ tabs: state.tabs.map(tab => {
+            if (!sameProjectPathKey(tab.projectKey, projectSession.projectPath)) return tab
+            const rebind = tab.projectSessionLease === projectSession.leaseId && !tab.planningRecovery
+            // Main reopened only after idle release. Old UI responses cannot
+            // leave the retained knowledge slot busy under the new lease.
+            const releaseKnowledgeBusy = tab.knowledgeDraft?.busy
+            return rebind || releaseKnowledgeBusy ? { ...tab,
+              ...(rebind ? { projectSessionLease: fresh.leaseId } : {}),
+              ...(releaseKnowledgeBusy ? { knowledgeDraft: { ...tab.knowledgeDraft!, busy: false } } : {}),
+            } : tab
+          }) }))
+          const recovery = deleteRecoverySession
+          const sources = recovery && sameProjectSessionContext(projectSession, recovery.restored)
+            ? [...recovery.sources, projectSession] : [projectSession]
+          deleteRecoverySession = Object.freeze({ sources: Object.freeze(sources), restored: fresh })
+          set(state => ({ currentProject: { ...current, sessionLease: fresh.leaseId },
+            projectSessionEpoch: state.projectSessionEpoch + 1, loading: false }))
+          // First-load recovery has no author buffer to rebind. Restart it only
+          // after publishing the fresh session so the normal load gate accepts it.
+          if (reloadCharacters) void useCharacterStore.getState().load(fresh.projectPath, fresh)
         }
         alertError(
           projectError(result.error),
@@ -1368,5 +1418,11 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
 
 // 任何 currentProject 提交都会同步刷新 IPC 的默认会话；工作流另行持有自己的冻结副本。
 useProjectStore.subscribe((state) => {
-  setActiveProjectSessionContext(projectSessionContextFromProject(state.currentProject))
+  const current = projectSessionContextFromProject(state.currentProject)
+  // Only consecutive explicit delete recoveries keep old ordinary exit handlers
+  // alive. An ordinary reopen, close or project switch ends that lineage.
+  if (deleteRecoverySession && !sameProjectSessionContext(current, deleteRecoverySession.restored)) {
+    deleteRecoverySession = null
+  }
+  setActiveProjectSessionContext(current)
 })

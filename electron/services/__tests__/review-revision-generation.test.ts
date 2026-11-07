@@ -59,7 +59,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
     ? { ...model, id, modelName: 'gpt-4.1-mini', maxTokens: 1024 } : null
   const spy = vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch ?? (async (_request, options) => { options.onVisible({ kind: 'delta', text: report }); return { finishReason: 'stop', usage: null } }))
   const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: () => '冻结的合成提示词' }
-  const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectId: 'project', epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel }), loadModel, dispatch: spy,
+  const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectPath: root, projectId: 'project', epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel }), loadModel, dispatch: spy,
     buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
     rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding })
   const owner = makeOwner('epoch-1')

@@ -717,6 +717,101 @@ describe('知识库', () => {
       expect(document.querySelector('textarea')?.value).toBe(`${copies.station}站台已封闭。`)
       expect(reads()).toEqual(['station'])
     })
+
+    it.each(['mounted', 'inactive'] as const)('failed deletion preserves the %s knowledge draft across the explicit fresh lease', async mode => {
+      const plain = invoke.getMockImplementation()!
+      const restoredSession = { ...session, leaseId: `recovered-${mode}` }
+      invoke.mockImplementation((channel, ...args) => channel === 'project:delete'
+        ? Promise.resolve({ success: false, directoryDeleted: false, databaseRestored: true,
+            restoredSession, error: 'fictional directory lock' })
+        : plain(channel, ...args))
+      useWorkflowStore.setState({ activeRuns: [] })
+      await renderPage()
+      await click(/车站档案/)
+      const content = `${copies.station}站台已封闭。`
+      await type(await editorArea(), content)
+      const before = useEditorStore.getState().tabs.find(tab => tab.id === KB_TAB)!
+      if (mode === 'inactive') await act(async () => root!.render(null))
+
+      await act(async () => { await useProjectStore.getState().deleteProject(session.projectPath) })
+      await click('确定')
+      expect(useProjectStore.getState().currentProject?.sessionLease).toBe(restoredSession.leaseId)
+      expect(useProjectStore.getState().loading).toBe(false)
+      const retained = useEditorStore.getState().tabs.find(tab => tab.id === KB_TAB)!
+      expect(retained.knowledgeDraft).toBe(before.knowledgeDraft)
+      expect(retained.dirty).toBe(true)
+      if (mode === 'inactive') await renderPage()
+      await vi.waitFor(() => expect(document.querySelector('textarea')?.value).toBe(content))
+      expect(document.querySelector('[aria-current="true"]')?.textContent).toContain('车站档案')
+      expect(reads()).toEqual(['station'])
+    })
+
+    it.each(['save', 'reindex', 'save-refresh', 'reindex-refresh'] as const)(
+      'late %s replies cannot mutate the recovered slot or clear its fresh search', async operation => {
+        let finishOld: (value: unknown) => void = () => {}
+        let holdRefresh = false
+        const isSave = operation.startsWith('save')
+        const isRefresh = operation.endsWith('refresh')
+        const restoredSession = { ...session, leaseId: `late-${operation}-recovered` }
+        const plain = invoke.getMockImplementation()!
+        invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+          if (channel === 'project:delete') return { success: false, directoryDeleted: false, databaseRestored: true,
+            restoredSession, error: 'fictional directory lock' }
+          if (channel === (isSave ? 'kb:save-document-copy' : 'kb:reindex-document-copy')) {
+            if (!isRefresh) return new Promise(resolve => { finishOld = resolve })
+            holdRefresh = true
+            return { success: true, docId: 'station', chunkCount: 3 }
+          }
+          if (channel === 'kb:read-document-copy' && args[0] === 'station' && holdRefresh) {
+            return new Promise(resolve => { finishOld = resolve })
+          }
+          const result = await plain(channel, ...args)
+          return channel === 'kb:read-document-copy' ? { ...(result as object), indexStatus: 'stale' } : result
+        })
+        useWorkflowStore.setState({ activeRuns: [] })
+        await renderPage()
+        await click(/车站档案/)
+        await vi.waitFor(() => expect(document.querySelector('textarea')?.value).toBe(copies.station))
+        if (isSave) await type(await editorArea(), `${copies.station}saved before recovery`)
+        await click(isSave ? '保存副本' : '更新检索')
+        await vi.waitFor(() => expect(invoke.mock.calls.filter(([channel]) => channel === (isRefresh
+          ? 'kb:read-document-copy' : isSave ? 'kb:save-document-copy' : 'kb:reindex-document-copy'))).toHaveLength(isRefresh ? 2 : 1))
+        if (!isRefresh) expect(useEditorStore.getState().tabs.find(tab => tab.id === KB_TAB)?.knowledgeDraft?.busy).toBe(true)
+
+        await act(async () => { await useProjectStore.getState().deleteProject(session.projectPath) })
+        await click('确定')
+        expect(useEditorStore.getState().tabs.find(tab => tab.id === KB_TAB)?.knowledgeDraft?.busy).toBeFalsy()
+        if (isRefresh) {
+          await click(/林舟人物小传/)
+          await vi.waitFor(() => expect(document.querySelector('textarea')?.value).toBe(copies.people))
+        }
+        await type(await editorArea(), 'fresh lease author buffer')
+        const slot = useEditorStore.getState().tabs.find(tab => tab.id === KB_TAB)!.knowledgeDraft
+        const query = document.querySelector<HTMLInputElement>('form[role="search"] input')!
+        await type(query, '三号站台')
+        await click('查找')
+        await vi.waitFor(() => expect(document.body.textContent).toContain('找到 2 条'))
+
+        await act(async () => {
+          finishOld(isRefresh ? { available: true, content: 'obsolete old refresh', contentHash: 'obsolete-hash', indexStatus: 'current' }
+            : { success: true, docId: 'station', chunkCount: 3 })
+          await new Promise(resolve => setTimeout(resolve, 20))
+        })
+        expect(useEditorStore.getState().tabs.find(tab => tab.id === KB_TAB)!.knowledgeDraft).toBe(slot)
+        expect(document.querySelector('textarea')?.value).toBe('fresh lease author buffer')
+        expect(document.body.textContent).toContain('找到 2 条')
+        expect(useEditorStore.getState().tabs.find(tab => tab.id === KB_TAB)?.dirty).toBe(true)
+      },
+    )
+
+    it('a normal same-root reopen still clears the mounted old knowledge draft', async () => {
+      await renderPage()
+      await click(/车站档案/)
+      await type(await editorArea(), `${copies.station}old lease draft`)
+      await act(async () => useProjectStore.setState({ currentProject: project({ sessionLease: 'ordinary-reopen' }) }))
+      await vi.waitFor(() => expect(useEditorStore.getState().tabs.find(tab => tab.id === KB_TAB)?.knowledgeDraft?.docId).toBeNull())
+      expect(document.querySelector('textarea')).toBeNull()
+    })
   })
 
   it('先点的资料读得慢，后点的资料不会被它盖掉', async () => {

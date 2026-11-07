@@ -97,8 +97,11 @@ async function canWriteIncrementalVectors(projectPath: string): Promise<boolean>
 
 /** One initial retrieval; later generation guards re-read identities without another embedding request. */
 export async function captureWritingKnowledgeSnapshot(query: string, projectPath: string,
-  configuration: { protocol: 'openai' | 'gemini'; model: EmbeddingModel } | null, excludedDocumentIds: readonly string[] = []) {
+  configuration: { protocol: 'openai' | 'gemini'; model: EmbeddingModel } | null, excludedDocumentIds: readonly string[] = [],
+  assertCurrent: () => void = () => {}) {
+  assertCurrent()
   await ensureMigration(projectPath)
+  assertCurrent()
   let queryVector: number[] | undefined
   if (configuration && hasRequiredApiKey(configuration.model) && query.trim()) {
     try {
@@ -106,16 +109,24 @@ export async function captureWritingKnowledgeSnapshot(query: string, projectPath
       if (vector?.length) queryVector = vector
     } catch { /* The established no-embedding path still uses canonical full-text search. */ }
   }
+  assertCurrent()
   const { captureGenerationKnowledge } = await import('./services/generation-knowledge-source')
   const { withKnowledgeSourceGate } = await import('./services/knowledge-source-gate')
+  assertCurrent()
   const projectStorageRoot = getProjectDataRoot(projectPath)
   return withKnowledgeSourceGate(projectStorageRoot, async () => {
+    assertCurrent()
     try {
-      return await captureGenerationKnowledge({ projectStorageRoot, query, topK: 5, queryVector, excludedDocumentIds,
+      const result = await captureGenerationKnowledge({ projectStorageRoot, query, topK: 5, queryVector, excludedDocumentIds,
         ...(queryVector && configuration ? { embeddingSpace: embeddingSpaceFor(configuration.protocol, configuration.model) } : {}) })
+      assertCurrent()
+      return result
     } catch (error) {
       if (!(error instanceof Error) || error.message !== 'GENERATION_KNOWLEDGE_SPACE_NOT_MATCHED') throw error
-      return captureGenerationKnowledge({ projectStorageRoot, query, topK: 5, excludedDocumentIds })
+      assertCurrent()
+      const result = await captureGenerationKnowledge({ projectStorageRoot, query, topK: 5, excludedDocumentIds })
+      assertCurrent()
+      return result
     }
   })
 }

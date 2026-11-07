@@ -381,6 +381,7 @@ export interface ProjectChannels {
       finalizationRepair?: FinalizationRepairOnOpen
     }
   }
+  'project-runtime:v1:open-view': ProjectChannels['project:open']
   'project:save': {
     args: [projectId: string, data: Partial<ProjectData>, expectedProjectPath: string]
     return: { success: boolean; error?: string }
@@ -442,6 +443,8 @@ export interface ProjectChannels {
       success: boolean
       directoryDeleted: boolean
       databaseRestored: boolean
+      /** Failed deletion reopened the same project with a fresh view lease. */
+      restoredSession?: ProjectSessionContext
       error?: string
       warning?: string
     }

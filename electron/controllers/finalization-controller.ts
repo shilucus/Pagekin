@@ -3,6 +3,7 @@ import { ipcMain } from 'electron'
 import { getCurrentProjectPath } from '../database'
 import { projectAccess } from '../services/project-access'
 import { FinalizationService } from '../services/finalization-service'
+import { withLegacyProjectOperation } from '../services/project-runtime-compatibility'
 import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import type { FinalizationSnapshot } from '../../src/services/finalization-snapshot'
@@ -53,14 +54,14 @@ export function registerFinalizationController(): void {
         throw new Error('FINALIZATION_SNAPSHOT_SESSION_MISMATCH')
       }
       const active = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
-      return await finalizationService.finalize({
+      return await withLegacyProjectOperation('finalization:commit', () => finalizationService.finalize({
         projectRoot: active.rootPath,
         draftId: candidate.draftId,
         chapterNumber: candidate.chapterNumber,
         chapterTitle: candidate.chapterTitle,
         content: candidate.content,
         contentRevision: candidate.contentRevision,
-      })
+      }))
     } catch (error) {
       return { success: false, committed: false, error: String(error) }
     }
@@ -79,10 +80,10 @@ export function registerFinalizationController(): void {
         throw new Error('PROJECT_SESSION_REQUIRED')
       }
       const active = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
-      return await finalizationService.retry({
+      return await withLegacyProjectOperation('finalization:retry', () => finalizationService.retry({
         projectRoot: active.rootPath,
         finalizationId,
-      })
+      }))
     } catch (error) {
       return { success: false, committed: false, error: String(error) }
     }

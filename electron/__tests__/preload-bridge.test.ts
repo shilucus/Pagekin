@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AiNovelAPI } from '../../src/shared/desktop-api'
+import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../src/shared/project-runtime-contract'
 
 const electron = vi.hoisted(() => ({
   contextBridge: { exposeInMainWorld: vi.fn() },
@@ -36,5 +37,19 @@ describe('桌面预加载接口', () => {
     expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith('planning-feedback:v1:capture', request, session)
     expect(request).toEqual({ target: 'premise' })
     expect(Object.keys(session)).toEqual(['projectId', 'leaseId', 'projectPath'])
+  })
+  it('forwards only the literal retained-view entry without manufacturing a project lease', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const target = { grantId: 'fictional-open-grant' }
+    const result = { success: true }
+    electron.ipcRenderer.invoke.mockResolvedValueOnce(result)
+    await expect(bridge.invoke(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-request', null)).resolves.toBe(result)
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-request', null)
+    const callsBefore = electron.ipcRenderer.invoke.mock.calls.length
+    await expect(bridge.invoke('project-runtime:v2:open-view', target, 'fictional-request', null))
+      .rejects.toThrow('PROJECT_RUNTIME_CHANNEL_NOT_ALLOWED')
+    await expect(bridge.invoke('project-runtime:v1:dispatch', target))
+      .rejects.toThrow('PROJECT_RUNTIME_CHANNEL_NOT_ALLOWED')
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(callsBefore)
   })
 })

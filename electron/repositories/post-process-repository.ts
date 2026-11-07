@@ -88,8 +88,7 @@ export class PostProcessRepository {
     }
 
     /** 获取最新的跑批实例（按 sourceType + sourceId 查询） */
-    static getLatestRun(sourceType: string, sourceId: string): PostProcessRunData | null {
-        const db = getProjectDb()
+    static getLatestRun(sourceType: string, sourceId: string, db = getProjectDb()): PostProcessRunData | null {
         if (!db) return null
         if (sourceType === 'chapter_finalize' && /^\d+$/.test(sourceId)
           && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='finalization_outbox_all'").get()) {
@@ -180,8 +179,7 @@ export class PostProcessRepository {
         })()
     }
 
-    static addUnfinishedSteps(runId: string, steps: ReadonlyArray<{ key: string; label: string; critical: boolean }>, errorMsg: string): void {
-        const db = getProjectDb()
+    static addUnfinishedSteps(runId: string, steps: ReadonlyArray<{ key: string; label: string; critical: boolean }>, errorMsg: string, db = getProjectDb()): void {
         if (!db) throw new Error('PROJECT_NOT_OPEN')
         const insert = db.prepare(`
       INSERT INTO post_process_steps (run_id, step_key, label, critical, error_msg)
@@ -189,13 +187,12 @@ export class PostProcessRepository {
     `)
         db.transaction(() => {
             for (const step of steps) insert.run(runId, step.key, step.label, step.critical ? 1 : 0, errorMsg, runId, step.key)
-            PostProcessRepository._refreshCriticalStatus(runId)
+            PostProcessRepository._refreshCriticalStatus(runId, db)
         })()
     }
 
     /** 重新检查并更新 all_critical_passed 状态 */
-    private static _refreshCriticalStatus(runId: string): void {
-        const db = getProjectDb()
+    private static _refreshCriticalStatus(runId: string, db = getProjectDb()): void {
         if (!db) return
 
         // 检查是否存在未完成的关键步骤

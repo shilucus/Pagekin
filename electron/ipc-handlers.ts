@@ -1,5 +1,4 @@
 import { assertGlobalDataReady } from './services/app-data-locator'
-import { getCurrentProjectPath, getProjectDb } from './database'
 
 import { registerConfigController } from './controllers/config-controller'
 import { registerProjectController } from './controllers/project-controller'
@@ -21,8 +20,12 @@ import { registerAppDataController } from './controllers/app-data-controller'
 import { registerCharacterAvatarController } from './controllers/character-avatar-controller'
 import { CharacterAssetService } from './services/character-asset-service'
 import { projectAccess } from './services/project-access'
-import { getProjectDataRoot } from './services/project-data-locator'
 import { CloudProjectBindingStore } from './services/cloud-project-binding-store'
+import { projectRuntimeHost } from './services/project-runtime'
+import { isKnowledgeSourceBusy } from './services/knowledge-source-gate'
+import { closeConnection } from './vector-store'
+
+let runtimeKnowledgeLifecycleInstalled = false
 
 /**
  * 注册所有 IPC 通道 — 在主进程启动时调用
@@ -30,6 +33,11 @@ import { CloudProjectBindingStore } from './services/cloud-project-binding-store
  */
 export function registerIPCHandlers() {
   assertGlobalDataReady()
+  if (!runtimeKnowledgeLifecycleInstalled) {
+    projectRuntimeHost.registerBusyPredicate(runtime => isKnowledgeSourceBusy(runtime.projectStorageRoot))
+    projectRuntimeHost.onBeforeRelease(runtime => closeConnection(runtime.canonicalRoot))
+    runtimeKnowledgeLifecycleInstalled = true
+  }
 
   // 挂载控制器路由
   registerWindowController()
@@ -49,14 +57,12 @@ export function registerIPCHandlers() {
   registerDatabaseController()
   registerCharacterAvatarController({
     resolveService(_event, context) {
-      let active
+      let runtime
       try {
-        active = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
+        runtime = projectAccess.assertViewContext(context)
       } catch { return null }
-      const database = getProjectDb()
-      if (!database) return null
       const service = new CharacterAssetService({ projectId: context.projectId, sessionLease: context.leaseId,
-        storageRoot: getProjectDataRoot(active.rootPath), database })
+        storageRoot: runtime.projectStorageRoot, database: runtime.database })
       service.recordReclaimableOrphans()
       return service
     },

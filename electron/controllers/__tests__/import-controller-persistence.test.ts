@@ -15,9 +15,10 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn((channel: string, handler: IpcHandler) => mocks.handlers.set(channel, handler)) },
 }))
 
-import { closeProjectDatabase, getProjectDb } from '../../database'
+import { closeProjectDatabase, createProjectDatabase, getProjectDb } from '../../database'
 import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { projectAccess } from '../../services/project-access'
+import { projectRuntimeHost } from '../../services/project-runtime'
 import { ExternalFileGrantService } from '../../services/external-file-grant-service'
 import { ImportInspectionStore } from '../../services/import-inspection-store'
 import { ImportRunRepository } from '../../repositories/import-run-repository'
@@ -74,7 +75,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  closeProjectDatabase()
+  for (const runtime of projectRuntimeHost.getOpenRuntimes()) projectRuntimeHost.releaseIdle(runtime)
   projectAccess.invalidateCurrentSession()
   fs.rmSync(parent, { recursive: true, force: true })
 })
@@ -135,7 +136,26 @@ describe('current-project import parsing persistence', () => {
     )).resolves.toEqual({ success: false, error: expected })
   })
 
-  it('does not create an import run when the project changes while the file picker is open', { timeout: 20_000 }, async () => {
+  it('rejects a two-runtime import before the picker or parsing writes', async () => {
+    const runtimeA = projectRuntimeHost.getActiveView()!
+    const other = projectAccess.createProject(parent, 'other')
+    createProjectDatabase(other.rootPath, secret)
+    const runtimeB = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(other))
+    const lease = projectAccess.beginViewSession(runtimeA)
+    session = { projectId: lease.projectId, leaseId: lease.leaseId, projectPath: lease.rootPath }
+    registerImportController(nodeTestSecureFileSystem,
+      filePath => ({ canonicalLocation: filePath }), {}, new ExternalFileGrantService(), new ImportInspectionStore(), secret)
+    await expect(mocks.handlers.get('dialog:select-novel-files')!(
+      { sender: { id: 55, once: vi.fn() } },
+      { runId: 'multi-runtime', purpose: 'reference', locale: 'en-US', expectedProjectPath: projectRoot }, session,
+    )).resolves.toMatchObject({ success: false })
+    expect(mocks.showOpenDialog).not.toHaveBeenCalled()
+    expect(importRows()).toEqual({ runs: [], sources: [] })
+    expect(runtimeB.database.prepare('SELECT COUNT(*) FROM import_runs').pluck().get()).toBe(0)
+    expect(projectRuntimeHost.getActiveView()).toBe(runtimeA)
+  })
+
+  it('blocks switching during the picker and creates no run after explicit lease revocation', { timeout: 20_000 }, async () => {
     const source = path.join(parent, 'picker.txt')
     fs.writeFileSync(source, 'Chapter 1 Picker\nalpha', 'utf8')
     const picker = deferred<{ canceled: boolean; filePaths: string[] }>()
@@ -154,16 +174,19 @@ describe('current-project import parsing persistence', () => {
       session,
     )
 
-    openNewProject('other-picker-project')
-    picker.resolve({ canceled: false, filePaths: [source] })
+    try {
+      expect(() => openNewProject('other-picker-project')).toThrow('PROJECT_RUNTIME_LEGACY_OPERATION_BUSY')
+      projectAccess.invalidateCurrentSession()
+    } finally { picker.resolve({ canceled: false, filePaths: [source] }); await pending }
 
     await expect(pending).resolves.toMatchObject({ success: false })
+    openNewProject('other-picker-project')
     expect(importRows()).toEqual({ runs: [], sources: [] })
     reopenProject(projectRoot)
     expect(importRows()).toEqual({ runs: [], sources: [] })
   })
 
-  it('does not write a completed or failed source into another project when a single read returns after a switch', { timeout: 20_000 }, async () => {
+  it('blocks switching during a read and rejects its late completion after lease revocation', { timeout: 20_000 }, async () => {
     const source = path.join(parent, 'single.txt')
     fs.writeFileSync(source, 'x', 'utf8')
     mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [source] })
@@ -184,10 +207,13 @@ describe('current-project import parsing persistence', () => {
     )
     await vi.waitFor(() => expect(fileSystem.readText).toHaveBeenCalledOnce())
 
-    openNewProject('other-single-project')
-    read.resolve('Chapter 1 Single\nalpha')
+    try {
+      expect(() => openNewProject('other-single-project')).toThrow('PROJECT_RUNTIME_LEGACY_OPERATION_BUSY')
+      projectAccess.invalidateCurrentSession()
+    } finally { read.resolve('Chapter 1 Single\nalpha'); await pending }
 
     await expect(pending).resolves.toMatchObject({ success: false })
+    openNewProject('other-single-project')
     expect(importRows()).toEqual({ runs: [], sources: [] })
     reopenProject(projectRoot)
     expect(importRows()).toEqual({
@@ -196,7 +222,7 @@ describe('current-project import parsing persistence', () => {
     })
   })
 
-  it('keeps multi-file progress in the original project when a later read returns after a switch', { timeout: 20_000 }, async () => {
+  it('holds the multi-file interlock and preserves earlier progress after lease revocation', { timeout: 20_000 }, async () => {
     const sourceA = path.join(parent, 'multi-a.txt')
     const sourceB = path.join(parent, 'multi-b.txt')
     fs.writeFileSync(sourceA, 'a', 'utf8')
@@ -225,10 +251,13 @@ describe('current-project import parsing persistence', () => {
     )
     await vi.waitFor(() => expect(fileSystem.readText).toHaveBeenCalledTimes(2))
 
-    openNewProject('other-multi-project')
-    secondRead.resolve('Chapter 2 B\nbeta')
+    try {
+      expect(() => openNewProject('other-multi-project')).toThrow('PROJECT_RUNTIME_LEGACY_OPERATION_BUSY')
+      projectAccess.invalidateCurrentSession()
+    } finally { secondRead.resolve('Chapter 2 B\nbeta'); await pending }
 
     await expect(pending).resolves.toMatchObject({ success: false })
+    openNewProject('other-multi-project')
     expect(importRows()).toEqual({ runs: [], sources: [] })
     reopenProject(projectRoot)
     expect(importRows()).toEqual({

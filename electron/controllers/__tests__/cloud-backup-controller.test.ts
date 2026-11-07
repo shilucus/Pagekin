@@ -13,6 +13,10 @@ import {
   type CloudBackupControllerDependencies,
 } from '../cloud-backup-controller'
 import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
+import { createProjectDatabase } from '../../database'
+import { projectAccess } from '../../services/project-access'
+import { projectRuntimeHost } from '../../services/project-runtime'
+import { assertRestoreTargetOutsideRuntimes } from '../../services/project-runtime-compatibility'
 
 vi.mock('../../utils/remove-directory', async importOriginal => {
   const actual = await importOriginal<typeof import('../../utils/remove-directory')>()
@@ -81,6 +85,9 @@ function fixture(overrides: Partial<CloudBackupControllerDependencies> = {}) {
   const ipc = { handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)) }
   const deps: CloudBackupControllerDependencies = {
     ipc,
+    acquireBackupOperation: vi.fn(() => () => undefined),
+    acquireRestoreOperation: vi.fn(() => () => undefined),
+    assertRestoreTargetAvailable: vi.fn(),
     credentialStore: {
       list: vi.fn(() => [{ accountId: ACCOUNT, endpoint: 'https://dav.example.test/root/', username: 'writer', persistence: 'os-backed' as const }]),
       save: vi.fn(input => ({ metadata: { accountId: input.accountId ?? ACCOUNT, endpoint: input.endpoint, username: input.username, persistence: 'os-backed' as const } })),
@@ -165,10 +172,82 @@ function fixture(overrides: Partial<CloudBackupControllerDependencies> = {}) {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  for (const runtime of projectRuntimeHost.getOpenRuntimes()) projectRuntimeHost.releaseIdle(runtime)
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
 describe('registerCloudBackupController', () => {
+  function runtimeProject(parent: string, name: string) {
+    const project = projectAccess.createProject(parent, name)
+    createProjectDatabase(project.rootPath, Buffer.alloc(32, 1))
+    return project
+  }
+
+  it('rejects a multi-runtime backup before staging, credentials, archive or network effects', async () => {
+    const f = fixture({ acquireBackupOperation: () => projectRuntimeHost.acquireLegacyOperation('cloud-backup:backup') })
+    const a = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(runtimeProject(f.root, 'fictional-a')))
+    projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(runtimeProject(f.root, 'fictional-b')))
+    projectRuntimeHost.activateView(a)
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    await expect(f.invoke('cloud-backup:backup', {
+      operationId: OPERATION, projectSession: session, disclosureConfirmed: true,
+    })).resolves.toMatchObject({ success: false, errorCode: 'CLOUD_BACKUP_FAILED' })
+    expect(f.deps.getGlobalDataRoot).not.toHaveBeenCalled()
+    expect(f.deps.credentialStore.resolveSecret).not.toHaveBeenCalled()
+    expect(f.deps.exportPortableProject).not.toHaveBeenCalled()
+    expect(f.deps.webDav.appendGeneration).not.toHaveBeenCalled()
+    expect(fs.existsSync(path.join(f.root, 'cloud-backup-staging'))).toBe(false)
+    expect(JSON.stringify(warning.mock.calls)).not.toContain(f.root)
+  })
+
+  it('holds a zero-active restore lifecycle interlock through cancellation and cleanup', async () => {
+    let finishDownload!: () => void
+    const gate = new Promise<void>(resolve => { finishDownload = resolve })
+    const f = fixture({ acquireRestoreOperation: () => projectRuntimeHost.acquireRestoreOperation(),
+      assertRestoreTargetAvailable: assertRestoreTargetOutsideRuntimes })
+    const target = f.restoreTarget('restored-without-view')
+    const later = runtimeProject(f.root, 'fictional-later')
+    vi.mocked(f.deps.webDav.downloadGeneration).mockImplementation(async input => {
+      await gate
+      if (input.signal?.aborted) throw new WebDavBackupError('WEBDAV_CANCELLED')
+      return { generationId: GENERATION, targetArchivePath: input.targetArchivePath, archiveSha256: 'a'.repeat(64), archiveByteSize: 7 }
+    })
+    const pending = f.invoke('cloud-backup:restore-copy', { operationId: OPERATION,
+      localEndpointAccountId: ACCOUNT, cloudBookId: BOOK, generationId: GENERATION, targetGrantId: target.grantId })
+    try {
+      await vi.waitFor(() => expect(f.deps.webDav.downloadGeneration).toHaveBeenCalledOnce())
+      expect(projectRuntimeHost.getActiveView()).toBeNull()
+      expect(() => projectRuntimeHost.prepareOpen(later)).toThrow('PROJECT_RUNTIME_RESTORE_BUSY')
+      expect(() => projectRuntimeHost.activateView(null)).toThrow('PROJECT_RUNTIME_RESTORE_BUSY')
+      await expect(f.invoke('cloud-backup:cancel', OPERATION)).resolves.toMatchObject({ success: true, cancelled: true })
+    } finally { finishDownload() }
+    await expect(pending).resolves.toMatchObject({ success: false, errorCode: 'CLOUD_BACKUP_CANCELLED' })
+    expect(f.deps.restorePortableProject).not.toHaveBeenCalled()
+    expect(fs.readdirSync(path.join(f.root, 'cloud-backup-staging'))).toEqual([])
+    const ticket = projectRuntimeHost.prepareOpen(later)
+    projectRuntimeHost.abortOpen(ticket)
+  })
+
+  it('rejects a restore target inside a retained runtime before credentials, staging or download', async () => {
+    const f = fixture({ acquireRestoreOperation: () => projectRuntimeHost.acquireRestoreOperation(),
+      assertRestoreTargetAvailable: assertRestoreTargetOutsideRuntimes })
+    const project = runtimeProject(f.root, 'fictional-source')
+    const runtime = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(project))
+    projectRuntimeHost.activateView(runtime)
+    const grant = f.grants.issueNewChild({ webContentsId: SENDER_ID,
+      filePath: path.join(project.rootPath, 'nested-copy'), operations: ['create'], ttlMs: 60_000, maxUses: 1 })
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    await expect(f.invoke('cloud-backup:restore-copy', { operationId: OPERATION,
+      localEndpointAccountId: ACCOUNT, cloudBookId: BOOK, generationId: GENERATION, targetGrantId: grant.grantId,
+    })).resolves.toMatchObject({ success: false, errorCode: 'CLOUD_BACKUP_FAILED' })
+    expect(f.deps.credentialStore.resolveSecret).not.toHaveBeenCalled()
+    expect(f.deps.getGlobalDataRoot).not.toHaveBeenCalled()
+    expect(f.deps.webDav.downloadGeneration).not.toHaveBeenCalled()
+    expect(f.deps.restorePortableProject).not.toHaveBeenCalled()
+    expect(runtime.database.open).toBe(true)
+    expect(fs.existsSync(path.join(project.rootPath, 'nested-copy'))).toBe(false)
+  })
+
   it('checks a connection before saving and returns only renderer-safe credential metadata', async () => {
     const f = fixture()
     vi.mocked(f.deps.credentialStore.save).mockImplementation(input => {

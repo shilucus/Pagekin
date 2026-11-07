@@ -1,4 +1,4 @@
-import { app, ipcMain, dialog } from 'electron'
+import { app, ipcMain, dialog, type IpcMainInvokeEvent } from 'electron'
 import { showOpenDialogInLastDirectory } from '../utils/remembered-dialog'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -13,23 +13,23 @@ import {
 } from '../../src/shared/ipc-channels'
 import { DIR_PROMPTS } from '../../src/shared/project-paths'
 import { sameProjectPathKey } from '../../src/shared/project-session-context'
+import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../src/shared/project-runtime-contract'
 import {
   resolveWritingLanguage,
 } from '../../src/shared/writing-language'
 import {
-  closeProjectDatabase,
   createProjectDatabase,
   getCurrentProjectPath,
   getProjectDb,
-  initProjectDatabase,
 } from '../database'
-import { closeConnection as closeVectorConnection } from '../vector-store'
+import { projectRuntimeHost, ProjectRuntimePreviousCloseError, type ProjectRuntime, type PreparedRuntimeOpen } from '../services/project-runtime'
+import { assertRestoreTargetOutsideRuntimes, withProjectRestoreOperation } from '../services/project-runtime-compatibility'
 import { externalFileGrants } from '../services/external-file-grant-service'
 import {
   ProjectCoreRepository,
   type ProjectCoreData,
 } from '../repositories/project-core-repository'
-import { projectAccess, ProjectSessionStaleError, type ProjectSessionLease } from '../services/project-access'
+import { projectAccess, ProjectSessionStaleError } from '../services/project-access'
 import { assertExpectedProjectPath, assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { sanitizeProjectName } from './project-path'
 import { projectStoragePreflightFailure } from '../services/project-storage-preflight'
@@ -41,12 +41,12 @@ import { FinalizationRepository } from '../repositories/finalization-repository'
 import type { FinalizationRepairOnOpen } from '../../src/shared/finalization-repair'
 import { REPLACED_FINAL_CLEANUP_STEP_LABELS } from '../../src/shared/finalization-step-error'
 
-function repairDuplicateFinalizationsOnOpen(): FinalizationRepairOnOpen {
+function repairDuplicateFinalizationsOnOpen(database: ProjectRuntime['database']): FinalizationRepairOnOpen {
   try {
     return { status: 'checked', ...FinalizationRepository.repairDuplicateFinalizations({
       remove_replaced_knowledge: text(...REPLACED_FINAL_CLEANUP_STEP_LABELS.remove_replaced_knowledge),
       remove_replaced_manuscripts: text(...REPLACED_FINAL_CLEANUP_STEP_LABELS.remove_replaced_manuscripts),
-    }) }
+    }, database) }
   } catch (error) {
     console.error('[Project] 遗留重复定稿修复失败:', error)
     return { status: 'failed', error: error instanceof Error ? error.message : String(error) }
@@ -125,19 +125,8 @@ interface ProjectDatabaseState {
   activeProjectPath: string | null
 }
 
-/**
- * A rollback boundary may only use authority observed and validated by the
- * main process before this create/open operation changes the database. The
- * renderer's remembered path is response metadata, never restoration input.
- */
-interface TrustedProjectRollbackSnapshot {
-  session: ProjectSessionLease
-  rootPath: string
-  databaseRoot: string
-}
-
 type ProjectRollbackBoundary =
-  | { kind: 'trusted'; snapshot: TrustedProjectRollbackSnapshot }
+  | { kind: 'trusted' }
   | { kind: 'neutral' }
   | { kind: 'untrusted' }
 
@@ -174,7 +163,7 @@ function assertRequiredProjectSession(
   data: Partial<ProjectData>,
   currentProjectPath: string | null,
   context: ProjectSessionContext | undefined,
-): void {
+): ProjectRuntime {
   if (!context) {
     throw new Error('PROJECT_SESSION_REQUIRED')
   }
@@ -186,13 +175,14 @@ function assertRequiredProjectSession(
   ) {
     throw new Error('PROJECT_SESSION_IDENTITY_MISMATCH')
   }
-  const active = projectAccess.assertCurrentProjectContext(context, currentProjectPath)
+  const runtime = projectAccess.assertViewContext(context)
   if (
-    !sameProjectPath(active.rootPath, currentProjectPath)
-    || (data.path !== undefined && !sameProjectPath(active.rootPath, data.path))
+    !sameProjectPath(runtime.canonicalRoot, currentProjectPath)
+    || (data.path !== undefined && !sameProjectPath(runtime.canonicalRoot, data.path))
   ) {
     throw new ProjectSessionStaleError('PROJECT_SESSION_ROOT_MISMATCH')
   }
+  return runtime
 }
 
 function databaseStateFor(expectedProjectPath: string | null): ProjectDatabaseState {
@@ -207,15 +197,8 @@ function databaseStateFor(expectedProjectPath: string | null): ProjectDatabaseSt
 }
 
 function failedDatabaseState(): ProjectDatabaseState {
-  // 回滚快照缺失、过期或恢复失败时，不能留下指向半切换项目的数据库或租约。
-  // close 先于 invalidate，避免后续 IPC 将旧租约误认为仍可写。
-  try {
-    closeProjectDatabase()
-  } catch (closeError) {
-    console.error('[Project] 关闭不可信项目数据库失败:', closeError)
-  } finally {
-    projectAccess.invalidateCurrentSession()
-  }
+  // Preparation never replaces the view. A failed target must not close or
+  // invalidate a different runtime that still owns the current view.
   return {
     databaseRestored: false,
     dbReady: false,
@@ -254,78 +237,37 @@ function captureProjectRollbackBoundary(): ProjectRollbackBoundary {
 
   try {
     const activeSession = projectAccess.assertCurrentSession(capturedSession)
+    const runtime = projectAccess.assertViewContext({ projectId: activeSession.projectId,
+      leaseId: activeSession.leaseId, projectPath: activeSession.rootPath })
     if (
       !sameProjectPath(activeSession.rootPath, capturedSession.rootPath)
       || !sameProjectPath(activeSession.rootPath, databaseRoot)
+      || runtime.database !== database
     ) {
       return { kind: 'untrusted' }
     }
 
-    return {
-      kind: 'trusted',
-      snapshot: Object.freeze({
-        session: Object.freeze({ ...activeSession }),
-        rootPath: activeSession.rootPath,
-        databaseRoot,
-      }),
-    }
+    return { kind: 'trusted' }
   } catch {
     return { kind: 'untrusted' }
   }
 }
 
-function restoreTrustedProjectDatabase(
-  snapshot: TrustedProjectRollbackSnapshot,
-): ProjectDatabaseState {
-  // A matching path is not enough: reopening it creates a fresh lease. Check
-  // the frozen lease before any filesystem/database side effect.
-  const activeSession = projectAccess.assertCurrentSession(snapshot.session)
-  if (
-    !sameProjectPath(activeSession.rootPath, snapshot.rootPath)
-    || !sameProjectPath(snapshot.databaseRoot, snapshot.rootPath)
-  ) {
-    throw new Error('PROJECT_ROLLBACK_SNAPSHOT_STALE')
-  }
-
-  initProjectDatabase(snapshot.rootPath)
-  const restoredSession = projectAccess.assertCurrentProjectContext({
-    projectId: snapshot.session.projectId,
-    leaseId: snapshot.session.leaseId,
-    projectPath: snapshot.rootPath,
-  }, getCurrentProjectPath())
-  if (!sameProjectPath(restoredSession.rootPath, snapshot.rootPath)) {
-    throw new Error('PROJECT_ROLLBACK_ROOT_MISMATCH')
-  }
-  return databaseStateFor(snapshot.rootPath)
+function databaseStateForRollbackBoundary(): ProjectDatabaseState {
+  const session = projectAccess.captureCurrentSession()
+  if (!session) return getCurrentProjectPath() === null && getProjectDb() === null
+    ? neutralDatabaseState() : failedDatabaseState()
+  try {
+    const runtime = projectAccess.assertViewContext({ projectId: session.projectId,
+      leaseId: session.leaseId, projectPath: session.rootPath })
+    return databaseStateFor(runtime.canonicalRoot)
+  } catch { return failedDatabaseState() }
 }
 
-function databaseStateForRollbackBoundary(
-  boundary: ProjectRollbackBoundary,
-): ProjectDatabaseState {
-  if (boundary.kind === 'trusted') return databaseStateFor(boundary.snapshot.rootPath)
-  if (boundary.kind === 'neutral') return neutralDatabaseState()
-  return failedDatabaseState()
-}
-
-function restoreProjectRollbackBoundary(
-  boundary: ProjectRollbackBoundary,
-): ProjectDatabaseState {
-  if (boundary.kind === 'trusted') {
-    return restoreTrustedProjectDatabase(boundary.snapshot)
-  }
-  if (boundary.kind === 'untrusted') {
-    throw new Error('PROJECT_ROLLBACK_UNTRUSTED')
-  }
-
-  // 首次启动没有旧项目可恢复。创建只负责落盘，因此显式关闭刚创建的
-  // 数据库并清空租约，保持 renderer 随后调用 project:open 前的中立态。
-  closeProjectDatabase()
-  projectAccess.invalidateCurrentSession()
-  const databaseState = neutralDatabaseState()
-  if (!databaseState.databaseRestored || !databaseState.dbReady) {
-    throw new Error('PROJECT_ROLLBACK_NEUTRAL_FAILED')
-  }
-  return databaseState
+function restoreProjectRollbackBoundary(): ProjectDatabaseState {
+  // Nothing was switched during preparation. A newer committed view wins;
+  // an older open request never restores a captured lease or view.
+  return databaseStateForRollbackBoundary()
 }
 
 function loadRecentProjects(): RecentProject[] {
@@ -377,6 +319,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     if (typeof sourceGrantId !== 'string' || typeof targetGrantId !== 'string') {
       return { state: 'blocked' as const, code: 'LEGACY_IMPORT_PATH_INVALID' }
     }
+    return withProjectRestoreOperation(async () => {
     const confirmation = await dialog.showMessageBox({
       type: 'warning',
       buttons: [text('取消', 'Cancel'), text('开始导入', 'Start import')],
@@ -404,6 +347,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         webContentsId: event.sender.id,
         operation: 'create',
       })
+      assertRestoreTargetOutsideRuntimes(targetRoot)
     } catch {
       return { state: 'blocked' as const, code: 'LEGACY_IMPORT_PATH_INVALID' }
     }
@@ -422,6 +366,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       }
     }
     return result
+    })
   })
 
   ipcMain.handle('project:get-runtime-context', async () => {
@@ -476,7 +421,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       const isLatestRequest = () => latestProjectOpenRequestToken === requestToken
       const rollbackBoundary = captureProjectRollbackBoundary()
       if (!isLatestRequest()) {
-        const databaseState = databaseStateForRollbackBoundary(rollbackBoundary)
+        const databaseState = databaseStateForRollbackBoundary()
         return {
           success: false,
           projectId: '',
@@ -486,7 +431,10 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         }
       }
 
+      let prepared: PreparedRuntimeOpen | undefined
       try {
+        if (rollbackBoundary.kind === 'untrusted') throw new Error('PROJECT_ROLLBACK_UNTRUSTED')
+        projectRuntimeHost.assertLifecycleAvailable()
         const projectName = sanitizeProjectName(config.name)
         const parentPath = externalFileGrants.resolveDirectoryPath({
           grantId: config.parentGrantId, webContentsId: event.sender.id, operation: 'project-create',
@@ -497,19 +445,23 @@ export function registerProjectController(options: ProjectControllerOptions = {}
 
         fs.mkdirSync(path.join(projectDir, DIR_PROMPTS), { recursive: true })
         createProjectDatabase(projectDir)
-        initProjectDatabase(projectDir)
-        ProjectCoreRepository.init(projectName, resolveWritingLanguage(config.writingLanguage))
+        prepared = projectRuntimeHost.prepareOpen(createdProject)
+        const database = prepared.runtime.database
+        ProjectCoreRepository.init(projectName, resolveWritingLanguage(config.writingLanguage), database)
         ProjectCoreRepository.update({
           genre: config.genre,
           targetAudience: config.targetAudience,
-        })
+        }, database)
+
+        projectRuntimeHost.abortOpen(prepared)
+        prepared = undefined
 
         const updatedAt = new Date().toISOString()
         if (!isLatestRequest()) {
           let databaseState: ProjectDatabaseState
           try {
             databaseState = requireReadyDatabase(
-              restoreProjectRollbackBoundary(rollbackBoundary),
+              restoreProjectRollbackBoundary(),
               'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE',
             )
           } catch (restoreError) {
@@ -538,10 +490,9 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           projectId,
           updatedAt,
         })
-        // 创建只提交磁盘数据；渲染进程随后通过同一串行队列执行打开。
-        // 在此之前恢复旧项目，避免主进程与仍显示旧项目的界面身份分裂。
+        // Creation only persists the new target; the current view never changes.
         const databaseState = requireReadyDatabase(
-          restoreProjectRollbackBoundary(rollbackBoundary),
+          restoreProjectRollbackBoundary(),
           'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE',
         )
         return {
@@ -553,10 +504,14 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         }
       } catch (error) {
         let rollbackError: unknown
+        if (prepared) {
+          try { projectRuntimeHost.abortOpen(prepared) } catch (abortError) { rollbackError = abortError }
+          prepared = undefined
+        }
         let databaseState: ProjectDatabaseState
         try {
           databaseState = requireReadyDatabase(
-            restoreProjectRollbackBoundary(rollbackBoundary),
+            restoreProjectRollbackBoundary(),
             'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE',
           )
         } catch (restoreError) {
@@ -575,9 +530,9 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     })
   })
 
-  // 打开现有项目
-  ipcMain.handle('project:open', async (
-    event,
+  // Both entrypoints share grant/probe validation and the latest-request queue.
+  const createOpenHandler = (retained: boolean) => async (
+    event: IpcMainInvokeEvent,
     target: ProjectOpenTarget,
     requestToken: string,
   ) => {
@@ -588,7 +543,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       const isLatestRequest = () => latestProjectOpenRequestToken === requestToken
       const rollbackBoundary = captureProjectRollbackBoundary()
       if (!isLatestRequest()) {
-        const databaseState = databaseStateForRollbackBoundary(rollbackBoundary)
+        const databaseState = databaseStateForRollbackBoundary()
         return {
           success: false,
           project: null,
@@ -599,7 +554,11 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       }
 
       let legacyImportSource: ProjectDirectoryGrant | undefined
+      let prepared: PreparedRuntimeOpen | undefined
+      const superseded = new Error('PROJECT_OPEN_SUPERSEDED')
       try {
+        if (rollbackBoundary.kind === 'untrusted') throw new Error('PROJECT_ROLLBACK_UNTRUSTED')
+        if (!retained) projectRuntimeHost.assertCompatibilityOpenAvailable()
         const recent = typeof target === 'string'
           ? loadRecentProjects().find(project => project.path === target) : undefined
         const smokePath = process.env.AI_NOVEL_SMOKE_OPEN_PROJECT?.trim()
@@ -628,106 +587,101 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         if (recent?.projectId && recent.projectId !== trustedProject.projectId) {
           throw new Error('PROJECT_OPEN_RECENT_IDENTITY_CHANGED')
         }
-        initProjectDatabase(resolvedProjectPath)
-        const openedDatabase = getProjectDb()
-        if (openedDatabase) adoptTransferredCharacterContinuityOnOpen({ database: openedDatabase,
-          projectRoot: resolvedProjectPath, projectId: trustedProject.projectId })
+        prepared = retained ? projectRuntimeHost.prepareRetainedOpen(trustedProject)
+          : projectRuntimeHost.prepareCompatibilityOpen(trustedProject)
+        const ticket = prepared
+        const opened = projectAccess.commitViewSession(ticket, runtime => {
+          const openedDatabase = runtime.database
+          if (!ticket.reused) adoptTransferredCharacterContinuityOnOpen({ database: openedDatabase,
+            projectRoot: resolvedProjectPath, projectId: trustedProject.projectId })
 
-        // 从数据库读取配置
-        const coreData = ProjectCoreRepository.get()
-        if (!coreData) {
-          // 如果是从空目录新建并打开，尝试初始化
-          const folderName = path.basename(resolvedProjectPath)
-          ProjectCoreRepository.init(folderName)
-        }
-
-        // 组装返回给前端的数据结构
-        const updatedCoreData = ProjectCoreRepository.get()!
-        const projectData: ProjectData = {
-          id: trustedProject.projectId,
-          name: updatedCoreData.projectName,
-          path: resolvedProjectPath,
-          novelConfig: {
-            writingLanguage: updatedCoreData.writingLanguage,
-            genre: updatedCoreData.genre,
-            subGenre: updatedCoreData.subGenre,
-            targetAudience: updatedCoreData.targetAudience,
-            totalChapters: updatedCoreData.totalChapters,
-            wordsPerChapter: updatedCoreData.wordsPerChapter,
-            creativeStrategy: updatedCoreData.creativeStrategy,
-            narrativeThreadDormantChapterThreshold: updatedCoreData.narrativeThreadDormantChapterThreshold,
-            plotStructure: updatedCoreData.plotStructure as 'three_act' | 'heros_journey' | 'save_the_cat' | 'kishotenketsu' | 'multi_thread' | 'freeform',
-            narrativePOV: updatedCoreData.narrativePov as 'third_limited' | 'first_person' | 'third_omniscient' | 'multi_pov',
-            coreOutline: updatedCoreData.coreOutline,
-            worldSetting: updatedCoreData.worldSetting,
-            goldenFinger: updatedCoreData.goldenFinger,
-            protagonistProfile: updatedCoreData.protagonistProfile,
-            globalGuidance: updatedCoreData.globalGuidance,
-            writingStyle: updatedCoreData.writingStyle,
-            referenceWorks: updatedCoreData.referenceWorks,
-          },
-          characterStates: updatedCoreData.characterStates,
-          createdAt: new Date().toISOString(), // 数据库中实际上有，但这里先提供时间值避免前端报错
-          updatedAt: new Date().toISOString(),
-        }
-
-        // 初始化与读取期间若同步触发了更新请求，旧事务必须恢复渲染进程仍展示的项目。
-        // 此处不再主动让出事件循环，避免其他项目级进程通信观察到尚未提交的数据库连接。
-        if (!isLatestRequest()) {
-          let databaseState: ProjectDatabaseState
-          try {
-            databaseState = requireReadyDatabase(
-              restoreProjectRollbackBoundary(rollbackBoundary),
-              'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE',
-            )
-          } catch (restoreError) {
-            databaseState = failedDatabaseState()
-            return {
-              success: false,
-              project: null,
-              requestToken,
-              stale: true,
-              ...databaseState,
-              error: String(restoreError),
-            }
+          // 从数据库读取配置
+          const coreData = ProjectCoreRepository.get(openedDatabase)
+          if (!coreData) {
+            // 如果是从空目录新建并打开，尝试初始化
+            const folderName = path.basename(resolvedProjectPath)
+            ProjectCoreRepository.init(folderName, undefined, openedDatabase)
           }
+
+          // 组装返回给前端的数据结构
+          const updatedCoreData = ProjectCoreRepository.get(openedDatabase)!
+          const projectData: ProjectData = {
+            id: trustedProject.projectId,
+            name: updatedCoreData.projectName,
+            path: resolvedProjectPath,
+            novelConfig: {
+              writingLanguage: updatedCoreData.writingLanguage,
+              genre: updatedCoreData.genre,
+              subGenre: updatedCoreData.subGenre,
+              targetAudience: updatedCoreData.targetAudience,
+              totalChapters: updatedCoreData.totalChapters,
+              wordsPerChapter: updatedCoreData.wordsPerChapter,
+              creativeStrategy: updatedCoreData.creativeStrategy,
+              narrativeThreadDormantChapterThreshold: updatedCoreData.narrativeThreadDormantChapterThreshold,
+              plotStructure: updatedCoreData.plotStructure as 'three_act' | 'heros_journey' | 'save_the_cat' | 'kishotenketsu' | 'multi_thread' | 'freeform',
+              narrativePOV: updatedCoreData.narrativePov as 'third_limited' | 'first_person' | 'third_omniscient' | 'multi_pov',
+              coreOutline: updatedCoreData.coreOutline,
+              worldSetting: updatedCoreData.worldSetting,
+              goldenFinger: updatedCoreData.goldenFinger,
+              protagonistProfile: updatedCoreData.protagonistProfile,
+              globalGuidance: updatedCoreData.globalGuidance,
+              writingStyle: updatedCoreData.writingStyle,
+              referenceWorks: updatedCoreData.referenceWorks,
+            },
+            characterStates: updatedCoreData.characterStates,
+            createdAt: new Date().toISOString(), // 数据库中实际上有，但这里先提供时间值避免前端报错
+            updatedAt: new Date().toISOString(),
+          }
+
+          // A superseded preparation owns only its ticket, never the view lease.
+          if (!isLatestRequest()) throw superseded
+
+          registerRecentProject({
+            name: projectData.name,
+            path: resolvedProjectPath,
+            updatedAt: projectData.updatedAt,
+            projectId: trustedProject.projectId,
+          })
+
+          const finalizationRepair = repairDuplicateFinalizationsOnOpen(openedDatabase)
+          revokeRecentPreviewCapabilities()
+          if (!isLatestRequest()) throw superseded
+          return { projectData, finalizationRepair }
+        })
+        prepared = undefined
+        opened.value.projectData.sessionLease = opened.session.leaseId
+        return {
+          success: true,
+          project: opened.value.projectData,
+          requestToken,
+          databaseRestored: true,
+          dbReady: true,
+          activeProjectPath: ticket.runtime.canonicalRoot,
+          finalizationRepair: opened.value.finalizationRepair,
+        }
+      } catch (error) {
+        if (error instanceof ProjectRuntimePreviousCloseError) {
+          // B and its fresh lease are already durable/published; this ticket cannot be aborted.
+          prepared = undefined
           return {
             success: false,
             project: null,
             requestToken,
-            stale: true,
-            ...databaseState,
+            databaseRestored: false,
+            dbReady: getProjectDb() !== null,
+            activeProjectPath: getCurrentProjectPath(),
+            error: String(error),
           }
         }
-
-        registerRecentProject({
-          name: projectData.name,
-          path: resolvedProjectPath,
-          updatedAt: projectData.updatedAt,
-          projectId: trustedProject.projectId,
-        })
-
-        const databaseState = requireReadyDatabase(
-          databaseStateFor(resolvedProjectPath),
-          'PROJECT_OPEN_DATABASE_UNAVAILABLE',
-        )
-        const session = projectAccess.beginSession(trustedProject)
-        projectData.sessionLease = session.leaseId
-        revokeRecentPreviewCapabilities()
-        const finalizationRepair = repairDuplicateFinalizationsOnOpen()
-        return {
-          success: true,
-          project: projectData,
-          requestToken,
-          ...databaseState,
-          finalizationRepair,
-        }
-      } catch (error) {
         let rollbackError: unknown
+        if (prepared) {
+          try { projectRuntimeHost.abortOpen(prepared) } catch (abortError) { rollbackError = abortError }
+          prepared = undefined
+        }
         let databaseState: ProjectDatabaseState
         try {
           databaseState = requireReadyDatabase(
-            restoreProjectRollbackBoundary(rollbackBoundary),
+            restoreProjectRollbackBoundary(),
             'PROJECT_ROLLBACK_DATABASE_UNAVAILABLE',
           )
         } catch (restoreError) {
@@ -741,13 +695,16 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           project: null,
           requestToken,
           ...databaseState,
+          ...(error === superseded ? { stale: true } : {}),
           ...(selectionFailure ?? {}),
           ...(legacyImportSource ? { legacyImportSource } : {}),
-          error: errorMessage,
+          ...(error !== superseded || rollbackError !== undefined ? { error: errorMessage } : {}),
         }
       }
     })
-  })
+  }
+  ipcMain.handle('project:open', createOpenHandler(false))
+  ipcMain.handle(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, createOpenHandler(true))
 
   // 保存/更新项目配置
   // 注意：这个接口前端可能还传入许多小说配置字段，需要映射到数据库。
@@ -762,7 +719,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       if (!data.path) return { success: false, error: 'PROJECT_CONTEXT_REQUIRED' }
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       assertExpectedProjectPath(data.path, expectedProjectPath)
-      assertRequiredProjectSession(_projectId, data, getCurrentProjectPath(), context)
+      const runtime = assertRequiredProjectSession(_projectId, data, getCurrentProjectPath(), context)
 
       const coreUpdate: Parameters<typeof ProjectCoreRepository.update>[0] = {}
       if (data.novelConfig) {
@@ -797,17 +754,16 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         coreUpdate.characterStates = data.characterStates
       }
 
-      const db = getProjectDb()
-      if (!db) throw new Error('PROJECT_NOT_OPEN')
+      const db = runtime.database
       db.transaction(() => {
-        ProjectCoreRepository.update(coreUpdate)
+        ProjectCoreRepository.update(coreUpdate, db)
       })()
 
       // 最近项目是导航便利数据，不属于项目核心提交。写入失败不能把已经
       // 已提交的数据库保存即使被误报为失败，也不能让渲染进程保留过期草稿。
       try {
         registerRecentProject({
-          name: data.name ?? ProjectCoreRepository.get()?.projectName ?? 'Unknown',
+          name: data.name ?? ProjectCoreRepository.get(db)?.projectName ?? 'Unknown',
           path: data.path,
           projectId: _projectId,
           updatedAt: new Date().toISOString(),
@@ -836,7 +792,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
   ) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      assertRequiredProjectSession(_projectId, data, getCurrentProjectPath(), context)
+      const runtime = assertRequiredProjectSession(_projectId, data, getCurrentProjectPath(), context)
       if (data.novelConfig) {
         ProjectCoreRepository.update({
           genre: data.novelConfig.genre,
@@ -855,7 +811,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           protagonistProfile: data.novelConfig.protagonistProfile,
           writingStyle: data.novelConfig.writingStyle ?? '',
           referenceWorks: data.novelConfig.referenceWorks ?? '',
-        })
+        }, runtime.database)
       }
       return { success: true }
     } catch (error) {
@@ -884,10 +840,8 @@ export function registerProjectController(options: ProjectControllerOptions = {}
 
   ipcMain.handle('project:overview-current', async (_event, context?: ProjectSessionContext) => {
     try {
-      const active = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
-      const database = getProjectDb()
-      if (!database) return { state: 'unavailable' as const }
-      return projectPeekService.readCurrent(active.projectId, database)
+      const runtime = projectAccess.assertViewContext(context)
+      return projectPeekService.readCurrent(runtime.projectId, runtime.database)
     } catch {
       return { state: 'unavailable' as const }
     }
@@ -912,36 +866,28 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       _legacySessionLease: string,
       context?: ProjectSessionContext,
     ) => {
+    let runtime: ProjectRuntime | undefined
     let resolvedPath: string
-    let deletedProjectId: string
-    let deletingCurrentProject = false
-    let databaseClosed = false
+    let releaseRestore: (() => void) | undefined
     try {
-      const activeSession = projectAccess.assertCurrentProjectContext(
-        context,
-        getCurrentProjectPath(),
-      )
-      deletedProjectId = activeSession.projectId
+      runtime = projectAccess.assertViewContext(context)
       resolvedPath = projectAccess.authorizeDeletion({
-        projectId: activeSession.projectId,
-        leaseId: activeSession.leaseId,
+        projectId: runtime.projectId,
+        leaseId: context!.leaseId,
       }, projectPath)
-      const currentProjectPath = getCurrentProjectPath()
-      if (!sameProjectPath(currentProjectPath, resolvedPath)) {
-        throw new ProjectSessionStaleError('PROJECT_SESSION_DATABASE_MISMATCH')
-      }
-      deletingCurrentProject = true
-
-      if (deletingCurrentProject) {
-        closeVectorConnection(resolvedPath)
-        closeProjectDatabase()
-        databaseClosed = true
-      }
+      const live = projectRuntimeHost.getOpenRuntimes()
+      if (live.length !== 1 || live[0] !== runtime) throw new Error('PROJECT_RUNTIME_MAINTENANCE_UNAVAILABLE')
+      projectRuntimeHost.assertLifecycleAvailable()
+      projectRuntimeHost.releaseIdle(runtime)
+      releaseRestore = projectRuntimeHost.acquireRestoreOperation()
     } catch (error) {
+      const databaseRestored = runtime
+        ? runtime.phase === 'open' && projectRuntimeHost.getActiveView() === runtime && getProjectDb() === runtime.database
+        : getProjectDb() !== null
       return {
         success: false,
         directoryDeleted: false,
-        databaseRestored: true,
+        databaseRestored,
         error: String(error),
       }
     }
@@ -951,66 +897,53 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       await removeDirectoryWithWindowsRetry(resolvedPath)
     } catch (error) {
       deletionError = error
+    } finally {
+      releaseRestore()
     }
 
-    // 删除目录是不可逆提交点。rmSync 即使抛错也可能已经完成删除，
-    // 因此必须以磁盘事实决定返回语义，而不是只看异常。
     const directoryDeleted = !fs.existsSync(resolvedPath)
     if (!directoryDeleted) {
-      let restoreError: unknown
-      let databaseRestored = !deletingCurrentProject || !databaseClosed
-      if (deletingCurrentProject && databaseClosed) {
+      let prepared: PreparedRuntimeOpen | undefined
+      let committed: ProjectRuntime | undefined
+      try {
+        // The restore interlock is released first. Never replace a winner
+        // that obtained the view before this synchronous recovery starts.
+        if (projectRuntimeHost.getActiveView() !== null) throw new Error('PROJECT_SESSION_STALE')
+        prepared = projectRuntimeHost.prepareOpen({ kind: 'manifest', projectId: runtime.projectId,
+          rootPath: runtime.canonicalRoot, storageFormat: 'canonical' })
+        committed = projectRuntimeHost.commitOpen(prepared)
+        prepared = undefined
+        const restored = projectAccess.beginViewSession(committed)
+        return { success: false, directoryDeleted: false, databaseRestored: true,
+          restoredSession: { projectId: restored.projectId, leaseId: restored.leaseId, projectPath: restored.rootPath },
+          error: deletionError ? String(deletionError) : 'PROJECT_DELETE_FAILED' }
+      } catch (restoreError) {
+        let cleanupError: unknown
         try {
-          initProjectDatabase(resolvedPath)
-          databaseRestored = true
-        } catch (error) {
-          restoreError = error
-          databaseRestored = false
-        }
+          if (prepared) projectRuntimeHost.abortOpen(prepared)
+          else if (committed) projectRuntimeHost.releaseIdle(committed)
+        } catch (error) { cleanupError = error }
+        if (projectRuntimeHost.getActiveView() === null) projectAccess.invalidateCurrentSession()
+        return { success: false, directoryDeleted: false, databaseRestored: false,
+          error: withRollbackFailure(withRollbackFailure(deletionError ? String(deletionError) : 'PROJECT_DELETE_FAILED', restoreError), cleanupError) }
       }
-      const error = withRollbackFailure(deletionError ? String(deletionError) : 'PROJECT_DELETE_FAILED', restoreError)
-      return { success: false, directoryDeleted: false, databaseRestored, error }
     }
 
+    if (projectRuntimeHost.getActiveView() === null) projectAccess.invalidateCurrentSession()
     let bindingCleanupWarning: string | undefined
-    try {
-      options.removeDeletedProjectBinding?.(deletedProjectId)
-    } catch {
-      bindingCleanupWarning = text(
-        '项目目录已删除，但本机云备份绑定暂未清理',
-        'The project folder was deleted, but its local cloud backup binding was not cleaned up yet',
-      )
+    try { options.removeDeletedProjectBinding?.(runtime.projectId) } catch {
+      bindingCleanupWarning = text('项目目录已删除，但本机云备份绑定暂未清理',
+        'The project folder was deleted, but its local cloud backup binding was not cleaned up yet')
     }
-    projectAccess.invalidateCurrentSession()
-    try {
-      removeRecentProject(resolvedPath)
-      return {
-        success: true,
-        directoryDeleted: true,
-        databaseRestored: false,
-        ...((deletionError || bindingCleanupWarning) ? {
-          warning: [
-            deletionError
-              ? text(`项目目录已删除：${String(deletionError)}`, `The project folder was deleted: ${String(deletionError)}`)
-              : undefined,
-            bindingCleanupWarning,
-          ].filter(Boolean).join(text('；', '; ')),
-        } : {}),
-      }
-    } catch (recentProjectError) {
-      return {
-        success: true,
-        directoryDeleted: true,
-        databaseRestored: false,
-        warning: [
-          bindingCleanupWarning,
-          text(
-            `项目目录已删除，但最近项目列表更新失败：${String(recentProjectError)}`,
-            `The project folder was deleted, but the recent project list could not be updated: ${String(recentProjectError)}`,
-          ),
-        ].filter(Boolean).join(text('；', '; ')),
-      }
+    const warnings = [deletionError
+      ? text(`项目目录已删除：${String(deletionError)}`, `The project folder was deleted: ${String(deletionError)}`)
+      : undefined, bindingCleanupWarning]
+    try { removeRecentProject(resolvedPath) } catch (error) {
+      warnings.push(text(`项目目录已删除，但最近项目列表更新失败：${String(error)}`,
+        `The project folder was deleted, but the recent project list could not be updated: ${String(error)}`))
     }
+    const warning = warnings.filter(Boolean).join(text('；', '; '))
+    return { success: true, directoryDeleted: true, databaseRestored: false, ...(warning ? { warning } : {}) }
     },
   )
 

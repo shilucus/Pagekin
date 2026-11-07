@@ -147,7 +147,11 @@
       ],
       "rollback": "停用新runtime入口，安全排空/暂停；保留旧工作流保护，不启双owner或降级schema。",
       "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "status": "completed", "passes": true, "evidence": [
+        { "type": "contract_review", "sourceSha": "34b13c33efe8f5bc83b080be068e69d4d2f44b18", "artifactOrReceipt": "stage-3a-evidence.md#feature-acceptance", "environment": "Windows x64; parent plus 79 frozen source/test hashes; accepted ADR-0029 routing contract", "result": "Two independent reviewers accepted all three RUNTIME-001 criteria, package-local contract/no-new-storage gates, explicit routing, compatibility interlocks, native COMMIT/session boundaries and buffer recovery", "limitations": "Routing feature only; no background grant, durable driver, complete workflow migration or platform qualification. This satisfies only the RUNTIME-001 prerequisite of downstream features, not their own gates." },
+        { "type": "deterministic", "sourceSha": "34b13c33efe8f5bc83b080be068e69d4d2f44b18", "artifactOrReceipt": "stage-3a-evidence.md#actual-execution", "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; isolated fictional native SQLite and installed Chromium override", "result": "Final 63-file 1434/1434; latest driver-only 28/28; browser 137/137; typecheck/lint/i18n/build exit 0", "limitations": "Runs overlap; not a full-suite or literary-quality PASS. Browser override is not pinned-browser qualification; earlier failures preserved." },
+        { "type": "electron", "sourceSha": "34b13c33efe8f5bc83b080be068e69d4d2f44b18", "artifactOrReceipt": "stage-3a-evidence.md#actual-execution", "environment": "Windows x64; Electron 44.9.3; runtime-routing-v1; loopback fake; owned fictional A/B; frozen build hashes", "result": "Registered IPC coexistence, one fetch, stale UI refusal, four legacy rejections and receipt replay without redispatch; normal quit and zero external writes/requests/residual processes", "limitations": "Direct IPC scene, not complete UI/background workflow. Two preceding path-length fixture failures preserved; no real model or installed-platform qualification." }
+      ]
     },
     {
       "id": "RUNTIME-002",

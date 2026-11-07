@@ -367,7 +367,7 @@ describe('portable project restore service', { timeout: 20_000 }, () => {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
       options.onVisible({ kind: 'delta', text: '恢复后首次新生成。' }); return { usage: null, finishReason: 'stop' }
     })
-    const owner = createMainGenerationOwner({ database: db, projectId, epoch, assertCurrent: () => undefined,
+    const owner = createMainGenerationOwner({ database: db, projectPath: f.targetRoot, projectId, epoch, assertCurrent: () => undefined,
       leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch,
       buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(dependencies, { ...selection, projectId, epoch,
         modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,

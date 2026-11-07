@@ -394,8 +394,7 @@ export class FinalizationRepository {
     }).immediate()
   }
 
-  static repairDuplicateFinalizations(cleanupLabels: Readonly<Record<ReplacedFinalCleanupStepKey, string>>): DuplicateFinalizationRepair {
-    const db = requireDatabase()
+  static repairDuplicateFinalizations(cleanupLabels: Readonly<Record<ReplacedFinalCleanupStepKey, string>>, db = requireDatabase()): DuplicateFinalizationRepair {
     return db.transaction(() => {
       const rows = db.prepare(`
         SELECT drafts.id, drafts.chapter_number, drafts.version,
@@ -439,10 +438,10 @@ export class FinalizationRepository {
           ...chapter.superseded.some(item => item.knowledgeDocumentId) ? ['remove_replaced_knowledge' as const] : [],
           ...chapter.superseded.some(item => item.targetFileName) ? ['remove_replaced_manuscripts' as const] : [],
         ]
-        const run = PostProcessRepository.getLatestRun('chapter_finalize', String(chapter.chapterNumber))
+        const run = PostProcessRepository.getLatestRun('chapter_finalize', String(chapter.chapterNumber), db)
         if (cleanup.length === 0 || !run?.triggerSourceId.startsWith('finalization:')) continue
         PostProcessRepository.addUnfinishedSteps(run.id, cleanup.map(key => ({ key, label: cleanupLabels[key], critical: false })),
-          'FINALIZATION_REPLACED_CLEANUP_PENDING')
+          'FINALIZATION_REPLACED_CLEANUP_PENDING', db)
         chapter.cleanupRegistered = true
       }
       if (chapters.length > 0) invalidateContinuityProjectionFrom(db, chapters[0]!.chapterNumber)
@@ -527,8 +526,8 @@ export class FinalizationRepository {
   }
 
   /** 定稿收进知识库的文档身份到章号；知识库凭它区分定稿章节与作者导入的资料（两者都写项目副本）。 */
-  static knowledgeDocumentChapters(): Map<string, number> {
-    const rows = requireDatabase().prepare(`
+  static knowledgeDocumentChapters(db = requireDatabase()): Map<string, number> {
+    const rows = db.prepare(`
       SELECT knowledge_document_id, chapter_number FROM finalization_outbox WHERE knowledge_document_id != ''
     `).all() as Array<{ knowledge_document_id: string; chapter_number: number }>
     return new Map(rows.map(row => [row.knowledge_document_id, row.chapter_number]))

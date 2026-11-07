@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProjectData } from '../../shared/ipc-channels'
+import { getActiveProjectSessionContext } from '../../shared/project-session-context'
+import { EMPTY_CARD, useCharacterStore } from '../character-store'
+import { useDraftStore } from '../draft-store'
 import { registerProjectTransitionDraft } from '../../services/project-transition'
 import {
   registerEditorExitSaveHandler,
@@ -96,6 +99,8 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useCharacterStore.getState().reset()
+  useDraftStore.getState().reset()
   useEditorStore.getState().clearTabs()
   useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({
@@ -1493,6 +1498,7 @@ describe('project close lifecycle', () => {
   })
 
   it('detaches the renderer when failed deletion cannot restore the active database', async () => {
+    const tabs = useEditorStore.getState().tabs
     mocks.invoke.mockResolvedValueOnce({
       success: false,
       directoryDeleted: false,
@@ -1504,12 +1510,139 @@ describe('project close lifecycle', () => {
 
     expect(useProjectStore.getState().currentProject).toBeNull()
     expect(useProjectStore.getState().fileTree).toEqual([])
-    expect(mocks.onProjectClosed).toHaveBeenCalledWith(project('A').path)
-    expect(useEditorStore.getState().tabs).toEqual([])
+    expect(mocks.onProjectClosed).not.toHaveBeenCalled()
+    expect(mocks.disableProjectBindingsPreservingDrafts).not.toHaveBeenCalled()
+    expect(useEditorStore.getState().tabs).toBe(tabs)
     expect(mocks.alertError).toHaveBeenCalledWith(
       expect.stringContaining('已关闭当前项目'),
       expect.objectContaining({ title: '删除失败，项目已停用' }),
     )
+  })
+
+  it('hands failed deletion to its fresh lease without replacing author buffers or recovery authority', async () => {
+    const previous = projectSession('A'), restored = { ...previous, leaseId: 'lease-A-recovered' }
+    const card = { ...EMPTY_CARD, characterId: 'character-a', name: 'Fictional A', notes: 'unsaved card' }
+    const avatars = { 'character-a': { kind: 'remove' as const } }
+    useCharacterStore.setState({ characters: [card], avatarDrafts: avatars, selectedId: card.characterId,
+      selectedName: card.name, loaded: true, dataProjectKey: previous.projectPath, dataProjectSession: previous,
+      rosterRevision: 7, identityRevision: 4 })
+    const metadata = {}
+    useDraftStore.setState({ draftsByChapter: metadata, dataProjectKey: previous.projectPath, dataProjectSession: previous })
+    useProjectStore.getState().updateNovelConfig({ coreOutline: 'unsaved config' })
+    const current = useProjectStore.getState().currentProject!
+    const recovery = { handle: { projectId: 'A', epoch: previous.leaseId, rootActionId: 'old-root', runId: 'old-run' } } as never
+    useEditorStore.setState({ draftLedgers: { fixture: 'unchanged opaque ledger' }, tabs: [
+      { id: 'a-draft', name: 'A', type: 'chapter', projectKey: previous.projectPath, projectSessionLease: previous.leaseId,
+        content: 'unsaved prose', savedContent: 'saved prose', contentRevision: 9, dirty: true },
+      { id: 'a-recovery', name: 'Candidate', type: 'arch-file', projectKey: previous.projectPath,
+        projectSessionLease: previous.leaseId, planningRecovery: recovery, content: 'unsaved candidate', dirty: true },
+      { id: 'a-kb', name: 'Knowledge', type: 'knowledge', projectKey: previous.projectPath,
+        knowledgeDraft: { docId: 'doc-a', copy: null, content: 'unsaved material', busy: true }, dirty: true },
+      { id: 'b-tab', name: 'B', type: 'outline', projectKey: project('B').path,
+        projectSessionLease: projectSession('B').leaseId, content: 'foreign draft', dirty: true },
+    ], activeTabId: 'a-draft' })
+    const before = useEditorStore.getState(), characters = useCharacterStore.getState().characters
+    mocks.invoke.mockResolvedValueOnce({ success: false, directoryDeleted: false, databaseRestored: true,
+      restoredSession: restored, error: 'directory locked' })
+
+    await expect(useProjectStore.getState().deleteProject(previous.projectPath)).resolves.toBe(false)
+
+    expect(useProjectStore.getState().currentProject).toEqual({ ...current, sessionLease: restored.leaseId })
+    expect(useProjectStore.getState().currentProject!.novelConfig).toBe(current.novelConfig)
+    expect(useProjectStore.getState().loading).toBe(false)
+    expect(useProjectStore.getState().projectSessionEpoch).toBe(1)
+    expect(getActiveProjectSessionContext()).toEqual(restored)
+    expect(useEditorStore.getState().draftLedgers).toBe(before.draftLedgers)
+    expect(useEditorStore.getState().activeTabId).toBe(before.activeTabId)
+    expect(useEditorStore.getState().tabs[0]).toEqual({ ...before.tabs[0], projectSessionLease: restored.leaseId })
+    expect(useEditorStore.getState().tabs[1]).toBe(before.tabs[1])
+    expect(useEditorStore.getState().tabs[1].planningRecovery).toBe(recovery)
+    expect(useEditorStore.getState().tabs[2].knowledgeDraft).toEqual({ ...before.tabs[2].knowledgeDraft, busy: false })
+    expect(useEditorStore.getState().tabs[3]).toBe(before.tabs[3])
+    expect(useCharacterStore.getState()).toMatchObject({ avatarDrafts: avatars, selectedId: card.characterId,
+      selectedName: card.name, rosterRevision: 7, identityRevision: 4, dataProjectSession: restored })
+    expect(useCharacterStore.getState().characters).toBe(characters)
+    expect(useCharacterStore.getState().avatarDrafts).toBe(avatars)
+    expect(useDraftStore.getState().draftsByChapter).toBe(metadata)
+    expect(useDraftStore.getState().dataProjectSession).toEqual(restored)
+    expect(mocks.onProjectOpening).not.toHaveBeenCalled()
+    expect(mocks.onProjectOpened).not.toHaveBeenCalled()
+    expect(mocks.onProjectClosed).not.toHaveBeenCalled()
+  })
+
+  it('restarts a pending first character read on the restored lease and ignores the late old read', async () => {
+    const previous = projectSession('A'), restored = { ...previous, leaseId: 'lease-A-first-read-recovered' }
+    const oldRead = deferred<unknown>(), freshRead = deferred<unknown>()
+    let rosterReads = 0
+    mocks.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:character-roster-read') return ++rosterReads === 1 ? oldRead.promise : freshRead.promise
+      if (channel === 'project:delete') return { success: false, directoryDeleted: false, databaseRestored: true,
+        restoredSession: restored, error: 'directory locked' }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const firstLoad = useCharacterStore.getState().load(previous.projectPath, previous)
+    expect(useCharacterStore.getState()).toMatchObject({ dataProjectSession: null, loadingProjectSession: previous })
+
+    await useProjectStore.getState().deleteProject(previous.projectPath)
+
+    expect(rosterReads).toBe(2)
+    expect(useCharacterStore.getState().loadingProjectSession).toEqual(restored)
+    const card = { ...EMPTY_CARD, characterId: 'fresh-role', name: 'Fresh role' }
+    freshRead.resolve({ revision: 3, identityRevision: 2, status: 'ready', entries: [{ ...card, relationships: [] }] })
+    await vi.waitFor(() => expect(useCharacterStore.getState().loaded).toBe(true))
+    expect(useCharacterStore.getState()).toMatchObject({ dataProjectSession: restored,
+      rosterRevision: 3, identityRevision: 2, characters: [expect.objectContaining({ characterId: 'fresh-role' })] })
+    const freshCharacters = useCharacterStore.getState().characters
+    oldRead.resolve({ revision: 1, status: 'empty', entries: [] })
+    await firstLoad
+    expect(useCharacterStore.getState().characters).toBe(freshCharacters)
+    expect(useCharacterStore.getState().dataProjectSession).toEqual(restored)
+  })
+
+  it.each([
+    { ...projectSession('A'), projectId: 'other', leaseId: 'fresh' },
+    { ...projectSession('A'), projectPath: project('B').path, leaseId: 'fresh' },
+    projectSession('A'),
+    { ...projectSession('A'), leaseId: ' ' },
+    null,
+  ])('disables an invalid deletion recovery response without discarding buffers: %j', async restoredSession => {
+    const tabs = useEditorStore.getState().tabs
+    const avatars = { 'fictional-id': { kind: 'remove' as const } }
+    useCharacterStore.setState({ avatarDrafts: avatars })
+    mocks.invoke.mockResolvedValueOnce({ success: false, directoryDeleted: false, databaseRestored: true,
+      restoredSession, error: 'directory locked' })
+
+    await expect(useProjectStore.getState().deleteProject(project('A').path)).resolves.toBe(false)
+
+    expect(useProjectStore.getState().currentProject).toBeNull()
+    expect(useProjectStore.getState().loading).toBe(false)
+    expect(useEditorStore.getState().tabs).toBe(tabs)
+    expect(useCharacterStore.getState().avatarDrafts).toBe(avatars)
+    expect(mocks.onProjectClosed).not.toHaveBeenCalled()
+  })
+
+  it('leaves the original lease when deletion was refused before closing its database', async () => {
+    mocks.invoke.mockResolvedValueOnce({ success: false, directoryDeleted: false, databaseRestored: true,
+      error: 'PROJECT_RUNTIME_BUSY' })
+    await expect(useProjectStore.getState().deleteProject(project('A').path)).resolves.toBe(false)
+    expect(useProjectStore.getState().currentProject?.sessionLease).toBe(projectSession('A').leaseId)
+    expect(useProjectStore.getState().projectSessionEpoch).toBe(0)
+    expect(useProjectStore.getState().loading).toBe(false)
+  })
+
+  it('does not adopt a late deletion recovery after another renderer session won', async () => {
+    const response = deferred<unknown>()
+    mocks.invoke.mockReturnValueOnce(response.promise)
+    const pending = useProjectStore.getState().deleteProject(project('A').path)
+    await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('project:delete', project('A').path, 'A', 'lease-A'))
+    useProjectStore.setState({ currentProject: project('C'), loading: false })
+    const tabs = useEditorStore.getState().tabs
+    response.resolve({ success: false, directoryDeleted: false, databaseRestored: true,
+      restoredSession: { ...projectSession('A'), leaseId: 'late-recovery' }, error: 'directory locked' })
+    await expect(pending).resolves.toBe(false)
+    expect(useProjectStore.getState().currentProject).toEqual(project('C'))
+    expect(useEditorStore.getState().tabs).toBe(tabs)
+    expect(mocks.alertError).not.toHaveBeenCalled()
   })
 })
 

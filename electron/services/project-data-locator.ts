@@ -30,7 +30,13 @@ function manifestState(projectPath: string) {
     const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8'))
     if (journal.version !== 1 || journal.phase !== 'switched' || journal.projectId !== manifest.projectId) throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
   }
-  return { root, manifestHash: createHash('sha256').update(bytes).digest('hex') }
+  return { root, projectId: manifest.projectId, manifestHash: createHash('sha256').update(bytes).digest('hex') }
+}
+/** Canonical identity is checked again on reuse; a path alone grants no runtime. */
+export function getCanonicalProjectIdentity(projectPath: string): { canonicalRoot: string; projectStorageRoot: string; projectId: string } {
+  const canonicalRoot = path.normalize(fs.realpathSync.native(path.resolve(projectPath)))
+  const state = manifestState(canonicalRoot)
+  return { canonicalRoot, projectStorageRoot: state.root, projectId: state.projectId }
 }
 /** New-project creation checks the canonical identity, but grants no DB access. */
 export function getNewProjectDatabasePath(projectPath: string): string {

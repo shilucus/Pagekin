@@ -55,7 +55,7 @@ function fixture(dispatch?:GenerationRunServiceDependencies['dispatch']) {
  let model:ModelProfile|null={id:'synthetic',name:'合成模型',provider:'openai',protocol:'openai',modelName:'gpt-4.1',apiKey:'fixture-only',baseUrl:'https://api.openai.com/v1',temperature:0.7,maxTokens:2048,purposes:['generation'],capabilities:{contextWindowTokens:32768,maxOutputTokens:2048,reasoning:false,structuredOutput:true,usage:true}}
  const spy=vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch??(async(_request,options)=>{options.onVisible({kind:'delta',text:validOutput});return {finishReason:'stop',usage:null}}))
  const deps={db,projectStorageRoot:root,globalDataRoot:root,readBuiltinPrompt:(key:string)=>JSON.stringify({key,systemRole:'图谱编辑',content:'合成模板'})}
- const make=(epoch:string)=>createMainGenerationOwner({database:db,projectId:'project',epoch,assertCurrent:()=>{},leases:new ModelExecutionLeaseRegistry({loadModel:()=>model}),loadModel:()=>model,dispatch:spy,
+ const make=(epoch:string)=>createMainGenerationOwner({database:db,projectPath:root,projectId:'project',epoch,assertCurrent:()=>{},leases:new ModelExecutionLeaseRegistry({loadModel:()=>model}),loadModel:()=>model,dispatch:spy,
   buildBinding:(selection,receipt,policy)=>buildGenerationSourceBinding(deps,{...selection,projectId:'project',epoch,modelReceipt:receipt,policy,outputContract:generationOutputContract(selection)}).binding,
   rebuildBinding:(previous,receipt)=>rebuildGenerationSourceBinding(deps,previous,epoch,receipt,readMainGenerationPolicy(previous.sourceManifest.policy)).binding})
  const owner=make('epoch-1');const owners=[owner]

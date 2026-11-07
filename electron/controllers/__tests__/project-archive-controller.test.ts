@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module'
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -10,6 +11,8 @@ import type {
   PortableProjectRestoreRequest,
   ProjectChannels,
 } from '../../../src/shared/ipc-channels'
+import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
+import { projectRuntimeHost } from '../../services/project-runtime'
 
 type IpcHandler = (...args: unknown[]) => Promise<unknown>
 
@@ -38,6 +41,14 @@ const mocks = vi.hoisted(() => ({
   createProjectDatabase: vi.fn(),
   showSaveDialog: vi.fn(),
   showOpenDialog: vi.fn(),
+  withLegacyProjectOperation: vi.fn(),
+  withProjectRestoreOperation: vi.fn(),
+}))
+
+vi.mock('../../services/project-runtime-compatibility', async importOriginal => ({
+  ...await importOriginal<typeof import('../../services/project-runtime-compatibility')>(),
+  withLegacyProjectOperation: mocks.withLegacyProjectOperation,
+  withProjectRestoreOperation: mocks.withProjectRestoreOperation,
 }))
 
 vi.mock('electron', () => ({
@@ -117,6 +128,18 @@ function tempRoot(prefix: string): string {
   return root
 }
 
+async function actualProject() {
+  const rootPath = tempRoot('runtime-archive-project-')
+  const projectId = randomUUID()
+  fs.mkdirSync(path.join(rootPath, '.ai-novel'))
+  fs.writeFileSync(path.join(rootPath, '.ai-novel', 'project.json'), JSON.stringify(createCanonicalProjectManifest({
+    projectId, createdAt: '2026-11-07T00:00:00.000Z',
+  })))
+  const actual = await vi.importActual<typeof import('../../database')>('../../database')
+  actual.createProjectDatabase(rootPath, Buffer.alloc(32, 1))
+  return { kind: 'manifest' as const, rootPath, projectId, storageFormat: 'canonical' as const }
+}
+
 function projectSession() {
   return {
     projectId: mocks.activeSession.projectId,
@@ -169,6 +192,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   now = 1_000
+  mocks.withLegacyProjectOperation.mockReset().mockImplementation((_channel: string, operation: () => unknown) => operation())
+  mocks.withProjectRestoreOperation.mockReset().mockImplementation((operation: () => unknown) => operation())
   mocks.currentProjectPath = path.resolve('C:/projects/current')
   mocks.database = { identity: 'active-database' }
   mocks.activeSession = {
@@ -201,6 +226,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  for (const runtime of projectRuntimeHost.getOpenRuntimes()) projectRuntimeHost.releaseIdle(runtime)
   grants.revokeWebContents(SENDER_ID)
   grants.revokeWebContents(OTHER_SENDER_ID)
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
@@ -306,6 +332,24 @@ describe('project archive choosers issue sender-bound grants instead of raw path
 })
 
 describe('project:archive-export', () => {
+  it('rejects retained-runtime export before consuming the chosen target grant or starting a snapshot', async () => {
+    const actual = await vi.importActual<typeof import('../../services/project-runtime-compatibility')>('../../services/project-runtime-compatibility')
+    mocks.withLegacyProjectOperation.mockImplementation(actual.withLegacyProjectOperation)
+    const a = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(await actualProject()))
+    projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(await actualProject()))
+    projectRuntimeHost.activateView(a)
+    const directory = tempRoot('runtime-export-refusal-')
+    const target = path.join(fs.realpathSync.native(directory), 'snapshot.ainovel')
+    const grantId = newTargetGrant(target)
+    await expect(handler('project:archive-export')(event(), {
+      projectSession: projectSession(), targetArchiveGrantId: grantId,
+    })).resolves.toMatchObject({ success: false, error: 'PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE' })
+    expect(mocks.exportPortableProject).not.toHaveBeenCalled()
+    expect(mocks.assertCurrentProjectContext).not.toHaveBeenCalled()
+    expect(fs.existsSync(target)).toBe(false)
+    expect(grants.resolveExactPath({ grantId, webContentsId: SENDER_ID, operation: 'create' })).toBe(target)
+  })
+
   it('binds export to the current session, the chooser grant, and the production asset provider', async () => {
     const root = tempRoot('b01-export-flow-')
     mocks.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: path.join(root, 'current.ainovel') })
@@ -499,6 +543,42 @@ describe('project:archive-export', () => {
 })
 
 describe('project:archive-restore', () => {
+  it('restores without an active view while interlocking open, reuse, activation and close until completion', async () => {
+    const actual = await vi.importActual<typeof import('../../services/project-runtime-compatibility')>('../../services/project-runtime-compatibility')
+    mocks.withProjectRestoreOperation.mockImplementation(actual.withProjectRestoreOperation)
+    const projectA = await actualProject(), projectB = await actualProject(), projectC = await actualProject()
+    const a = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(projectA))
+    const b = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(projectB))
+    projectRuntimeHost.activateView(null)
+    const directory = tempRoot('runtime-restore-interlock-')
+    const target = path.join(fs.realpathSync.native(directory), 'restored')
+    const archiveGrantId = archiveFileGrant(path.join(directory, 'source.ainovel'))
+    const targetGrantId = newTargetGrant(target)
+    let finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    mocks.restorePortableProject.mockImplementationOnce(async () => {
+      await gate
+      createRestoredDatabase(target, 'Fictional restored title')
+      return restoreReceipt(target)
+    })
+    const pending = handler('project:archive-restore')(event(), { archiveGrantId, targetGrantId })
+    try {
+      await vi.waitFor(() => expect(mocks.restorePortableProject).toHaveBeenCalledOnce())
+      expect(projectRuntimeHost.getActiveView()).toBeNull()
+      expect(() => projectRuntimeHost.prepareOpen(projectA)).toThrow('PROJECT_RUNTIME_RESTORE_BUSY')
+      expect(() => projectRuntimeHost.prepareOpen(projectC)).toThrow('PROJECT_RUNTIME_RESTORE_BUSY')
+      expect(() => projectRuntimeHost.activateView(a)).toThrow('PROJECT_RUNTIME_RESTORE_BUSY')
+      expect(() => projectRuntimeHost.releaseIdle(b)).toThrow('PROJECT_RUNTIME_RESTORE_BUSY')
+    } finally { finish() }
+    await expect(pending).resolves.toMatchObject({ success: true, recentProjectUpdated: true })
+    expect(a.database.open).toBe(true)
+    expect(b.database.open).toBe(true)
+    expect(projectRuntimeHost.getActiveView()).toBeNull()
+    const later = projectRuntimeHost.prepareOpen(projectC)
+    projectRuntimeHost.abortOpen(later)
+    projectRuntimeHost.activateView(a)
+  })
+
   it('restores from chooser grants without opening the copy and registers its readonly database name as recent', async () => {
     const root = tempRoot('b01-controller-')
     const realRoot = fs.realpathSync.native(root)

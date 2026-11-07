@@ -29,6 +29,8 @@ import {
 import { getGlobalDataRoot } from '../services/app-data-locator'
 import { externalFileGrants } from '../services/external-file-grant-service'
 import { projectAccess } from '../services/project-access'
+import { projectRuntimeHost } from '../services/project-runtime'
+import { assertRestoreTargetOutsideRuntimes } from '../services/project-runtime-compatibility'
 import {
   exportPortableProject,
   type ExportPortableProjectInput,
@@ -108,6 +110,9 @@ export interface CloudBackupControllerDependencies {
   registerRecentProject(project: RecentProject): void
   idFactory(): string
   now(): Date
+  acquireBackupOperation(): () => void
+  acquireRestoreOperation(): () => void
+  assertRestoreTargetAvailable(targetProjectRoot: string): void
 }
 
 class CloudBackupControllerError extends Error {
@@ -261,6 +266,9 @@ function productionDependencies(): CloudBackupControllerDependencies {
     registerRecentProject,
     idFactory: randomUUID,
     now: () => new Date(),
+    acquireBackupOperation: () => projectRuntimeHost.acquireLegacyOperation('cloud-backup:backup'),
+    acquireRestoreOperation: () => projectRuntimeHost.acquireRestoreOperation(),
+    assertRestoreTargetAvailable: assertRestoreTargetOutsideRuntimes,
   }
 }
 
@@ -268,19 +276,24 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
   const deps = injected ?? productionDependencies()
   const operations = new Map<string, AbortController>()
 
-  const runOperation = async <T>(rawId: unknown, operation: (signal: AbortSignal, id: string) => Promise<T>) => {
-    let id: string
-    try { id = operationId(rawId) } catch (error) { return failure(error) }
-    if (operations.has(id)) return failure(new CloudBackupControllerError('CLOUD_BACKUP_OPERATION_CONFLICT'), id)
-    const controller = new AbortController()
-    operations.set(id, controller)
+  const runOperation = async <T>(rawId: unknown, operation: (signal: AbortSignal, id: string) => Promise<T>, kind: 'backup' | 'restore' = 'backup') => {
+    let release: () => void
+    try { release = kind === 'backup' ? deps.acquireBackupOperation() : deps.acquireRestoreOperation() }
+    catch (error) { return failure(error) }
     try {
-      return await operation(controller.signal, id)
-    } catch (error) {
-      return failure(error, id)
-    } finally {
-      operations.delete(id)
-    }
+      let id: string
+      try { id = operationId(rawId) } catch (error) { return failure(error) }
+      if (operations.has(id)) return failure(new CloudBackupControllerError('CLOUD_BACKUP_OPERATION_CONFLICT'), id)
+      const controller = new AbortController()
+      operations.set(id, controller)
+      try {
+        return await operation(controller.signal, id)
+      } catch (error) {
+        return failure(error, id)
+      } finally {
+        operations.delete(id)
+      }
+    } finally { release() }
   }
 
   deps.ipc.handle('cloud-backup:connect', async (_event, rawRequest) => {
@@ -491,6 +504,7 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
       let targetProjectRoot: string
       try { targetProjectRoot = deps.resolveRestoreTargetGrant(event, targetGrantId) }
       catch { return fail('CLOUD_BACKUP_INPUT_INVALID') }
+      deps.assertRestoreTargetAvailable(targetProjectRoot)
       const remoteAccount = account(deps.credentialStore, accountId)
       const dataRoot = deps.getGlobalDataRoot()
       const stagingRoot = createStagingRoot(dataRoot, id)
@@ -546,7 +560,7 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
       } finally {
         await removeStagingRoot(dataRoot, id, stagingRoot)
       }
-    })
+    }, 'restore')
   })
 
   deps.ipc.handle('cloud-backup:cancel', async (_event, rawId) => {

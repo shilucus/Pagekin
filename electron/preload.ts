@@ -1,5 +1,6 @@
 import { ipcRenderer, contextBridge, webFrame } from 'electron'
 import type { AiNovelAPI } from '../src/shared/desktop-api'
+import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../src/shared/project-runtime-contract'
 
 /**
  * AI Novel Preload Script — 安全地暴露 IPC 通信能力到渲染进程
@@ -10,6 +11,9 @@ contextBridge.exposeInMainWorld('aiNovelAPI', {
   // ===== 双向请求/响应（invoke/handle） =====
   /** 调用主进程并等待结果 */
   invoke: (channel: string, ...args: unknown[]) => {
+    if (channel.startsWith('project-runtime:') && channel !== PROJECT_RUNTIME_OPEN_VIEW_CHANNEL) {
+      return Promise.reject(new Error('PROJECT_RUNTIME_CHANNEL_NOT_ALLOWED'))
+    }
     return ipcRenderer.invoke(channel, ...args)
   },
 

@@ -16,10 +16,10 @@ import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-c
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { getBuiltinPromptTemplate } from '../../src/services/builtin-prompt-templates'
 import { readBuiltinWritingSkill } from '../../src/shared/builtin-writing-skills'
-import { getProjectDb, getCurrentProjectPath, onProjectDatabaseBeforeClose } from '../database'
+import { getProjectDb, onProjectDatabaseBeforeClose } from '../database'
 import { getGlobalDataRoot } from '../services/app-data-locator'
-import { getProjectDataRoot } from '../services/project-data-locator'
 import { projectAccess, ProjectSessionStaleError } from '../services/project-access'
+import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
 import { ModelExecutionLeaseRegistry } from '../services/model-execution-lease'
 import { createMainGenerationOwner } from '../services/main-generation-owner'
 import { readMainGenerationPolicy, TaskBudgetPreflightError } from '../services/main-generation-plan'
@@ -40,6 +40,7 @@ type Owner = ReturnType<typeof createMainGenerationOwner>
 type OwnerChannels = PlanningFeedbackChannels & LegacyRosterGenerationChannels & GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
 const owners = new Map<Database.Database, { owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
+const ownerRuntimes = new WeakMap<Owner, ProjectRuntime>()
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
 export function assertGenerationSourcesCurrent(handle: MainGenerationRunHandle, blueprintRange?: { startChapter: number; endChapter: number }): void {
   const database = getProjectDb()
@@ -114,16 +115,19 @@ export function registerGenerationController(options: {
   loadModel: (id: string) => ModelProfile | null
   applyProxyConfig: () => void
 }) {
+  const activeHandlers = new Map<ProjectRuntime, number>()
+  projectRuntimeHost.registerBusyPredicate(runtime => (activeHandlers.get(runtime) ?? 0) > 0
+    || (owners.get(runtime.database)?.owner.hasPhysicalInFlight() ?? false))
   onProjectDatabaseBeforeClose(({ database }) => {
     const entry = owners.get(database)
     if (entry) { entry.owner.suspendForProjectClose(); owners.delete(database) }
   })
   const authorizedOwner = (session: ProjectSessionContext, event: IpcMainInvokeEvent) => {
-    projectAccess.assertCurrentProjectContext(session, getCurrentProjectPath())
-    const database = getProjectDb()
-    if (!database) throw new Error('GENERATION_DATABASE_NOT_READY')
+    const runtime = projectAccess.assertViewContext(session)
+    const database = runtime.database
     let entry = owners.get(database)
     if (entry && (entry.session.projectId !== session.projectId || entry.session.leaseId !== session.leaseId)) {
+      if (entry.owner.hasPhysicalInFlight()) throw new Error('GENERATION_OWNER_BUSY')
       entry.owner.suspendForProjectClose()
       owners.delete(database)
       entry = undefined
@@ -131,24 +135,25 @@ export function registerGenerationController(options: {
     if (!entry) {
       const captured = Object.freeze({ ...session })
       const subscribers = new Set<WebContents>()
-      const sourceDependencies = { db: database, projectStorageRoot: getProjectDataRoot(captured.projectPath),
+      const sourceDependencies = { db: database, projectStorageRoot: runtime.projectStorageRoot,
         globalDataRoot: getGlobalDataRoot(), readBuiltinSkill: readBuiltinWritingSkill,
         readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => {
           const template = getBuiltinPromptTemplate(key, language)
           if (!template) throw new Error('GENERATION_BUILTIN_PROMPT_MISSING')
           return JSON.stringify(template)
         } }
-      const owner = createMainGenerationOwner({ database, projectId: captured.projectId, epoch: captured.leaseId,
-        assertCurrent: () => { projectAccess.assertCurrentProjectContext(captured, getCurrentProjectPath());
-          if (getProjectDb() !== database) throw new Error('GENERATION_DATABASE_CHANGED') },
+      const owner = createMainGenerationOwner({ database, projectId: runtime.projectId, projectPath: runtime.canonicalRoot, epoch: captured.leaseId,
+        assertCurrent: () => { if (projectAccess.assertViewContext(captured) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED') },
         leases: options.modelExecutionLeases, loadModel: options.loadModel, beforeDispatch: options.applyProxyConfig,
         transferOrigin: () => readPortableCurrentAuthority({ database, projectStorageRoot: sourceDependencies.projectStorageRoot,
           projectId: captured.projectId })?.originProjectId,
         buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDependencies, { ...selection,
-          projectId: captured.projectId, epoch: captured.leaseId, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+          projectId: runtime.projectId, epoch: captured.leaseId, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
         rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDependencies, previous, captured.leaseId,
           modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
-        onSnapshot: snapshot => { for (const subscriber of subscribers) {
+        onSnapshot: snapshot => {
+          try { if (projectAccess.assertViewContext(captured) !== runtime) return } catch { return }
+          for (const subscriber of subscribers) {
           if (subscriber.isDestroyed()) subscribers.delete(subscriber)
           else {
             subscriber.send('generation:snapshot', snapshot)
@@ -158,13 +163,16 @@ export function registerGenerationController(options: {
             } catch { /* Snapshot delivery does not depend on diagnostics. */ }
           }
         } },
-        onReasoning: reasoning => { for (const subscriber of subscribers) {
+        onReasoning: reasoning => {
+          try { if (projectAccess.assertViewContext(captured) !== runtime) return } catch { return }
+          for (const subscriber of subscribers) {
           if (subscriber.isDestroyed()) subscribers.delete(subscriber)
           else subscriber.send('generation:reasoning', reasoning)
         } },
       })
       entry = { owner, session: captured, subscribers }
       ownerSessions.set(owner, captured)
+      ownerRuntimes.set(owner, runtime)
       owners.set(database, entry)
     }
     entry.subscribers.add(event.sender)
@@ -173,11 +181,12 @@ export function registerGenerationController(options: {
   const guardKnowledge = async <T>(owner: Owner, snapshot: GenerationKnowledgeSnapshot | undefined, operation: () => T | Promise<T>): Promise<T> => {
     if (!snapshot) return operation()
     const session = ownerSessions.get(owner)!
-    const projectStorageRoot = getProjectDataRoot(session.projectPath)
+    const runtime = ownerRuntimes.get(owner)!
+    const projectStorageRoot = runtime.projectStorageRoot
     return withKnowledgeSourceGate(projectStorageRoot, async () => {
       const { verifyGenerationKnowledge } = await import('../services/generation-knowledge-source')
       await verifyGenerationKnowledge({ projectStorageRoot, snapshot })
-      projectAccess.assertCurrentProjectContext(session, getCurrentProjectPath())
+      if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
       return operation()
     })
   }
@@ -194,11 +203,17 @@ export function registerGenerationController(options: {
         if (!isProjectSessionContext(session) || raw.length !== arity && !(channel === 'generation:compose-visible' && raw.length === 3)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
         if (channel.startsWith('planning-feedback:v1:')) assertPlanningFeedbackRequest(channel as PlanningFeedbackChannel, raw[0])
         const owner = authorizedOwner(session, event)
-        const database = getProjectDb()
-        const result = await handler(owner, ...raw as OwnerChannels[C]['args'])
-        projectAccess.assertCurrentProjectContext(session, getCurrentProjectPath())
-        if (channel.startsWith('planning-feedback:v1:') && getProjectDb() !== database) throw new Error('GENERATION_DATABASE_CHANGED')
-        return result
+        const runtime = ownerRuntimes.get(owner)!
+        activeHandlers.set(runtime, (activeHandlers.get(runtime) ?? 0) + 1)
+        try {
+          const result = await handler(owner, ...raw as OwnerChannels[C]['args'])
+          if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+          return result
+        } finally {
+          const remaining = activeHandlers.get(runtime)! - 1
+          if (remaining) activeHandlers.set(runtime, remaining)
+          else activeHandlers.delete(runtime)
+        }
       } catch (error) {
         throw new Error(generationIpcErrorCode(channel, error))
       }
@@ -216,14 +231,14 @@ export function registerGenerationController(options: {
   register('planning-feedback:v1:relineage', 1, (owner, request) => owner.relineageFieldFeedback(request))
   register('planning-feedback:v1:adopt', 1, (owner, request) => owner.adoptFieldFeedback(request))
   // 补写中间章时，本章及以后章节的定稿正文不能进取材，否则模型会提前写出或照抄后文。
-  const laterFinalizedDocuments = (chapterNumber: number) => new Set([...FinalizationRepository.knowledgeDocumentChapters()]
+  const laterFinalizedDocuments = (owner: Owner, chapterNumber: number) => new Set([...FinalizationRepository.knowledgeDocumentChapters(ownerRuntimes.get(owner)!.database)]
     .filter(([, finalizedChapter]) => finalizedChapter >= chapterNumber).map(([documentId]) => documentId))
   // 定稿后处理先导入、再登记文档身份，登记走另一条 IPC，不经过知识库门闩。
   // 准备之后才登记的后文章节要拦下，所以查登记和放行必须在同一个同步块里，中间不能有 await。
   const admitPreparedDraft = <T>(owner: Owner, request: { operation: string; chapterNumber?: number; preparationId?: string }, admit: () => T) => {
     const knowledge = request.preparationId ? owner.preparedKnowledge(request.preparationId) : undefined
     return guardKnowledge(owner, knowledge, () => {
-      const later = knowledge && request.operation === 'chapter-draft' && request.chapterNumber !== undefined ? laterFinalizedDocuments(request.chapterNumber) : new Set<string>()
+      const later = knowledge && request.operation === 'chapter-draft' && request.chapterNumber !== undefined ? laterFinalizedDocuments(owner, request.chapterNumber) : new Set<string>()
       if (knowledge?.items.some(item => later.has(item.documentId))) throw new Error('GENERATION_KNOWLEDGE_SOURCE_STALE')
       return admit()
     })
@@ -232,7 +247,12 @@ export function registerGenerationController(options: {
     const baseline = owner.draftPreparationBinding(request)
     const session = ownerSessions.get(owner)!
     const kb = await knowledgeBaseLoader.load()
-    const knowledge = await kb.captureWritingKnowledgeSnapshot(request.query, session.projectPath, getEmbeddingConfig(), [...laterFinalizedDocuments(request.chapterNumber)])
+    if (projectAccess.assertViewContext(session) !== ownerRuntimes.get(owner)) throw new Error('GENERATION_DATABASE_CHANGED')
+    const runtime = ownerRuntimes.get(owner)!
+    const knowledge = await kb.captureWritingKnowledgeSnapshot(request.query, runtime.canonicalRoot, getEmbeddingConfig(),
+      [...laterFinalizedDocuments(owner, request.chapterNumber)], () => {
+        if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+      })
     return guardKnowledge(owner, knowledge, () => owner.prepareDraftContext(request, knowledge, baseline))
   })
   register('generation:begin', 1, (owner, request) => {

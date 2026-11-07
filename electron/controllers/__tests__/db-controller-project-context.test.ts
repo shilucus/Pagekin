@@ -8,6 +8,14 @@ const mocks = vi.hoisted(() => ({
   closeProjectDatabase: vi.fn(),
   invalidateCurrentSession: vi.fn(),
   assertCurrentProjectContext: vi.fn(),
+  assertViewContext: vi.fn(),
+  runtimeCount: 1,
+  runtimeBusy: false,
+  legacyHeld: false,
+  explicitDatabase: { project: 'A' },
+  releaseIdle: vi.fn(),
+  acquireLegacyOperation: vi.fn(),
+  releaseLegacyOperation: vi.fn(),
   captureCurrentSession: vi.fn(),
   projectCoreGet: vi.fn(),
   projectCoreUpdate: vi.fn(),
@@ -94,10 +102,16 @@ vi.mock('../../services/project-access', () => ({
   projectAccess: {
     invalidateCurrentSession: mocks.invalidateCurrentSession,
     assertCurrentProjectContext: mocks.assertCurrentProjectContext,
+    assertViewContext: mocks.assertViewContext,
     captureCurrentSession: mocks.captureCurrentSession,
     assertCurrentSession: mocks.assertCurrentSession,
   },
 }))
+
+vi.mock('../../services/project-runtime', () => ({ projectRuntimeHost: {
+  releaseIdle: mocks.releaseIdle,
+  acquireLegacyOperation: mocks.acquireLegacyOperation,
+} }))
 
 vi.mock('../../services/project-data-locator', () => ({ getProjectDataRoot: mocks.getProjectDataRoot }))
 vi.mock('../../services/portable-current-authority', () => ({ readPortableCurrentAuthority: mocks.readPortableCurrentAuthority }))
@@ -289,6 +303,17 @@ beforeAll(() => {
 beforeEach(() => {
   mocks.currentProjectPath = 'C:/projects/A'
   vi.clearAllMocks()
+  mocks.runtimeCount = 1
+  mocks.runtimeBusy = false
+  mocks.legacyHeld = false
+  mocks.acquireLegacyOperation.mockImplementation(() => {
+    if (mocks.runtimeCount !== 1) throw new Error('PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE')
+    mocks.legacyHeld = true
+    return () => { mocks.legacyHeld = false; mocks.releaseLegacyOperation() }
+  })
+  mocks.releaseIdle.mockImplementation(() => {
+    if (mocks.runtimeBusy) throw new Error('PROJECT_RUNTIME_BUSY')
+  })
   mocks.getProjectDb.mockReset()
   mocks.getProjectDataRoot.mockReturnValue('C:/projects/A/.ai-novel')
   mocks.readPortableCurrentAuthority.mockReturnValue(null)
@@ -313,9 +338,69 @@ beforeEach(() => {
     leaseId: `lease-${mocks.currentProjectPath.split('/').at(-1)}`,
     rootPath: mocks.currentProjectPath,
   }))
+  mocks.assertViewContext.mockImplementation((context: unknown) => {
+    mocks.assertCurrentProjectContext(context, mocks.currentProjectPath)
+    return { projectId: currentSession().projectId, canonicalRoot: mocks.currentProjectPath,
+      database: mocks.getProjectDb() ?? mocks.explicitDatabase }
+  })
 })
 
 describe('database controller project context guard', () => {
+  it('routes classified core reads and writes through the captured DB even when another runtime is retained', async () => {
+    mocks.runtimeCount = 2
+    const database = { project: 'captured-A' }
+    mocks.getProjectDb.mockReturnValue(database)
+    mocks.projectCoreGet.mockImplementationOnce((received: unknown) => {
+      expect(received).toBe(database)
+      mocks.currentProjectPath = 'C:/projects/B'
+      return { premise: 'A only' }
+    })
+    await expect(handler('db:project-core-get')({}, 'C:/projects/A')).resolves.toEqual({ premise: 'A only' })
+    expect(mocks.acquireLegacyOperation).not.toHaveBeenCalled()
+    mocks.currentProjectPath = 'C:/projects/A'
+    await expect(handler('db:project-core-update')({}, { premise: 'A edit' }, 'C:/projects/A'))
+      .resolves.toEqual({ success: true })
+    expect(mocks.projectCoreUpdate).toHaveBeenCalledWith({ premise: 'A edit' }, database)
+  })
+
+  it('denies every unclassified legacy family before repository or import-locale lookup while runtimes coexist', async () => {
+    mocks.runtimeCount = 2
+    await expect(handler('db:draft-get-full')({}, 1, 'C:/projects/A'))
+      .rejects.toThrow('PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE')
+    await expect(handler('db:project-clear-generated-data')({}, {}, 'C:/projects/A'))
+      .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE' })
+    await expect(handler('db:import-run-get')({}, 'fiction-run', 'C:/projects/A'))
+      .rejects.toThrow('PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE')
+    expect(mocks.draftGetFull).not.toHaveBeenCalled()
+    expect(mocks.projectClearGeneratedData).not.toHaveBeenCalled()
+    expect(mocks.importRunGet).not.toHaveBeenCalled()
+    expect(mocks.releaseLegacyOperation).not.toHaveBeenCalled()
+  })
+
+  it('holds the legacy admission through the returned promise and releases it on success or failure', async () => {
+    let finish!: (value: unknown) => void
+    mocks.postProcessGetLatestRun.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    const pending = handler('db:post-process-get-latest-run')({}, 'chapter_finalize', '1', 'C:/projects/A')
+    expect(mocks.legacyHeld).toBe(true)
+    finish({ id: 'fiction-run' })
+    await expect(pending).resolves.toEqual({ id: 'fiction-run' })
+    expect(mocks.legacyHeld).toBe(false)
+    expect(mocks.releaseLegacyOperation).toHaveBeenCalledOnce()
+    mocks.postProcessGetLatestRun.mockRejectedValueOnce(new Error('fiction read failure'))
+    await expect(handler('db:post-process-get-latest-run')({}, 'chapter_finalize', '1', 'C:/projects/A'))
+      .rejects.toThrow('fiction read failure')
+    expect(mocks.legacyHeld).toBe(false)
+    expect(mocks.releaseLegacyOperation).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses busy close without invalidating the active view lease', async () => {
+    mocks.runtimeBusy = true
+    await expect(handler('db:close')({}, 'C:/projects/A'))
+      .resolves.toEqual({ success: false, error: 'Error: PROJECT_RUNTIME_BUSY' })
+    expect(mocks.invalidateCurrentSession).not.toHaveBeenCalled()
+    expect(mocks.closeProjectDatabase).not.toHaveBeenCalled()
+  })
+
   it('adds only proven current derived fields to the read view using verified portable origin', async () => {
     const database = { synthetic: true }
     mocks.getProjectDb.mockReturnValue(database)
@@ -1212,16 +1297,16 @@ describe('database controller project context guard', () => {
   it('closes only the explicitly matched project database', async () => {
     await expect(handler('db:close')({}, 'C:/projects/A'))
       .resolves.toEqual({ success: true })
-    expect(mocks.closeProjectDatabase).toHaveBeenCalledOnce()
+    expect(mocks.releaseIdle).toHaveBeenCalledWith(expect.objectContaining({ canonicalRoot: 'C:/projects/A' }))
     expect(mocks.invalidateCurrentSession).toHaveBeenCalledOnce()
 
-    mocks.closeProjectDatabase.mockClear()
+    mocks.releaseIdle.mockClear()
     mocks.currentProjectPath = 'C:/projects/B'
     await expect(handler('db:close')({}, 'C:/projects/A'))
       .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_CONTEXT_CHANGED' })
     await expect(rawHandler('db:close')({}))
       .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_SESSION_REQUIRED' })
-    expect(mocks.closeProjectDatabase).not.toHaveBeenCalled()
+    expect(mocks.releaseIdle).not.toHaveBeenCalled()
     expect(mocks.invalidateCurrentSession).toHaveBeenCalledOnce()
   })
 })

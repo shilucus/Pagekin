@@ -62,7 +62,7 @@ function owner() {
   const model: ModelProfile = { id: 'test-model', name: 'Synthetic', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1', apiKey: 'synthetic-only', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'] }
   const deps = { db, projectStorageRoot: projectPath, globalDataRoot: projectPath,
     readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => JSON.stringify(getBuiltinPromptTemplate(key, language)) }
-  actualOwner = createMainGenerationOwner({ database: db, projectId: 'test', epoch: 'lease-test', assertCurrent: () => {},
+  actualOwner = createMainGenerationOwner({ database: db, projectId: 'test', projectPath, epoch: 'lease-test', assertCurrent: () => {},
     leases: new ModelExecutionLeaseRegistry({ loadModel: id => id === 'post-model' ? { ...model, id } : model }), loadModel: id => id === 'post-model' ? { ...model, id } : model,
     dispatch: (request, options) => new Promise((resolve, reject) => {
       void useLLMStore.getState().generateStream((request as { task: { messages: ModelMessages } }).task.messages, {

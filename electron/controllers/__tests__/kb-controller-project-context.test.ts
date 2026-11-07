@@ -2,6 +2,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type IpcHandler = (...args: unknown[]) => Promise<unknown>
 
+vi.mock('../../services/project-runtime-compatibility', () => ({
+  withLegacyProjectOperation: async (_channel: string, operation: () => unknown) => operation(),
+}))
+
 const mocks = vi.hoisted(() => ({
   currentProjectPath: 'C:/projects/A',
   handlers: new Map<string, IpcHandler>(),

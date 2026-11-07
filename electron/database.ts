@@ -8,18 +8,17 @@ import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import { initializeLegacyBaselineSchema } from './migrations/baseline-schema'
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from './migrations/desktop-registry'
-import { SchemaMigrationError } from './migrations/registry'
 import { migrateSchema } from './migrations/runner'
 import { SqliteSchemaAdapter } from './migrations/sqlite-schema-adapter'
-import { openCanonicalProjectData, deactivateProjectData, getNewProjectDatabasePath, getProjectDatabasePath } from './services/project-data-locator'
-import { readSqliteContentIdentity } from './services/sqlite-project-migration'
+import { getCanonicalProjectIdentity, getNewProjectDatabasePath } from './services/project-data-locator'
+import { projectRuntimeHost } from './services/project-runtime'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 import type BetterSqlite3 from 'better-sqlite3'
 
-let projectDb: BetterSqlite3.Database | null = null
-let currentProjectPath: string | null = null
+export { openVerifiedProjectDatabase, closeCapturedProjectDatabase, onProjectDatabaseBeforeClose, fenceProjectSession } from './services/project-runtime'
+export type { OpenProjectDatabase, ProjectDatabaseBeforeCloseContext } from './services/project-runtime'
 
 /** 初始化项目数据库（打开项目时调用） */
 export function createProjectDatabase(projectPath: string, importSourceSecret?: Buffer): void {
@@ -33,83 +32,35 @@ export function createProjectDatabase(projectPath: string, importSourceSecret?: 
   } finally { database.close() }
 }
 
-/** Existing projects are verified before acquiring a writable handle or fencing. */
+/** Compatibility activation only: it never closes another captured runtime. */
 export function initProjectDatabase(projectPath: string): void {
-  closeProjectDatabase()
-  let database: BetterSqlite3.Database | undefined
+  const identity = getCanonicalProjectIdentity(projectPath)
+  const ticket = projectRuntimeHost.prepareOpen({ kind: 'manifest', projectId: identity.projectId,
+    rootPath: identity.canonicalRoot, storageFormat: 'canonical' })
   try {
-    const verified = openCanonicalProjectData(projectPath)
-    const databasePath = getProjectDatabasePath(projectPath)
-    database = new Database(databasePath, { fileMustExist: true })
-    // Compare before any statement: an unused handle has not opened the WAL, so closing it on refusal cannot checkpoint.
-    const content = readSqliteContentIdentity(databasePath)
-    if (content.database !== verified.database || content.wal !== verified.wal) {
-      throw new SchemaMigrationError('SOURCE_CHANGED_SINCE_PROBE')
-    }
-    database.pragma('journal_mode = WAL')
-    database.pragma('foreign_keys = ON')
-    fenceProjectSession(database)
-    projectDb = database
-    currentProjectPath = projectPath
+    const runtime = projectRuntimeHost.commitOpen(ticket)
+    projectRuntimeHost.activateView(runtime)
   } catch (error) {
-    database?.close(); deactivateProjectData(projectPath); throw error
+    // commit/activation are synchronous; an unconsumed ticket owns only its preparation.
+    if (ticket.runtime.phase === 'opening') projectRuntimeHost.abortOpen(ticket)
+    throw error
   }
-}
-
-export interface ProjectDatabaseBeforeCloseContext { projectPath: string; database: BetterSqlite3.Database }
-const beforeCloseListeners = new Set<(context: ProjectDatabaseBeforeCloseContext) => void>()
-let notifyingBeforeClose = false
-/** Main owners must synchronously persist pause/cancel and stop new dispatch.
- * Async work must be awaited by their own outer lifecycle before asking to close.
- */
-export function onProjectDatabaseBeforeClose(listener: (context: ProjectDatabaseBeforeCloseContext) => void): () => void {
-  beforeCloseListeners.add(listener)
-  return () => { beforeCloseListeners.delete(listener) }
 }
 
 /** 关闭项目数据库 */
 export function closeProjectDatabase(): void {
-  if (notifyingBeforeClose) throw new Error('PROJECT_DATABASE_CLOSE_REENTRANT')
-  if (projectDb && currentProjectPath) {
-    notifyingBeforeClose = true
-    try {
-      for (const listener of beforeCloseListeners) {
-        const result: unknown = listener({ projectPath: currentProjectPath, database: projectDb })
-        if (result && typeof (result as { then?: unknown }).then === 'function') {
-          void Promise.resolve(result).catch(() => {})
-          throw new Error('PROJECT_DATABASE_BEFORE_CLOSE_MUST_BE_SYNCHRONOUS')
-        }
-      }
-    } finally { notifyingBeforeClose = false }
-  }
-  // Clear the process-visible identity before closing the native handle. If
-  // the close itself throws, callers still fail closed instead of treating a
-  // half-closed database as the active project.
-  const closingDatabase = projectDb
-  const closingProjectPath = currentProjectPath
-  projectDb = null
-  currentProjectPath = null
-  if (closingProjectPath) deactivateProjectData(closingProjectPath)
-  closingDatabase?.close()
+  const runtime = projectRuntimeHost.getActiveView()
+  if (runtime) projectRuntimeHost.releaseIdle(runtime)
 }
 
 /** 获取当前数据库实例 */
 export function getProjectDb(): BetterSqlite3.Database | null {
-  return projectDb
+  const runtime = projectRuntimeHost.getActiveView()
+  return runtime?.phase === 'open' && runtime.database.open ? runtime.database : null
 }
 
 /** 获取当前已打开项目路径 */
 export function getCurrentProjectPath(): string | null {
-  return currentProjectPath
-}
-
-/** Session ownership changes are separate from schema migration. */
-export function fenceProjectSession(db: BetterSqlite3.Database): void {
-  db.exec(`
-    UPDATE import_runs
-    SET execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
-        updated_at = datetime('now')
-    WHERE status = 'running' AND (execution_owner <> '' OR lease_expires_at <> 0)
-  `)
-
+  const runtime = projectRuntimeHost.getActiveView()
+  return runtime?.phase === 'open' && runtime.database.open ? runtime.canonicalRoot : null
 }

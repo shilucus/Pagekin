@@ -52,7 +52,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
     const ownDb = db, ownEpoch = `epoch-${epoch}`
     const sourceDeps = { db: ownDb, projectStorageRoot: storage, globalDataRoot: root,
       readBuiltinPrompt: () => { throw new Error('UNEXPECTED_BUILTIN_PROMPT') } }
-    const owner = createMainGenerationOwner({ database: ownDb, projectId, epoch: ownEpoch,
+    const owner = createMainGenerationOwner({ database: ownDb, projectId, projectPath: root, epoch: ownEpoch,
       assertCurrent: () => { if (db !== ownDb || ownEpoch !== `epoch-${epoch}`) throw new Error('GENERATION_EPOCH_STALE') },
       leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: spy,
       buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDeps,

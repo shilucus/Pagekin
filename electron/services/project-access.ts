@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import { probeProjectSqlite } from './sqlite-project-migration'
 import os from 'node:os'
 import path from 'node:path'
+import { projectRuntimeHost, type PreparedRuntimeOpen, type ProjectRuntime } from './project-runtime'
 import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { CANONICAL_PROJECT_DIRECTORY, createCanonicalProjectManifest, parseCanonicalProjectManifest } from '../../src/shared/project-format'
 import {
@@ -234,6 +235,40 @@ export class ProjectAccessService {
     }
     this.activeSession = lease
     return lease
+  }
+
+  /** A view activation always rotates its UI lease, not the runtime epoch. */
+  beginViewSession(runtime: ProjectRuntime): ProjectSessionLease {
+    projectRuntimeHost.assertOpen(runtime)
+    const project = this.probeExistingProject(runtime.canonicalRoot)
+    if (project.kind !== 'manifest' || project.projectId !== runtime.projectId || project.storageFormat !== 'canonical') {
+      throw new Error('PROJECT_RUNTIME_IDENTITY_MISMATCH')
+    }
+    const lease: ProjectSessionLease = { ...project, leaseId: this.newLeaseId() }
+    projectRuntimeHost.activateView(runtime)
+    this.activeSession = lease
+    return lease
+  }
+
+  /** Prepare all fallible lease checks before the host commits and publishes the view. */
+  commitViewSession<T>(ticket: PreparedRuntimeOpen, operation: (runtime: ProjectRuntime) => T): { session: ProjectSessionLease; value: T } {
+    projectRuntimeHost.assertViewOpenAvailable(ticket)
+    const runtime = ticket.runtime
+    const project = this.probeExistingProject(runtime.canonicalRoot)
+    if (project.kind !== 'manifest' || project.projectId !== runtime.projectId || project.storageFormat !== 'canonical') {
+      throw new Error('PROJECT_RUNTIME_IDENTITY_MISMATCH')
+    }
+    const session: ProjectSessionLease = { ...project, leaseId: this.newLeaseId() }
+    const value = projectRuntimeHost.commitViewOpen(ticket, operation, () => { this.activeSession = session })
+    return { session, value }
+  }
+
+  assertViewContext(context: ProjectSessionContext | undefined): ProjectRuntime {
+    const runtime = projectRuntimeHost.getActiveView()
+    const session = this.assertCurrentProjectContext(context, runtime?.canonicalRoot ?? null)
+    if (!runtime || runtime.projectId !== session.projectId) throw new ProjectSessionStaleError('PROJECT_SESSION_DATABASE_MISMATCH')
+    projectRuntimeHost.assertOpen(runtime)
+    return runtime
   }
 
   /**

@@ -4,6 +4,7 @@ import { FileNode, type FileWriteCommitState, type ProjectSessionContext } from 
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { getCurrentProjectPath } from '../database'
 import { projectAccess } from '../services/project-access'
+import { withLegacyProjectOperation } from '../services/project-runtime-compatibility'
 import { mainText } from '../i18n'
 import {
   assertProjectFilePath,
@@ -139,7 +140,7 @@ function registerFilesystemHandler<Args extends unknown[]>(
       if (!context) {
         throw new Error('PROJECT_SESSION_REQUIRED')
       }
-      return await handler(event, context, ...(args as Args))
+      return await withLegacyProjectOperation(channel, () => handler(event, context, ...(args as Args)))
     } catch (error) {
       return projectFilesystemFailure(channel, error)
     }

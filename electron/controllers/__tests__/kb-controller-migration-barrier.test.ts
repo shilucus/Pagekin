@@ -3,6 +3,10 @@ import { LEGACY_VECTOR_MIGRATION_BLOCKED, LegacyVectorMigrationBlockedError } fr
 
 type IpcHandler = (...args: unknown[]) => Promise<unknown>
 
+vi.mock('../../services/project-runtime-compatibility', () => ({
+  withLegacyProjectOperation: async (_channel: string, operation: () => unknown) => operation(),
+}))
+
 const mocks = vi.hoisted(() => ({
   locale: 'zh-CN',
   handlers: new Map<string, IpcHandler>(),

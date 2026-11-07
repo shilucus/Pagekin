@@ -32,7 +32,8 @@ import { getProjectDataRoot } from '../../services/project-data-locator'
 import { withKnowledgeSourceGate } from '../../services/knowledge-source-gate'
 import { ModelExecutionLeaseRegistry } from '../../services/model-execution-lease'
 import { projectAccess } from '../../services/project-access'
-import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb } from '../../database'
+import { projectRuntimeHost } from '../../services/project-runtime'
+import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb, onProjectDatabaseBeforeClose } from '../../database'
 import { textHash } from '../../repositories/generation-run-repository'
 import { KnowledgeBaseUnavailableError, knowledgeBaseLoader } from '../../services/knowledge-base-loader'
 import { LegacyVectorMigrationBlockedError } from '../../services/knowledge-base-migration-error'
@@ -130,6 +131,105 @@ describe('planning feedback v1 registered IPC', () => {
     return { started, release, fetch }
   }
 
+  it('settles an already dispatched A request only in A after switching the view to B', async () => {
+    const base = await invoke('planning-feedback:v1:capture', { target: 'coreOutline' })
+    const input = { baseId: base.baseId, feedback: 'Revise the fictional outline', constraints: [] }
+    const run = await invoke('planning-feedback:v1:begin', { input, modelId: model.id, uiActionNonce: 'runtime-a' })
+    const runtimeA = projectRuntimeHost.getActiveView()!
+    const runtimeEpoch = runtimeA.executionEpoch
+    const sessionA = { ...session }
+    expect(run.handle.epoch).toBe(sessionA.leaseId)
+    const delayed = delayedStream()
+    const execution = invoke('planning-feedback:v1:execute', { handle: run.handle })
+    const rejected = expect(execution).rejects.toThrow()
+    await delayed.started
+    expect(() => projectRuntimeHost.releaseIdle(runtimeA)).toThrow('PROJECT_RUNTIME_BUSY')
+    const projectB = projectAccess.createProject(root, 'Fiction B')
+    createProjectDatabase(projectB.rootPath)
+    initProjectDatabase(projectB.rootPath)
+    const runtimeB = projectRuntimeHost.getActiveView()!
+    runtimeB.database.exec("INSERT INTO project_core(id,project_name,core_outline) VALUES('main','Fiction B','B original')")
+    session = { projectId: projectB.projectId, projectPath: projectB.rootPath, leaseId: projectAccess.beginSession(projectB).leaseId }
+    const beforeB = runtimeB.database.prepare('SELECT * FROM project_core').all()
+    const beforeA = runtimeA.database.prepare('SELECT * FROM project_core').all()
+    const sentBeforeLateResult = sender.send.mock.calls.length
+    try {
+      await expect(mocks.handlers.get('planning-feedback:v1:execute')!({ sender }, { handle: run.handle }, sessionA)).rejects.toThrow()
+      delayed.release()
+      await rejected
+      expect(delayed.fetch).toHaveBeenCalledTimes(1)
+      expect(sender.send).toHaveBeenCalledTimes(sentBeforeLateResult)
+      expect(runtimeA.database.prepare('SELECT * FROM project_core').all()).toEqual(beforeA)
+      expect(runtimeB.database.prepare('SELECT * FROM project_core').all()).toEqual(beforeB)
+      expect(runtimeB.database.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
+      const attempts = runtimeA.database.prepare('SELECT attempt_json FROM generation_attempts').all() as { attempt_json: string }[]
+      expect(attempts).toHaveLength(1)
+      expect(JSON.parse(attempts[0].attempt_json).status).toBe('unknown')
+      projectRuntimeHost.activateView(runtimeA)
+      session = { ...sessionA, leaseId: projectAccess.beginSession(openedProject).leaseId }
+      expect(runtimeA.executionEpoch).toBe(runtimeEpoch)
+      expect(session.leaseId).not.toBe(run.handle.epoch)
+      const replay = await invoke('planning-feedback:v1:execute', { handle: run.handle })
+      expect(replay.outcome.status).toBe('completed')
+      expect(delayed.fetch).toHaveBeenCalledTimes(1)
+    } finally {
+      delayed.release()
+      await execution.catch(() => undefined)
+      projectRuntimeHost.activateView(runtimeA)
+      session = { ...sessionA, leaseId: projectAccess.beginSession(openedProject).leaseId }
+      projectRuntimeHost.releaseIdle(runtimeB)
+    }
+  })
+
+  it('keeps A busy after cancellation until an abort-ignoring provider physically returns', async () => {
+    const base = await invoke('planning-feedback:v1:capture', { target: 'coreOutline' })
+    const run = await invoke('planning-feedback:v1:begin', { input: { baseId: base.baseId, feedback: 'Fiction', constraints: [] },
+      modelId: model.id, uiActionNonce: 'physical-after-cancel' })
+    const runtimeA = projectRuntimeHost.getActiveView()!, sessionA = { ...session }
+    const delayed = delayedStream()
+    const running = invoke('planning-feedback:v1:execute', { handle: run.handle })
+    await delayed.started
+    await invoke('planning-feedback:v1:cancel', { handle: run.handle })
+    const outcome = await running
+    expect(outcome.outcome.status).toBe('incomplete')
+    const attemptsBeforeLate = runtimeA.database.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts').all() as { attempt_json: string; usage_receipt_json: string }[]
+    expect(attemptsBeforeLate).toHaveLength(1)
+    expect(JSON.parse(attemptsBeforeLate[0].attempt_json).status).toBe('unknown')
+    const closedA = vi.fn()
+    const removeCloseListener = onProjectDatabaseBeforeClose(({ database }) => { if (database === runtimeA.database) closedA() })
+    let runtimeB: ReturnType<typeof projectRuntimeHost.getActiveView> = null
+    try {
+      expect(() => projectRuntimeHost.releaseIdle(runtimeA)).toThrow('PROJECT_RUNTIME_BUSY')
+      expect(closedA).not.toHaveBeenCalled()
+      const projectB = projectAccess.createProject(root, 'Cancelled B')
+      createProjectDatabase(projectB.rootPath)
+      initProjectDatabase(projectB.rootPath)
+      runtimeB = projectRuntimeHost.getActiveView()!
+      session = { projectId: projectB.projectId, projectPath: projectB.rootPath, leaseId: projectAccess.beginSession(projectB).leaseId }
+      projectRuntimeHost.activateView(runtimeA)
+      session = { ...sessionA, leaseId: projectAccess.beginSession(openedProject).leaseId }
+      await expect(invoke('planning-feedback:v1:read-run', { handle: run.handle })).rejects.toThrow('GENERATION_OWNER_BUSY')
+      expect(() => projectRuntimeHost.releaseIdle(runtimeA)).toThrow('PROJECT_RUNTIME_BUSY')
+      expect(closedA).not.toHaveBeenCalled()
+      delayed.release()
+      await vi.waitFor(async () => {
+        await expect(invoke('planning-feedback:v1:read-run', { handle: run.handle })).resolves.toBeDefined()
+      })
+      expect(runtimeA.database.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts').all()).toEqual(attemptsBeforeLate)
+      expect(runtimeB.database.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
+      await expect(invoke('planning-feedback:v1:execute', { handle: run.handle })).resolves.toMatchObject({ outcome: { status: 'incomplete' } })
+      expect(delayed.fetch).toHaveBeenCalledTimes(1)
+      expect(closedA).not.toHaveBeenCalled()
+    } finally {
+      delayed.release()
+      await running.catch(() => undefined)
+      removeCloseListener()
+      projectRuntimeHost.activateView(runtimeA)
+      session = { ...sessionA, leaseId: projectAccess.beginSession(openedProject).leaseId }
+      if (runtimeB) projectRuntimeHost.releaseIdle(runtimeB)
+    }
+  })
+
   it('runs the production client through the registered bridge to two candidates and explicit adoption', async () => {
     const fetch = stream('Client candidate')
     const bridge = vi.fn((channel: string, ...args: unknown[]) => mocks.handlers.get(channel)!({ sender }, ...args))
@@ -221,15 +321,16 @@ describe('planning feedback v1 registered IPC', () => {
       .run('# Outline\n\n## 第1章：旧一\n旧一正文\n\n## 第2章：旧二\n旧二正文\n\n## 第3章：旧三\n旧三正文\n\n## 第4章：旧四\n旧四正文')
     const sourceDeps = { db, projectStorageRoot: getProjectDataRoot(session.projectPath), globalDataRoot: mocks.globalRoot,
       readBuiltinPrompt: () => { throw new Error('Unexpected template') } }
-    const owner = createMainGenerationOwner({ database: db, projectId: session.projectId, epoch: session.leaseId,
+    const epoch = session.leaseId
+    const owner = createMainGenerationOwner({ database: db, projectId: session.projectId, projectPath: session.projectPath, epoch,
       assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model,
       dispatch: async (_request, options) => {
         options.onVisible({ kind: 'delta', text: '## 第3章：新三\n三正文\n\n## 第4章：新四\n四正文' })
         return { finishReason: 'stop', usage: null }
       },
       buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDeps,
-        { ...selection, projectId: session.projectId, epoch: session.leaseId, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
-      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDeps, previous, session.leaseId,
+        { ...selection, projectId: session.projectId, epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDeps, previous, epoch,
         modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding })
     try {
       const range = owner.capturePlanningFeedbackBase({ kind: 'plot-outline-range', from: 3, to: 4 })
@@ -385,20 +486,21 @@ describe('planning feedback v1 registered IPC', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
-  it('does not return a late execution into a replaced database handle', async () => {
+  it('does not replace a database handle while its provider request is in flight', async () => {
     const delayed = delayedStream()
     const base = await invoke('planning-feedback:v1:capture', { target: 'coreOutline' })
     const view = await invoke('planning-feedback:v1:begin', { input: { baseId: base.baseId, feedback: '', constraints: [] },
       modelId: model.id, uiActionNonce: 'database-replaced' })
     const running = invoke('planning-feedback:v1:execute', { handle: view.handle })
-    const rejected = expect(running).rejects.toThrow()
     await delayed.started
     const old = getProjectDb()
+    expect(() => closeProjectDatabase()).toThrow('PROJECT_RUNTIME_BUSY')
+    expect(getProjectDb()).toBe(old)
+    delayed.release()
+    await running
     closeProjectDatabase()
     initProjectDatabase(session.projectPath)
     expect(getProjectDb()).not.toBe(old)
-    delayed.release()
-    await rejected
     expect(ProjectCoreRepository.get(getProjectDb()!)!.coreOutline).toBe(base.value)
     expect(delayed.fetch).toHaveBeenCalledTimes(1)
   })
@@ -875,6 +977,39 @@ describe('generation public IPC with actual project authority and SQLite', () =>
       return knowledgeBase
     })
     await expect(invoke('generation:prepare-draft-context', fixture.prepareRequest)).rejects.toThrow('GENERATION_DRAFT_PREPARATION_CHANGED')
+  })
+  it('does not begin knowledge capture after its original view loses authority', async () => {
+    const fixture = await selectedSourceFixture(), kb = await knowledgeBaseLoader.load()
+    const capture = vi.fn(kb.captureWritingKnowledgeSnapshot)
+    let entered!: () => void, release!: () => void
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    vi.spyOn(knowledgeBaseLoader, 'load').mockImplementationOnce(async () => {
+      entered()
+      await gate
+      return { ...kb, captureWritingKnowledgeSnapshot: capture }
+    })
+    const runtimeA = projectRuntimeHost.getActiveView()!, sessionA = { ...session }
+    const pending = invoke('generation:prepare-draft-context', fixture.prepareRequest)
+    const rejected = expect(pending).rejects.toThrow()
+    await started
+    const projectB = projectAccess.createProject(root, 'Knowledge B')
+    createProjectDatabase(projectB.rootPath)
+    initProjectDatabase(projectB.rootPath)
+    const runtimeB = projectRuntimeHost.getActiveView()!
+    session = { projectId: projectB.projectId, projectPath: projectB.rootPath, leaseId: projectAccess.beginSession(projectB).leaseId }
+    try {
+      expect(() => projectRuntimeHost.releaseIdle(runtimeA)).toThrow('PROJECT_RUNTIME_BUSY')
+      release()
+      await rejected
+      expect(capture).not.toHaveBeenCalled()
+    } finally {
+      release()
+      await pending.catch(() => undefined)
+      projectRuntimeHost.activateView(runtimeA)
+      session = { ...sessionA, leaseId: projectAccess.beginSession(openedProject).leaseId }
+      projectRuntimeHost.releaseIdle(runtimeB)
+    }
   })
   it('keeps the original root active when a restart preparation is rejected', async () => {
     const fixture = await selectedSourceFixture()

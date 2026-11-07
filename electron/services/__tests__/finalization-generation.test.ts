@@ -54,7 +54,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], option
   // 「synthetic-b」是作者换上的第二个分工模型，其余 id 都按原夹具模型处理。
   const byId = (id: string): ModelProfile => id === 'synthetic-b' ? { ...model, id, name: '合成模型 B', modelName: 'gpt-4.1-mini' } : model
   let current = true
-  const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectId: 'project', epoch,
+  const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectPath: root, projectId: 'project', epoch,
     assertCurrent: () => { if (!current) throw new Error('GENERATION_EPOCH_STALE') },
     leases: new ModelExecutionLeaseRegistry({ loadModel: byId }), loadModel: byId, dispatch: dispatchSpy,
     buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch,

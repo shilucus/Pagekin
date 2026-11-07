@@ -35,6 +35,7 @@ import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { countDraftUnits } from '../../src/shared/draft-units'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { projectAccess } from '../services/project-access'
+import { projectRuntimeHost } from '../services/project-runtime'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { ImportRunRepository } from '../repositories/import-run-repository'
 import { measurePerformanceOperation, performanceStarted, recordPerformanceCount, recordPerformanceDuration } from '../services/performance-diagnostics'
@@ -337,6 +338,7 @@ export function registerImportController(
     const purpose: ImportPurpose = typeof request === 'string' ? request : (structuredRequest?.purpose ?? 'reference')
     let frozenProject: { rootPath: string; session: ProjectSessionContext } | undefined
     let responseLocale = structuredRequest?.locale
+    let releaseLegacyOperation: (() => void) | undefined
     const assertFrozenProject = () => {
       if (!frozenProject) return
       const active = projectAccess.assertCurrentProjectContext(
@@ -350,6 +352,7 @@ export function registerImportController(
       if (structuredRequest) {
         const active = projectAccess.assertCurrentProjectContext(projectSession, getCurrentProjectPath())
         assertRequiredExpectedProjectPath(active.rootPath, structuredRequest.expectedProjectPath)
+        releaseLegacyOperation = projectRuntimeHost.acquireLegacyOperation('dialog:select-novel-files')
         frozenProject = {
           rootPath: active.rootPath,
           session: Object.freeze({ ...projectSession }) as ProjectSessionContext,
@@ -695,6 +698,7 @@ export function registerImportController(
           : importSelectionErrorMessage(error, responseLocale, limits),
       }
     } finally {
+      releaseLegacyOperation?.()
       recordPerformanceDuration('import.inspect.ms', inspectionStarted)
     }
   })
