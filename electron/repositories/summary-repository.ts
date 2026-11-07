@@ -830,8 +830,7 @@ export class SummaryRepository {
   }
 
   /** Raw immutable prose is the deterministic fallback when a derived projection is stale. */
-  static readFinalizedSource(draftId: number): FinalizedSourceReadResult {
-    const db = getProjectDb()
+  static readFinalizedSource(draftId: number, db = getProjectDb()): FinalizedSourceReadResult {
     if (!db) return { status: 'invalid' }
     if (!Number.isSafeInteger(draftId) || draftId < 1) throw new Error('CONTINUITY_SOURCE_DRAFT_INVALID')
     const row = db.prepare(`

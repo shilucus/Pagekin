@@ -160,6 +160,7 @@ function readFile(root: string, relative: string, optional = false): Buffer | nu
     }
     return fs.readFileSync(absolute);
 }
+export { readFile as readGenerationSourceFile };
 function without(row: Record<string, unknown>, excluded: readonly string[]): Record<string, unknown> { return Object.fromEntries(Object.entries(row).filter(([key]) => !excluded.includes(key))); }
 function freezeAuthorInputs(value: unknown): GenerationAuthorInput[] {
     if (value === undefined) return [];

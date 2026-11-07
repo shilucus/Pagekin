@@ -1,10 +1,10 @@
-import type { PromptTemplate } from '../prompt-templates'
+import type { PromptTemplate } from '../builtin-prompt-templates'
 import {
-  appendRequiredPromptContext,
   composePromptSystemRole,
   getBuiltinPromptTemplate,
   pruneEmptyOptionalPromptSections,
-} from '../prompt-templates'
+} from '../builtin-prompt-templates'
+import { appendRequiredPromptContext } from '../../shared/render-prompt'
 import type { WritingLanguage } from '../../shared/writing-language'
 
 /**

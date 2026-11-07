@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, getProjectDb } from '../../database'
@@ -31,6 +32,26 @@ afterEach(() => {
 })
 
 describe('finalized continuity projection', () => {
+  it('reads finalized prose from the captured database instead of the active project', () => {
+    const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
+    const captured = new Database(':memory:')
+    try {
+      captured.exec(`
+        CREATE TABLE contents (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
+        CREATE TABLE drafts (id INTEGER PRIMARY KEY, chapter_number INTEGER, status TEXT, content_id INTEGER);
+        CREATE TABLE blueprints (chapter_number INTEGER, title TEXT);
+        CREATE TABLE finalization_outbox (draft_id INTEGER, chapter_title TEXT, finalization_id TEXT);
+        INSERT INTO contents VALUES (1, 'captured A prose');
+        INSERT INTO drafts VALUES (1, 1, 'finalized', 1);
+        INSERT INTO blueprints VALUES (1, 'A');
+      `)
+      expect(SummaryRepository.readFinalizedSource(1, captured)).toMatchObject({ status: 'legacy', content: 'captured A prose' })
+      expect(SummaryRepository.readFinalizedSource(1)).toEqual({ status: 'invalid' })
+    } finally {
+      captured.close()
+    }
+  })
+
   it('persists and reads a complete long fact and evidence without losing its final correction', () => {
     const content = '阿青听说宝剑已经售出，' + '这个尚未证实的消息在客栈内被反复转述，'.repeat(20) + '但消息并不属实，宝剑仍在木箱里。'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {

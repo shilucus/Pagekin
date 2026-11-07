@@ -119,6 +119,39 @@ afterEach(() => {
   db.close()
 })
 
+describe('captured roster reads', () => {
+  it('reads only the explicitly captured database without changing either project', () => {
+    db.prepare("INSERT INTO characters(name, role) VALUES ('A', 'protagonist')").run()
+    const other = new Database(db.serialize())
+    try {
+      other.prepare("UPDATE characters SET name='B' WHERE name='A'").run()
+      const beforeA = db.serialize(), beforeB = other.serialize()
+      expect(CharacterRosterRepository.readCaptured(db).entries.map(item => item.name)).toEqual(['A'])
+      expect(CharacterRosterRepository.readCaptured(other).entries.map(item => item.name)).toEqual(['B'])
+      expect(db.serialize()).toEqual(beforeA)
+      expect(other.serialize()).toEqual(beforeB)
+    } finally {
+      other.close()
+    }
+  })
+
+  it('does not initialize missing schema or metadata', () => {
+    const empty = new Database(':memory:')
+    try {
+      expect(() => CharacterRosterRepository.readCaptured(empty)).toThrow()
+      expect(empty.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([])
+      expect(empty.prepare('SELECT total_changes() AS count').get()).toEqual({ count: 0 })
+    } finally {
+      empty.close()
+    }
+    db.prepare("DELETE FROM character_roster_meta WHERE id='main'").run()
+    const before = db.serialize()
+    expect(() => CharacterRosterRepository.readCaptured(db)).toThrow('CHARACTER_ROSTER_META_MISSING')
+    expect(db.serialize()).toEqual(before)
+    expect(db.prepare('SELECT COUNT(*) AS count FROM character_roster_meta').get()).toEqual({ count: 0 })
+  })
+})
+
 function finalizedSource(draftId: number, chapterNumber: number) {
   return {
     draftId,

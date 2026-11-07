@@ -978,6 +978,18 @@ export class CharacterRosterRepository {
     return readSnapshot(db)
   }
 
+  /** Captured project reads require an already migrated roster and never initialize it. */
+  static readCaptured(db: BetterSqlite3.Database): CharacterRosterSnapshot {
+    const columns = db.prepare('PRAGMA table_info(characters)').all() as Array<{ name: string }>
+    const names = new Set(columns.map(column => column.name))
+    if (['name', 'role', 'gender', 'age', 'appearance', 'personality', 'background', 'abilities', 'motivation',
+      'relationships', 'arc', 'notes', 'cs_location', 'cs_power_level', 'cs_physical_state', 'cs_mental_state',
+      'cs_key_items', 'cs_recent_events', 'cs_updated_at_chapter', 'cs_provenance'].some(name => !names.has(name))) {
+      throw new Error('CHARACTER_ROSTER_SCHEMA_MISSING')
+    }
+    return readSnapshot(db)
+  }
+
   static commit(candidate: CharacterRosterCommitRequest, assertGenerationSources?: () => void): CharacterRosterCommitReceipt {
     const db = requiredDb()
     ensureCharacterRosterSchema(db)
