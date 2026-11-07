@@ -304,7 +304,7 @@
       ],
       "rollback": "停新driver，保留候选/收据，人工从已知状态继续；不自动重发。",
       "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "status": "in_progress", "passes": false, "evidence": []
     },
     {
       "id": "SCHED-001",
