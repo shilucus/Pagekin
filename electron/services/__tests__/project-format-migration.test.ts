@@ -1,4 +1,6 @@
-import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
+import { migrateSchema } from '../../migrations/runner'
+import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { createRequire } from 'node:module'
 import * as lance from '@lancedb/lancedb'
 import { Field, Schema, Utf8, Int32 } from 'apache-arrow'
@@ -333,4 +335,64 @@ it.each(['missing-old-projection', 'changed-current-domain'] as const)('refuses 
   expect(result).toMatchObject({ state: 'blocked', code: mode === 'missing-old-projection' ? 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' : 'PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED' })
   expect(fs.existsSync(options.legacy)).toBe(true)
   expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
+})
+
+it.each(['valid', 'missing', 'tampered'] as const)('checks the schema 8 pre-feedback domain before cutover: %s', async mode => {
+  const options = fixture()
+  const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
+  const sourcePath = path.join(options.legacy, 'vela.db')
+  fs.unlinkSync(sourcePath)
+  const source = new Database(sourcePath)
+  try {
+    source.pragma('foreign_keys = ON')
+    source.transaction(() => initializeLegacyBaselineSchema(source))()
+    migrateSchema(new SqliteSchemaAdapter(source), getDesktopMigrationRegistry(), 8)
+    source.prepare("INSERT INTO project_core(id,project_name,core_outline) VALUES('main','Fiction','Original outline')").run()
+    source.prepare('INSERT INTO contents(body) VALUES(?)').run('Synthetic author text')
+  } finally { source.close() }
+  const original = fs.readFileSync(sourcePath)
+  const before = probeProjectSqlite({ databasePath: sourcePath })
+  expect(before.schemaVersion).toBe(8)
+  expect(CURRENT_DESKTOP_SCHEMA_VERSION).toBe(9)
+  const captured: { upgraded?: Awaited<ReturnType<typeof backupProjectSqlite>> } = {}
+  options.dependencies.probeSqlite = databasePath => probeProjectSqlite({ databasePath })
+  options.dependencies.backupSqlite = async (sourceDatabasePath, targetDatabasePath) => {
+    const upgraded = await backupProjectSqlite({ sourceDatabasePath, targetDatabasePath })
+    captured.upgraded = upgraded
+    if (mode === 'missing') {
+      const withoutProjection = { ...upgraded }
+      delete withoutProjection.preFeedbackDomain
+      return withoutProjection
+    }
+    if (mode === 'tampered') return { ...upgraded, preFeedbackDomain: {
+      ...upgraded.preFeedbackDomain!, authorContentHash: 'tampered',
+    } }
+    return upgraded
+  }
+  options.dependencies.verifySqlite = databasePath => verifyProjectSqlite({ databasePath })
+  const checkpoints: string[] = []
+  const result = await migrateProjectFormat({ ...options, checkpoint: stage => { checkpoints.push(stage) } })
+  expect(captured.upgraded?.schemaVersion).toBe(9)
+  expect(captured.upgraded?.preFeedbackDomain).toEqual(before.domain)
+  expect(captured.upgraded?.domain).not.toEqual(before.domain)
+  expect(captured.upgraded?.domain.tableCounts.planning_feedback_core_revision).toBe(1)
+  if (mode !== 'valid') {
+    expect(result).toMatchObject({ state: 'blocked', code: 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' })
+    expect(checkpoints).not.toContain('legacy-renamed')
+    expect(checkpoints).not.toContain('target-renamed')
+    expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
+    expect(fs.readFileSync(sourcePath)).toEqual(original)
+    return
+  }
+  expect(result).toMatchObject({ state: 'ready' })
+  if (result.state !== 'ready') throw new Error('schema 8 fixture failed to migrate')
+  expect(fs.existsSync(options.legacy)).toBe(false)
+  expect(fs.readFileSync(path.join(options.projectRoot, '.ai-novel-migration', `${result.migrationId}.legacy`, 'vela.db'))).toEqual(original)
+  const target = new Database(path.join(result.storageRoot, 'project.db'), { readonly: true })
+  try {
+    expect(target.pragma('user_version', { simple: true })).toBe(9)
+    expect(target.prepare('SELECT body FROM contents').pluck().get()).toBe('Synthetic author text')
+    expect(target.prepare("SELECT core_outline FROM project_core WHERE id='main'").pluck().get()).toBe('Original outline')
+    expect(target.prepare('SELECT COUNT(*) FROM planning_feedback_core_revision').pluck().get()).toBe(1)
+  } finally { target.close() }
 })

@@ -58,6 +58,17 @@ describe('portable runtime freeze sidecar', () => {
     expect(() => readPortableRuntimeFreeze(root)).toThrow('PORTABLE_RUNTIME_FREEZE_INVALID')
   })
 
+  it('freezes planning bases, candidates and adoption nonces independently of matching content', () => {
+    const root = fixture()
+    writeFreeze(root, ['planning_feedback_bases', 'planning_feedback_candidates', 'planning_feedback_adoptions']
+      .map(table => frozen(table, `old-${table}`)))
+    const guard = readPortableRuntimeFreeze(root)
+    for (const table of ['planning_feedback_bases', 'planning_feedback_candidates', 'planning_feedback_adoptions'] as const) {
+      expect(() => guard.assertMutable(table, `old-${table}`)).toThrow('PORTABLE_RUNTIME_FROZEN')
+      expect(() => guard.assertMutable(table, `new-${table}`)).not.toThrow()
+    }
+  })
+
   it('rejects a sidecar path replacement after its descriptor has opened', () => {
     const root = fixture()
     writeFreeze(root, [frozen('import_runs', 'old-run')])

@@ -12,6 +12,9 @@ import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock, withoutDraftRec
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
 import { getCurrentProjectPath } from '../database'
+import { PlanningFeedbackService, type PlanningFeedbackGenerationInput } from './planning-feedback-service'
+import { readPlanningFeedbackTask } from './planning-feedback-generation'
+import { assertPlanningFeedbackObject, type AdoptPlanningFeedbackCandidate, type PlanningFeedbackTarget, type RelineagePlanningFeedbackCandidate, type StagePlanningFeedbackCandidate } from '../../src/shared/planning-feedback'
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
 import { createGenerationRunService, GENERATION_STOPPED, type GenerationRunServiceDependencies } from './generation-run-service'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
@@ -79,7 +82,7 @@ export interface MainGenerationOwnerDependencies {
   assertCurrent: () => void
   leases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
-  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string; legacyRosterKey?: string }, model: SafeGenerationModelReceipt, policy: MainGenerationPolicy) => RunBinding
+  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string; legacyRosterKey?: string; planningFeedbackInput?: PlanningFeedbackGenerationInput }, model: SafeGenerationModelReceipt, policy: MainGenerationPolicy) => RunBinding
   rebuildBinding: (previous: RunBinding, model: SafeGenerationModelReceipt) => RunBinding
   beforeDispatch?: () => void
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
@@ -125,7 +128,8 @@ async function dispatchProvider(value: unknown, options: Parameters<GenerationRu
 
 /** One owner per captured database/session. No renderer budget, lease or hash is authoritative. */
 export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies) {
-  const runtimeFreeze = readPortableRuntimeFreeze(getCurrentProjectPath())
+  const capturedProjectPath = getCurrentProjectPath()
+  const runtimeFreeze = readPortableRuntimeFreeze(capturedProjectPath)
   const repository = new GenerationRunRepository(() => deps.database, Date.now, (table, recordId) => runtimeFreeze.isFrozen(table, recordId))
   const draftEffects = new GenerationDraftEffects(deps.database, repository)
   const runLeases = new Map<string, string>()
@@ -414,13 +418,14 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     preparations.set(preparationId, { binding, knowledgeSnapshot: structuredClone(knowledgeSnapshot) })
     return { preparationId, knowledgeSnapshot: structuredClone(knowledgeSnapshot), selectedDrafts }
   }
-  const begin = (selection: (BeginGenerationRequest | AgentBeginSelection) & { editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string; legacyRosterKey?: string }, batchInitialization = false, agentInitialization = false, editorInitialization = false, finalizationInitialization = false, graphInitialization = false, legacyInitialization = false): MainGenerationRunView => {
+  const begin = (selection: (BeginGenerationRequest | AgentBeginSelection) & { editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string; legacyRosterKey?: string; planningFeedbackInput?: PlanningFeedbackGenerationInput }, batchInitialization = false, agentInitialization = false, editorInitialization = false, finalizationInitialization = false, graphInitialization = false, legacyInitialization = false, planningInitialization = false): MainGenerationRunView => {
     assertCurrent()
     if (!selection || typeof selection.operation !== 'string' || !/^[a-z0-9][a-z0-9:_-]{0,127}$/u.test(selection.operation)
       || !Array.isArray(selection.promptKeys) || selection.promptKeys.length === 0
       || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
       || typeof selection.uiActionNonce !== 'string' || !selection.uiActionNonce.trim() || selection.uiActionNonce.length > 256
-      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'materialDecision', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : []), ...(finalizationInitialization ? ['finalizationGenerationSlot'] : []), ...(graphInitialization ? ['graphGenerationInput', 'graphGenerationKey'] : []), ...(legacyInitialization ? ['legacyRosterKey'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'materialDecision', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : []), ...(finalizationInitialization ? ['finalizationGenerationSlot'] : []), ...(graphInitialization ? ['graphGenerationInput', 'graphGenerationKey'] : []), ...(legacyInitialization ? ['legacyRosterKey'] : []), ...(planningInitialization ? ['planningFeedbackInput'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+    if (selection.operation === 'planning-feedback' && !planningInitialization) throw new Error('GENERATION_FEEDBACK_ADMISSION_REQUIRED')
     if (selection.operation === 'editor-inline' && !editorInitialization) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
     if (['finalized-chapter-notes', 'finalized-character-state'].includes(selection.operation) && !finalizationInitialization) throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     if (Object.values(graphOperations).includes(selection.operation as typeof graphOperations[keyof typeof graphOperations]) && !graphInitialization) throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
@@ -435,6 +440,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (selection.parentRootActionId && repository.budget(selection.parentRootActionId).root.operation === 'editor-inline') throw new Error('GENERATION_EDITOR_CHILD_FORBIDDEN')
     if (selection.parentRootActionId && Object.values(graphOperations).includes(repository.budget(selection.parentRootActionId).root.operation as typeof graphOperations[keyof typeof graphOperations])) throw new Error('GENERATION_GRAPH_CHILD_FORBIDDEN')
     if (selection.parentRootActionId && repository.budget(selection.parentRootActionId).root.operation === 'legacy-character-roster-repair') throw new Error('GENERATION_LEGACY_CHILD_FORBIDDEN')
+    if (selection.parentRootActionId && repository.budget(selection.parentRootActionId).root.operation === 'planning-feedback') throw new Error('GENERATION_FEEDBACK_CHILD_FORBIDDEN')
     if (agentWorkflow?.existing) return viewOf(repository.get(agentWorkflow.existing.runId))
     generationOutputContract(selection)
     const finalizedCharacterContextHash = finalizedCharacters.admit(selection)
@@ -564,8 +570,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return { outcome: finishReason === 'stop' ? { status: 'completed', content, finishReason, receipt: details }
       : { status: 'incomplete', content, finishReason, receipt: details }, run: viewOf(repository.get(receipt.run.runId)) }
   }
-  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false, graphExecution = false, legacyExecution = false, shortOutlineRetryAttemptId?: string): Promise<MainGenerationExecuteReceipt> => {
+  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false, graphExecution = false, legacyExecution = false, shortOutlineRetryAttemptId?: string, planningExecution = false): Promise<MainGenerationExecuteReceipt> => {
     const run = requireRun(request.handle, true)
+    if (run.binding.sourceManifest.operation === 'planning-feedback' && !planningExecution) throw new Error('GENERATION_FEEDBACK_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.operation === 'agent-round' && !agentExecution) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.importSlot && !importExecution) throw new Error('GENERATION_IMPORT_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.operation === 'editor-inline' && !editorExecution) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
@@ -672,7 +679,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       requestedOutputTokens: plan.requestedOutputTokens, inputUpperBoundTokens: plan.inputUpperBoundTokens,
       reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy, purpose: task.purpose,
       ...(plan.budgetDecision ? { budgetDecision: plan.budgetDecision } : {}),
-      ...(run.binding.sourceManifest.importSlot || materialDecision?.shortOutlinePromptHash || repository.readPlotOutline(run.runId) ? { replayTask: task } : {}),
+      ...(run.binding.sourceManifest.importSlot || run.binding.sourceManifest.operation === 'planning-feedback' || materialDecision?.shortOutlinePromptHash || repository.readPlotOutline(run.runId) ? { replayTask: task } : {}),
       ...(reconciliationInjected ? { reconciliationInjected } : {}),
       ...(agentExecution ? { agentToolNames: (run.binding.sourceManifest.agentContext as AgentGenerationContext).input.tools.map(tool => tool.name) } : {}) })
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)
@@ -746,6 +753,19 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
       if (!isDeepStrictEqual(current, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
     }
+  const planningFeedback = () => {
+    assertCurrent()
+    if (!capturedProjectPath) throw new Error('PLANNING_FEEDBACK_PROJECT_ROOT_REQUIRED')
+    return new PlanningFeedbackService({ database: deps.database, projectId: deps.projectId,
+      projectPath: capturedProjectPath, assertCurrent, assertGenerationBindingCurrent: receipt => {
+        const binding = receipt.run.binding
+        // A settled original-project receipt may be staged after restart; it grants no new dispatch.
+        if (runtimeFreeze.isFrozen('generation_runs', receipt.run.runId) || binding.projectId !== deps.projectId
+          || !compareGenerationSourceBindings(binding, deps.rebuildBinding(binding, currentModelReceipt(binding)))) {
+          throw new Error('PLANNING_FEEDBACK_GENERATION_UNPROVEN')
+        }
+      } })
+  }
   const plotOutlineTargetCurrent = (run: DurableGenerationRun, outline: PlotOutlineProgress, target: string): boolean => {
     const raw = deps.database.prepare("SELECT * FROM project_core WHERE id='main'").get() as Record<string, unknown> | undefined
     if (!raw || raw.synopsis !== target) return false
@@ -1136,6 +1156,48 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       ...(artifact ? {artifact} : {}), ...(proposal ? {proposal} : {}) }
   }
   return { begin: (selection: BeginGenerationRequest) => begin(selection), bindMaterialDecision, execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent, agents,
+    capturePlanningFeedbackBase: (target: PlanningFeedbackTarget) => planningFeedback().captureBase(target),
+    preparePlanningFeedback: (input: PlanningFeedbackGenerationInput) => planningFeedback().prepare(input),
+    beginPlanningFeedback: (request: { input: PlanningFeedbackGenerationInput; modelId: string; uiActionNonce: string }) => {
+      assertCurrent()
+      assertPlanningFeedbackObject(request, ['input', 'modelId', 'uiActionNonce'])
+      if (typeof request.uiActionNonce !== 'string' || !request.uiActionNonce.trim() || request.uiActionNonce.length > 256)
+        throw new Error('GENERATION_BEGIN_INVALID')
+      const rows = deps.database.prepare(`SELECT r.run_id FROM generation_runs r JOIN generation_roots g ON g.root_action_id=r.root_action_id
+        WHERE json_extract(g.action_json,'$.operation')='planning-feedback' AND json_extract(g.action_json,'$.projectId')=?
+          AND json_extract(g.action_json,'$.uiActionNonce')=?`).all(deps.projectId, request.uiActionNonce) as { run_id: string }[]
+      if (rows.length > 1) throw new Error('GENERATION_NONCE_CONFLICT')
+      if (rows[0]) {
+        const prior = repository.get(rows[0].run_id)
+        if (!isDeepStrictEqual(request.input, prior.binding.sourceManifest.planningFeedbackInput)
+          || request.modelId !== modelReceipt(prior.binding).modelId) throw new Error('GENERATION_NONCE_CONFLICT')
+        return viewOf(prior)
+      }
+      planningFeedback().prepare(request.input)
+      return begin({ operation: 'planning-feedback', uiActionNonce: request.uiActionNonce, modelId: request.modelId,
+        selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['planning-feedback-v1'], skillStages: ['planning'],
+        output: 'visible-text', planningFeedbackInput: structuredClone(request.input) }, false, false, false, false, false, false, true)
+    },
+    executePlanningFeedback: async (handle: MainGenerationRunHandle) => {
+      const run = requireRun(handle)
+      if (run.binding.sourceManifest.operation !== 'planning-feedback') throw new Error('GENERATION_FEEDBACK_ADMISSION_REQUIRED')
+      const task = readPlanningFeedbackTask(run), invocationNonce = 'planning-feedback:0'
+      const requestHash = textHash(JSON.stringify([task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
+      const prior = repository.findInvocation(run.runId, invocationNonce, requestHash)
+      if (prior) {
+        const running = pending.get(JSON.stringify([run.runId, invocationNonce]))
+        return running ? running.promise : outcomeOf(volatileReceipts.get(prior.attempt.attemptId) ?? prior, task)
+      }
+      if (runAttempts(run.runId).length) throw new Error('GENERATION_FEEDBACK_ATTEMPT_CONFLICT')
+      const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
+      return execute({ handle: current.handle, invocationNonce, task }, false, false, false, false, false, false, undefined, true)
+    },
+    stagePlanningFeedback: (request: StagePlanningFeedbackCandidate) => planningFeedback().stage(request),
+    adoptPlanningFeedback: (request: AdoptPlanningFeedbackCandidate) => planningFeedback().adopt(request),
+    relineagePlanningFeedback: (request: RelineagePlanningFeedbackCandidate) => planningFeedback().relineage(request),
+    listPlanningFeedbackCandidates: (baseId: string) => planningFeedback().listCandidates(baseId),
+    listPlanningFeedbackAdoptions: (baseId: string) => planningFeedback().listAdoptions(baseId),
+    planningFeedbackCandidateState: (candidateId: string) => planningFeedback().candidateState(candidateId),
     readLegacyRosterSource: () => { assertCurrent(); return readLegacyRosterSource(deps.database) },
     adoptLegacyCards: (request: LegacyRosterGenerationChannels['legacy-roster:adopt-existing']['args'][0]) => { assertCurrent(); return adoptLegacyCards(deps.database, request) },
     beginLegacyRosterGeneration: (request: LegacyRosterGenerationChannels['legacy-roster:begin']['args'][0]) => {

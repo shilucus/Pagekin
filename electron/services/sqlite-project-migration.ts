@@ -11,6 +11,7 @@ import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 import { M02_ADDED_CHARACTER_COLUMNS, M02_AUXILIARY_TABLES } from '../migrations/m02-character-identity'
 import { M03_REVIEW_CYCLE_TABLES } from '../migrations/m03-review-cycle'
 import { M07_DRAFT_COLUMNS, logicalTableName } from '../migrations/m07-chapter-recycle'
+import { M08_PLANNING_FEEDBACK_TABLES } from '../migrations/m08-planning-feedback'
 import { initializeLegacyBaselineSchema } from '../migrations/baseline-schema'
 import { ensureBaselineBlueprintTables } from '../migrations/baseline-blueprint-schema'
 import { initializeCharacterRosterMetadata } from '../repositories/character-roster-schema'
@@ -43,6 +44,7 @@ export interface ProjectSqliteEvidence {
   preIdentityDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preAssetDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preRecycleDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
+  preFeedbackDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
 }
 
 function regular(file: string): void {
@@ -102,11 +104,12 @@ function physicalSnapshot(source: string) {
 type DomainColumns = { name: string; columns: string[] }[]
 const quoteIdentifier = (value: string) => '"' + value.replaceAll('"', '""') + '"'
 const M05_ASSET_TABLES = ['character_avatar_assets', 'character_avatar_unresolved'] as const
-function domainColumns(db: BetterSqlite3.Database, preIdentity = false, preAsset = false, preRecycle = preIdentity): DomainColumns {
+function domainColumns(db: BetterSqlite3.Database, preIdentity = false, preAsset = false, preRecycle = preIdentity, preFeedback = false): DomainColumns {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]
   const postLegacyTables = [...M02_AUXILIARY_TABLES, ...M03_REVIEW_CYCLE_TABLES, ...M05_ASSET_TABLES] as readonly string[]
   return tables.filter(({ name }) => (!preIdentity || !postLegacyTables.includes(name))
-    && (!preAsset || !(M05_ASSET_TABLES as readonly string[]).includes(name))).map(({ name }) => ({ name,
+    && (!preAsset || !(M05_ASSET_TABLES as readonly string[]).includes(name))
+    && (!(preIdentity || preAsset || preRecycle || preFeedback) || !(M08_PLANNING_FEEDBACK_TABLES as readonly string[]).includes(name))).map(({ name }) => ({ name,
     columns: (db.prepare(`PRAGMA table_info(${quoteIdentifier(name)})`).all() as { name: string }[]).map(column => column.name)
       .filter(column => !preIdentity || name !== 'characters' || !(M02_ADDED_CHARACTER_COLUMNS as readonly string[]).includes(column))
       .filter(column => !preRecycle || logicalTableName(name) !== 'drafts' || !(M07_DRAFT_COLUMNS as readonly string[]).includes(column)),
@@ -131,7 +134,8 @@ function inspect(db: BetterSqlite3.Database, registry: MigrationRegistry, target
   return { schemaVersion: result.version, fingerprint: result.fingerprint, domain: domain(db),
     ...(result.version >= 3 ? { preIdentityDomain: domain(db, domainColumns(db, true)) } : {}),
     ...(result.version >= 6 ? { preAssetDomain: domain(db, domainColumns(db, false, true)) } : {}),
-    ...(result.version >= 8 ? { preRecycleDomain: domain(db, domainColumns(db, false, false, true)) } : {}) }
+    ...(result.version >= 8 ? { preRecycleDomain: domain(db, domainColumns(db, false, false, true)) } : {}),
+    ...(result.version >= 9 ? { preFeedbackDomain: domain(db, domainColumns(db, false, false, false, true)) } : {}) }
 }
 function qualifiedLegacySource(db: BetterSqlite3.Database): string | null {
   const adapter = new SqliteSchemaAdapter(db)

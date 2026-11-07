@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 
 import { CHARACTER_STATE_TEXT_FIELDS } from '../../src/shared/character-roster'
+import { PLANNING_FEEDBACK_CORE_COLUMNS, planningFeedbackCoreSnapshot } from '../../src/shared/planning-feedback'
 import { readPortableCurrentAuthority } from './portable-current-authority'
 import { parsePortableRuntimeFreeze, readPortableRuntimeFreeze } from './portable-runtime-freeze'
 
@@ -71,6 +72,9 @@ const REQUIRED_JSON_PROJECTORS = new Set([
   'import_run_sources.display_json',
   'import_runs.source_display_json',
   'recovery_candidates.source_snapshot',
+  'planning_feedback_bases.source_json',
+  'planning_feedback_candidates.constraints_json',
+  'planning_feedback_candidates.origin_json',
 ])
 const REVIEW_FINGERPRINT_FIELDS = [
   'chapterBriefHash', 'authorGuidanceHash', 'dependencyHash', 'contextSnapshotHash', 'templateHash',
@@ -103,12 +107,21 @@ const HISTORY_ID_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.f
   post_process_runs: ['id'],
   post_process_steps: ['id'],
   recovery_candidates: ['candidate_id'],
+  planning_feedback_bases: ['base_id'],
+  planning_feedback_candidates: ['candidate_id'],
+  planning_feedback_adoptions: ['adoption_id'],
   review_cycles: ['cycle_id'],
   review_findings: ['cycle_id', 'finding_id'],
 })
 const HISTORY_STATE_COLUMNS = [
   'status', 'state', 'publication_status', 'manuscript_status', 'knowledge_status', 'revision_status',
 ] as const
+const HISTORY_KEY_COLUMNS: Readonly<Record<string, { column: string; id: string }>> = Object.freeze({
+  planning_feedback_adoptions: { column: 'idempotency_key', id: 'adoption_id' },
+  generation_attempts: { column: 'invocation_nonce', id: 'attempt_id' },
+  generation_roots: { column: 'idempotency_key', id: 'root_action_id' },
+  generation_runs: { column: 'open_key', id: 'run_id' },
+})
 
 export type ProjectArchiveServiceErrorCode =
   | 'PORTABLE_ASSET_MISSING'
@@ -730,6 +743,40 @@ function projectDisplay(value: unknown, many: boolean): unknown {
   return many ? projected : projected[0]
 }
 
+function projectPlanningSource(value: unknown): Record<string, string | number> {
+  const keys = Object.keys(PLANNING_FEEDBACK_CORE_COLUMNS)
+  const source = object(parseJson(value), keys)
+  try { return planningFeedbackCoreSnapshot(source) }
+  catch { return fail('PORTABLE_UNSAFE_PROJECTION') }
+}
+
+function projectPlanningConstraints(value: unknown): string[] {
+  const constraints = parseJson(value)
+  if (!Array.isArray(constraints)) fail('PORTABLE_UNSAFE_PROJECTION')
+  return constraints.map(item => safeString(item))
+}
+
+function projectPlanningOrigin(value: unknown): Record<string, unknown> {
+  const source = parseJson(value)
+  if (!source || typeof source !== 'object' || Array.isArray(source)) fail('PORTABLE_UNSAFE_PROJECTION')
+  const kind = (source as Record<string, unknown>).kind
+  const historical = kind === 'portable-history'
+  const sourceKind = historical ? (source as Record<string, unknown>).sourceKind : kind
+  if (sourceKind === 'generated') {
+    const item = object(source, historical ? ['kind', 'sourceKind', 'runId', 'attemptId', 'artifactId']
+      : ['kind', 'runId', 'attemptId', 'artifactId', 'modelLeaseRevision', 'skillSnapshotHash', 'contextSnapshotHash'])
+    if (!historical) for (const key of ['modelLeaseRevision', 'skillSnapshotHash', 'contextSnapshotHash']) contentHash(item[key])
+    return { kind: 'portable-history', sourceKind, runId: safeId(item.runId), attemptId: safeId(item.attemptId), artifactId: safeId(item.artifactId) }
+  }
+  if (sourceKind === 'copied') {
+    const item = object(source, historical ? ['kind', 'sourceKind', 'sourceCandidateId', 'originProjectId', 'sourceTextHash']
+      : ['kind', 'sourceCandidateId', 'originProjectId', 'sourceTextHash'])
+    return { kind: 'portable-history', sourceKind, sourceCandidateId: safeId(item.sourceCandidateId),
+      originProjectId: safeId(item.originProjectId), sourceTextHash: contentHash(item.sourceTextHash) }
+  }
+  return fail('PORTABLE_UNSAFE_PROJECTION')
+}
+
 function requiredProjection(key: string, value: unknown): unknown {
   switch (key) {
     case 'drafts.source_dependencies': return projectSourceDependencies(value)
@@ -740,6 +787,9 @@ function requiredProjection(key: string, value: unknown): unknown {
     case 'import_run_sources.display_json': return projectDisplay(value, false)
     case 'import_runs.source_display_json': return projectDisplay(value, true)
     case 'recovery_candidates.source_snapshot': return projectRecoverySource(value)
+    case 'planning_feedback_bases.source_json': return projectPlanningSource(value)
+    case 'planning_feedback_candidates.constraints_json': return projectPlanningConstraints(value)
+    case 'planning_feedback_candidates.origin_json': return projectPlanningOrigin(value)
     default: return fail('PORTABLE_UNSAFE_PROJECTION')
   }
 }
@@ -851,6 +901,21 @@ export function sanitizePortableDatabase(databasePath: string): {
         const hasHistory = policies.some(policy => policy.disposition === 'historical-nonreplayable')
         const rows = db.prepare(`SELECT rowid AS __portable_rowid__, * FROM ${quote(physical)}`).all() as Array<Record<string, unknown>>
         tableCounts[`table.${table}`] = rows.length
+        const historyKey = HISTORY_KEY_COLUMNS[table]
+        if (historyKey) {
+          const occupied = new Set(rows.flatMap(row => [safeString(row[historyKey.column]),
+            `portable-history:${safeId(row[historyKey.id])}`]))
+          const temporaryUpdate = db.prepare(`UPDATE ${quote(physical)} SET ${quote(historyKey.column)}=? WHERE rowid=?`)
+          let temporaryIndex = 0
+          // User keys may occupy any prefix, including another row's final label.
+          // Vacate every old key before final assignment, avoiding all old/final/temporary values.
+          for (const row of rows) {
+            let temporary: string
+            do { temporary = `portable-temporary:${temporaryIndex++}` } while (occupied.has(temporary))
+            occupied.add(temporary)
+            temporaryUpdate.run(temporary, row.__portable_rowid__)
+          }
+        }
         const updates = columns.filter((_column, index) => {
           const disposition = policies[index]!.disposition
           return disposition === 'redacted-projection' || disposition === 'exclude-machine-authority'
@@ -877,10 +942,15 @@ export function sanitizePortableDatabase(databasePath: string): {
               originalReceiptVerified: false,
             })
           }
-          if (update) update.run(...updates.map(column => neutralValue(
-            `${table}.${column.name}`, column, row[column.name],
-            reviewProof,
-          )), row.__portable_rowid__)
+          if (update) update.run(...updates.map(column => {
+            if (table === 'planning_feedback_bases' && column.name === 'source_hash') {
+              return sha256(JSON.stringify(projectPlanningSource(row.source_json)))
+            }
+            if (historyKey && column.name === historyKey.column) {
+              return `portable-history:${safeId(row[historyKey.id])}`
+            }
+            return neutralValue(`${table}.${column.name}`, column, row[column.name], reviewProof)
+          }), row.__portable_rowid__)
           for (const [index, column] of columns.entries()) {
             if (policies[index]!.disposition !== 'validated-relative') continue
             const value = row[column.name]

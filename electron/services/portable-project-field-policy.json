@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 8,
+  "schemaVersion": 9,
   "rules": {
     "D": ["preserve-domain", "signed-domain-value", "portable-domain-copy"],
     "H": ["historical-nonreplayable", "nonreplayable-history", "portable-history-projector"],
@@ -18,6 +18,7 @@
   ],
   "m06Tables": ["review_cycle_merges"],
   "m07Fields": ["drafts.deletion_id", "drafts.deleted_from_status", "drafts.deleted_at"],
+  "m08Tables": ["planning_feedback_core_revision", "planning_feedback_bases", "planning_feedback_candidates", "planning_feedback_adoptions"],
   "optionalFields": ["characters.avatar"],
   "deltaCharacterFields": ["character_id", "legacy_key", "static_provenance", "identity_revision", "retired"],
   "signedOverrides": {
@@ -95,9 +96,9 @@
     "finalization_outbox": {"finalization_id":"D","draft_id":"D","chapter_number":"D","chapter_title":"D","content_hash":"D","content_revision":"D","content_snapshot":"D","target_file_name":"P","knowledge_document_id":"D","publication_status":"H","last_error":"R","published_at":"D","created_at":"D","updated_at":"D"},
     "finalized_draft_import_operations": {"operation_id":"D","payload_hash":"R","receipt_json":"R","created_at":"H"},
     "generation_artifacts": {"artifact_id":"H","attempt_id":"H","run_id":"H","artifact_json":"R","revision":"H","status":"H"},
-    "generation_attempts": {"attempt_id":"H","reservation_id":"H","run_id":"H","root_action_id":"H","attempt_json":"R","usage_receipt_json":"R","invocation_nonce":"H"},
-    "generation_roots": {"root_action_id":"H","idempotency_key":"H","action_json":"R","budget_json":"R","active_elapsed_ms":"H","active_since_ms":"H","blocked_code":"H","revision":"H"},
-    "generation_runs": {"run_id":"H","root_action_id":"H","binding_json":"R","status":"H","created_at_ms":"H","open_key":"H"},
+    "generation_attempts": {"attempt_id":"H","reservation_id":"H","run_id":"H","root_action_id":"H","attempt_json":"R","usage_receipt_json":"R","invocation_nonce":"X"},
+    "generation_roots": {"root_action_id":"H","idempotency_key":"X","action_json":"R","budget_json":"R","active_elapsed_ms":"H","active_since_ms":"H","blocked_code":"H","revision":"H"},
+    "generation_runs": {"run_id":"H","root_action_id":"H","binding_json":"R","status":"H","created_at_ms":"H","open_key":"X"},
     "import_effect_ledger": {"run_id":"H","stage":"H","batch_id":"H","effect_namespace":"H","effect_key":"H","state":"H","evidence_kind":"H","diagnostic_code":"H","created_at":"H","updated_at":"H"},
     "import_global_fact_operations": {"operation_id":"D","payload_hash":"R","receipt_json":"R","created_at":"H"},
     "import_legacy_identity_bridge": {"id":"X","ciphertext_hex":"X","iv_hex":"X","auth_tag_hex":"X","created_at":"X"},
@@ -113,6 +114,10 @@
     "llm_calls": {"id":"R","model_id":"R","model_name":"R","purpose":"R","prompt_tokens":"R","completion_tokens":"R","total_tokens":"R","duration_ms":"R","success":"R","error_message":"R","created_at":"R"},
     "narrative_thread_confirmations": {"id":"D","plan_id":"D","draft_id":"D","event_type":"D","evidence":"D","reason":"D","created_at":"D"},
     "narrative_thread_plans": {"id":"D","title":"D","type":"D","target_start_chapter":"D","target_end_chapter":"D","author_intent":"D","created_at":"D","updated_at":"D"},
+    "planning_feedback_core_revision": {"id":"D","revision":"H"},
+    "planning_feedback_bases": {"base_id":"H","schema_version":"H","project_id":"H","target":"H","source_revision":"H","source_hash":"R","source_json":"R","value":"H","value_hash":"H","created_at":"H","closed_at":"H","closed_by_adoption_id":"H"},
+    "planning_feedback_candidates": {"candidate_id":"H","schema_version":"H","project_id":"H","base_id":"H","parent_candidate_id":"H","generation_parent_hash":"H","text":"H","text_hash":"H","feedback":"H","constraints_json":"R","origin_json":"R","created_at":"H"},
+    "planning_feedback_adoptions": {"adoption_id":"H","schema_version":"H","project_id":"H","base_id":"H","candidate_id":"H","idempotency_key":"X","request_hash":"X","target":"H","decision":"H","decision_source":"H","text":"H","text_hash":"H","before_value":"H","before_hash":"H","source_revision":"H","committed_revision":"H","created_at":"H"},
     "post_process_runs": {"id":"H","trigger_source_type":"H","trigger_source_id":"H","source_label":"H","all_critical_passed":"H","created_at":"H","updated_at":"H"},
     "post_process_steps": {"id":"H","run_id":"H","step_key":"H","label":"H","critical":"H","ok":"H","error_msg":"R","attempt_count":"H","completed_at":"H","last_attempt_at":"H"},
     "project_core": {"id":"D","project_name":"D","genre":"D","sub_genre":"D","target_audience":"D","total_chapters":"D","words_per_chapter":"D","writing_language":"D","creative_strategy":"D","narrative_thread_dormant_threshold":"D","plot_structure":"D","narrative_pov":"D","writing_style":"D","reference_works":"D","global_guidance":"D","golden_finger":"D","core_outline":"D","world_setting":"D","protagonist_profile":"D","premise":"D","worldbuilding":"D","characters_arch":"D","synopsis":"D","character_states":"D","plot_tree_snapshot":"D","created_at":"D","updated_at":"D"},

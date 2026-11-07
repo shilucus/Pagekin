@@ -35,6 +35,9 @@ import { captureLegacyRosterGenerationContext, legacyRosterGenerationTask } from
 import { readPortableCurrentAuthority } from './portable-current-authority';
 import { currentCharacterProjection } from './current-character-projection';
 import { plotOutlinePolicy, plotOutlineExpected, plotOutlineConfirmedPrefix, type PlotOutlineSource } from '../../src/shared/plot-outline-contract';
+import { capturePlanningFeedbackContext, type PlanningFeedbackGenerationInput } from './planning-feedback-service';
+import { buildPlanningFeedbackTask, type PlanningFeedbackGenerationContext } from './planning-feedback-generation';
+import { readPortableRuntimeFreeze } from './portable-runtime-freeze';
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>;
 export interface GenerationSourceBindingInput {
     plotOutlineSource?: PlotOutlineSource;
@@ -70,6 +73,8 @@ export interface GenerationSourceBindingInput {
     graphGenerationContext?: GraphGenerationContext;
     legacyRosterKey?: string;
     legacyRosterContext?: LegacyRosterGenerationContext;
+    /** Main-only selection admitted by the dedicated feedback owner entry. */
+    planningFeedbackInput?: PlanningFeedbackGenerationInput;
     modelReceipt: SafeGenerationModelReceipt;
     policy: Readonly<Record<string, unknown>>;
     outputContract: string | Readonly<Record<string, unknown>>;
@@ -290,6 +295,15 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     const agentInput = input.agentInput ? validateAgentGenerationInput(input.agentInput) : undefined;
     const editorInlineInput = input.editorInlineInput ? validateEditorInlineInput(input.editorInlineInput) : undefined;
     const graphInput = input.graphGenerationInput ? validateGraphGenerationInput(input.graphGenerationInput) : undefined;
+    if (input.planningFeedbackInput !== undefined || input.operation === 'planning-feedback') {
+        if (input.operation !== 'planning-feedback' || !input.planningFeedbackInput
+            || !isDeepStrictEqual(input.promptKeys, ['planning-feedback-v1']) || !isDeepStrictEqual(input.skillStages, ['planning'])
+            || input.selectedDraftIds.length || input.selectedFinalizedDraftIds.length || input.selectedBlueprintChapterNumbers?.length
+            || input.chapterNumber !== undefined || input.authorInputs?.length || input.outputContract !== 'visible-text'
+            || input.importSlot || input.editorInlineInput || input.graphGenerationInput || input.legacyRosterKey
+            || input.finalizationGenerationSlot || input.reviewRevisionContext || input.knowledgeSnapshot || input.materialDecision
+            || input.agentInput || input.batchId || input.batchIntent || input.finalizedCharacterContextHash) fail('GENERATION_FEEDBACK_SELECTION_INVALID');
+    }
     if (input.legacyRosterKey && (input.operation !== 'legacy-character-roster-repair' || !isDeepStrictEqual(input.promptKeys, ['legacy-roster'])
         || input.skillStages.length || input.selectedDraftIds.length || input.selectedFinalizedDraftIds.length || input.chapterNumber !== undefined
         || input.authorInputs?.length || graphInput)) fail('GENERATION_LEGACY_SELECTION_INVALID');
@@ -358,14 +372,24 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         add(`author-action:${item.id}`, 0, item.text, 'author-constraint', 'explicit immutable author input for this action; not a database or file identity');
     let graphContext: GraphGenerationContext | undefined;
     let legacyContext: LegacyRosterGenerationContext | undefined;
+    let planningFeedbackContext: PlanningFeedbackGenerationContext | undefined;
     // SQLite supplies one read transaction; filesystem selections are read twice below.
     const facts = deps.db.transaction(() => {
         const raw = deps.db.prepare("SELECT * FROM project_core WHERE id='main'").get() as Record<string, unknown> | undefined;
         if (!raw)
             fail('GENERATION_PROJECT_CORE_MISSING');
-        const core = without(raw, ['created_at', 'updated_at', 'character_states', 'plot_tree_snapshot']);
-        const language: WritingLanguage = core.writing_language === 'en-US' ? 'en-US' : 'zh-CN';
+        if (input.planningFeedbackInput) {
+            const guard = readPortableRuntimeFreeze(path.dirname(deps.projectStorageRoot));
+            planningFeedbackContext = capturePlanningFeedbackContext(deps.db, input.planningFeedbackInput, {
+                projectId: input.projectId, assertCurrent: () => {}, isFrozen: (table, id) => guard.isFrozen(table, id),
+            });
+        }
+        const core = planningFeedbackContext ? { ...planningFeedbackContext.source }
+            : without(raw, ['created_at', 'updated_at', 'character_states', 'plot_tree_snapshot']);
+        const language: WritingLanguage = (planningFeedbackContext?.source.writingLanguage ?? core.writing_language) === 'en-US' ? 'en-US' : 'zh-CN';
         add('project-core:main', 0, stable(core), 'author-constraint', 'current project settings');
+        if (planningFeedbackContext) add('planning-feedback:context', planningFeedbackContext.sourceRevision,
+            JSON.stringify(planningFeedbackContext), 'author-constraint', 'original adoption baseline, actual immutable generation parent and explicit feedback');
         if (input.legacyRosterKey) {
             legacyContext = captureLegacyRosterGenerationContext(deps.db, input, input.legacyRosterKey, input.legacyRosterContext);
             add('legacy-roster-context', 0, JSON.stringify(legacyContext), 'author-constraint', 'actual preserved legacy evidence and identity baseline');
@@ -474,6 +498,10 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     let agentPrompt: { selected: string; builtin: string } | undefined;
     const importPrompts: Record<string, import('../../src/services/prompt-templates').PromptTemplate> = {};
     for (const key of input.promptKeys) {
+        if (planningFeedbackContext) {
+            assets.push({ scope: 'builtin', identity: `prompt:${key}:${facts.language}`, hash: hash(JSON.stringify(buildPlanningFeedbackTask(planningFeedbackContext, null))) });
+            continue;
+        }
         if (legacyContext) {
             assets.push({ scope: 'builtin', identity: `prompt:${key}:${facts.language}`, hash: hash(JSON.stringify(legacyRosterGenerationTask(legacyContext))) });
             continue;
@@ -515,6 +543,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         identity: string;
         hash: string;
     }[] = [];
+    let planningFeedbackSkillText: string | null = null;
     for (const stage of input.skillStages) {
         const id = bindings.bindings[stage];
         if (id === undefined) {
@@ -542,6 +571,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         if (scope !== 'builtin' && !inspected.compatible || !['bilingual', facts.language].includes(inspected.metadata.language))
             fail('GENERATION_SKILL_INCOMPATIBLE');
         skills.push({ stage, identity: id, hash: hash(bundled.length ? JSON.stringify([text, ...bundled]) : text) });
+        if (planningFeedbackContext && stage === 'planning') planningFeedbackSkillText = inspected.content;
     }
     for (const file of observed) {
         const now = readFile(file.root, file.relative, true);
@@ -575,6 +605,12 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     if (deps.db.pragma('data_version', { simple: true }) !== dataVersion || deps.db.prepare('SELECT total_changes()').pluck().get() !== changes)
         fail('GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT');
     const sourceManifest = { version: 1, ...(input.finalizedCharacterContextHash ? { finalizedCharacterContextHash: input.finalizedCharacterContextHash } : {}), operation: input.operation, ...(input.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(input.knowledgeSnapshot) } : {}), ...(input.batchId ? { batchId: input.batchId } : {}), ...(input.batchIntent ? { batchIntent: structuredClone(input.batchIntent) } : {}), ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), ...(materialDecision ? { materialDecision, materialDecisionHash } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
+    if (planningFeedbackContext) {
+        const task = buildPlanningFeedbackTask(planningFeedbackContext, planningFeedbackSkillText);
+        Object.assign(sourceManifest, { planningFeedbackInput: structuredClone(input.planningFeedbackInput),
+            planningFeedbackContext, planningFeedbackContextHash: hash(JSON.stringify(planningFeedbackContext)),
+            planningFeedbackSkillText, planningFeedbackTask: task, planningFeedbackTaskHash: hash(JSON.stringify(task)) });
+    }
     if (transferAuthority) Object.assign(sourceManifest, { portableTransferAuthority: transferAuthority });
     if (plotOutlineSource) Object.assign(sourceManifest, { plotOutlineSource: structuredClone(plotOutlineSource) });
     if (input.reviewRevisionContext) Object.assign(sourceManifest, { reviewRevisionContext: structuredClone(input.reviewRevisionContext), reviewRevisionContextHash: hash(JSON.stringify(input.reviewRevisionContext)) });

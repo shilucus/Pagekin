@@ -1,0 +1,341 @@
+import { createHash, randomUUID } from 'node:crypto'
+import type Database from 'better-sqlite3'
+import {
+  PLANNING_FEEDBACK_CORE_COLUMNS, assertPlanningFeedbackAdoption, assertPlanningFeedbackId,
+  assertPlanningFeedbackInstructions, assertPlanningFeedbackObject, isPlanningFeedbackTarget,
+  planningFeedbackAdoptionBinding, planningFeedbackCoreSnapshot,
+  type AdoptPlanningFeedbackCandidate, type PlanningFeedbackAdoption, type PlanningFeedbackBase,
+  type PlanningFeedbackCandidate, type PlanningFeedbackCoreSnapshot, type PlanningFeedbackOrigin,
+  type PlanningFeedbackTable, type PlanningFeedbackTarget, type RelineagePlanningFeedbackCandidate,
+  type StagePlanningFeedbackCandidate,
+} from '../../src/shared/planning-feedback'
+import { isContentHash } from '../../src/shared/source-ref'
+import { isGeneratedGlobalGuidanceValid } from '../../src/services/workflows/novel-config-expansion'
+import { GenerationRunRepository, type GenerationExecutionReceipt } from './generation-run-repository'
+import { ProjectCoreRepository } from './project-core-repository'
+
+type Row = Record<string, unknown>
+const hash = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex')
+function fail(code: string): never { throw new Error(code) }
+function parse(value: unknown): unknown {
+  if (typeof value !== 'string') return fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+  try { return JSON.parse(value) } catch { return fail('PLANNING_FEEDBACK_INTEGRITY_FAILED') }
+}
+function integer(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) return fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+  return Number(value)
+}
+function text(value: unknown): string {
+  if (typeof value !== 'string') return fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+  return value
+}
+function digest(value: unknown): string {
+  if (typeof value !== 'string' || !isContentHash(value)) return fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+  return value
+}
+function coreSnapshot(value: unknown): PlanningFeedbackCoreSnapshot {
+  const keys = Object.keys(PLANNING_FEEDBACK_CORE_COLUMNS)
+  assertPlanningFeedbackObject(value, keys)
+  return planningFeedbackCoreSnapshot(value)
+}
+
+export function readPlanningFeedbackCoreSnapshot(db: Database.Database): PlanningFeedbackCoreSnapshot {
+  return planningFeedbackCoreSnapshot(ProjectCoreRepository.get(db))
+}
+
+export function planningFeedbackSourceHash(source: PlanningFeedbackCoreSnapshot): string {
+  return hash(JSON.stringify(planningFeedbackCoreSnapshot(source)))
+}
+function originSnapshot(value: unknown, frozenHistory = false): PlanningFeedbackOrigin {
+  if (!value || typeof value !== 'object') return fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+  const kind = (value as Row).kind
+  if (kind === 'generated') {
+    assertPlanningFeedbackObject(value, ['kind', 'runId', 'attemptId', 'artifactId', 'modelLeaseRevision', 'skillSnapshotHash', 'contextSnapshotHash'])
+    for (const key of ['runId', 'attemptId', 'artifactId']) assertPlanningFeedbackId(value[key])
+    for (const key of ['modelLeaseRevision', 'skillSnapshotHash', 'contextSnapshotHash']) digest(value[key])
+  } else if (kind === 'copied') {
+    assertPlanningFeedbackObject(value, ['kind', 'sourceCandidateId', 'originProjectId', 'sourceTextHash'])
+    assertPlanningFeedbackId(value.sourceCandidateId)
+    assertPlanningFeedbackId(value.originProjectId)
+    digest(value.sourceTextHash)
+  } else if (kind === 'portable-history' && frozenHistory) {
+    const sourceKind = (value as Row).sourceKind
+    if (sourceKind === 'generated') {
+      assertPlanningFeedbackObject(value, ['kind', 'sourceKind', 'runId', 'attemptId', 'artifactId'])
+      for (const key of ['runId', 'attemptId', 'artifactId']) assertPlanningFeedbackId(value[key])
+    } else if (sourceKind === 'copied') {
+      assertPlanningFeedbackObject(value, ['kind', 'sourceKind', 'sourceCandidateId', 'originProjectId', 'sourceTextHash'])
+      assertPlanningFeedbackId(value.sourceCandidateId)
+      assertPlanningFeedbackId(value.originProjectId)
+      digest(value.sourceTextHash)
+    } else fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+  } else fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+  return value as unknown as PlanningFeedbackOrigin
+}
+
+export interface PlanningFeedbackRepositoryOptions {
+  projectId: string
+  /** Main must verify the captured lease, canonical root and this exact DB handle. */
+  assertCurrent(): void
+  isFrozen(table: PlanningFeedbackTable, recordId: string): boolean
+  /** Rebuild authoritative generation sources and check the actual frozen parent/model/Skill. */
+  assertGenerationCurrent(receipt: GenerationExecutionReceipt, base: PlanningFeedbackBase,
+    parent: PlanningFeedbackCandidate | null, request: StagePlanningFeedbackCandidate): void
+  now?(): number
+}
+
+/** An explicit DB and mandatory authority/freeze guards; no global DB lookup or DDL. */
+export class PlanningFeedbackRepository {
+  constructor(private readonly db: Database.Database, private readonly options: PlanningFeedbackRepositoryOptions) {
+    assertPlanningFeedbackId(options.projectId)
+  }
+
+  private current(): void {
+    if (!this.db.open) fail('PLANNING_FEEDBACK_DATABASE_NOT_READY')
+    this.options.assertCurrent()
+  }
+
+  private transaction<T>(operation: () => T): T {
+    this.current()
+    return this.db.transaction(() => { this.current(); return operation() }).immediate()
+  }
+
+  private now(): number { return integer((this.options.now ?? Date.now)()) }
+
+  private mutable(table: PlanningFeedbackTable, id: string, projectId: string): void {
+    if (projectId !== this.options.projectId || this.options.isFrozen(table, id)) fail('PLANNING_FEEDBACK_HISTORY_FROZEN')
+  }
+
+  private revision(): number {
+    const row = this.db.prepare('SELECT revision FROM planning_feedback_core_revision WHERE id=1').get() as Row | undefined
+    if (!row) return fail('PLANNING_FEEDBACK_REVISION_MISSING')
+    return integer(row.revision)
+  }
+
+  private source(): PlanningFeedbackCoreSnapshot {
+    return readPlanningFeedbackCoreSnapshot(this.db)
+  }
+
+  readSource(): { source: PlanningFeedbackCoreSnapshot; sourceHash: string; sourceRevision: number } {
+    this.current()
+    const source = this.source()
+    return { source, sourceHash: planningFeedbackSourceHash(source), sourceRevision: this.revision() }
+  }
+
+  assertBaseCurrent(baseId: string): PlanningFeedbackBase {
+    const base = this.getBase(baseId)
+    this.ready(base)
+    return base
+  }
+
+  captureBase(target: PlanningFeedbackTarget): PlanningFeedbackBase {
+    if (!isPlanningFeedbackTarget(target)) fail('PLANNING_FEEDBACK_TARGET_INVALID')
+    return this.transaction(() => {
+      const source = this.source(), value = text(source[target])
+      const base: PlanningFeedbackBase = { schemaVersion: 1, baseId: randomUUID(), projectId: this.options.projectId,
+        target, sourceRevision: this.revision(), sourceHash: hash(JSON.stringify(source)), source,
+        value, valueHash: hash(value), createdAt: this.now(), closedAt: null, closedByAdoptionId: null }
+      this.db.prepare(`INSERT INTO planning_feedback_bases
+        (base_id,schema_version,project_id,target,source_revision,source_hash,source_json,value,value_hash,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(base.baseId, 1, base.projectId, target, base.sourceRevision,
+        base.sourceHash, JSON.stringify(source), value, base.valueHash, base.createdAt)
+      return base
+    })
+  }
+
+  getBase(baseId: string): PlanningFeedbackBase {
+    this.current()
+    assertPlanningFeedbackId(baseId)
+    const row = this.db.prepare('SELECT * FROM planning_feedback_bases WHERE base_id=?').get(baseId) as Row | undefined
+    if (!row) return fail('PLANNING_FEEDBACK_BASE_MISSING')
+    if (row.schema_version !== 1 || !isPlanningFeedbackTarget(row.target)) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    const source = coreSnapshot(parse(row.source_json)), value = text(row.value)
+    const base: PlanningFeedbackBase = { schemaVersion: 1, baseId: text(row.base_id), projectId: text(row.project_id),
+      target: row.target, sourceRevision: integer(row.source_revision), sourceHash: digest(row.source_hash), source,
+      value, valueHash: digest(row.value_hash), createdAt: integer(row.created_at),
+      closedAt: row.closed_at === null ? null : integer(row.closed_at),
+      closedByAdoptionId: row.closed_by_adoption_id === null ? null : text(row.closed_by_adoption_id) }
+    if (hash(JSON.stringify(source)) !== base.sourceHash || hash(value) !== base.valueHash || source[base.target] !== value
+      || (base.closedAt === null) !== (base.closedByAdoptionId === null)) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    return base
+  }
+
+  private ready(base: PlanningFeedbackBase): void {
+    this.mutable('planning_feedback_bases', base.baseId, base.projectId)
+    if (base.closedAt !== null || this.revision() !== base.sourceRevision
+      || hash(JSON.stringify(this.source())) !== base.sourceHash) fail('PLANNING_FEEDBACK_SOURCE_CONFLICT')
+  }
+
+  getCandidate(candidateId: string): PlanningFeedbackCandidate {
+    this.current()
+    assertPlanningFeedbackId(candidateId)
+    const row = this.db.prepare('SELECT * FROM planning_feedback_candidates WHERE candidate_id=?').get(candidateId) as Row | undefined
+    if (!row) return fail('PLANNING_FEEDBACK_CANDIDATE_MISSING')
+    if (row.schema_version !== 1) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    const constraints = parse(row.constraints_json)
+    assertPlanningFeedbackInstructions(row.feedback, constraints)
+    const candidate: PlanningFeedbackCandidate = { schemaVersion: 1, candidateId: text(row.candidate_id), projectId: text(row.project_id),
+      baseId: text(row.base_id), parentCandidateId: row.parent_candidate_id === null ? null : text(row.parent_candidate_id),
+      generationParentHash: digest(row.generation_parent_hash), text: text(row.text), textHash: digest(row.text_hash),
+      feedback: text(row.feedback), constraints: constraints as string[],
+      origin: originSnapshot(parse(row.origin_json), this.options.isFrozen('planning_feedback_candidates', candidateId)), createdAt: integer(row.created_at) }
+    const base = this.getBase(candidate.baseId)
+    if (hash(candidate.text) !== candidate.textHash || base.projectId !== candidate.projectId) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    const parent = candidate.parentCandidateId
+      ? this.db.prepare('SELECT base_id,project_id,text,text_hash FROM planning_feedback_candidates WHERE candidate_id=?').get(candidate.parentCandidateId) as Row | undefined
+      : undefined
+    if (candidate.parentCandidateId && (!parent || parent.base_id !== candidate.baseId || parent.project_id !== candidate.projectId
+      || hash(text(parent.text)) !== parent.text_hash)) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    if (candidate.generationParentHash !== (parent?.text_hash ?? base.valueHash)) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    return candidate
+  }
+
+  listCandidates(baseId: string): PlanningFeedbackCandidate[] {
+    this.getBase(baseId)
+    return (this.db.prepare('SELECT candidate_id FROM planning_feedback_candidates WHERE base_id=? ORDER BY created_at,candidate_id').all(baseId) as Row[])
+      .map(row => this.getCandidate(text(row.candidate_id)))
+  }
+
+  candidateState(candidateId: string): 'ready' | 'conflict' | 'frozen' | 'adopted' {
+    const candidate = this.getCandidate(candidateId), base = this.getBase(candidate.baseId)
+    if (candidate.projectId !== this.options.projectId || this.options.isFrozen('planning_feedback_candidates', candidateId)
+      || this.options.isFrozen('planning_feedback_bases', base.baseId)) return 'frozen'
+    if (base.closedByAdoptionId) {
+      const adoption = this.db.prepare('SELECT candidate_id FROM planning_feedback_adoptions WHERE adoption_id=?').get(base.closedByAdoptionId) as Row | undefined
+      return adoption?.candidate_id === candidateId ? 'adopted' : 'conflict'
+    }
+    return this.revision() === base.sourceRevision && hash(JSON.stringify(this.source())) === base.sourceHash ? 'ready' : 'conflict'
+  }
+
+  private insertCandidate(base: PlanningFeedbackBase, parent: PlanningFeedbackCandidate | null, value: string,
+    feedback: string, constraints: readonly string[], origin: Exclude<PlanningFeedbackOrigin, { kind: 'portable-history' }>): PlanningFeedbackCandidate {
+    const candidate: PlanningFeedbackCandidate = { schemaVersion: 1, candidateId: randomUUID(), projectId: this.options.projectId,
+      baseId: base.baseId, parentCandidateId: parent?.candidateId ?? null, generationParentHash: parent?.textHash ?? base.valueHash,
+      text: value, textHash: hash(value), feedback, constraints: [...constraints], origin, createdAt: this.now() }
+    this.db.prepare(`INSERT INTO planning_feedback_candidates
+      (candidate_id,schema_version,project_id,base_id,parent_candidate_id,generation_parent_hash,text,text_hash,feedback,constraints_json,origin_json,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(candidate.candidateId, 1, candidate.projectId, base.baseId, candidate.parentCandidateId,
+      candidate.generationParentHash, value, candidate.textHash, feedback, JSON.stringify(constraints), JSON.stringify(origin), candidate.createdAt)
+    return candidate
+  }
+
+  stageCandidate(request: StagePlanningFeedbackCandidate): PlanningFeedbackCandidate {
+    assertPlanningFeedbackObject(request, ['baseId', 'feedback', 'constraints', 'runId', 'attemptId', 'artifactId'], ['parentCandidateId'])
+    for (const value of [request.baseId, request.runId, request.attemptId, request.artifactId]) assertPlanningFeedbackId(value)
+    assertPlanningFeedbackInstructions(request.feedback, request.constraints)
+    return this.transaction(() => {
+      const base = this.getBase(request.baseId)
+      this.ready(base)
+      const parent = request.parentCandidateId == null ? null : this.getCandidate(request.parentCandidateId)
+      if (parent) {
+        this.mutable('planning_feedback_candidates', parent.candidateId, parent.projectId)
+        if (parent.baseId !== base.baseId) fail('PLANNING_FEEDBACK_PARENT_CONFLICT')
+      }
+      const receipt = new GenerationRunRepository(() => this.db).receipt(request.attemptId)
+      const artifact = receipt.artifact
+      const discarded = this.db.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status='discarded'").get(request.artifactId)
+      if (!artifact || receipt.run.runId !== request.runId || artifact.artifactId !== request.artifactId
+        || receipt.run.binding.projectId !== this.options.projectId
+        || (receipt.attempt.status !== 'settled' && receipt.attempt.status !== 'unknown')
+        || receipt.result?.finishReason !== 'stop'
+        || receipt.failureCode || receipt.unsavedTail || receipt.budget.root.status === 'cancelled'
+        || discarded || !artifact.text.trim()) fail('PLANNING_FEEDBACK_GENERATION_UNPROVEN')
+      if (base.target === 'globalGuidance' && !isGeneratedGlobalGuidanceValid(artifact.text)) fail('PLANNING_FEEDBACK_TEXT_INVALID')
+      const proof: unknown = this.options.assertGenerationCurrent(receipt, base, parent, request)
+      if (proof !== undefined) fail('PLANNING_FEEDBACK_ASYNC_PROOF_INVALID')
+      this.current()
+      this.ready(base)
+      const fingerprint = artifact.fingerprint
+      const origin = { kind: 'generated' as const, runId: request.runId, attemptId: request.attemptId,
+        artifactId: artifact.artifactId, modelLeaseRevision: fingerprint.modelLeaseRevision,
+        skillSnapshotHash: fingerprint.skillSnapshotHash, contextSnapshotHash: fingerprint.contextSnapshotHash }
+      originSnapshot(origin)
+      return this.insertCandidate(base, parent, artifact.text, request.feedback, request.constraints, origin)
+    })
+  }
+
+  relineageCandidate(request: RelineagePlanningFeedbackCandidate): PlanningFeedbackCandidate {
+    assertPlanningFeedbackObject(request, ['baseId', 'sourceCandidateId', 'feedback', 'constraints'])
+    assertPlanningFeedbackId(request.baseId)
+    assertPlanningFeedbackId(request.sourceCandidateId)
+    assertPlanningFeedbackInstructions(request.feedback, request.constraints)
+    return this.transaction(() => {
+      const base = this.getBase(request.baseId)
+      this.ready(base)
+      const source = this.getCandidate(request.sourceCandidateId), sourceBase = this.getBase(source.baseId)
+      if (sourceBase.target !== base.target || source.baseId === base.baseId) fail('PLANNING_FEEDBACK_PARENT_CONFLICT')
+      return this.insertCandidate(base, null, source.text, request.feedback, request.constraints, { kind: 'copied',
+        sourceCandidateId: source.candidateId, originProjectId: source.projectId, sourceTextHash: source.textHash })
+    })
+  }
+
+  private adoption(row: Row): PlanningFeedbackAdoption {
+    if (row.schema_version !== 1 || !isPlanningFeedbackTarget(row.target) || row.decision_source !== 'author-action') {
+      return fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    }
+    const portableHistory = this.options.isFrozen('planning_feedback_adoptions', text(row.adoption_id))
+      && row.request_hash === '' && row.idempotency_key === `portable-history:${text(row.adoption_id)}`
+    const result: PlanningFeedbackAdoption = { schemaVersion: 1, adoptionId: text(row.adoption_id), projectId: text(row.project_id),
+      baseId: text(row.base_id), candidateId: text(row.candidate_id), idempotencyKey: text(row.idempotency_key),
+      requestHash: portableHistory ? '' : digest(row.request_hash),
+      target: row.target, decision: row.decision as PlanningFeedbackAdoption['decision'], decisionSource: 'author-action',
+      text: text(row.text), textHash: digest(row.text_hash),
+      beforeValue: text(row.before_value), beforeHash: digest(row.before_hash), sourceRevision: integer(row.source_revision),
+      committedRevision: integer(row.committed_revision), createdAt: integer(row.created_at) }
+    assertPlanningFeedbackAdoption({ candidateId: result.candidateId, idempotencyKey: result.idempotencyKey, decision: result.decision, text: result.text })
+    const candidate = this.getCandidate(result.candidateId), base = this.getBase(result.baseId)
+    if (hash(result.text) !== result.textHash || hash(result.beforeValue) !== result.beforeHash
+      || base.projectId !== result.projectId || candidate.baseId !== base.baseId || result.target !== base.target
+      || result.sourceRevision !== base.sourceRevision || result.beforeValue !== base.value
+      || (!portableHistory && hash(planningFeedbackAdoptionBinding(result, candidate, base, result.textHash)) !== result.requestHash)) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    return result
+  }
+
+  listAdoptions(baseId: string): PlanningFeedbackAdoption[] {
+    this.getBase(baseId)
+    return (this.db.prepare('SELECT * FROM planning_feedback_adoptions WHERE base_id=? ORDER BY created_at,adoption_id').all(baseId) as Row[])
+      .map(row => this.adoption(row))
+  }
+
+  adopt(request: AdoptPlanningFeedbackCandidate): PlanningFeedbackAdoption {
+    assertPlanningFeedbackAdoption(request)
+    return this.transaction(() => {
+      // Replay is checked before source CAS, so a lost reply never performs the write twice.
+      const prior = this.db.prepare('SELECT * FROM planning_feedback_adoptions WHERE project_id=? AND idempotency_key=?')
+        .get(this.options.projectId, request.idempotencyKey) as Row | undefined
+      const candidate = this.getCandidate(request.candidateId), base = this.getBase(candidate.baseId)
+      this.mutable('planning_feedback_candidates', candidate.candidateId, candidate.projectId)
+      this.mutable('planning_feedback_bases', base.baseId, base.projectId)
+      const payloadHash = hash(request.text), requestHash = hash(planningFeedbackAdoptionBinding(request, candidate, base, payloadHash))
+      if (prior) {
+        const receipt = this.adoption(prior)
+        this.mutable('planning_feedback_adoptions', receipt.adoptionId, receipt.projectId)
+        if (receipt.requestHash !== requestHash) fail('PLANNING_FEEDBACK_IDEMPOTENCY_CONFLICT')
+        return receipt
+      }
+      this.ready(base)
+      if (request.decision === 'full' && request.text !== candidate.text) fail('PLANNING_FEEDBACK_TEXT_INVALID')
+      // Author-edited/partial text uses the existing free-text field contract, not generated-only formatting rules.
+      const adoptionId = randomUUID(), createdAt = this.now()
+      ProjectCoreRepository.update({ [base.target]: request.text }, this.db)
+      this.current()
+      if (hash(JSON.stringify(this.source())) !== hash(JSON.stringify({ ...base.source, [base.target]: request.text }))) fail('PLANNING_FEEDBACK_WRITE_FAILED')
+      // A successful adoption consumes F0 even if its final text is unchanged; raw same-value edits do not.
+      if (request.text === base.value) {
+        const consumed = this.db.prepare('UPDATE planning_feedback_core_revision SET revision=revision+1 WHERE id=1 AND revision=?').run(base.sourceRevision)
+        if (consumed.changes !== 1) fail('PLANNING_FEEDBACK_SOURCE_CONFLICT')
+      }
+      const committedRevision = this.revision()
+      if (committedRevision !== base.sourceRevision + 1) fail('PLANNING_FEEDBACK_WRITE_FAILED')
+      this.db.prepare(`INSERT INTO planning_feedback_adoptions
+        (adoption_id,schema_version,project_id,base_id,candidate_id,idempotency_key,request_hash,target,decision,decision_source,text,text_hash,before_value,before_hash,source_revision,committed_revision,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(adoptionId, 1, this.options.projectId, base.baseId, candidate.candidateId,
+        request.idempotencyKey, requestHash, base.target, request.decision, 'author-action', request.text, payloadHash, base.value, base.valueHash,
+        base.sourceRevision, committedRevision, createdAt)
+      const closed = this.db.prepare('UPDATE planning_feedback_bases SET closed_at=?,closed_by_adoption_id=? WHERE base_id=? AND closed_at IS NULL')
+        .run(createdAt, adoptionId, base.baseId)
+      if (closed.changes !== 1) fail('PLANNING_FEEDBACK_SOURCE_CONFLICT')
+      return this.adoption(this.db.prepare('SELECT * FROM planning_feedback_adoptions WHERE adoption_id=?').get(adoptionId) as Row)
+    })
+  }
+}

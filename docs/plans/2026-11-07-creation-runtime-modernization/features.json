@@ -356,7 +356,10 @@
       ],
       "rollback": "停新候选采用，保留候选/旧快照/收据；不重写原事实，不复用正文revisions表作万能历史。",
       "requiredEvidenceTypes": ["contract_review", "deterministic"],
-      "status": "not_started", "passes": false, "evidence": []
+      "status": "in_progress", "passes": false, "evidence": [
+        { "type": "contract_review", "sourceSha": "b9c3855e87087d3fd0102356ed59e2fba53e7cf3", "artifactOrReceipt": "stage-2a-evidence.md#scope-and-review", "environment": "Windows x64; integrated source hashes in stage evidence", "result": "Stage 2A internal eight-target kernel accepted after independent receipt/source and storage/migration re-review", "limitations": "Partial FEEDBACK-001 only; no chapter-range adapter, UI or public entrypoint acceptance. Parent SHA plus exact implementation hashes identifies the tested version." },
+        { "type": "deterministic", "sourceSha": "b9c3855e87087d3fd0102356ed59e2fba53e7cf3", "artifactOrReceipt": "stage-2a-evidence.md#actual-commands", "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0", "result": "480 owner/source, 262 kernel/portable and 170 compatibility tests passed; typecheck, lint, i18n and source build exit 0", "limitations": "Separate batches include overlapping tests. No full-suite, Electron, browser, real-model or platform qualification in this slice." }
+      ]
     },
     {
       "id": "FEEDBACK-002",

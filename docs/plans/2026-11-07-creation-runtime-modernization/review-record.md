@@ -161,3 +161,13 @@ F2-D1 README SHA256 `6078CEF689C0BD0095EBF16B5942C40357B5ED439D2F70AF7D2463C8065
 - 最终README、features的SHA256见A3/A4；最终evidence-map为`AB773F53AA90E935568AA74500938FA2099E7115B6CE9246C74CE22F4FA0C136`。本次仅更新3份方案文档并新增features.json，未运行项目脚本/测试/构建/服务、真实模型、备份恢复或平台操作，未作Git或外部状态写入。
 
 静态检查结果全部无诊断；产品实现、性能改善、模型质量、备份恢复、视觉与平台资格仍为未执行项。
+
+## 2026-11-07 Implementation: Stage 2A
+
+This section records the separately authorized implementation run, not a revision of the earlier documentation-only review. F2 README and evidence-map hashes remain unchanged.
+
+- Scope: FEEDBACK-001 internal kernel for six configuration text fields plus premise/worldbuilding, with actual main-owned task/Skill proof, source revisions, transactional adoption/history and package-local portable recovery. No visible design, public IPC/API, chapter-range or full feature acceptance.
+- Independent receipt/source reviewer: gpt-6.1-terra/high; no implementation ownership. Found that untrusted usage and absent usage produce accounting `unknown` even for a durable `stop`. Fixed both proof layers to accept only complete persisted stop with exact source/task/artifact and no failure, tail or cancellation; ledger remains unknown and fixed-nonce execution never resends. Re-review found no remaining in-scope code blocker.
+- Independent storage/migration reviewer: inherited session model; no implementation ownership. Found intermediate UNIQUE collisions when legal nonces occupy another row's final portable-history label, and missing schema 8 pre-feedback projection in format coordination. Added transactional collision-free key transition and source-version-specific domain comparison; actual-adoption, repeated archive and real SQLite missing/tampered projection regressions cover them. Re-review found no remaining in-scope code blocker, conditional on the compatibility run, which root subsequently completed successfully.
+- Root executed 480/480 owner/source tests, 262/262 kernel/portable tests and 170/170 compatibility tests in separate batches; typecheck/lint/i18n/source build exit 0. Reviewers did not independently execute these commands. Earlier failed runs remain recorded, not overwritten into PASS.
+- The package acceptance and frozen implementation hashes are in [stage-2a-evidence.md](stage-2a-evidence.md). FEEDBACK-001 remains in_progress/passes=false. Existing protected staged repository analysis is outside the implementation commit. No claim of real-model quality, visible UI acceptance or target-platform qualification.
