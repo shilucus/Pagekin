@@ -136,6 +136,7 @@ export async function startFakeModel(diagnostics) {
   let keylessEmbeddings = false
   let importInference = false
   let contextLengthRejection = null
+  let rateLimited = false
   /** 每次被接受的嵌入请求带的 Authorization 头（没有时为 null），场景据此确认本机检索模型真的没带 Key。 */
   const embeddingAuthorizations = []
   const streamLog = []
@@ -153,6 +154,7 @@ export async function startFakeModel(diagnostics) {
   }
   /** 之后的正文回复按 chunks 逐块发出，块间隔 intervalMs；每块发出的时刻记进 streamLog（epoch 毫秒与累计块数）。 */
   const streamProse = plan => { stream = plan; streamLog.length = 0 }
+  const rejectRateLimit = (rejected = true) => { rateLimited = rejected }
   /** 之后的创作资料角色提取回一份合法 JSON（每份资料默认两张卡，cards 限定张数，夹具只有 1–2 张）；不开时与以前一样回正文，提取失败，导入类场景不会停在等你确认。 */
   const replyCharacterCards = (cards = 2) => {
     if (cards !== 1 && cards !== 2) throw new Error(`replyCharacterCards: cards 只能是 1 或 2，收到 ${cards}`)
@@ -233,6 +235,12 @@ export async function startFakeModel(diagnostics) {
     }
     if (request.url !== '/v1/chat/completions') { response.writeHead(404).end(); return }
     await pass()
+    if (rateLimited) {
+      record('rate-limit', 'fixture HTTP 429')
+      response.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '1' })
+        .end(JSON.stringify({ error: { type: 'rate_limit_error', code: 'rate_limit_exceeded', message: 'Fictional local rate limit.' } }))
+      return
+    }
     if (contextLengthRejection) {
       record('context-length', `${Buffer.byteLength(JSON.stringify(body.messages ?? []))} 字节`)
       response.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify(contextLengthRejection))
@@ -242,7 +250,8 @@ export async function startFakeModel(diagnostics) {
     const reply = responseFor(prompt, { extraction, plotTree, review, characterState, importInference })
     const { kind } = reply
     const content = kind === 'character-state' && brokenCharacterState ? '角色状态暂时无法整理。' : reply.content
-    chats.push({ kind, model: body.model, messages: body.messages })
+    chats.push({ kind, model: body.model, messages: body.messages,
+      maxTokens: body.max_tokens ?? body.max_completion_tokens ?? null, temperature: body.temperature ?? null })
     record(kind, prompt.slice(0, 120).replace(/\s+/g, ' '))
     response.writeHead(200, { 'Content-Type': 'text/event-stream' })
     if (kind === 'character-state' && droppedCharacterStates > 0) {
@@ -252,21 +261,29 @@ export async function startFakeModel(diagnostics) {
       return
     }
     const finish = kind === 'prose' && failedProse ? 'content_filter' : 'stop'
-    if (kind === 'prose' && stream) {
-      for (const [index, chunk] of stream.chunks.entries()) {
+    const proseStream = kind === 'prose' ? stream : null
+    if (proseStream) {
+      for (const reasoning of proseStream.reasoningChunks ?? []) {
+        if (response.destroyed) return
+        response.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: reasoning }, finish_reason: null }] })}\n\n`)
+        await new Promise(resolve => setTimeout(resolve, proseStream.reasoningIntervalMs ?? proseStream.intervalMs))
+      }
+      for (const [index, chunk] of proseStream.chunks.entries()) {
+        if (response.destroyed) return
         response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk }, finish_reason: null }] })}\n\n`)
         streamLog.push({ at: Date.now(), count: index + 1 })
-        await new Promise(resolve => setTimeout(resolve, stream.intervalMs))
+        await new Promise(resolve => setTimeout(resolve, proseStream.intervalMs))
       }
       response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: finish }] })}\n\n`)
     } else {
       response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: finish }] })}\n\n`)
     }
-    response.write('data: {"choices":[],"usage":{"prompt_tokens":400,"completion_tokens":200,"total_tokens":600}}\n\n')
+    response.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 400, completion_tokens: 200, total_tokens: 600,
+      ...(proseStream?.reasoningChunks?.length ? { completion_tokens_details: { reasoning_tokens: 32 } } : {}) } })}\n\n`)
     response.end('data: [DONE]\n\n')
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   server.unref()
-  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview, replyCharacterState, acceptKeylessEmbeddings, replyImport, rejectContextLength, embeddingAuthorizations,
+  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, rejectRateLimit, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview, replyCharacterState, acceptKeylessEmbeddings, replyImport, rejectContextLength, embeddingAuthorizations,
     close: () => new Promise(resolve => { server.closeAllConnections(); server.close(() => resolve()) }) }
 }

@@ -5,14 +5,73 @@ import path from 'node:path'
 import process from 'node:process'
 import { afterEach, it, vi } from 'vitest'
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { appearanceWrite, assertBuilt, captureFailure, driveSessions, finishRealSession, harvestModelLog, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs,
+import { appearanceWrite, assertBuilt, captureFailure, driveSessions, finalizeSessionObservations, finishRealSession, harvestModelLog, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs,
   releaseSessionRoot, scanRunForSecret, sessionIsClean, writeConsoleLog } from '../drive.mjs'
 import { fileStamps } from '../real-model.mjs'
 import { BASELINE_SESSIONS, EXTRA_SCENARIOS, SCENARIOS } from '../scenarios.mjs'
+import { appendPerformanceFailureDiagnostic } from '../performance-baseline.mjs'
 
 const parents = []
 afterEach(() => { for (const parent of parents.splice(0)) fs.rmSync(parent, { recursive: true, force: true }) })
 const tempParent = () => { const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'drive-args-')); parents.push(parent); return parent }
+
+it('成功收尾也在性能截止之后采集最后的网络观测', async () => {
+  const shared = {}, order = []
+  const result = await finalizeSessionObservations({ shared,
+    app: { evaluate: async () => { order.push('network'); return [] } },
+    context: { finalizePerformanceEvidence: async () => { order.push('performance') } } })
+  assert.deepEqual(order, ['performance', 'network'])
+  assert.deepEqual(result.errors, [])
+  assert.deepEqual(shared.externalRequests, [])
+  assert.equal(shared.externalRequestsCoverage, 'observed_before_quit')
+})
+
+it('失败收尾仍观察网络，保留性能截止错误和外部请求违规两项证据', async () => {
+  const shared = {}, report = { failureStage: 'workflow', success: false, failureDiagnostics: [] }
+  const cause = Object.assign(new Error('private-workflow'), { code: 'ECONNRESET' })
+  appendPerformanceFailureDiagnostic(report.failureDiagnostics, cause, 'scenario', 'workflow')
+  const original = Object.assign(new Error('private-cutoff', { cause }), { performanceBaseline: report, code: 'ETIMEDOUT' })
+  const app = { evaluate: vi.fn(async () => ['https://example.invalid']) }
+  const result = await finalizeSessionObservations({ app, shared, restartRequests: ['https://restart.invalid'],
+    context: { finalizePerformanceEvidence: async () => { throw original } }, networkMessage: 'network violation' })
+  assert.equal(result.errors[0], original)
+  assert.match(result.errors[1].message, /network violation/u)
+  assert.equal(result.performanceBaseline, report)
+  assert.deepEqual(shared.externalRequests, ['https://restart.invalid', 'https://example.invalid'])
+  assert.equal(shared.externalRequestsCoverage, 'observed_before_quit')
+  assert.equal(app.evaluate.mock.calls.length, 1)
+  const receipt = JSON.parse(JSON.stringify({ measured: report, ...shared }))
+  assert.deepEqual(receipt.measured.failureDiagnostics, [{ source: 'scenario', stage: 'workflow', errorClass: 'Error', code: 'ECONNRESET' }])
+  assert.deepEqual(receipt.failureDiagnostics, [
+    { source: 'cleanup', stage: 'driver_finalize', errorClass: 'Error', code: 'ETIMEDOUT' },
+    { source: 'cleanup', stage: 'network_observation', errorClass: 'AssertionError', code: 'ERR_ASSERTION' },
+  ])
+  assert.doesNotMatch(JSON.stringify(receipt), /private-workflow|private-cutoff|network violation/u)
+})
+
+it('网络日志不可用时不伪造空数组', async () => {
+  const shared = {}
+  const result = await finalizeSessionObservations({ app: { evaluate: async () => undefined }, shared })
+  assert.equal(shared.externalRequests, null)
+  assert.equal(shared.externalRequestsCoverage, 'unavailable')
+  assert.equal(result.errors.length, 1)
+})
+
+it('性能截止挂起有界返回，随后仍采集网络，取消计时器', async () => {
+  vi.useFakeTimers()
+  try {
+    const shared = {}, app = { evaluate: vi.fn(async () => []) }
+    const pending = finalizeSessionObservations({ app, shared, timeoutMs: 50,
+      context: { finalizePerformanceEvidence: () => new Promise(() => {}) } })
+    await vi.advanceTimersByTimeAsync(50)
+    const result = await pending
+    assert.equal(result.errors.length, 1)
+    assert.equal(result.errors[0].message, 'DRIVE_FINAL_OBSERVATION_TIMEOUT')
+    assert.deepEqual(shared.externalRequests, [])
+    assert.equal(shared.externalRequestsCoverage, 'observed_before_quit')
+    assert.equal(vi.getTimerCount(), 0)
+  } finally { vi.useRealTimers() }
+})
 
 it('pnpm 透传的 -- 与全部参数都能解析', () => {
   const options = parseArgs(['--', '--scenario', 'baseline-all', '--theme', 'dark', '--out', 'shots/x', '--dump-dom', '--console', '--app-root', '../trunk'])
@@ -31,6 +90,13 @@ it('默认浅色、诊断关闭、输出到 .runtime/redesign-baseline', () => {
   assert.equal(options.console, false)
   assert.equal(path.basename(path.dirname(options.out)), '.runtime')
   assert.equal(path.basename(options.out), 'redesign-baseline')
+})
+
+it.each(['perf-long-stream', 'perf-slow-embedding', 'perf-rate-limit'])('独立注册压力场景 %s，不改变 baseline-all', scenario => {
+  assert.equal(parseArgs(['--scenario', scenario]).scenario, scenario)
+  assert.equal(Object.hasOwn(SCENARIOS, scenario), false)
+  assert.equal(Object.hasOwn(EXTRA_SCENARIOS, scenario), false)
+  assert.equal(JSON.stringify(BASELINE_SESSIONS).includes(scenario), false)
 })
 
 it('拒绝缺失或未知的场景、主题与参数', () => {

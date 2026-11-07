@@ -70,3 +70,37 @@ it('rejectContextLength 让对话请求回 400 上下文超长错误体，记成
   assert.deepEqual((await writeProse()).finish.at(-1), 'stop')
 })
 
+it('rejectRateLimit returns an actual local HTTP 429 and disabling it restores the original stream', async () => {
+  fake = await startFakeModel([])
+  fake.rejectRateLimit()
+  const response = await fetch(`http://127.0.0.1:${fake.port}/v1/chat/completions`, {
+    method: 'POST', headers: { Authorization: `Bearer ${FAKE_MODEL.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: FAKE_MODEL.modelName, stream: true, messages: [{ role: 'user', content: 'Fictional prose.' }] }),
+  })
+  assert.equal(response.status, 429)
+  assert.equal(response.headers.get('retry-after'), '1')
+  assert.equal((await response.json()).error.code, 'rate_limit_exceeded')
+  assert.deepEqual(fake.requests, ['rate-limit'])
+  assert.deepEqual(fake.chats, [])
+  fake.rejectRateLimit(false)
+  assert.equal((await writeProse()).finish.at(-1), 'stop')
+})
+
+it('streams independent reasoning before visible prose without putting reasoning in the visible stream log', async () => {
+  fake = await startFakeModel([])
+  const chunks = streamingProse(3, 16)
+  fake.streamProse({ chunks, intervalMs: 0, reasoningChunks: ['Reason one.', 'Reason two.'], reasoningIntervalMs: 0 })
+  const response = await fetch(`http://127.0.0.1:${fake.port}/v1/chat/completions`, {
+    method: 'POST', headers: { Authorization: `Bearer ${FAKE_MODEL.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: FAKE_MODEL.modelName, stream: true, messages: [{ role: 'user', content: 'Fictional prose.' }] }),
+  })
+  const events = (await response.text()).split('\n\n').filter(line => line.startsWith('data: {')).map(line => JSON.parse(line.slice(6)))
+  const deltas = events.flatMap(event => event.choices).map(choice => choice.delta)
+  assert.deepEqual(deltas.slice(0, 2), [{ reasoning_content: 'Reason one.' }, { reasoning_content: 'Reason two.' }])
+  assert.equal(deltas.map(delta => delta.content ?? '').join(''), chunks.join(''))
+  assert.equal(events.at(-1).usage.completion_tokens_details.reasoning_tokens, 32)
+  assert.equal(fake.streamLog.length, 3)
+  fake.streamProse(null)
+  assert.equal((await writeProse()).finish.at(-1), 'stop')
+})
+

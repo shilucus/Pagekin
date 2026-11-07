@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { corpusSha256, performanceCorpus, PERFORMANCE_SCENARIOS } from '../performance-scenarios.mjs'
-import { performanceMetadata, readModelRequestSummary, startPerformanceBaseline, stopPerformanceBaseline } from '../performance-baseline.mjs'
+import { cancelPerformanceImport, corpusSha256, performanceCorpus, PERFORMANCE_SCENARIOS, runPerformanceImportScenario } from '../performance-scenarios.mjs'
+import { appendPerformanceFailureDiagnostic, assertPerformanceProbeCoverage, performanceMetadata, readModelRequestSummary, startPerformanceBaseline, stopPerformanceBaseline } from '../performance-baseline.mjs'
 
 const collectorKey = Symbol.for('pagekin.performance-baseline')
 beforeEach(() => { globalThis[collectorKey] = () => ({ schemaVersion: 1, quantiles: 'fixed-histogram-upper-bounds', metrics: { 'source.capture.calls': { count: 1 } } }) })
@@ -114,11 +114,99 @@ describe('performance baseline contract', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('distinguishes live probes with zero events from a stop failure', async () => {
+    vi.useFakeTimers()
+    globalThis[collectorKey] = () => ({ schemaVersion: 1, quantiles: 'fixed-histogram-upper-bounds', metrics: {} })
+    // Fake timers do not advance the native histogram; supply one explicit loop sample.
+    const app = { evaluate: async callback => {
+      const result = callback()
+      return result?.eventLoop ? { ...result, eventLoop: { ...result.eventLoop, count: 1 } } : result
+    } }
+    const page = { evaluate: async (callback, argument) => callback(argument) }
+    await startPerformanceBaseline(app, page)
+    await vi.advanceTimersByTimeAsync(300)
+    const result = await stopPerformanceBaseline(app, page)
+    expect(result.renderer.heartbeat.count).toBe(3)
+    expect(result.renderer.metrics).toEqual({})
+    expect(result.coverage).toEqual({ main: 'live_zero_events', renderer: 'live_zero_events' })
+    expect(result.stopFailures).toEqual({ main: 0, renderer: 0 })
+    expect(() => assertPerformanceProbeCoverage(result)).not.toThrow()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([{ heartbeat: 0, loop: 1 }, { heartbeat: 1, loop: 0 }, { heartbeat: 0, loop: 0 }])(
+    'retains zero-sampling raw evidence but rejects complete coverage: %j', async counts => {
+      const main = { metrics: { schemaVersion: 1, quantiles: 'fixed-histogram-upper-bounds', metrics: {} },
+        memory: { rssMax: 1024, rssSamples: 1 }, eventLoop: { count: counts.loop } }
+      const renderer = { metrics: {}, heartbeat: { intervalMs: 100, count: counts.heartbeat, sumDelayMs: 0, maxDelayMs: 0 } }
+      const result = await stopPerformanceBaseline({ evaluate: async () => main }, { evaluate: async () => renderer })
+      expect(result.main).toBe(main)
+      expect(result.renderer).toBe(renderer)
+      expect(result.main.eventLoop.count).toBe(counts.loop)
+      expect(result.renderer.heartbeat.count).toBe(counts.heartbeat)
+      expect(result.stopFailures).toEqual({ main: 0, renderer: 0 })
+      expect(result.coverage).toEqual({ main: counts.loop ? 'live_zero_events' : 'insufficient_samples',
+        renderer: counts.heartbeat ? 'live_zero_events' : 'insufficient_samples' })
+      expect(() => assertPerformanceProbeCoverage(result)).toThrow('PERFORMANCE_PROBE_COVERAGE_UNAVAILABLE')
+      expect(() => assertPerformanceProbeCoverage({ ...result, coverage: { main: 'live_zero_events', renderer: 'live_zero_events' } }))
+        .toThrow('PERFORMANCE_PROBE_COVERAGE_UNAVAILABLE')
+    },
+  )
+
+  it('persists only bounded closed diagnostic categories and exact stable codes', () => {
+    const entries = []
+    appendPerformanceFailureDiagnostic(entries, Object.assign(new Error('private-body'), { name: 'private-class', code: 'PRIVATE_SECRET' }), 'private-source', 'private-stage')
+    appendPerformanceFailureDiagnostic(entries, new Error('PERFORMANCE_IMPORT_DRAIN_TIMEOUT'), 'cleanup', 'drain')
+    for (let index = 0; index < 30; index++) appendPerformanceFailureDiagnostic(entries, new Error('private-body'), 'cleanup', 'quit')
+    const saved = JSON.parse(JSON.stringify(entries))
+    expect(saved).toHaveLength(12)
+    expect(saved[0]).toEqual({ source: 'unclassified', stage: 'unclassified', errorClass: 'Error', code: 'UNCLASSIFIED_ERROR' })
+    expect(saved[1]).toEqual({ source: 'cleanup', stage: 'drain', errorClass: 'Error', code: 'PERFORMANCE_IMPORT_DRAIN_TIMEOUT' })
+    expect(JSON.stringify(saved)).not.toMatch(/private-|PRIVATE_SECRET/u)
+  })
+
+  it('rejects a malformed renderer heartbeat even when metrics exist', async () => {
+    vi.useFakeTimers()
+    const app = { evaluate: async callback => callback() }
+    const page = { evaluate: async (callback, argument) => callback(argument) }
+    await startPerformanceBaseline(app, page)
+    const probe = globalThis[Symbol.for('pagekin.performance-baseline.renderer')]
+    const stop = probe.stop
+    probe.stop = () => ({ ...stop(), heartbeat: { intervalMs: 100, count: -1, sumDelayMs: 0, maxDelayMs: 0 } })
+    const result = await stopPerformanceBaseline(app, page)
+    expect(result.coverage.renderer).toBe('unavailable')
+    expect(result.stopFailures.renderer).toBe(1)
+    expect(() => assertPerformanceProbeCoverage(result)).toThrow('PERFORMANCE_PROBE_COVERAGE_UNAVAILABLE')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('bounds a hung renderer stop and still cleans the main probe', async () => {
+    vi.useFakeTimers()
+    const app = { evaluate: async callback => callback() }
+    await startPerformanceBaseline(app, { evaluate: async (callback, argument) => callback(argument) })
+    const stopped = stopPerformanceBaseline(app, { evaluate: () => new Promise(() => {}) })
+    await vi.advanceTimersByTimeAsync(5_000)
+    const result = await stopped
+    expect(result.stopFailures).toEqual({ main: 0, renderer: 1 })
+    expect(result.coverage.renderer).toBe('unavailable')
+    globalThis[Symbol.for('pagekin.performance-baseline.renderer')].stop()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([undefined, { stopFailures: { main: 0, renderer: 0 } },
+    { stopFailures: { main: 1, renderer: 0 }, coverage: { main: 'observed_metrics', renderer: 'live_zero_events' } },
+    { stopFailures: { main: 0, renderer: 0 }, coverage: { main: 'observed_metrics', renderer: 'unavailable' } },
+    { stopFailures: { main: 0, renderer: 0 }, coverage: { main: 'insufficient_samples', renderer: 'observed_metrics' } },
+  ])('does not accept missing or failed probe coverage: %j', measurements => {
+    expect(() => assertPerformanceProbeCoverage(measurements)).toThrow('PERFORMANCE_PROBE_COVERAGE_UNAVAILABLE')
+  })
+
   it('reports absent probes without treating missing observations as success', async () => {
     const app = { evaluate: async callback => callback() }
     const page = { evaluate: async callback => callback() }
     const result = await stopPerformanceBaseline(app, page)
     expect(result.stopFailures).toEqual({ main: 1, renderer: 1 })
+    expect(result.coverage).toEqual({ main: 'unavailable', renderer: 'unavailable' })
   })
 
   it('reports a missing main collector while still stopping both probes', async () => {
@@ -131,6 +219,7 @@ describe('performance baseline contract', () => {
     const result = await stopPerformanceBaseline(app, page)
     expect(result.main.metrics).toBeNull()
     expect(result.stopFailures).toEqual({ main: 1, renderer: 0 })
+    expect(result.coverage.main).toBe('unavailable')
     expect(vi.getTimerCount()).toBe(0)
   })
 
@@ -155,7 +244,184 @@ describe('performance baseline contract', () => {
     try { await PERFORMANCE_SCENARIOS['perf-import-10'].run(context) } catch (caught) { error = caught }
     expect(error.message).toBe('PERFORMANCE_SCENARIO_FAILED:runtime')
     expect(error.performanceBaseline).toMatchObject({ success: false, failureStage: 'runtime', attempted: 1, failed: 1, stopFailures: 0 })
+    expect(error.performanceBaseline.importedChapters).toBeNull()
+    expect(error.performanceBaseline.blueprintChapters).toBeNull()
     expect(JSON.stringify(error.performanceBaseline)).not.toContain('private content')
     expect(page.setDefaultTimeout).toHaveBeenLastCalledWith(20_000)
+  })
+})
+
+function importFixture() {
+  vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {})
+  const events = []
+  const action = { isChecked: async () => true, click: async () => {} }
+  const dialog = { getByRole: () => action, waitFor: async () => {} }
+  const context = {
+    page: { setDefaultTimeout: vi.fn() }, roots: { temp: 'unused' },
+    fake: { requests: Array(32).fill(null), replyReview: () => {} },
+    app: { evaluate: vi.fn().mockResolvedValue({ leaseId: 'fictional-lease', projectPath: 'fictional-project' }) },
+    invoke: vi.fn(async (_page, channel) => channel === 'db:draft-list-all'
+      ? Array.from({ length: 10 }, () => ({ status: 'finalized' })) : Array(10).fill({})),
+  }
+  const summary = count => ({ coverage: 'guarded_fetch_attempts', byRoute: { '/v1/chat/completions': { count } } })
+  const dependencies = {
+    start: vi.fn(async () => {}),
+    stop: vi.fn(async () => { events.push('stop'); return {
+      stopFailures: { main: 0, renderer: 0 }, coverage: { main: 'observed_metrics', renderer: 'observed_metrics' },
+      main: { metrics: { metrics: { 'import.inspect.calls': { count: 1 } } }, eventLoop: { count: 1 } },
+      renderer: { metrics: { 'renderer.snapshot.accepted': { count: 1 } }, heartbeat: { count: 1 } },
+    } }),
+    openImport: vi.fn(async () => dialog),
+    waitDone: vi.fn(async () => { events.push('workflow') }),
+    cancelImport: vi.fn(async () => { events.push('cancel'); return { status: 'drained', cancellationRequested: true } }),
+    readRequests: vi.fn(async () => { events.push('summary'); return summary(32) }),
+  }
+  return { context, dependencies, events, summary }
+}
+
+describe('performance import failure evidence', () => {
+  it('cancels and drains a timed-out import before stopping probes or freezing requests', async () => {
+    const f = importFixture(), original = new Error('private-workflow-timeout')
+    f.dependencies.waitDone.mockRejectedValue(original)
+    let caught
+    try { await runPerformanceImportScenario(10, f.context, f.dependencies) } catch (error) { caught = error }
+    expect(f.events).toEqual(['cancel', 'stop', 'summary'])
+    expect(caught.cause).toBe(original)
+    expect(caught.performanceBaseline).toMatchObject({ failureStage: 'workflow', failed: 1, success: false,
+      importedChapters: null, blueprintChapters: null, cleanupFailures: 0, drain: { status: 'drained' },
+      countCoverage: { importedChapters: 'unavailable', blueprintChapters: 'unavailable' } })
+    expect(JSON.stringify(caught.performanceBaseline)).not.toContain('private-workflow-timeout')
+    await f.context.finalizePerformanceEvidence()
+    expect(caught.performanceBaseline).toMatchObject({ failureStage: 'workflow', success: false, requestsAfterMeasurement: 0,
+      requestSummaryCutoff: 'before_quit' })
+  })
+
+  it('preserves original, drain and stop errors without replacing the failing stage', async () => {
+    const f = importFixture(), original = Object.assign(new Error('private-original'), { code: 'ECONNRESET' })
+    const drain = Object.assign(new Error('private-drain'), { name: 'TimeoutError' }), stop = new Error('private-stop')
+    f.dependencies.waitDone.mockRejectedValue(original)
+    f.dependencies.cancelImport.mockRejectedValue(drain)
+    f.dependencies.stop.mockRejectedValue(stop)
+    let caught
+    try { await runPerformanceImportScenario(10, f.context, f.dependencies) } catch (error) { caught = error }
+    expect(caught.cause.errors).toEqual([original, drain, stop])
+    expect(caught.performanceBaseline).toMatchObject({ failureStage: 'workflow', cleanupFailures: 2, drain: { status: 'unavailable' } })
+    expect(JSON.parse(JSON.stringify(caught.performanceBaseline)).failureDiagnostics).toEqual([
+      { source: 'scenario', stage: 'workflow', errorClass: 'Error', code: 'ECONNRESET' },
+      { source: 'cleanup', stage: 'drain', errorClass: 'TimeoutError', code: 'TIMEOUT' },
+      { source: 'cleanup', stage: 'probe_stop', errorClass: 'Error', code: 'UNCLASSIFIED_ERROR' },
+    ])
+    expect(JSON.stringify(caught.performanceBaseline)).not.toMatch(/private-original|private-drain|private-stop/u)
+  })
+
+  it('keeps a completed count when the subsequent independent count cannot be read', async () => {
+    const f = importFixture()
+    f.context.invoke.mockImplementation(async (_page, channel) => {
+      if (channel === 'db:blueprint-get-all') throw new Error('unavailable')
+      return Array.from({ length: 10 }, () => ({ status: 'finalized' }))
+    })
+    await expect(runPerformanceImportScenario(10, f.context, f.dependencies)).rejects.toMatchObject({ performanceBaseline: {
+      failureStage: 'verify', importedChapters: 10, blueprintChapters: null,
+      countCoverage: { importedChapters: 'observed', blueprintChapters: 'unavailable' },
+    } })
+  })
+
+  it('reports applicable missing events separately from valid zero-event probes', async () => {
+    const f = importFixture()
+    f.dependencies.stop.mockResolvedValue({ stopFailures: { main: 0, renderer: 0 },
+      coverage: { main: 'live_zero_events', renderer: 'live_zero_events' }, main: { metrics: { metrics: {} }, eventLoop: { count: 1 } },
+      renderer: { metrics: {}, heartbeat: { count: 1 } } })
+    await expect(runPerformanceImportScenario(10, f.context, f.dependencies)).rejects.toMatchObject({ performanceBaseline: {
+      failureStage: 'event_coverage', stopFailures: 0, cleanupFailures: 0,
+      eventCoverage: { importInspection: 'not_observed', rendererSnapshots: 'not_observed' },
+    } })
+  })
+
+  it('fails zero-sampling coverage without misreporting a successful stop as a stop failure', async () => {
+    const f = importFixture()
+    f.dependencies.stop.mockResolvedValue({ stopFailures: { main: 0, renderer: 0 },
+      coverage: { main: 'insufficient_samples', renderer: 'live_zero_events' }, main: { eventLoop: { count: 0 } },
+      renderer: { heartbeat: { count: 2 } } })
+    await expect(runPerformanceImportScenario(10, f.context, f.dependencies)).rejects.toMatchObject({ performanceBaseline: {
+      failureStage: 'probe_coverage', stopFailures: 0, cleanupFailures: 1,
+      failureDiagnostics: [{ source: 'cleanup', stage: 'probe_coverage', code: 'PERFORMANCE_PROBE_COVERAGE_UNAVAILABLE' }],
+      measurements: { main: { eventLoop: { count: 0 } } },
+    } })
+  })
+
+  it('rejects requests arriving between probe stop and the driver final cutoff', async () => {
+    const f = importFixture()
+    const report = await runPerformanceImportScenario(10, f.context, f.dependencies)
+    expect(report.success).toBe(true)
+    expect(f.dependencies.cancelImport).not.toHaveBeenCalled()
+    f.dependencies.readRequests.mockResolvedValueOnce(f.summary(33))
+    await expect(f.context.finalizePerformanceEvidence()).rejects.toMatchObject({ performanceBaseline: report })
+    expect(report).toMatchObject({ success: false, failed: 1, failureStage: 'final_request_summary',
+      requestsAfterMeasurement: 1, cleanupFailures: 1, requestSummaryCutoff: 'before_quit' })
+  })
+
+  it('does not replace an unavailable final request observation with an empty success', async () => {
+    const f = importFixture()
+    const report = await runPerformanceImportScenario(10, f.context, f.dependencies)
+    f.dependencies.readRequests.mockRejectedValueOnce(new Error('private-observation'))
+    await expect(f.context.finalizePerformanceEvidence()).rejects.toMatchObject({ performanceBaseline: report })
+    expect(report).toMatchObject({ success: false, finalRequestSummary: null, requestsAfterMeasurement: null })
+    expect(JSON.stringify(report)).not.toContain('private-observation')
+  })
+
+  it('detects a newly accepted fixture request even before its guarded fetch settles', async () => {
+    const f = importFixture()
+    const report = await runPerformanceImportScenario(10, f.context, f.dependencies)
+    f.context.fake.requests.push(null)
+    await expect(f.context.finalizePerformanceEvidence()).rejects.toMatchObject({ performanceBaseline: report })
+    expect(report).toMatchObject({ success: false, failed: 1, finalFixtureAcceptedRequests: 33, requestsAfterMeasurement: 0 })
+  })
+
+  it('retains the original workflow error and report when the later cutoff also fails', async () => {
+    const f = importFixture(), original = new Error('private-original-workflow')
+    f.dependencies.waitDone.mockRejectedValue(original)
+    let caught
+    try { await runPerformanceImportScenario(10, f.context, f.dependencies) } catch (error) { caught = error }
+    const report = caught.performanceBaseline
+    f.dependencies.readRequests.mockResolvedValueOnce(f.summary(34))
+    await expect(f.context.finalizePerformanceEvidence()).rejects.toMatchObject({ performanceBaseline: report })
+    expect(caught.cause).toBe(original)
+    expect(caught.performanceBaseline).toBe(report)
+    expect(report).toMatchObject({ failureStage: 'workflow', failed: 1, requestsAfterMeasurement: 2, cleanupFailures: 1 })
+    expect(f.context.invoke).not.toHaveBeenCalled()
+  })
+
+  it('uses the actual import cancel button and bounds a non-draining executor', async () => {
+    vi.useFakeTimers()
+    const click = vi.fn(async () => {}), hidden = vi.fn(() => new Promise(() => {}))
+    const active = { count: async () => 1, getAttribute: async () => 'running', getByRole: () => ({ click }), waitFor: hidden }
+    const card = { filter: () => card, waitFor: async () => {}, and: () => active }
+    const sheet = { waitFor: async () => {}, getByRole: () => card }
+    const page = { getByRole: () => sheet, locator: vi.fn(), waitForFunction: hidden }
+    const cancelled = cancelPerformanceImport(page, 10)
+    const rejected = expect(cancelled).rejects.toThrow('PERFORMANCE_IMPORT_DRAIN_TIMEOUT')
+    await vi.advanceTimersByTimeAsync(30_000)
+    await rejected
+    expect(click).toHaveBeenCalledOnce()
+    expect(hidden).toHaveBeenCalledWith(expect.any(Function), '导入作者原稿（10 章）', { timeout: 25_000 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('does not equate a terminal card still in activeRuns with drained execution', async () => {
+    const title = '导入作者原稿（10 章）'
+    let movedToHistory = false
+    const node = { querySelector: selector => selector === 'h3' ? { textContent: title } : movedToHistory ? {} : null }
+    vi.stubGlobal('document', { querySelectorAll: () => [node] })
+    try {
+      const active = { count: async () => 0 }
+      const card = { filter: () => card, waitFor: async () => {}, and: () => active }
+      const sheet = { waitFor: async () => {}, getByRole: () => card }
+      const page = { getByRole: () => sheet, locator: () => {}, waitForFunction: async (predicate, expectedTitle) => {
+        expect(predicate(expectedTitle)).toBe(false)
+        movedToHistory = true
+        expect(predicate(expectedTitle)).toBe(true)
+      } }
+      await expect(cancelPerformanceImport(page, 10)).resolves.toEqual({ status: 'drained', cancellationRequested: false })
+    } finally { vi.unstubAllGlobals() }
   })
 })

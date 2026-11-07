@@ -16,6 +16,8 @@ import { changedFiles, fetchRoute, filesContaining, fileStamps, guardFetch, REAL
 import { assertNodeRunsTypeScript } from './node-version.mjs'
 import { dismissCompletionToasts, dismissStartupNotice, firstInteractiveControl, waitForShell } from './pages/shell.mjs'
 import { PERFORMANCE_SCENARIOS } from './performance-scenarios.mjs'
+import { PERFORMANCE_PRESSURE_SCENARIOS } from './performance-pressure-scenarios.mjs'
+import { appendPerformanceFailureDiagnostic } from './performance-baseline.mjs'
 
 const asEntryPoint = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 // 场景模块会 import 应用里的 .ts：静态 import 会在任何代码运行前报 ERR_UNKNOWN_FILE_EXTENSION，所以先查再动态加载。
@@ -42,7 +44,7 @@ const VIEWPORT = { width: 1440, height: 900 }
 const THEMES = ['light', 'dark']
 const SHELLS = ['writer', 'stage']
 const ROOT_NAMES = ['legacy', 'canonical', 'userData', 'home', 'appData', 'localAppData', 'temp', 'projects']
-const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS, ...F491_SCENARIOS, ...F484_SCENARIOS, ...ST504_SCENARIOS, ...F512_SCENARIOS, ...SM517_SCENARIOS, ...BPG_SCENARIOS, ...IMPORT_INFER_SCENARIOS, ...RBK_SCENARIOS, ...F537_SCENARIOS, ...F555_SCENARIOS, ...D77_SCENARIOS, ...REOPEN_SCENARIOS, ...I552_SCENARIOS, ...A573_SCENARIOS, ...F571_SCENARIOS, ...RTUX_SCENARIOS, ...TRASH_SCENARIOS, ...REAL_SCENARIOS, ...F593_SCENARIOS, ...PERFORMANCE_SCENARIOS }
+const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS, ...F491_SCENARIOS, ...F484_SCENARIOS, ...ST504_SCENARIOS, ...F512_SCENARIOS, ...SM517_SCENARIOS, ...BPG_SCENARIOS, ...IMPORT_INFER_SCENARIOS, ...RBK_SCENARIOS, ...F537_SCENARIOS, ...F555_SCENARIOS, ...D77_SCENARIOS, ...REOPEN_SCENARIOS, ...I552_SCENARIOS, ...A573_SCENARIOS, ...F571_SCENARIOS, ...RTUX_SCENARIOS, ...TRASH_SCENARIOS, ...REAL_SCENARIOS, ...F593_SCENARIOS, ...PERFORMANCE_SCENARIOS, ...PERFORMANCE_PRESSURE_SCENARIOS }
 /** 计时会话：先在同一隔离目录预启动一次写好外观（书房计时另建 20 部作品），再计之后那次冷启动。 */
 const TIMED_SESSIONS = new Set(['startup-timing', 'library-timing'])
 /** 空闲内存：与启动计时同样先预启动一次，第二次冷启动到可交互后静置，再按间隔采样全部进程的内存。 */
@@ -445,6 +447,10 @@ async function dumpDom(page, base) {
 }
 
 const messageOf = error => error instanceof Error ? error.message : String(error)
+const performanceMessageOf = (error, source, stage, entries = []) => {
+  const diagnostic = appendPerformanceFailureDiagnostic(entries, error, source, stage)
+  return `PERFORMANCE_FAILURE:${diagnostic.source}:${diagnostic.stage}:${diagnostic.errorClass}:${diagnostic.code}`
+}
 
 /** 会话收尾时读回这次启动在主进程里记下的模型请求，并进 modelLog。读不回（应用已退出）记进 sessionErrors：请求数少算了，会话不算干净。 */
 export async function harvestModelLog(app, modelLog, sessionErrors) {
@@ -502,6 +508,39 @@ export function scanRunForSecret(results, out, outBefore, secret, remove = remov
   for (const result of results) result.keyScan = { scanned: scan.scanned, hits: scan.hits, unreadable: [...walkProblems, ...scan.unreadable], removeFailures }
 }
 
+/** Collect final observations on both outcomes; unavailable network evidence is not an empty log. */
+export async function finalizeSessionObservations({ app, context, shared, restartRequests = [], networkMessage, timeoutMs = 10_000 }) {
+  const errors = []
+  const bounded = async operation => {
+    let timer
+    try {
+      return await Promise.race([Promise.resolve().then(operation), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('DRIVE_FINAL_OBSERVATION_TIMEOUT')), timeoutMs)
+      })])
+    } finally { clearTimeout(timer) }
+  }
+  try { await bounded(() => context?.finalizePerformanceEvidence?.()) }
+  catch (error) {
+    errors.push(error)
+    appendPerformanceFailureDiagnostic(shared.failureDiagnostics ??= [], error, 'cleanup', 'driver_finalize')
+  }
+  shared.externalRequests = null
+  shared.externalRequestsCoverage = 'unavailable'
+  if (app) {
+    try {
+      const requests = await bounded(() => app.evaluate(() => globalThis.__driveExternalRequests))
+      assert.ok(Array.isArray(requests), 'DRIVE_EXTERNAL_REQUEST_LOG_UNAVAILABLE')
+      shared.externalRequests = [...restartRequests, ...requests]
+      shared.externalRequestsCoverage = 'observed_before_quit'
+      assert.deepEqual(shared.externalRequests, [], networkMessage)
+    } catch (error) {
+      errors.push(error)
+      appendPerformanceFailureDiagnostic(shared.failureDiagnostics ??= [], error, 'cleanup', 'network_observation')
+    }
+  }
+  return { errors, performanceBaseline: errors.find(error => error?.performanceBaseline)?.performanceBaseline }
+}
+
 /**
  * 一个会话一次冷启动：先跑首个截图点的 setup，再依次 run、截图、after。隔离与进程检查按会话做，结果抄进每一项。
  * realKey 只在真实模式下有：由 installRealModels 交给应用存进隔离目录的模型配置，会话结束时连同配置文件一起删掉。
@@ -520,6 +559,7 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
   let current = null
   let launched
   let recording = null
+  let context
   const restartRequests = []
   const modelLog = []
   const fetchPolicy = () => ({ fakePort: fake?.port ?? null, realOrigin: realKey ? REAL_ORIGIN : null })
@@ -538,7 +578,7 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
     } else {
       await applyAppearance(launched.page, { theme: options.theme, shell })
       shared.shell = await shellShown(launched.page)
-      const context = {
+      context = {
         ...launched, roots, invoke, fake, diagnostics,
         /** 场景中途多拍一张图，与收尾截图放在同一目录。 */
         shoot: name => shoot(context.page, `${base(name)}.png`),
@@ -586,13 +626,13 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
       }
       current = null
     }
-    shared.externalRequests = [...restartRequests, ...await launched.app.evaluate(() => globalThis.__driveExternalRequests)]
-    assert.deepEqual(shared.externalRequests, [], fake ? 'fetch 越过夹具访问外部网络' : '无夹具场景发出了 fetch')
   } catch (error) {
-    if (current === null) sessionErrors.push(messageOf(error))
+    const errorMessage = performanceBaseline
+      ? performanceMessageOf(error, 'scenario', error?.performanceBaseline?.failureStage, shared.failureDiagnostics ??= []) : messageOf(error)
+    if (current === null) sessionErrors.push(errorMessage)
     else {
       failedAt = current
-      results[current].error = messageOf(error)
+      results[current].error = errorMessage
       if (performanceBaseline && error?.performanceBaseline) results[current].measured = error.performanceBaseline
     }
     await captureFailure(launched?.page, base(current === null ? sessionName : names[current]))
@@ -600,17 +640,36 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
   } finally {
     // 场景在 hold 与 release 之间抛错时门还关着：卡住的请求让运行一直进行，应用拒绝关闭，quit 要等满 10 秒再强杀
     fake?.gate.release()
+    const final = await finalizeSessionObservations({ app: launched?.app, context, shared, restartRequests,
+      networkMessage: fake ? 'fetch 越过夹具访问外部网络' : '无夹具场景发出了 fetch' })
+    sessionErrors.push(...final.errors.map(error => performanceBaseline ? performanceMessageOf(error, 'cleanup', 'driver_finalize') : messageOf(error)))
+    if (final.performanceBaseline && current !== null) results[current].measured = final.performanceBaseline
     if (options.console) writeConsoleLog(`${base(sessionName)}.console.log`, diagnostics, sessionErrors, realKey)
     if (launched && realKey) await harvestModelLog(launched.app, modelLog, sessionErrors)
-    if (launched) shared.quit = await quit(launched.app).catch(error => { sessionErrors.push(messageOf(error)); return null })
-    await fake?.close()
+    const fixtureRequestsBeforeQuit = fake?.requests.length
+    const cleanupMessage = error => performanceBaseline
+      ? performanceMessageOf(error, 'cleanup', 'quit', shared.failureDiagnostics ??= []) : messageOf(error)
+    if (launched) shared.quit = await quit(launched.app).catch(error => { sessionErrors.push(cleanupMessage(error)); return null })
+    await fake?.close().catch(error => { sessionErrors.push(cleanupMessage(error)) })
     if (fake) shared.modelRequests = fake.requests.length
+    if (performanceBaseline && fake) {
+      shared.modelRequestsAfterFinalCutoff = fake.requests.length - fixtureRequestsBeforeQuit
+      if (shared.modelRequestsAfterFinalCutoff !== 0) {
+        sessionErrors.push('PERFORMANCE_REQUESTS_DURING_QUIT')
+        appendPerformanceFailureDiagnostic(shared.failureDiagnostics ??= [], new Error('PERFORMANCE_REQUESTS_DURING_QUIT'), 'cleanup', 'quit')
+        for (const result of results) if (result.measured) {
+          result.measured.failureStage ??= 'quit_request_cutoff'
+          result.measured.success = false; result.measured.failed = 1
+        }
+      }
+    }
     if (realKey) finishRealSession({ shared, sessionErrors, modelLog, canonical: roots.canonical })
   }
   try {
     shared.residualProcesses = await residualProcesses(roots.userData)
     Object.assign(shared, profileWrites(before))
-  } catch (error) { sessionErrors.push(messageOf(error)) }
+  } catch (error) { sessionErrors.push(performanceBaseline
+    ? performanceMessageOf(error, 'cleanup', 'cleanup', shared.failureDiagnostics ??= []) : messageOf(error)) }
   const clean = sessionIsClean({ failedAt, sessionErrors, residualProcesses: shared.residualProcesses, externalWrites: shared.externalWrites })
   releaseSessionRoot(roots.root, clean, sessionErrors)
   return results.map((result, index) => {

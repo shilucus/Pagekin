@@ -9,7 +9,7 @@ export function performanceMetadata(chapters, sourceSha = process.env.PAGEKIN_PE
 }
 
 export async function readModelRequestSummary(app) {
-  return app.evaluate(() => {
+  return boundedObservation(() => app.evaluate(() => {
     const routes = ['/v1/chat/completions', '/v1/embeddings', '/v1/messages']
     const rows = Object.fromEntries(routes.map(route => [route, { count: 0, failed: 0, http429: 0, totalMs: 0, maxMs: 0 }]))
     const log = globalThis.__driveModelRequests
@@ -26,7 +26,50 @@ export async function readModelRequestSummary(app) {
       }
     }
     return { coverage: 'guarded_fetch_attempts', byRoute: rows }
-  })
+  }))
+}
+
+async function boundedObservation(read, timeoutMs = 5_000) {
+  let timer
+  try {
+    return await Promise.race([Promise.resolve().then(read), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('PERFORMANCE_OBSERVATION_TIMEOUT')), timeoutMs)
+    })])
+  } finally { clearTimeout(timer) }
+}
+
+export function assertPerformanceProbeCoverage(measurements) {
+  const available = new Set(['observed_metrics', 'live_zero_events'])
+  if (measurements?.stopFailures?.main !== 0 || measurements?.stopFailures?.renderer !== 0
+    || !available.has(measurements?.coverage?.main) || !available.has(measurements?.coverage?.renderer)
+    || !Number.isSafeInteger(measurements?.main?.eventLoop?.count) || measurements.main.eventLoop.count < 1
+    || !Number.isSafeInteger(measurements?.renderer?.heartbeat?.count) || measurements.renderer.heartbeat.count < 1) {
+    throw new Error('PERFORMANCE_PROBE_COVERAGE_UNAVAILABLE')
+  }
+}
+
+const DIAGNOSTIC_SOURCES = new Set(['scenario', 'cleanup'])
+const DIAGNOSTIC_STAGES = new Set(['fixture', 'runtime', 'session', 'probe_start', 'preview', 'import', 'workflow',
+  'verify', 'producer', 'evidence', 'drain', 'probe_stop', 'probe_coverage', 'request_summary', 'event_coverage',
+  'final_request_summary', 'driver_finalize', 'network_observation', 'quit', 'cleanup'])
+const DIAGNOSTIC_CLASSES = new Set(['Error', 'TimeoutError', 'AssertionError', 'AggregateError', 'TypeError', 'RangeError'])
+const DIAGNOSTIC_CODES = new Set(['ERR_ASSERTION', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'EIO', 'ENOENT', 'EACCES', 'EPERM',
+  'PERFORMANCE_OBSERVATION_TIMEOUT', 'PERFORMANCE_PROBE_COVERAGE_UNAVAILABLE', 'PERFORMANCE_PROBE_ALREADY_RUNNING',
+  'PERFORMANCE_RENDERER_PROBE_ALREADY_RUNNING', 'PERFORMANCE_RENDERER_PROBE_START_FAILED', 'PERFORMANCE_IMPORT_DRAIN_TIMEOUT',
+  'PERFORMANCE_DRAFT_READ_UNAVAILABLE', 'PERFORMANCE_BLUEPRINT_READ_UNAVAILABLE', 'PERFORMANCE_REQUEST_SUMMARY_UNAVAILABLE',
+  'PERFORMANCE_EVENT_COVERAGE_MISSING', 'PERFORMANCE_REQUEST_CUTOFF_CHANGED', 'PERFORMANCE_FIXTURE_REQUEST_CUTOFF_CHANGED',
+  'PERFORMANCE_FINAL_REQUEST_SUMMARY_FAILED', 'PERFORMANCE_PRESSURE_TIMEOUT', 'PERFORMANCE_PRESSURE_FINAL_REQUEST_EVIDENCE_FAILED',
+  'DRIVE_FINAL_OBSERVATION_TIMEOUT', 'DRIVE_EXTERNAL_REQUEST_LOG_UNAVAILABLE', 'PERFORMANCE_REQUESTS_DURING_QUIT'])
+
+/** Persist only bounded, closed diagnostic categories; arbitrary messages, paths and codes stay in Error.cause. */
+export function appendPerformanceFailureDiagnostic(entries, error, source, stage) {
+  const errorClass = DIAGNOSTIC_CLASSES.has(error?.name) ? error.name : 'Error'
+  const code = DIAGNOSTIC_CODES.has(error?.code) ? error.code : DIAGNOSTIC_CODES.has(error?.message) ? error.message
+    : errorClass === 'TimeoutError' ? 'TIMEOUT' : 'UNCLASSIFIED_ERROR'
+  const diagnostic = { source: DIAGNOSTIC_SOURCES.has(source) ? source : 'unclassified',
+    stage: DIAGNOSTIC_STAGES.has(stage) ? stage : 'unclassified', errorClass, code }
+  if (entries.length < 12) entries.push(diagnostic)
+  return diagnostic
 }
 
 export async function startPerformanceBaseline(app, page) {
@@ -87,13 +130,19 @@ export async function startPerformanceBaseline(app, page) {
 
 export async function stopPerformanceBaseline(app, page) {
   let renderer = null, main = null, rendererStopFailures = 0, mainStopFailures = 0
+  const coverage = { main: 'unavailable', renderer: 'unavailable' }
+  const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
   try {
-    renderer = await page.evaluate(() => globalThis[Symbol.for('pagekin.performance-baseline.renderer')]?.stop() ?? null)
-    if (!renderer?.metrics || typeof renderer.metrics !== 'object' || Array.isArray(renderer.metrics)
-      || Object.keys(renderer.metrics).length === 0) rendererStopFailures++
+    renderer = await boundedObservation(() => page.evaluate(() => globalThis[Symbol.for('pagekin.performance-baseline.renderer')]?.stop() ?? null))
+    const heartbeat = renderer?.heartbeat
+    if (!record(renderer?.metrics) || heartbeat?.intervalMs !== 100 || !Number.isSafeInteger(heartbeat.count) || heartbeat.count < 0
+      || !Number.isFinite(heartbeat.sumDelayMs) || heartbeat.sumDelayMs < 0
+      || !Number.isFinite(heartbeat.maxDelayMs) || heartbeat.maxDelayMs < 0) rendererStopFailures++
+    else coverage.renderer = heartbeat.count === 0 ? 'insufficient_samples'
+      : Object.keys(renderer.metrics).length ? 'observed_metrics' : 'live_zero_events'
   } catch { rendererStopFailures++ }
   try {
-    main = await app.evaluate(() => {
+    main = await boundedObservation(() => app.evaluate(() => {
       const key = Symbol.for('pagekin.performance-baseline.probe'), probe = globalThis[key]
       if (!probe) return null
       clearInterval(probe.timer); probe.histogram.disable()
@@ -103,10 +152,13 @@ export async function stopPerformanceBaseline(app, page) {
       return { metrics, memory, eventLoop: { count: h.count, minMs: h.count ? h.min / 1e6 : null,
         maxMs: h.count ? h.max / 1e6 : null, meanMs: h.count ? h.mean / 1e6 : null,
         p50Ms: h.count ? h.percentile(50) / 1e6 : null, p95Ms: h.count ? h.percentile(95) / 1e6 : null } }
-    })
+    }))
     if (!main || main.metrics?.schemaVersion !== 1 || main.metrics?.quantiles !== 'fixed-histogram-upper-bounds'
-      || !main.metrics?.metrics || typeof main.metrics.metrics !== 'object' || Array.isArray(main.metrics.metrics)
-      || Object.keys(main.metrics.metrics).length === 0) mainStopFailures++
+      || !record(main.metrics?.metrics) || !Number.isSafeInteger(main.memory?.rssSamples) || main.memory.rssSamples < 1
+      || !Number.isFinite(main.memory?.rssMax) || main.memory.rssMax <= 0
+      || !Number.isSafeInteger(main.eventLoop?.count) || main.eventLoop.count < 0) mainStopFailures++
+    else coverage.main = main.eventLoop.count === 0 ? 'insufficient_samples'
+      : Object.keys(main.metrics.metrics).length ? 'observed_metrics' : 'live_zero_events'
   } catch { mainStopFailures++ }
-  return { main, renderer, stopFailures: { main: mainStopFailures, renderer: rendererStopFailures } }
+  return { main, renderer, coverage, stopFailures: { main: mainStopFailures, renderer: rendererStopFailures } }
 }
