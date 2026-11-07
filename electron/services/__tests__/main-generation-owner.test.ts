@@ -20,6 +20,7 @@ import type { ArchitecturePlanningIntent, BeginGenerationRequest } from '../../.
 import { generationOutputContract, MAX_BATCH_CHAPTERS } from '../../../src/shared/generation-owner-contract'
 import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
 import { WorkflowDriverRepository } from '../../repositories/workflow-driver-repository'
+import { WorkflowBatchRepository } from '../../repositories/workflow-batch-repository'
 import type { GenerationTask } from '../../../src/services/generation/generation-harness'
 import { createMainOwnedGenerationRuntime, type MainGenerationSnapshot, type MainGenerationTransport } from '../../../src/services/generation/generation-runtime'
 import { formatGenerationBudgetDiagnostic } from '../../../src/services/generation/prompt-budget-failure'
@@ -72,13 +73,14 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
     modelName: silicon ? 'deepseek-ai/DeepSeek-V4-Flash' : 'gpt-4.1', apiKey: 'synthetic-private-key',
     baseUrl: silicon ? 'https://api.siliconflow.cn/v1' : 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'],
     capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: false, usage: true } }
-  const makeOwner = () => {
+  const makeOwner = (mode: 'legacy' | 'workflow-batch' = 'legacy', leases = new ModelExecutionLeaseRegistry({ loadModel: () => model })) => {
     const capturedDb = db, capturedEpoch = epoch
     const sourceDeps = { db: capturedDb, projectStorageRoot, globalDataRoot,
       readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => JSON.stringify(getBuiltinPromptTemplate(key, language)), readBuiltinSkill: readBuiltinWritingSkill }
     return createMainGenerationOwner({ database: capturedDb, projectPath: root, projectId: 'project', epoch: capturedEpoch,
       assertCurrent: () => { if (!current || capturedEpoch !== epoch || capturedDb !== db) throw new Error('GENERATION_EPOCH_STALE') },
-      leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch,
+      leases, loadModel: () => model, dispatch, mode,
+      ...(mode === 'workflow-batch' ? { workflowDriver: { assertActive: () => {}, assertDispatchAdmission: () => {} } } : {}),
       onReasoning,
       onSnapshot,
       buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDeps, { ...selection, projectId: 'project', epoch: capturedEpoch,
@@ -93,6 +95,11 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
   const begin: BeginGenerationRequest = { operation: 'chapter-draft', uiActionNonce: 'click', modelId: model.id, chapterNumber: 1,
     selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['first_chapter_draft'], skillStages: [], output: 'visible-text' }
   return { root, model, get db() { return db }, owner: owners[0], begin,
+    createBatchOwner: () => {
+      const leases = new ModelExecutionLeaseRegistry({ loadModel: () => model })
+      const owner = makeOwner('workflow-batch', leases); owners.push(owner)
+      return { owner, leases }
+    },
     invalidate: () => { current = false },
     reopen: () => { owners.at(-1)!.suspendForProjectClose(); db.close(); db = new Database(path.join(root, 'project.db')); epoch = `epoch-${owners.length + 1}`;
       const owner = makeOwner(); owners.push(owner); return owner },
@@ -125,6 +132,44 @@ function acceptOutline(owner: ReturnType<typeof fixture>['owner'], handle: Param
   const text = joinPlotOutlineEntries(progress.composition?.text ?? '', progress.cursor.text)
   return owner.composeVisible(handle, [...(progress.composition?.artifactIds ?? []), ...progress.cursor.artifactIds], textHash(text), PLOT_OUTLINE_PROTOCOL)
 }
+
+describe('native failure receipt', () => {
+  it('retains the reserved empty artifact and terminal result for a provider failure', () => {
+    const f = fixture(), view = f.owner.begin(f.begin)
+    const runs = new GenerationRunRepository(() => f.db)
+    const reserved = runs.reserve(view.handle.runId, 'fictional-failure', textHash('request'), 200, 100)
+    expect(reserved.artifact).toMatchObject({ text: '', textHash: textHash('') })
+    runs.markDispatched(reserved.attempt.attemptId)
+    const settled = runs.settle(reserved.attempt.attemptId, null, null, 'GENERATION_PROVIDER_FAILED')
+    expect(settled.attempt.status).toBe('unknown')
+    expect(settled.artifact).toMatchObject({ text: '', textHash: textHash('') })
+    expect(settled.result).toMatchObject({ usage: null, finishReason: null })
+    expect(settled.failureCode).toBe('GENERATION_PROVIDER_FAILED')
+    expect(runs.receipt(reserved.attempt.attemptId)).toEqual(settled)
+  })
+})
+
+describe('batch owner transaction boundary', () => {
+  it('requires a native transaction and releases the preparation after its rollback', () => {
+    const f = fixture(undefined, false, undefined, undefined, true)
+    const { owner, leases } = f.createBatchOwner(), closeLease = vi.spyOn(leases, 'close')
+    const request = { mode: 'draft_review' as const, range: { startChapter: 1, endChapter: 1 }, targetUnits: 200,
+      uiActionNonce: 'batch-transaction', modelId: f.model.id, authorInputs: [],
+      promptKeys: ['first_chapter_draft', 'next_chapter_draft', 'consistency_check'], skillStages: ['drafting', 'review'] as const }
+    const input = { ...request, skillStages: [...request.skillStages] }
+    expect(() => owner.beginWorkflowBatchRoot(input)).toThrow('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
+    let handle: ReturnType<typeof owner.beginWorkflowBatchRoot>['handle'] | undefined
+    expect(() => f.db.transaction(() => {
+      handle = owner.beginWorkflowBatchRoot(input).handle
+      throw new Error('ISSUE_FAILED')
+    }).immediate()).toThrow('ISSUE_FAILED')
+    expect(handle).toBeDefined()
+    expect(f.db.prepare('SELECT 1 FROM generation_runs WHERE run_id=?').get(handle!.runId)).toBeUndefined()
+    owner.rollbackWorkflowDriverPreparation(handle!)
+    expect(closeLease).toHaveBeenCalledTimes(1)
+    expect(() => owner.rollbackWorkflowDriverPreparation(handle!)).toThrow('GENERATION_WORKFLOW_DRIVER_PREPARATION_INVALID')
+  })
+})
 
 describe('early project close', () => {
   it('settles only the failed held attempt as unknown before escrow while physical transport remains busy', async () => {
@@ -1084,6 +1129,31 @@ describe('automatic short outline binding', () => {
     coverage: { required: 1, included: 1, complete: true }, included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author' as const, required: true, units: 1 }], omitted: [] }
   const outlineTask = { purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text' as const, messages: [{ role: 'user' as const, content: outlinePrompt }] }
   const draftTask = (content: string) => ({ ...task, messages: [{ role: 'user' as const, content }] })
+  function protectedBatch() {
+    const f = fixture(undefined, false, undefined, undefined, true)
+    f.db.prepare("UPDATE project_core SET writing_language='zh-CN' WHERE id='main'").run()
+    const intent = { mode: 'draft_review' as const, range: { startChapter: 1, endChapter: 1 }, targetUnits: 200 }
+    const authorInputs = [{ id: 'draft:target-units', text: '200' }]
+    const batch = f.owner.beginBatch({ ...intent, uiActionNonce: randomUUID(), modelId: f.model.id,
+      authorInputs, promptKeys: ['first_chapter_draft', 'next_chapter_draft', 'consistency_check'], skillStages: ['drafting', 'review'] })
+    const ledger = new WorkflowBatchRepository(f.db, { projectId: 'project', assertCurrent: () => {}, isFrozen: () => false })
+    const registered = ledger.issue({ taskId: randomUUID(), operationKey: randomUUID(), requestHash: textHash('fictional-registered-batch'),
+      batchRunId: batch.batchId, recipe: { schemaVersion: 2, writingLanguage: 'zh-CN', uiLocale: 'zh-CN', intent, authorInputs },
+      reviewModelId: f.model.id, reviewModelHash: textHash('fictional-review-model') })
+    return { ...f, get db() { return f.db }, batch, ledger, registered, authorInputs }
+  }
+  function nativeBatchChild(f: ReturnType<typeof protectedBatch>, register = false) {
+    const runs = new GenerationRunRepository(() => f.db), root = runs.get(f.batch.batchId)
+    return f.db.transaction(() => {
+      const child = runs.open({ ...root.binding, operation: 'chapter-draft', uiActionNonce: randomUUID(), frozenInputHash: textHash('fictional-child-input'),
+        parentRootActionId: root.rootActionId, budget: runs.budget(root.rootActionId).policy,
+        sourceManifest: { ...root.binding.sourceManifest, operation: 'chapter-draft', chapterNumber: 1, batchId: root.runId,
+          authorInputs: f.authorInputs, materialDecision: decision } })
+      if (register) f.ledger.bindStep({ taskId: f.registered.taskId, revision: f.registered.revision, batchRunId: root.runId },
+        { chapterNumber: 1, role: 'draft', kind: 'outline', slot: 0, runId: child.runId, input: { kind: 'model', task: outlineTask } })
+      return child
+    }).immediate()
+  }
   it('hides a driver-bound run from legacy read and execution entry points', async () => {
     const f = fixture(undefined, false, undefined, undefined, true)
     f.db.prepare("UPDATE project_core SET writing_language='zh-CN' WHERE id='main'").run()
@@ -1101,6 +1171,111 @@ describe('automatic short outline binding', () => {
       .toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
     expect(() => f.owner.commitDraft({ handle: run.handle, chapterNumber: 1, source: 'write', expectedCompositionHash: textHash('fictional') }))
       .toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+  })
+  it('hides a batch-driver root from legacy owner entry points', async () => {
+    const f = fixture(undefined, false, undefined, undefined, true)
+    f.db.prepare("UPDATE project_core SET writing_language='zh-CN' WHERE id='main'").run()
+    const intent = { mode: 'draft_review' as const, range: { startChapter: 1, endChapter: 1 }, targetUnits: 200 }
+    const authorInputs = [{ id: 'draft:target-units', text: '200' }]
+    const batch = f.owner.beginBatch({ ...intent, uiActionNonce: 'legacy-batch-fixture', modelId: f.model.id,
+      authorInputs, promptKeys: ['first_chapter_draft', 'next_chapter_draft', 'consistency_check'], skillStages: ['drafting', 'review'] })
+    const repository = new WorkflowBatchRepository(f.db, { projectId: 'project', assertCurrent: () => {}, isFrozen: () => false })
+    repository.issue({ taskId: randomUUID(), operationKey: randomUUID(), requestHash: textHash('fictional-batch'),
+      batchRunId: batch.batchId, recipe: { schemaVersion: 2, writingLanguage: 'zh-CN', uiLocale: 'zh-CN', intent, authorInputs },
+      reviewModelId: f.model.id, reviewModelHash: textHash('fictional-review-model') })
+    expect(f.owner.list().some(item => item.handle.runId === batch.batchId)).toBe(false)
+    expect(() => f.owner.read(batch.rootHandle)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    expect(() => f.owner.readContext(batch.rootHandle)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    expect(() => f.owner.readBatch(batch.batchId)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    await expect(f.owner.execute({ handle: batch.rootHandle, invocationNonce: 'legacy-batch', task: outlineTask }))
+      .rejects.toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    await expect(f.owner.resume(batch.rootHandle)).rejects.toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+  })
+  it('rejects legacy draft preparation and begin through a protected batch or parent before creating any child', () => {
+    const f = protectedBatch(), before = f.db.prepare('SELECT * FROM generation_runs ORDER BY rowid').all()
+    const preparation = { chapterNumber: 1, modelId: 'missing-model', promptKeys: ['first_chapter_draft'], skillStages: [],
+      authorInputs: f.authorInputs, query: 'fictional lookup', selectedDraftIds: [], batchId: f.batch.batchId }
+    expect(() => f.owner.draftPreparationBinding(preparation)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    expect(() => f.owner.prepareDraftContext(preparation, { version: 1, state: 'empty', storageState: 'absent', query: preparation.query,
+      topK: 1, canonicalRevision: null, documentsRevision: null, items: [] })).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    for (const patch of [{ batchId: f.batch.batchId }, { parentRootActionId: f.batch.rootHandle.rootActionId },
+      { batchId: f.batch.batchId, parentRootActionId: f.batch.rootHandle.rootActionId }]) {
+      expect(() => f.owner.begin({ ...f.begin, ...patch, uiActionNonce: randomUUID(), modelId: 'missing-model',
+        authorInputs: f.authorInputs })).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    }
+    expect(f.db.prepare('SELECT * FROM generation_runs ORDER BY rowid').all()).toEqual(before)
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
+  })
+  it('fences an unregistered same-root child from generic legacy read and execute without making it recoverable', async () => {
+    const f = protectedBatch(), child = nativeBatchChild(f), handle = { projectId: 'project', epoch: 'epoch-1',
+      rootActionId: child.rootActionId, runId: child.runId }
+    expect(() => f.owner.read(handle)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    expect(f.owner.list().some(view => view.handle.runId === child.runId)).toBe(false)
+    await expect(f.owner.execute({ handle, invocationNonce: 'borrowed-root', task: outlineTask })).rejects.toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    const runs = new GenerationRunRepository(() => f.db)
+    expect(() => runs.recoverWorkflowDriverRun(child.runId)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
+  })
+  it('leaves v2 task, steps and same-root attempts untouched during legacy all-DB recovery', () => {
+    const f = protectedBatch(), child = nativeBatchChild(f, true), runs = new GenerationRunRepository(() => f.db)
+    const pending = runs.reserve(child.runId, 'fictional-pending-driver', textHash('driver-request'), 200, 100)
+    runs.markDispatched(pending.attempt.attemptId)
+    const legacy = f.owner.begin({ ...f.begin, uiActionNonce: 'ordinary-legacy' })
+    const ordinary = runs.reserve(legacy.handle.runId, 'fictional-pending-legacy', textHash('legacy-request'), 200, 100)
+    runs.markDispatched(ordinary.attempt.attemptId)
+    const snapshot = () => ({ root: f.db.prepare('SELECT * FROM generation_roots WHERE root_action_id=?').get(child.rootActionId),
+      runs: f.db.prepare('SELECT * FROM generation_runs WHERE root_action_id=? ORDER BY rowid').all(child.rootActionId),
+      attempt: f.db.prepare('SELECT * FROM generation_attempts WHERE attempt_id=?').get(pending.attempt.attemptId),
+      tasks: f.db.prepare('SELECT * FROM workflow_batch_tasks').all(), steps: f.db.prepare('SELECT * FROM workflow_batch_steps').all(),
+      effects: f.db.prepare('SELECT * FROM workflow_batch_effects').all() })
+    const before = snapshot()
+    runs.recoverInterrupted()
+    expect(snapshot()).toEqual(before)
+    expect(runs.receipt(ordinary.attempt.attemptId).attempt.status).toBe('unknown')
+    expect(runs.get(legacy.handle.runId).status).toBe('paused')
+  })
+  it('recovers only exactly registered old-epoch v2 roots or steps and preserves unknown request identity', () => {
+    const f = protectedBatch(), child = nativeBatchChild(f, true), runs = new GenerationRunRepository(() => f.db)
+    const pending = runs.reserve(child.runId, 'fictional-crashed-invocation', textHash('crashed-request'), 200, 100)
+    runs.markDispatched(pending.attempt.attemptId)
+    f.createBatchOwner()
+    f.reopen()
+    const { owner } = f.createBatchOwner()
+    const root = owner.recoverWorkflowDriverRun(f.batch.batchId)
+    expect(root.handle.epoch).toBe('epoch-1')
+    expect(root.status).toBe('paused')
+    const recovered = owner.recoverWorkflowDriverRun(child.runId)
+    const current = new GenerationRunRepository(() => f.db)
+    expect(recovered.handle.runId).toBe(child.runId)
+    expect(current.receipt(pending.attempt.attemptId).attempt.status).toBe('unknown')
+    expect(current.findInvocation(child.runId, 'fictional-crashed-invocation', textHash('crashed-request'))?.attempt.attemptId).toBe(pending.attempt.attemptId)
+    expect(current.receipt(pending.attempt.attemptId).result).toBeNull()
+    const frozen = new GenerationRunRepository(() => f.db, Date.now, (table, recordId) => table === 'workflow_batch_tasks' && recordId === f.registered.taskId)
+    expect(() => frozen.recoverWorkflowDriverRun(child.runId)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    const unregistered = current.open({ ...current.get(child.runId).binding, operation: 'chapter-draft', uiActionNonce: randomUUID(),
+      parentRootActionId: undefined, frozenInputHash: textHash('unregistered'), budget: MAIN_GENERATION_POLICY.budget })
+    expect(() => current.recoverWorkflowDriverRun(unregistered.runId)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+  })
+  it('keeps ordinary legacy batches available while the internal v2 root freezes only its authorized plan range', () => {
+    const f = fixture(undefined, false, undefined, undefined, true)
+    f.db.prepare("UPDATE project_core SET writing_language='zh-CN' WHERE id='main'").run()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'Second planned chapter'),(3,'Outside batch')")
+    const request = { mode: 'draft_review' as const, range: { startChapter: 1, endChapter: 2 }, targetUnits: 200,
+      modelId: f.model.id, uiActionNonce: 'internal-v2-range', authorInputs: [{ id: 'draft:target-units', text: '200' }],
+      promptKeys: ['first_chapter_draft', 'next_chapter_draft', 'consistency_check'], skillStages: ['drafting' as const, 'review' as const] }
+    const legacy = f.owner.beginBatch({ ...request, uiActionNonce: 'ordinary-batch', range: { startChapter: 1, endChapter: 1 } })
+    const ordinary = f.owner.begin({ ...f.begin, uiActionNonce: 'ordinary-child', batchId: legacy.batchId,
+      parentRootActionId: legacy.rootHandle.rootActionId, authorInputs: request.authorInputs })
+    expect(ordinary.handle.rootActionId).toBe(legacy.rootHandle.rootActionId)
+    const { owner } = f.createBatchOwner()
+    const root = f.db.transaction(() => owner.beginWorkflowBatchRoot(request)).immediate()
+    const runs = new GenerationRunRepository(() => f.db), binding = runs.get(root.handle.runId).binding
+    expect(binding.sourceManifest.selectedBlueprintChapterNumbers).toEqual([1, 2])
+    expect(binding.sourceRefs.filter(source => source.sourceId.startsWith('blueprint:')).map(source => source.sourceId)).toEqual(['blueprint:1', 'blueprint:2'])
+    f.db.prepare("UPDATE blueprints SET title='Outside changed' WHERE chapter_number=3").run()
+    expect(() => owner.assertSourcesCurrent(root.handle)).not.toThrow()
+    f.db.prepare("UPDATE blueprints SET title='Selected plan changed' WHERE chapter_number=2").run()
+    expect(() => owner.assertSourcesCurrent(root.handle)).toThrow('GENERATION_SOURCE_CHANGED')
   })
   it('generates and saves three chapters with edited blueprints in one owner session', async () => {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>()

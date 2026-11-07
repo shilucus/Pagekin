@@ -78,7 +78,7 @@ export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt):
     modelRevision: receipt.modelRevision, endpointFingerprint: receipt.endpointFingerprint, capabilityEvidence: structuredClone(receipt.capabilityEvidence) }
 }
 export interface MainGenerationOwnerDependencies {
-  mode?: 'legacy' | 'runtime-feedback' | 'workflow-driver'
+  mode?: 'legacy' | 'runtime-feedback' | 'workflow-driver' | 'workflow-batch'
   /** Disable database-wide recovery during an idle owner handoff on the same native DB. */
   recoverInterrupted?: boolean
   /** Checks runtime-owned claims before an idle owner handoff. */
@@ -149,16 +149,39 @@ async function dispatchProvider(value: unknown, options: Parameters<GenerationRu
 /** One owner per captured database/session. No renderer budget, lease or hash is authoritative. */
 export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies) {
   if (deps.mode === 'runtime-feedback' && !deps.runtimeFeedback) throw new Error('GENERATION_RUNTIME_FEEDBACK_ADMISSION_REQUIRED')
-  if (deps.mode === 'workflow-driver' && !deps.workflowDriver) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
+  const isDriverMode = deps.mode === 'workflow-driver' || deps.mode === 'workflow-batch'
+  const isAuthorViewOwner = deps.mode === undefined || deps.mode === 'legacy'
+  if (isDriverMode && !deps.workflowDriver) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
   const hasRuntimeGrantTable = Boolean(deps.database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_feedback_grants'").get())
   const hasWorkflowTaskTable = Boolean(deps.database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_tasks'").get())
+  const hasWorkflowBatchTable = Boolean(deps.database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_batch_tasks'").get())
   if (deps.mode === 'runtime-feedback' && !hasRuntimeGrantTable) throw new Error('GENERATION_RUNTIME_FEEDBACK_SCHEMA_REQUIRED')
   if (deps.mode === 'workflow-driver' && !hasWorkflowTaskTable) throw new Error('GENERATION_WORKFLOW_DRIVER_SCHEMA_REQUIRED')
+  if (deps.mode === 'workflow-batch' && !hasWorkflowBatchTable) throw new Error('GENERATION_WORKFLOW_DRIVER_SCHEMA_REQUIRED')
   const isGrantRun = (runId: string) => hasRuntimeGrantTable && Boolean(deps.database.prepare('SELECT 1 FROM runtime_feedback_grants WHERE run_id=? LIMIT 1').get(runId))
-  const isDriverRun = (runId: string) => hasWorkflowTaskTable && Boolean(deps.database.prepare('SELECT 1 FROM workflow_tasks WHERE run_id=? LIMIT 1').get(runId))
+  const isV1DriverRun = (runId: string) => hasWorkflowTaskTable && Boolean(deps.database.prepare('SELECT 1 FROM workflow_tasks WHERE run_id=? LIMIT 1').get(runId))
+  const isBatchDriverRun = (runId: string) => hasWorkflowBatchTable && Boolean(deps.database.prepare(`SELECT 1 FROM generation_runs candidate
+    JOIN generation_runs registered ON registered.root_action_id=candidate.root_action_id WHERE candidate.run_id=? AND (
+      EXISTS(SELECT 1 FROM workflow_batch_tasks t WHERE t.batch_run_id=registered.run_id)
+      OR EXISTS(SELECT 1 FROM workflow_batch_steps s WHERE s.run_id=registered.run_id)) LIMIT 1`).get(runId))
+  const isDriverRun = (runId: string) => isV1DriverRun(runId) || isBatchDriverRun(runId)
+  const authorFollowupRuns = new Set<string>()
+  const executableAuthorFollowups = new Set<string>()
+  const assertAuthorFollowupWritable = (runId: string) => {
+    if (authorFollowupRuns.has(runId)) {
+      if (!executableAuthorFollowups.has(runId)) throw new Error('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+      reviewRevisions.assertBatchFollowupWritable(runId)
+    }
+  }
   const assertLegacyRunAccess = (runId: string) => {
     if (deps.mode !== 'runtime-feedback' && isGrantRun(runId)) throw new Error('GENERATION_RUNTIME_FEEDBACK_ACCESS_DENIED')
-    if (deps.mode !== 'workflow-driver' && isDriverRun(runId)) throw new Error('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    if (deps.mode !== 'workflow-driver' && isV1DriverRun(runId)
+      || deps.mode !== 'workflow-batch' && isBatchDriverRun(runId) && !authorFollowupRuns.has(runId))
+      throw new Error('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+  }
+  const assertLegacyParentAccess = (rootActionId: string) => {
+    for (const row of deps.database.prepare('SELECT run_id FROM generation_runs WHERE root_action_id=?').all(rootActionId) as { run_id: string }[])
+      assertLegacyRunAccess(row.run_id)
   }
   const capturedProjectPath = deps.projectPath
   const runtimeFreeze = readPortableRuntimeFreeze(capturedProjectPath)
@@ -204,7 +227,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return value
   }
   const finalizedCharacters = new FinalizedCharacterGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent, deps.transferOrigin)
-  const reviewRevisions = new ReviewRevisionGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent)
+  const reviewRevisions = new ReviewRevisionGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent,
+    (table, id) => runtimeFreeze.isFrozen(table, id))
   const handleOf = (run: DurableGenerationRun): MainGenerationRunHandle => ({ projectId: run.binding.projectId,
     epoch: run.binding.epoch, rootActionId: run.rootActionId, runId: run.runId })
   const rootPolicy = (rootActionId: string): MainGenerationPolicy => {
@@ -220,6 +244,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     assertLegacyRunAccess(handle.runId)
     const run = repository.get(handle.runId)
     if (run.binding.projectId !== deps.projectId || !isDeepStrictEqual(handleOf(run), handle)) throw new Error('GENERATION_RUN_IDENTITY_MISMATCH')
+    if (execution) assertAuthorFollowupWritable(run.runId)
     if (execution) {
       repository.assertBlueprintRecoveryWritable(run.runId)
       repository.assertPlotOutlineWritable(run.runId)
@@ -378,7 +403,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       }
     },
   })
-  const recoverInterrupted = !['runtime-feedback', 'workflow-driver'].includes(deps.mode ?? 'legacy') && deps.recoverInterrupted !== false
+  const recoverInterrupted = !['runtime-feedback', 'workflow-driver', 'workflow-batch'].includes(deps.mode ?? 'legacy') && deps.recoverInterrupted !== false
   if (recoverInterrupted) service.recoverInterrupted()
   function currentModelReceipt(binding: RunBinding): SafeGenerationModelReceipt {
     const model = deps.loadModel(modelReceipt(binding).modelId)
@@ -433,7 +458,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         batchId, batchRoot: Boolean(batchIntent) }
     }).filter(run => run.handle.projectId === deps.projectId
       && (deps.mode === 'runtime-feedback' || !isGrantRun(run.handle.runId))
-      && (deps.mode === 'workflow-driver' || !isDriverRun(run.handle.runId)))
+      && (deps.mode === 'workflow-driver' && isV1DriverRun(run.handle.runId)
+        || deps.mode === 'workflow-batch' && isBatchDriverRun(run.handle.runId) || !isDriverRun(run.handle.runId)
+        || isAuthorViewOwner && reviewRevisions.isBatchFollowupRun(run.handle.runId)))
   const list = (): MainGenerationRunSummary[] => {
     assertCurrent()
     return runSummaries().map(({ handle, status, operation }) => ({ handle, status, operation }))
@@ -466,6 +493,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     assertCurrent()
     if (!request || typeof request.query !== 'string' || knowledgeSnapshot && request.query !== knowledgeSnapshot.query
       || Object.keys(request).some(key => !['chapterNumber', 'modelId', 'promptKeys', 'skillStages', 'authorInputs', 'query', 'selectedDraftIds', 'batchId'].includes(key))) throw new Error('GENERATION_DRAFT_PREPARATION_INVALID')
+    if (request.batchId) assertLegacyRunAccess(request.batchId)
     const model = deps.loadModel(request.modelId)
     if (!model) throw new Error('GENERATION_MODEL_MISSING')
     const receipt = safeGenerationModelReceipt(createModelExecutionLeaseReceipt(model, { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
@@ -499,6 +527,12 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
       || typeof selection.uiActionNonce !== 'string' || !selection.uiActionNonce.trim() || selection.uiActionNonce.length > 256
       || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'materialDecision', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : []), ...(finalizationInitialization ? ['finalizationGenerationSlot'] : []), ...(graphInitialization ? ['graphGenerationInput', 'graphGenerationKey'] : []), ...(legacyInitialization ? ['legacyRosterKey'] : []), ...(planningInitialization ? ['planningFeedbackInput'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+    if (selection.batchId) assertLegacyRunAccess(selection.batchId)
+    const protectedReviewParent = isAuthorViewOwner && selection.parentRootActionId && selection.reviewRevisionContextId
+      && (deps.database.prepare('SELECT run_id FROM generation_runs WHERE root_action_id=?').all(selection.parentRootActionId) as { run_id: string }[])
+        .some(row => isBatchDriverRun(row.run_id))
+    const authorFollowup = protectedReviewParent ? reviewRevisions.admitBatchFollowup(selection) : undefined
+    if (selection.parentRootActionId && !authorFollowup) assertLegacyParentAccess(selection.parentRootActionId)
     if (selection.operation === 'planning-feedback' && !planningInitialization) throw new Error('GENERATION_FEEDBACK_ADMISSION_REQUIRED')
     if (selection.operation === 'editor-inline' && !editorInitialization) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
     if (['finalized-chapter-notes', 'finalized-character-state'].includes(selection.operation) && !finalizationInitialization) throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
@@ -518,7 +552,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (agentWorkflow?.existing) return viewOf(repository.get(agentWorkflow.existing.runId))
     generationOutputContract(selection)
     const finalizedCharacterContextHash = finalizedCharacters.admit(selection)
-    const reviewRevision = reviewRevisions.admit(selection)
+    const reviewRevision = authorFollowup ?? reviewRevisions.admit(selection)
     if (selection.batchIntent && !batchInitialization) throw new Error('GENERATION_BATCH_INTENT_MAIN_ONLY')
     const batch = selection.batchId ? draftEffects.readBatch(selection.batchId, deps.projectId) : undefined
     if (batch) {
@@ -587,6 +621,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (prepared && !preparationMatches(prepared.binding, binding)) throw new Error('GENERATION_DRAFT_PREPARATION_CHANGED')
       if (binding.projectId !== deps.projectId || binding.epoch !== deps.epoch) throw new Error('GENERATION_BINDING_INVALID')
       const run = deps.database.transaction(() => {
+      if (authorFollowup) reviewRevisions.admitBatchFollowup(selection)
       if (selection.importSlot) {
         const existing = imports.find(selection.importSlot)
         if (existing && !imports.retryable(existing)) return existing
@@ -614,8 +649,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (batch?.currentChapterRunHandle && batch.currentChapterRunHandle.runId !== next.runId) throw new Error('GENERATION_BATCH_RECOVERY_REQUIRED')
       if (continuation && !continuation.continuationHandle) repository.bindDirectoryContinuation(continuation.operationId, handleOf(next))
       if (selection.agentWorkflowRegistrationId) agents.recordWorkflowChild(selection.agentWorkflowRegistrationId, handleOf(next))
+      if (authorFollowup) reviewRevisions.assertBatchFollowupRun(next.runId)
       return next
       }).immediate()
+      if (authorFollowup) { authorFollowupRuns.add(run.runId); executableAuthorFollowups.add(run.runId) }
       if (run.binding.epoch === deps.epoch && !runLeases.has(run.runId)) runLeases.set(run.runId, lease.leaseId)
       else deps.leases.close(lease.leaseId)
       return viewOf(run)
@@ -648,7 +685,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false, graphExecution = false, legacyExecution = false, shortOutlineRetryAttemptId?: string, planningExecution = false, driverExecution = false): Promise<MainGenerationExecuteReceipt> => {
     assertAdmission()
     const run = requireRun(request.handle, true)
-    if (isDriverRun(run.runId) && !driverExecution) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
+    if (isDriverRun(run.runId) && !driverExecution && !authorFollowupRuns.has(run.runId)) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.operation === 'planning-feedback' && !planningExecution) throw new Error('GENERATION_FEEDBACK_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.operation === 'agent-round' && !agentExecution) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.importSlot && !importExecution) throw new Error('GENERATION_IMPORT_ADMISSION_REQUIRED')
@@ -726,6 +763,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     const existing = repository.findInvocation(run.runId, request.invocationNonce, requestHash)
     if (existing && (task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE || existing.attempt.status !== 'dispatch-marked' && existing.attempt.status !== 'reserved')) return outcomeOf(volatileReceipts.get(existing.attempt.attemptId) ?? existing, task)
+    if (authorFollowupRuns.has(run.runId) && reviewRevisions.hasUnknownDelivery(run.runId))
+      throw new Error('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
     repository.assertPlotOutlineRequest(run.runId, task.purpose, task)
     if (task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE && runAttempts(run.runId).length) {
       if (!shortOutlineRetryAttemptId) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_ALREADY_ATTEMPTED')
@@ -766,7 +805,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         const receipt = safeGenerationModelReceipt(createModelExecutionLeaseReceipt(frozenModel, { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
         if (!isDeepStrictEqual(receipt, modelReceipt(run.binding))) throw new Error('GENERATION_MODEL_CHANGED')
       } } : {}),
-      ...(deps.mode === 'workflow-driver' && driverExecution ? { workflowDriverAdmission: () => {
+      ...(isDriverMode && driverExecution ? { workflowDriverAdmission: () => {
         assertAdmission()
         assertSourcesCurrent(handleOf(run))
         deps.workflowDriver!.assertDispatchAdmission(run.runId, request.invocationNonce, task)
@@ -793,6 +832,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const resume = async (handle: MainGenerationRunHandle) => {
     assertAdmission()
     const run = requireRun(handle)
+    assertAuthorFollowupWritable(run.runId)
     repository.assertBlueprintRecoveryWritable(run.runId)
     repository.assertPlotOutlineWritable(run.runId)
     if (plotOutlineAlreadyCurrent(run)) return viewOf(run)
@@ -807,10 +847,20 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const lease = deps.leases.begin(receipt.modelId)
     try {
       if (!isDeepStrictEqual(safeGenerationModelReceipt(lease), receipt)) throw new Error('GENERATION_MODEL_CHANGED')
-      const resumed = await service.resume(run.runId, next, deps.mode === 'workflow-driver' ? () => {
+      const authorRecovery = authorFollowupRuns.has(run.runId)
+      const admitAuthorRecovery = () => {
+        assertAdmission()
+        assertRetirable()
+        reviewRevisions.assertBatchFollowupWritable(run.runId)
+        if (!compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))))
+          throw new Error('GENERATION_REVIEW_CONTEXT_CHANGED')
+      }
+      if (authorRecovery && run.binding.epoch !== deps.epoch && repository.budget(run.rootActionId).root.status === 'active')
+        repository.recoverReviewRevisionRun(run.runId, admitAuthorRecovery)
+      const resumed = await service.resume(run.runId, next, isDriverMode ? () => {
         assertAdmission()
         deps.workflowDriver!.assertActive(run.runId)
-      } : undefined)
+      } : authorRecovery ? admitAuthorRecovery : undefined)
       assertCurrent()
       const previous = runLeases.get(run.runId)
       if (previous) deps.leases.close(previous)
@@ -1109,7 +1159,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       ...(selectedDrafts.every(item => item !== null) ? { selectedDrafts } : {}),
       ...(manifest.batchId ? { batchId: manifest.batchId as string } : {}) }
   }
-  const readBatch = (batchId: string) => { assertCurrent(); return draftEffects.readBatch(batchId, deps.projectId) }
+  const readBatch = (batchId: string) => { assertCurrent(); assertLegacyRunAccess(batchId); return draftEffects.readBatch(batchId, deps.projectId) }
   const characters = new CharacterProposalService(deps.database, deps.projectId, (source, forWrite, version) => {
     assertCurrent(); return proveCharacterProposal(deps.database, repository, deps.projectId, source, forWrite, (handle, committedBlueprintChapters) => {
       const run = requireRun(handle)
@@ -1151,9 +1201,34 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     try { current = repository.budget(run.rootActionId).root.status !== 'cancelled' && compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))) } catch { /* Original text remains readable after source or model changes. */ }
     return { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, context, sourceStatus: current ? 'current' : 'conflict' }
   }
-  const readReviewRevisionRecovery = (handle: MainGenerationRunHandle) => reviewRevisions.readRecovery(handle,
-    run => compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))),
-    run => viewOf(run).candidates?.at(-1))
+  const readReviewRevisionRecovery = (handle: MainGenerationRunHandle, admitRecovery = true) => {
+    const protectedFollowup = isAuthorViewOwner && isBatchDriverRun(handle.runId)
+    if (protectedFollowup) reviewRevisions.assertBatchFollowupRun(handle.runId)
+    else requireRun(handle)
+    const read = () => reviewRevisions.readRecovery(handle,
+      run => compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))),
+      run => viewOf(run).candidates?.at(-1))
+    let recovery = read()
+    const interrupted = protectedFollowup && runAttempts(handle.runId).some(attempt => attempt.status === 'dispatch-marked')
+    if (admitRecovery && interrupted && !reviewRevisions.hasUnknownDelivery(handle.runId)
+      && !recovery.saved && recovery.sourceStatus === 'current' && handle.epoch !== deps.epoch) {
+      assertAdmission()
+      assertRetirable()
+      repository.recoverReviewRevisionRun(handle.runId, () => {
+        assertAdmission()
+        assertRetirable()
+        reviewRevisions.assertBatchFollowupRun(handle.runId)
+        if (read().sourceStatus !== 'current') throw new Error('GENERATION_REVIEW_CONTEXT_CHANGED')
+      })
+      recovery = read()
+    }
+    if (admitRecovery && protectedFollowup && (recovery.saved || recovery.sourceStatus === 'current')) authorFollowupRuns.add(handle.runId)
+    if (admitRecovery && protectedFollowup && !recovery.saved && recovery.sourceStatus === 'current' && !reviewRevisions.hasUnknownDelivery(handle.runId))
+      executableAuthorFollowups.add(handle.runId)
+    if (protectedFollowup && !recovery.saved && reviewRevisions.hasUnknownDelivery(handle.runId))
+      return { ...recovery, canResume: false, contextId: undefined }
+    return recovery
+  }
   /**
    * 运行侧页「可恢复」区的数据。只读操作类型可能恢复的运行；一个运行读不出不挡其余运行，只标 partial。
    * 单章写稿保存过就不再需要恢复，正文后来改没改过都一样；只有这次打开里还留着没落盘的正文时仍列出，那段文字只能从这里复制。
@@ -1174,7 +1249,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         if ((recovery.plotOutlineRecovery || recovery.blueprintRecovery) && recovery.planningContinuation?.state !== 'complete'
           && !recovery.plotOutlineRecovery?.inFormalOutline) list.planning.push(recovery)
       },
-      review: (handle: MainGenerationRunHandle) => { list.reviews.push({ view: viewOf(requireRun(handle)), recovery: readReviewRevisionRecovery(handle) }) },
+      review: (handle: MainGenerationRunHandle) => { const recovery = readReviewRevisionRecovery(handle, false); list.reviews.push({ view: viewOf(repository.get(handle.runId)), recovery }) },
       editor: (handle: MainGenerationRunHandle) => { list.editors.push(readEditorInlineRecovery(handle)) },
       draft: (handle: MainGenerationRunHandle) => {
         const saved = draftEffects.readRecovery(handle.runId).kind !== 'absent'
@@ -1333,7 +1408,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return execute({ handle, invocationNonce, task }, false, false, false, false, false, false, undefined, true)
   }
   const executeWorkflowDriver = async (request: ExecuteGenerationRequest) => {
-    if (deps.mode !== 'workflow-driver' || !deps.workflowDriver) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
+    if (!isDriverMode || !deps.workflowDriver) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
     deps.workflowDriver.assertActive(request.handle.runId)
     const run = requireRun(request.handle, true)
     if (!isDriverRun(run.runId)) throw new Error('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
@@ -1350,14 +1425,14 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     executeRuntimeFieldFeedback,
     executeWorkflowDriver,
     pauseWorkflowDriver: (handle: MainGenerationRunHandle, cancel = false) => {
-      if (deps.mode !== 'workflow-driver') throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
+      if (!isDriverMode) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
       const run = requireRun(handle)
       if (!isDriverRun(run.runId)) throw new Error('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
       if (cancel) service.cancelRuntimeFeedback(run.rootActionId)
       else service.pauseWorkflowDriver(run.rootActionId)
     },
     recoverWorkflowDriverRun: (runId: string) => {
-      if (deps.mode !== 'workflow-driver') throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
+      if (!isDriverMode) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
       assertAdmission()
       if (physicalDispatches || pending.size) throw new Error('GENERATION_OWNER_BUSY')
       if (repository.get(runId).binding.epoch === deps.epoch) throw new Error('GENERATION_WORKFLOW_DRIVER_EPOCH_CURRENT')
@@ -1365,7 +1440,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return viewOf(repository.get(runId))
     },
     assertWorkflowDriverRecoverySources: (handle: MainGenerationRunHandle) => {
-      if (deps.mode !== 'workflow-driver' || !isDriverRun(handle.runId)) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
+      if (!isDriverMode || !isDriverRun(handle.runId)) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
       const run = requireRun(handle)
       if (!compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))))
         throw new Error('GENERATION_SOURCE_CHANGED')
@@ -1383,8 +1458,41 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       driverPreparations.set(view.handle.runId, { ...view.handle })
       return view
     },
+    beginWorkflowBatchRoot: (request: BeginGenerationBatchRequest) => {
+      if (deps.mode !== 'workflow-batch' || !deps.database.inTransaction) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
+      assertGenerationBatchIntent(request)
+      if (request.mode !== 'draft_review') throw new Error('GENERATION_WORKFLOW_DRIVER_SCOPE_INVALID')
+      const { mode, range, targetUnits, ...intent } = request
+      const view = begin({ ...intent, operation: 'batch-chapters', selectedDraftIds: [], selectedFinalizedDraftIds: [],
+        selectedBlueprintChapterNumbers: Array.from({ length: range.endChapter - range.startChapter + 1 }, (_, index) => range.startChapter + index),
+        output: 'visible-text', batchIntent: { mode, range, targetUnits } }, true)
+      driverPreparations.set(view.handle.runId, { ...view.handle })
+      return view
+    },
+    beginWorkflowBatchRun: (selection: BeginGenerationRequest) => {
+      if (deps.mode !== 'workflow-batch' || !deps.database.inTransaction) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
+      if (selection.operation === 'chapter-draft') {
+        if (!selection.batchId || !selection.parentRootActionId || !selection.preparationId || !selection.materialDecision
+          || selection.output !== 'visible-text') throw new Error('GENERATION_WORKFLOW_DRIVER_SCOPE_INVALID')
+      } else if (selection.operation === 'review-chapter') {
+        if (selection.batchId || selection.parentRootActionId || !selection.reviewRevisionContextId
+          || selection.output !== 'structured-data') throw new Error('GENERATION_WORKFLOW_DRIVER_SCOPE_INVALID')
+      } else throw new Error('GENERATION_WORKFLOW_DRIVER_SCOPE_INVALID')
+      const view = begin(selection)
+      driverPreparations.set(view.handle.runId, { ...view.handle })
+      return view
+    },
+    retryWorkflowBatchShortOutline: (request: GenerationOwnerChannels['generation:retry-draft-short-outline']['args'][0]) => {
+      if (deps.mode !== 'workflow-batch') throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
+      const run = requireRun(request.handle, true)
+      if (!isBatchDriverRun(run.runId)) throw new Error('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+      deps.workflowDriver!.assertActive(run.runId)
+      const task = readFailedShortOutlineTask(run, request.failedAttemptId)
+      return execute({ handle: request.handle, invocationNonce: `draft-short-outline-retry:${request.failedAttemptId}`, task },
+        false, false, false, false, false, false, request.failedAttemptId, false, true)
+    },
     rollbackWorkflowDriverPreparation: (handle: MainGenerationRunHandle) => {
-      if (deps.mode !== 'workflow-driver') throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
+      if (!isDriverMode) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
       if (closed || !deps.database.open) throw new Error('GENERATION_OWNER_CLOSED')
       if (deps.assertRetirementResources) deps.assertRetirementResources()
       else deps.assertCurrent()
@@ -1913,8 +2021,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     readPendingFinalizedCharacterStateCandidate: (request: { draftId: number; candidateKey: string }) => finalizedCharacters.readPendingStateCandidate(request),
     decideFinalizedCharacterStateCandidate: (request: import('../../src/shared/finalized-continuity').FinalizedCharacterStateDecisionRequest) => finalizedCharacters.decideStateCandidate(request),
     prepareReviewRevision: (request: PrepareReviewRevisionRequest) => reviewRevisions.prepare(request),
-    commitReview: (request: ReviewGenerationCommitRequest) => reviewRevisions.commitReview(request, assertSourcesCurrent),
-    commitRevision: (request: RevisionGenerationCommitRequest) => reviewRevisions.commitRevision(request, assertSourcesCurrent),
+    commitReview: (request: ReviewGenerationCommitRequest) => { requireRun(request.handle); return reviewRevisions.commitReview(request, assertSourcesCurrent) },
+    commitRevision: (request: RevisionGenerationCommitRequest) => { requireRun(request.handle); return reviewRevisions.commitRevision(request, assertSourcesCurrent) },
     readReviewRevisionRecovery, listRecovery, findBlueprintRecovery,
     readContext, readBatch, prepareDraftContext, preparedKnowledge, draftPreparationBinding, retryDraftShortOutline,
     beginBatch: (request: BeginGenerationBatchRequest) => {
@@ -1943,7 +2051,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       }).immediate()
     },
     assertSynopsisCommit, commitPlotOutlineAuthorEdit, commitBlueprintAuthorEdit,
-    withAgentChildEffect: <T>(handle: MainGenerationRunHandle, effect: () => T): T => { requireRun(handle); return agents.withChildEffect(handle, effect) },
+    withAgentChildEffect: <T>(handle: MainGenerationRunHandle, effect: () => T): T => { const run = requireRun(handle); assertAuthorFollowupWritable(run.runId); return agents.withChildEffect(handle, effect) },
     read: (handle: MainGenerationRunHandle) => viewOf(requireRun(handle)),
     listDirectoryProgress: () => {
       assertCurrent()
@@ -1983,9 +2091,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return composition ? { ...composition, authorInputs: structuredClone(run.binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined) } : null
     },
     pause: (handle: MainGenerationRunHandle) => { const run = requireRun(handle, true); service.pause(run.rootActionId); return viewOf(repository.get(run.runId)) },
-    cancel: (handle: MainGenerationRunHandle) => { const run = requireRun(handle); service.cancel(run.rootActionId); return viewOf(repository.get(run.runId)) },
+    cancel: (handle: MainGenerationRunHandle) => { const run = requireRun(handle); assertAuthorFollowupWritable(run.runId); service.cancel(run.rootActionId); return viewOf(repository.get(run.runId)) },
     restart: (handle: MainGenerationRunHandle, selection: BeginGenerationRequest) => {
       const old = requireRun(handle)
+      assertAuthorFollowupWritable(old.runId)
+      if (authorFollowupRuns.has(old.runId)) throw new Error('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
       repository.assertBlueprintRecoveryWritable(old.runId)
       imports.assertMutable(old)
       finalizations.assertMutable(old)
@@ -2025,6 +2135,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     discardCandidate: (handle: MainGenerationRunHandle, artifactId: string) => {
       const run = requireRun(handle)
+      assertAuthorFollowupWritable(run.runId)
       if (run.binding.sourceManifest.operation === 'agent-round') throw new Error('GENERATION_AGENT_CONTROL_IMMUTABLE')
       reviewRevisions.assertMutable(run.runId)
       imports.assertMutable(run)
@@ -2053,6 +2164,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       preparations.clear()
       finalizedCharacters.close()
       reviewRevisions.close()
+      authorFollowupRuns.clear()
+      executableAuthorFollowups.clear()
       closed = true
       for (const leaseId of runLeases.values()) deps.leases.close(leaseId)
       runLeases.clear()
@@ -2063,6 +2176,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       preparations.clear()
       finalizedCharacters.close()
       reviewRevisions.close()
+      authorFollowupRuns.clear()
+      executableAuthorFollowups.clear()
       if (closed) return
       for (const recordCancelled of [...unrecordedCalls]) recordCancelled()
       service.suspendForProjectClose(deps.mode === 'runtime-feedback')

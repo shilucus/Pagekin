@@ -1,4 +1,5 @@
 import fs, { createReadStream } from 'node:fs'
+import { assertOrdinaryHistoryFreezeCoverage } from '../migrations/ordinary-review-history'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
@@ -557,6 +558,7 @@ async function installedReceipt(
       database.pragma('foreign_keys = ON')
       assertPortableSourceSchema(database)
       verifyPortableTransferAuthority(database, installedAuthority, freeze)
+      assertOrdinaryHistoryFreezeCoverage(database, freeze)
     } finally { database.close() }
     const knowledgeEntry = entries.find(entry => entry.path === PORTABLE_KNOWLEDGE_SOURCE_PATH)
     if (knowledgeEntry) {
@@ -800,6 +802,7 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
       database.pragma('foreign_keys = ON')
       assertPortableSourceSchema(database)
       verifyPortableTransferAuthority(database, authority, freeze)
+      assertOrdinaryHistoryFreezeCoverage(database, freeze)
     } finally {
       database.close()
       for (const suffix of ['-wal', '-shm', '-journal']) captureGeneratedFileIfPresent(attempt, databasePath + suffix)

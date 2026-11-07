@@ -3,6 +3,7 @@ import type { AiNovelAPI } from '../../src/shared/desktop-api'
 import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../src/shared/project-runtime-contract'
 import { RUNTIME_FEEDBACK_CHANNELS } from '../../src/shared/runtime-feedback-contract'
 import { WORKFLOW_DRIVER_CHANNELS } from '../../src/shared/workflow-driver-contract'
+import { WORKFLOW_BATCH_CHANNELS } from '../../src/shared/workflow-batch-contract'
 
 const electron = vi.hoisted(() => ({
   contextBridge: { exposeInMainWorld: vi.fn() },
@@ -77,6 +78,20 @@ describe('桌面预加载接口', () => {
     const calls = electron.ipcRenderer.invoke.mock.calls.length
     for (const channel of ['workflow-driver:v2:start', 'workflow-driver:v1:approve', 'workflow-driver:v1:execute']) {
       await expect(bridge.invoke(channel, request)).rejects.toThrow('WORKFLOW_DRIVER_CHANNEL_NOT_ALLOWED')
+    }
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)
+  })
+  it('forwards only the v2 batch literal set without model execution or approval fallbacks', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const request = Object.freeze({ taskId: 'fictional-task' })
+    for (const channel of WORKFLOW_BATCH_CHANNELS) {
+      await bridge.invoke(channel, request)
+      expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, request)
+    }
+    const calls = electron.ipcRenderer.invoke.mock.calls.length
+    for (const channel of ['workflow-batch:v1:start', 'workflow-batch:v2:approve', 'workflow-batch:v2:execute',
+      'workflow-batch:v2:prepare-context', 'workflow-batch:v3:start']) {
+      await expect(bridge.invoke(channel, request)).rejects.toThrow('WORKFLOW_BATCH_CHANNEL_NOT_ALLOWED')
     }
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)
   })

@@ -7,6 +7,8 @@ import type { TrustedProject } from './project-access'
 import { SchemaMigrationError } from '../migrations/registry'
 import { deactivateProjectData, getCanonicalProjectIdentity, getProjectDatabasePath, getProjectDataRoot, openCanonicalProjectData } from './project-data-locator'
 import { readSqliteContentIdentity } from './sqlite-project-migration'
+import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
+import { assertOrdinaryHistoryFreezeCoverage } from '../migrations/ordinary-review-history'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 
@@ -83,6 +85,7 @@ export function openVerifiedProjectDatabase(projectPath: string, expectedProject
     if (content.database !== verified.database || content.wal !== verified.wal) throw new SchemaMigrationError('SOURCE_CHANGED_SINCE_PROBE')
     const current = getCanonicalProjectIdentity(identity.canonicalRoot)
     if (current.projectId !== identity.projectId) throw new Error('PROJECT_RUNTIME_IDENTITY_MISMATCH')
+    assertOrdinaryHistoryFreezeCoverage(database, readPortableRuntimeFreeze(identity.canonicalRoot))
     getProjectDataRoot(identity.canonicalRoot)
     database.pragma('journal_mode = WAL')
     database.pragma('foreign_keys = ON')

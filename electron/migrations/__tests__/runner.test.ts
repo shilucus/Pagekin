@@ -49,7 +49,7 @@ class FixtureDatabase implements SchemaWriter {
   }
 }
 
-const identities = Array.from({ length: 14 }, (_, version) => ({ version, fingerprint: `fixture-schema-${version}` }))
+const identities = Array.from({ length: 15 }, (_, version) => ({ version, fingerprint: `fixture-schema-${version}` }))
 function implementations(): MigrationImplementation[] {
   return MIGRATION_LANE.map(slot => ({ ...slot,
     migrate(db) {
@@ -86,7 +86,7 @@ describe('desktop single schema lane', () => {
     }
   })
 
-  it('reserves exactly thirteen consecutive versions with a single declared owner for each', () => {
+  it('reserves exactly fourteen consecutive versions with a single declared owner for each', () => {
     expect(MIGRATION_LANE.map(s => [s.id, s.from, s.to, s.owner])).toEqual([
       ['M00', 0, 1, 'S04'], ['M01', 1, 2, 'S05'], ['M02', 2, 3, 'S08'],
       ['M03', 3, 4, 'S11'], ['M04', 4, 5, 'S12'], ['M05', 5, 6, 'F03'],
@@ -96,6 +96,7 @@ describe('desktop single schema lane', () => {
       ['M10', 10, 11, 'runtime-feedback-grants'],
       ['M11', 11, 12, 'generation-recovery-tails'],
       ['M12', 12, 13, 'workflow-driver'],
+      ['M13', 13, 14, 'workflow-batch'],
     ])
     expect(migrationRegistry.implementations).toEqual([])
     expect(migrationRegistry.recognizedSchemas).toEqual([])
@@ -197,8 +198,8 @@ describe('desktop single schema lane', () => {
     const db = new FixtureDatabase()
     const registry = createMigrationRegistry(implementations(), identities)
     const result = migrateSchema(db, registry)
-    expect(result.version).toBe(13)
-    expect(verifySchema(db, registry, 13)).toEqual({ version: 13, fingerprint: 'fixture-schema-13' })
+    expect(result.version).toBe(14)
+    expect(verifySchema(db, registry, 14)).toEqual({ version: 14, fingerprint: 'fixture-schema-14' })
     expect(() => migrateSchema(db, registry, 5)).toThrow('SCHEMA_DOWNGRADE_REFUSED')
     expect(() => verifySchema(db, registry, 5)).toThrow('SCHEMA_VERSION_MISMATCH')
     expect(result.sessionFenced).toBe(false)

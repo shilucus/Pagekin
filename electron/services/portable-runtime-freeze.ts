@@ -15,6 +15,10 @@ const AUTHORITY_FILE = 'portable-transfer-authority.json'
 
 export type PortableRuntimeFreezeTable =
   | 'drafts'
+  | 'contents'
+  | 'reviews'
+  | 'revisions'
+  | 'review_cycle_merges'
   | 'chapter_deletion_operations'
   | 'finalization_outbox'
   | 'import_runs'
@@ -22,6 +26,7 @@ export type PortableRuntimeFreezeTable =
   | 'generation_roots'
   | 'generation_runs'
   | 'generation_attempts'
+  | 'generation_artifacts'
   | 'generation_recovery_tails'
   | 'planning_feedback_bases'
   | 'planning_feedback_candidates'
@@ -30,6 +35,11 @@ export type PortableRuntimeFreezeTable =
   | 'workflow_tasks'
   | 'workflow_steps'
   | 'workflow_effects'
+  | 'workflow_batch_tasks'
+  | 'workflow_batch_steps'
+  | 'workflow_batch_effects'
+  | 'review_cycles'
+  | 'review_findings'
 
 export class PortableRuntimeFreezeError extends Error {
   constructor(readonly code: 'PORTABLE_RUNTIME_FREEZE_INVALID' | 'PORTABLE_RUNTIME_FROZEN') {
@@ -41,6 +51,7 @@ export class PortableRuntimeFreezeError extends Error {
 export interface PortableRuntimeFreezeGuard {
   readonly active: boolean
   isFrozen(table: PortableRuntimeFreezeTable, recordId: string): boolean
+  projection?(table: string, recordId: string): Readonly<Record<string, unknown>> | null
   assertMutable(table: PortableRuntimeFreezeTable, recordId: string): void
 }
 
@@ -152,15 +163,21 @@ export function parsePortableRuntimeFreeze(bytes: Buffer): PortableRuntimeFreeze
     || !Array.isArray(document.avatarReferenceProjections) || document.avatarReferenceProjections.length > MAX_RECORDS
     || document.avatarReferenceProjections.some(item => !item || typeof item !== 'object' || Array.isArray(item))) fail('PORTABLE_RUNTIME_FREEZE_INVALID')
   const frozen = new Set<string>()
+  const projections = new Map<string, string>()
   for (const item of document.records) {
     const parsed = record(item)
     const key = `${parsed.table}\u0000${parsed.recordId}`
     if (frozen.has(key)) fail('PORTABLE_RUNTIME_FREEZE_INVALID')
     frozen.add(key)
+    projections.set(key, JSON.stringify((item as Record<string, unknown>).projection))
   }
   return Object.freeze({
     active: true,
     isFrozen: (table: PortableRuntimeFreezeTable, recordId: string) => frozen.has(`${table}\u0000${recordId}`),
+    projection: (table: string, recordId: string) => {
+      const encoded = projections.get(`${table}\u0000${recordId}`)
+      return encoded === undefined ? null : Object.freeze(JSON.parse(encoded) as Record<string, unknown>)
+    },
     assertMutable: (table: PortableRuntimeFreezeTable, recordId: string) => {
       if (frozen.has(`${table}\u0000${recordId}`)) fail('PORTABLE_RUNTIME_FROZEN')
     },

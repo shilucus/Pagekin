@@ -13,6 +13,7 @@ import { probeProjectSqlite, backupProjectSqlite, verifyProjectSqlite } from '..
 import { exportVectorStoreForMigration, importVectorStoreForMigration, verifyVectorStoreForMigration, type VectorMigrationSnapshot } from '../vector-migration-snapshot'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
 import { parseWorkflowDriverRecipe } from '../../../src/shared/workflow-driver-contract'
+import { parseWorkflowBatchRecipe } from '../../../src/shared/workflow-batch-contract'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
@@ -344,12 +345,61 @@ it.each(['missing-old-projection', 'missing-asset-projection', 'changed-current-
   expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
 })
 
-it.each([8, 9, 10, 11, 12])('checks old feedback-domain cutover from schema %s', async sourceVersion => {
+it('rejects M13-only target contamination after asset migration and preserves the original schema 13 source', async () => {
+  const options = fixture(), sourcePath = path.join(options.legacy, 'vela.db')
+  const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
+  const recipe = parseWorkflowBatchRecipe({ schemaVersion: 2, writingLanguage: 'en-US', uiLocale: 'en-US',
+    intent: { mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: 100 }, authorInputs: [] })
+  fs.unlinkSync(sourcePath)
+  const source = new Database(sourcePath)
+  let batchRunId: string
+  try {
+    source.pragma('foreign_keys=ON')
+    source.transaction(() => initializeLegacyBaselineSchema(source))()
+    migrateSchema(new SqliteSchemaAdapter(source), getDesktopMigrationRegistry(), 13)
+    source.exec("INSERT INTO project_core(id,project_name,writing_language) VALUES('main','Fictional','en-US')")
+    const proof = 'a'.repeat(64)
+    batchRunId = new GenerationRunRepository(() => source, () => 100).open({ projectId: options.projectId,
+      epoch: 'fictional-source-epoch', operation: 'batch-chapters', uiActionNonce: randomUUID(), frozenInputHash: proof,
+      contextSnapshotId: 'fictional-source-context', sourceRefs: [], sourceManifest: { operation: 'batch-chapters',
+        freezeWritingLanguage: true, writingLanguage: 'en-US', batchIntent: recipe.intent, authorInputs: [] },
+      fingerprint: { chapterBriefHash: proof, authorGuidanceHash: proof, dependencyHash: proof, contextSnapshotHash: proof,
+        templateHash: proof, skillSnapshotHash: proof, modelLeaseRevision: proof, policyHash: proof, outputContractHash: proof },
+      budget: { maxPhysicalRequests: 1, maxTokenLiability: 100, maxOutputPerRequest: 50, maxActiveElapsedMs: 1000 } }).runId
+  } finally { source.close() }
+  const original = fs.readFileSync(sourcePath), before = probeProjectSqlite({ databasePath: sourcePath })
+  options.dependencies.probeSqlite = databasePath => probeProjectSqlite({ databasePath })
+  options.dependencies.backupSqlite = async (sourceDatabasePath, targetDatabasePath) => backupProjectSqlite({ sourceDatabasePath, targetDatabasePath })
+  options.dependencies.verifySqlite = databasePath => verifyProjectSqlite({ databasePath })
+  const migrateAssets = options.dependencies.characterAssets.migrate
+  options.dependencies.characterAssets.migrate = async input => {
+    const receipt = await migrateAssets(input), db = new Database(input.stagingDatabasePath)
+    try {
+      const encoded = JSON.stringify(recipe)
+      db.prepare("INSERT INTO workflow_batch_tasks VALUES(?,?,?,?,'prepared-batch-review-v2',?,1,'ready',NULL,?,?,?,?,100,100)")
+        .run(randomUUID(), options.projectId, randomUUID(), 'a'.repeat(64), batchRunId, encoded,
+          createHash('sha256').update(encoded).digest('hex'), 'fictional-review-model', 'a'.repeat(64))
+    } finally { db.close() }
+    const injected = verifyProjectSqlite({ databasePath: input.stagingDatabasePath })
+    expect(injected.preWorkflowBatchDomain).toEqual(before.domain)
+    expect(injected.assetMigrationDomain?.tableCounts.workflow_batch_tasks).toBe(1)
+    return receipt
+  }
+  const checkpoints: string[] = []
+  expect(await migrateProjectFormat({ ...options, checkpoint: stage => { checkpoints.push(stage) } }))
+    .toMatchObject({ state: 'blocked', code: 'PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED' })
+  expect(checkpoints).not.toContain('legacy-renamed')
+  expect(checkpoints).not.toContain('target-renamed')
+  expect(fs.readFileSync(sourcePath)).toEqual(original)
+  expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
+})
+
+it.each([8, 9, 10, 11, 12, 13])('checks old feedback-domain cutover from schema %s', async sourceVersion => {
  for (const mode of ['valid', 'missing', 'tampered', 'grant-pollution', 'tail-pollution', 'workflow-pollution'] as const) {
   const options = fixture()
   const projectionKey = sourceVersion === 8 ? 'preFeedbackDomain'
     : sourceVersion === 9 ? 'preFeedbackRangesDomain' : sourceVersion === 10 ? 'preGrantsDomain'
-      : sourceVersion === 11 ? 'preRecoveryTailsDomain' : 'preWorkflowDriverDomain'
+      : sourceVersion === 11 ? 'preRecoveryTailsDomain' : sourceVersion === 12 ? 'preWorkflowDriverDomain' : 'preWorkflowBatchDomain'
   let tailInput: PreserveGenerationTailInput | undefined
   let workflowRunId: string | undefined
   const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')

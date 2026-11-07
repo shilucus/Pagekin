@@ -15,6 +15,8 @@ import { assertRuntimeFeedbackRequest, RUNTIME_FEEDBACK_CHANNELS } from '../../s
 import type { PrepareRuntimeFeedbackRequest, RuntimeFeedbackReference, RuntimeFeedbackRevocationReceipt } from '../../src/shared/runtime-feedback-contract'
 import { assertWorkflowDriverRequest, WORKFLOW_DRIVER_CHANNELS, workflowDriverRequiresView } from '../../src/shared/workflow-driver-contract'
 import type { StartWorkflowDriverRequest, WorkflowDriverReference } from '../../src/shared/workflow-driver-contract'
+import { assertWorkflowBatchRequest, WORKFLOW_BATCH_CHANNELS, workflowBatchRequiresView,
+  type StartWorkflowBatchRequest, type WorkflowBatchReference } from '../../src/shared/workflow-batch-contract'
 import { generationOutputContract } from '../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
@@ -24,11 +26,12 @@ import { getProjectDb, onProjectDatabaseBeforeClose } from '../database'
 import { getGlobalDataRoot } from '../services/app-data-locator'
 import { projectAccess, ProjectSessionStaleError } from '../services/project-access'
 import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
-import { ModelExecutionLeaseRegistry } from '../services/model-execution-lease'
-import { createMainGenerationOwner } from '../services/main-generation-owner'
+import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from '../services/model-execution-lease'
+import { createMainGenerationOwner, safeGenerationModelReceipt } from '../services/main-generation-owner'
 import type { MainGenerationOwnerDependencies } from '../services/main-generation-owner'
 import { RuntimeFeedbackAuthority, readRuntimeFeedbackReceipt } from '../services/runtime-feedback-authority'
 import { WorkflowDriverAuthority, readWorkflowDriverReceipt } from '../services/workflow-driver-authority'
+import { WorkflowBatchAuthority, readWorkflowBatchReceipt } from '../services/workflow-batch-authority'
 import { readMainGenerationPolicy, TaskBudgetPreflightError } from '../services/main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../services/generation-source-binding'
 import { LegacyVectorMigrationBlockedError } from '../services/knowledge-base-migration-error'
@@ -49,10 +52,12 @@ type OwnerChannels = PlanningFeedbackChannels & LegacyRosterGenerationChannels &
 type LegacyOwnerEntry = { mode: 'legacy'; owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }
 type RuntimeOwnerEntry = { mode: 'runtime-feedback'; authority: RuntimeFeedbackAuthority; runtime: ProjectRuntime }
 type DriverOwnerEntry = { mode: 'workflow-driver'; authority: WorkflowDriverAuthority; runtime: ProjectRuntime }
-type OwnerEntry = LegacyOwnerEntry | RuntimeOwnerEntry | DriverOwnerEntry
+type BatchOwnerEntry = { mode: 'workflow-batch'; authority: WorkflowBatchAuthority; runtime: ProjectRuntime }
+type OwnerEntry = LegacyOwnerEntry | RuntimeOwnerEntry | DriverOwnerEntry | BatchOwnerEntry
 const owners = new Map<Database.Database, OwnerEntry>()
 const receiptAuthorities = new Map<Database.Database, Set<RuntimeFeedbackAuthority>>()
 const driverReceiptAuthorities = new Map<Database.Database, Set<WorkflowDriverAuthority>>()
+const batchReceiptAuthorities = new Map<Database.Database, Set<WorkflowBatchAuthority>>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 const ownerRuntimes = new WeakMap<Owner, ProjectRuntime>()
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
@@ -93,7 +98,7 @@ export function assertImportGenerationSourcesCurrent(handle: MainGenerationRunHa
   entry.owner.assertImportGenerationSources(handle, slot, allowLegacyStyle)
 }
 
-const GENERATION_ERROR_CODE = /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER|PLANNING_FEEDBACK|RUNTIME_FEEDBACK|WORKFLOW_DRIVER)_[A-Z_]+$/u
+const GENERATION_ERROR_CODE = /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER|PLANNING_FEEDBACK|RUNTIME_FEEDBACK|WORKFLOW_DRIVER|WORKFLOW_BATCH)_[A-Z_]+$/u
 const DIAGNOSTIC_MESSAGE_LIMIT = 200
 
 /**
@@ -109,7 +114,8 @@ export function generationIpcErrorCode(channel: string, error: unknown): string 
     return 'GENERATION_PROJECT_SESSION_STALE'
   }
   if (error instanceof Error && (error.message === 'SOURCE_DRAFT_CHANGED' || GENERATION_ERROR_CODE.test(error.message))) return error.message
-  if (channel.startsWith('planning-feedback:v1:') || channel.startsWith('runtime-feedback:') || channel.startsWith('workflow-driver:')) {
+  if (channel.startsWith('planning-feedback:v1:') || channel.startsWith('runtime-feedback:')
+    || channel.startsWith('workflow-driver:') || channel.startsWith('workflow-batch:')) {
     console.error('[generation] unmapped feedback failure', { channel, name: error instanceof Error ? 'Error' : typeof error,
       stack: error instanceof Error ? errorStackFrames(error, 7) : undefined })
     return 'GENERATION_REQUEST_FAILED'
@@ -149,6 +155,10 @@ export function registerGenerationController(options: {
       if (entry?.mode === 'workflow-driver' && entry.authority === authority) continue
       try { authority.requestProjectClose() } catch (error) { failures.push(error) }
     }
+    for (const authority of batchReceiptAuthorities.get(runtime.database) ?? []) {
+      if (entry?.mode === 'workflow-batch' && entry.authority === authority) continue
+      try { authority.requestProjectClose() } catch (error) { failures.push(error) }
+    }
     if (failures.length) throw new AggregateError(failures, 'GENERATION_PROJECT_CLOSE_FAILED')
   })
   onProjectDatabaseBeforeClose(({ database }) => {
@@ -167,6 +177,11 @@ export function registerGenerationController(options: {
       authority.suspendForProjectClose()
     }
     driverReceiptAuthorities.delete(database)
+    for (const authority of batchReceiptAuthorities.get(database) ?? []) {
+      if (entry?.mode === 'workflow-batch' && entry.authority === authority) continue
+      authority.suspendForProjectClose()
+    }
+    batchReceiptAuthorities.delete(database)
   })
   const capturedResources = (runtime: ProjectRuntime) => {
     const database = runtime.database, identity = runtime.databaseIdentity, epoch = runtime.executionEpoch
@@ -206,7 +221,7 @@ export function registerGenerationController(options: {
       transferOrigin: () => readPortableCurrentAuthority({ database: runtime.database,
         projectStorageRoot: runtime.projectStorageRoot, projectId: runtime.projectId })?.originProjectId,
       buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDependencies, { ...selection,
-        ...(extra.mode === 'workflow-driver' ? { freezeWritingLanguage: true as const } : {}),
+        ...(extra.mode === 'workflow-driver' || extra.mode === 'workflow-batch' ? { freezeWritingLanguage: true as const } : {}),
         projectId: runtime.projectId, epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
       rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDependencies, previous, epoch,
         modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
@@ -248,7 +263,16 @@ export function registerGenerationController(options: {
       const subscribers = new Set<WebContents>()
       const owner = makeOwner(runtime, captured.leaseId,
         () => { if (projectAccess.assertViewContext(captured) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED') },
-        { recoverInterrupted: !handoff }, {
+        { recoverInterrupted: !handoff, assertNoRuntimeClaims: () => {
+          projectRuntimeHost.assertTaskAvailable(runtime)
+          const current = owners.get(database)
+          // The synchronous recovery handler itself is allowed; another handler or physical claim is not.
+          if ((activeHandlers.get(runtime) ?? 0) > 1 || hasPhysical(current)
+            || [...receiptAuthorities.get(database) ?? []].some(authority => authority.hasPhysicalInFlight())
+            || [...driverReceiptAuthorities.get(database) ?? [], ...batchReceiptAuthorities.get(database) ?? []]
+              .some(authority => authority.hasIssuance() || authority.hasPhysicalInFlight())) throw new Error('GENERATION_OWNER_BUSY')
+          if (current?.mode === 'runtime-feedback') current.authority.assertRetirable()
+        } }, {
         onSnapshot: snapshot => {
           try { if (projectAccess.assertViewContext(captured) !== runtime) return } catch { return }
           for (const subscriber of subscribers) {
@@ -481,6 +505,109 @@ export function registerGenerationController(options: {
           if (channel === 'workflow-driver:v1:pause') return authority.pause(event.sender, reference)
           if (channel === 'workflow-driver:v1:cancel') return authority.cancel(event.sender, reference)
           if (channel === 'workflow-driver:v1:resume') return authority.resume(event.sender, reference)
+          return authority.readReceipt(event.sender, reference)
+        })
+      } catch (error) { throw new Error(generationIpcErrorCode(channel, error)) }
+    })
+  }
+  const authorizedWorkflowBatch = (runtime: ProjectRuntime): WorkflowBatchAuthority => {
+    const entry = owners.get(runtime.database)
+    if (entry?.mode === 'workflow-batch') {
+      projectRuntimeHost.assertWorkAvailable(runtime)
+      return entry.authority
+    }
+    projectRuntimeHost.assertTaskAvailable(runtime)
+    if (entry) assertRetirable(runtime, entry)
+    let batchOwner: Owner
+    const assertResources = capturedResources(runtime)
+    const authority = new WorkflowBatchAuthority({ runtime, globalDataRoot: getGlobalDataRoot(),
+      assertAdmission: () => projectRuntimeHost.assertWorkAvailable(runtime),
+      assertCapturedResources: assertResources,
+      acquireWork: () => projectRuntimeHost.acquireWork(runtime),
+      readSafeModelReceipt: modelId => {
+        assertResources()
+        const model = options.loadModel(modelId)
+        if (!model) throw new Error('GENERATION_MODEL_MISSING')
+        return safeGenerationModelReceipt(createModelExecutionLeaseReceipt(model,
+          { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
+      },
+      captureKnowledge: async (query, chapterNumber) => {
+        assertResources()
+        projectRuntimeHost.assertWorkAvailable(runtime)
+        const kb = await knowledgeBaseLoader.load()
+        assertResources()
+        projectRuntimeHost.assertWorkAvailable(runtime)
+        return kb.captureWritingKnowledgeSnapshot(query, runtime.canonicalRoot, getEmbeddingConfig(),
+          [...driverLaterFinalizedDocuments(runtime, chapterNumber)], () => {
+            assertResources()
+            projectRuntimeHost.assertWorkAvailable(runtime)
+          })
+      },
+      withKnowledge: (handle, operation) => guardRuntimeKnowledge(runtime,
+        readActionContext(batchOwner, handle).knowledgeSnapshot, operation),
+      withPreparedKnowledge: (preparationId, chapterNumber, operation) => {
+        const knowledge = batchOwner.preparedKnowledge(preparationId)
+        return guardRuntimeKnowledge(runtime, knowledge, () => {
+          const later = driverLaterFinalizedDocuments(runtime, chapterNumber)
+          if (knowledge.items.some(item => later.has(item.documentId))) throw new Error('GENERATION_KNOWLEDGE_SOURCE_STALE')
+          return operation()
+        })
+      },
+      createOwner: hooks => {
+        batchOwner = makeOwner(runtime, runtime.executionEpoch, () => projectRuntimeHost.assertOpen(runtime),
+          { mode: 'workflow-batch', recoverInterrupted: false, ...hooks })
+        ownerRuntimes.set(batchOwner, runtime)
+        return batchOwner
+      } })
+    if (entry) {
+      try { retire(runtime, entry) }
+      catch (error) {
+        try { authority.retireIdle() }
+        catch (cleanup) { throw new AggregateError([error, cleanup], 'WORKFLOW_BATCH_HANDOFF_FAILED') }
+        throw error
+      }
+    }
+    owners.set(runtime.database, { mode: 'workflow-batch', authority, runtime })
+    let receipts = batchReceiptAuthorities.get(runtime.database)
+    if (!receipts) { receipts = new Set(); batchReceiptAuthorities.set(runtime.database, receipts) }
+    receipts.add(authority)
+    return authority
+  }
+  const batchCapabilityAuthority = (reference: WorkflowBatchReference, subject: WebContents): WorkflowBatchAuthority => {
+    const authority = [...batchReceiptAuthorities.values()].flatMap(value => [...value]).reverse().find(value =>
+      value.runtime.projectId === reference.projectId && value.hasIssuance(reference.taskId, subject))
+    if (!authority) throw new Error('WORKFLOW_BATCH_CAPABILITY_REQUIRED')
+    return authority
+  }
+  for (const channel of WORKFLOW_BATCH_CHANNELS) {
+    ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
+      try {
+        const requiresView = workflowBatchRequiresView(channel)
+        if (raw.length !== (requiresView ? 2 : 1)) throw new Error('WORKFLOW_BATCH_PAYLOAD_INVALID')
+        const body = raw[0]
+        assertWorkflowBatchRequest(channel, body)
+        if (requiresView) {
+          const session = raw[1]
+          if (!isProjectSessionContext(session)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
+          const runtime = projectAccess.assertViewContext(session)
+          const fresh = () => {
+            if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+          }
+          if (channel === 'workflow-batch:v2:read-history') {
+            return await withRuntimeHandler(runtime, () => readWorkflowBatchReceipt(runtime,
+              (body as { taskId: string }).taskId, capturedResources(runtime)))
+          }
+          const authority = authorizedWorkflowBatch(runtime)
+          return await withRuntimeHandler(runtime, () => channel === 'workflow-batch:v2:reauthorize'
+            ? authority.reauthorize(event.sender, (body as { taskId: string }).taskId, fresh)
+            : authority.start(event.sender, body as StartWorkflowBatchRequest, fresh))
+        }
+        const reference = (body as { reference: WorkflowBatchReference }).reference
+        const authority = batchCapabilityAuthority(reference, event.sender)
+        return await withRuntimeHandler(authority.runtime, () => {
+          if (channel === 'workflow-batch:v2:pause') return authority.pause(event.sender, reference)
+          if (channel === 'workflow-batch:v2:cancel') return authority.cancel(event.sender, reference)
+          if (channel === 'workflow-batch:v2:resume') return authority.resume(event.sender, reference)
           return authority.readReceipt(event.sender, reference)
         })
       } catch (error) { throw new Error(generationIpcErrorCode(channel, error)) }

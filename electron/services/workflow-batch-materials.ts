@@ -155,6 +155,73 @@ export interface WorkflowBatchMaterialInput extends BatchSource {
   assertSourcesCurrent: () => void
 }
 
+type ObserveAsset = (root: string, relative: string, optional?: boolean) => Buffer | null
+interface WorkflowAssetRoots { projectStorageRoot: string; globalDataRoot: string; writingLanguage: WritingLanguage }
+function readWorkflowPromptAndSkill(input: WorkflowAssetRoots,
+  key: 'first_chapter_draft' | 'next_chapter_draft' | 'consistency_check', stage: 'drafting' | 'review', observe: ObserveAsset) {
+  const language = input.writingLanguage
+  let template: PromptTemplate | undefined
+  for (const root of [input.projectStorageRoot, input.globalDataRoot]) {
+    for (const relative of [`prompts/${key}.${language}.json`, ...(language === 'zh-CN' ? [`prompts/${key}.json`] : [])]) {
+      const bytes = observe(root, relative, true)
+      if (!template && bytes) {
+        const parsed = JSON.parse(bytes.toString('utf8')) as PromptTemplate
+        if (parsed.key !== key || (parsed.writingLanguage ?? 'zh-CN') !== language) throw new Error('GENERATION_PROMPT_INVALID')
+        template = parsed
+      }
+    }
+    if (template) break
+  }
+  template ??= getBuiltinPromptTemplate(key, language)
+  if (!template) throw new Error('GENERATION_BUILTIN_PROMPT_MISSING')
+  const bindingsBytes = observe(input.projectStorageRoot, 'writing-skills.json', true)
+  let bindings: { version?: unknown; bindings?: Record<string, unknown> } | null
+  try {
+    bindings = bindingsBytes ? JSON.parse(bindingsBytes.toString('utf8')) as { version?: unknown; bindings?: Record<string, unknown> } : { version: 1, bindings: {} }
+  } catch {
+    throw new Error('GENERATION_SKILL_BINDINGS_INVALID')
+  }
+  if (!bindings || bindings.version !== 1 || !bindings.bindings || typeof bindings.bindings !== 'object' || Array.isArray(bindings.bindings)) throw new Error('GENERATION_SKILL_BINDINGS_INVALID')
+  const id = bindings.bindings[stage]
+  let skill: { name: string; content: string } | null = null
+  if (id !== undefined) {
+    if (typeof id !== 'string' || !/^(builtin|user|project):[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)) throw new Error('GENERATION_SKILL_ID_INVALID')
+    const [scope, name] = id.split(':') as [string, string]
+    if (name === '.' || name === '..') throw new Error('GENERATION_SKILL_ID_INVALID')
+    const raw = scope === 'builtin' ? readBuiltinWritingSkill(name, language)
+      : observe(scope === 'project' ? input.projectStorageRoot : input.globalDataRoot, `skills/${name}/SKILL.md`)!.toString('utf8')
+    if (!raw) throw new Error('GENERATION_SKILL_MISSING')
+    const bundle = scope === 'user' ? readInstalledWritingSkillBundle(relative => observe(input.globalDataRoot, `skills/${name}/${relative}`, true)) : { status: 'none' as const }
+    if (bundle.status === 'damaged') throw new Error('GENERATION_SKILL_BUNDLE_DAMAGED')
+    const inspected = inspectInstalledWritingSkill(raw, bundle, name)
+    if (scope !== 'builtin' && !inspected.compatible || !['bilingual', language].includes(inspected.metadata.language)) throw new Error('GENERATION_SKILL_INCOMPATIBLE')
+    const builtinMetadata = scope === 'builtin' ? getBuiltinWritingSkills().find(item => item.metadata.name === name)?.metadata : undefined
+    skill = { name: builtinMetadata?.displayName ?? builtinMetadata?.name ?? inspected.metadata.displayName ?? inspected.metadata.name, content: inspected.content }
+  }
+  return { template, skill }
+}
+
+/** Captured main-only review assets, with the same priority and safety rules as drafting. */
+export function readWorkflowReviewAssets(input: WorkflowAssetRoots & {
+  assertResources(): void; assertSourcesCurrent(): void
+}) {
+  input.assertResources()
+  const observed: Array<{ root: string; relative: string; bytes: Buffer | null }> = []
+  const assets = readWorkflowPromptAndSkill(input, 'consistency_check', 'review', (root, relative, optional = false) => {
+    const bytes = readGenerationSourceFile(root, relative, optional)
+    observed.push({ root, relative, bytes }); return bytes
+  })
+  const assertUnchanged = () => {
+    input.assertResources()
+    for (const item of observed) if (!isDeepStrictEqual(item.bytes, readGenerationSourceFile(item.root, item.relative, true))) throw new Error('GENERATION_ASSET_CHANGED_DURING_SNAPSHOT')
+    const checked: unknown = input.assertSourcesCurrent()
+    if (checked && typeof (checked as { then?: unknown }).then === 'function') throw new Error('GENERATION_SOURCE_GUARD_ASYNC')
+    input.assertResources()
+  }
+  assertUnchanged()
+  return { ...assets, assertUnchanged }
+}
+
 export async function prepareWorkflowBatchMaterials(input: WorkflowBatchMaterialInput) {
   const chapter = readWorkflowBatchChapter(input), { core, chapterInfo, novelConfig, targetUnits } = chapter
   const language = core.writingLanguage
@@ -180,44 +247,7 @@ export async function prepareWorkflowBatchMaterials(input: WorkflowBatchMaterial
       `## Project-specific guidance (${name.replace(/\.md$/, '')})\n${text}`)] : []
   }).join('\n\n')
   const key = input.chapterNumber === 1 ? 'first_chapter_draft' : 'next_chapter_draft'
-  let template: PromptTemplate | undefined
-  for (const root of [input.projectStorageRoot, input.globalDataRoot]) {
-    for (const relative of [`prompts/${key}.${language}.json`, ...(language === 'zh-CN' ? [`prompts/${key}.json`] : [])]) {
-      const bytes = observe(root, relative, true)
-      if (!template && bytes) {
-        const parsed = JSON.parse(bytes.toString('utf8')) as PromptTemplate
-        if (parsed.key !== key || (parsed.writingLanguage ?? 'zh-CN') !== language) throw new Error('GENERATION_PROMPT_INVALID')
-        template = parsed
-      }
-    }
-    if (template) break
-  }
-  template ??= getBuiltinPromptTemplate(key, language)
-  if (!template) throw new Error('GENERATION_BUILTIN_PROMPT_MISSING')
-  const bindingsBytes = observe(input.projectStorageRoot, 'writing-skills.json', true)
-  let bindings: { version?: unknown; bindings?: Record<string, unknown> } | null
-  try {
-    bindings = bindingsBytes ? JSON.parse(bindingsBytes.toString('utf8')) as { version?: unknown; bindings?: Record<string, unknown> } : { version: 1, bindings: {} }
-  } catch {
-    throw new Error('GENERATION_SKILL_BINDINGS_INVALID')
-  }
-  if (!bindings || bindings.version !== 1 || !bindings.bindings || typeof bindings.bindings !== 'object' || Array.isArray(bindings.bindings)) throw new Error('GENERATION_SKILL_BINDINGS_INVALID')
-  const id = bindings.bindings.drafting
-  let skill: { name: string; content: string } | null = null
-  if (id !== undefined) {
-    if (typeof id !== 'string' || !/^(builtin|user|project):[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)) throw new Error('GENERATION_SKILL_ID_INVALID')
-    const [scope, name] = id.split(':') as [string, string]
-    if (name === '.' || name === '..') throw new Error('GENERATION_SKILL_ID_INVALID')
-    const raw = scope === 'builtin' ? readBuiltinWritingSkill(name, language)
-      : observe(scope === 'project' ? input.projectStorageRoot : input.globalDataRoot, `skills/${name}/SKILL.md`)!.toString('utf8')
-    if (!raw) throw new Error('GENERATION_SKILL_MISSING')
-    const bundle = scope === 'user' ? readInstalledWritingSkillBundle(relative => observe(input.globalDataRoot, `skills/${name}/${relative}`, true)) : { status: 'none' as const }
-    if (bundle.status === 'damaged') throw new Error('GENERATION_SKILL_BUNDLE_DAMAGED')
-    const inspected = inspectInstalledWritingSkill(raw, bundle, name)
-    if (scope !== 'builtin' && !inspected.compatible || !['bilingual', language].includes(inspected.metadata.language)) throw new Error('GENERATION_SKILL_INCOMPATIBLE')
-    const builtinMetadata = scope === 'builtin' ? getBuiltinWritingSkills().find(item => item.metadata.name === name)?.metadata : undefined
-    skill = { name: builtinMetadata?.displayName ?? builtinMetadata?.name ?? inspected.metadata.displayName ?? inspected.metadata.name, content: inspected.content }
-  }
+  const { template, skill } = readWorkflowPromptAndSkill({ ...input, writingLanguage: language }, key, 'drafting', observe)
   const facts = [core.coreOutline, core.worldSetting, core.goldenFinger, core.protagonistProfile].filter(value => Boolean(value.trim()))
   const duplicates = new Set(facts.flatMap(value => value.split(/\r?\n\s*\r?\n/u).map(part => part.trim()).filter(Boolean)))
   const architecture = [core.premise, core.worldbuilding, synopsisForDraftChapter(core.synopsis, input.chapterNumber)].map(value => value.split(/\r?\n\s*\r?\n/u).map(part => part.trim()).filter(part => part && !duplicates.has(part)).join('\n\n')).filter(Boolean).join('\n\n---\n\n')

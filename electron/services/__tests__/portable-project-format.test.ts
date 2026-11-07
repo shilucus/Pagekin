@@ -70,19 +70,19 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
-describe('portable v13 field policy', () => {
-  it('与实际当前registry双向精确匹配61表579字段，放行M07的四个live视图，并包含两个lazy表', () => {
+describe('portable v14 field policy', () => {
+  it('与实际当前registry双向精确匹配64表612字段，放行M07的四个live视图，并包含两个lazy表', () => {
     const { database } = openCurrent()
     expect(database.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
     const tables = database.prepare("SELECT name FROM pragma_table_list WHERE schema='main' AND type='table' AND name NOT LIKE 'sqlite_%'")
       .all() as Array<{ name: string }>
     const fieldCount = tables.reduce((count, table) => count
       + (database.prepare(`PRAGMA table_info("${table.name}")`).all() as unknown[]).length, 0)
-    expect({ tables: tables.length, fields: fieldCount }).toEqual({ tables: 61, fields: 579 })
+    expect({ tables: tables.length, fields: fieldCount }).toEqual({ tables: 64, fields: 612 })
     expect(database.prepare("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name").pluck().all()).toEqual([
       'drafts', 'finalization_outbox', 'narrative_thread_confirmations', 'summary_snapshots',
     ])
-    expect(assertPortableSourceSchema(database)).toEqual({ tables: 61, fields: 579 })
+    expect(assertPortableSourceSchema(database)).toEqual({ tables: 64, fields: 612 })
     for (const field of ['deletion_id', 'deleted_from_status', 'deleted_at']) {
       expect(getPortableFieldPolicy('drafts', field)).toMatchObject({ disposition: 'preserve-domain', origin: 'm07-delta', signedDisposition: null })
     }
@@ -114,7 +114,8 @@ describe('portable v13 field policy', () => {
     const baseline = new Set(signed.fieldDispositions.map(field => `${field.table}.${field.field}`))
     const baselineTables = new Set(signed.fieldDispositions.map(field => field.table))
     const added = listPortableFieldPolicyKeys().filter(key => !baseline.has(key))
-    expect(added).toHaveLength(224)
+    expect(added).toHaveLength(257)
+    expect(added.filter(key => getPortableFieldPolicy(...key.split('.') as [string, string]).origin !== 'm13-delta')).toHaveLength(224)
     expect(getPortableFieldPolicy('characters', 'avatar')).toMatchObject({
       origin: 'registered-donor', disposition: 'exclude-machine-authority', signedDisposition: null,
     })
@@ -169,6 +170,22 @@ describe('portable v13 field policy', () => {
     for (const key of workflow) expect(getPortableFieldPolicy(...key.split('.') as [string, string])).toMatchObject({
       disposition: ['workflow_tasks.operation_key', 'workflow_tasks.request_hash', 'workflow_steps.invocation_nonce'].includes(key)
         ? 'exclude-machine-authority' : ['workflow_tasks.recipe_json', 'workflow_steps.input_json'].includes(key)
+          ? 'redacted-projection' : 'historical-nonreplayable', signedDisposition: null,
+    })
+    const batch = listPortableFieldPolicyKeys().filter(key => getPortableFieldPolicy(
+      ...key.split('.') as [string, string]).origin === 'm13-delta')
+    expect(batch).toEqual(Object.entries({
+      workflow_batch_tasks: ['task_id', 'project_id', 'operation_key', 'request_hash', 'template', 'batch_run_id', 'revision',
+        'state', 'blocked_code', 'recipe_json', 'recipe_hash', 'review_model_id', 'review_model_hash', 'created_at', 'updated_at'],
+      workflow_batch_steps: ['step_id', 'task_id', 'chapter_number', 'role', 'kind', 'slot', 'command_id', 'run_id',
+        'invocation_nonce', 'input_json', 'input_hash'],
+      workflow_batch_effects: ['step_id', 'receipt_kind', 'receipt_attempt_id', 'content_hash', 'acknowledged_at',
+        'semantic_history_json', 'semantic_history_hash'],
+    }).flatMap(([table, fields]) => fields.map(field => `${table}.${field}`)).sort())
+    for (const key of batch) expect(getPortableFieldPolicy(...key.split('.') as [string, string])).toMatchObject({
+      disposition: ['workflow_batch_tasks.operation_key', 'workflow_batch_tasks.request_hash', 'workflow_batch_tasks.review_model_id',
+        'workflow_batch_tasks.review_model_hash', 'workflow_batch_steps.invocation_nonce'].includes(key) ? 'exclude-machine-authority'
+        : ['workflow_batch_tasks.recipe_json', 'workflow_batch_steps.input_json', 'workflow_batch_effects.semantic_history_json'].includes(key)
           ? 'redacted-projection' : 'historical-nonreplayable', signedDisposition: null,
     })
   })
@@ -241,9 +258,12 @@ describe('portable v13 field policy', () => {
       expect(() => assertPortableSourceSchema(database, 11)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
       expect(assertPortableSourceSchema(database, 12)).toEqual({ tables: 58, fields: 553 })
       expect(() => assertPortableSourceSchema(database)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
+      migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), 13)
+      expect(assertPortableSourceSchema(database, 13)).toEqual({ tables: 61, fields: 579 })
+      expect(() => assertPortableSourceSchema(database)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
       expect(() => assertPortableSourceSchema(database, 12)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
-      expect(assertPortableSourceSchema(database)).toEqual({ tables: 61, fields: 579 })
+      expect(assertPortableSourceSchema(database)).toEqual({ tables: 64, fields: 612 })
     } finally { database.close() }
   })
 
@@ -266,7 +286,7 @@ describe('portable v13 field policy', () => {
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), 10)
       expect(assertPortableSourceSchema(database, 10)).toEqual({ tables: 56, fields: variant === 'normal' ? 531 : 532 })
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
-      expect(assertPortableSourceSchema(database)).toEqual({ tables: 61, fields: variant === 'normal' ? 579 : 580 })
+      expect(assertPortableSourceSchema(database)).toEqual({ tables: 64, fields: variant === 'normal' ? 612 : 613 })
     } finally { database.close() }
   })
 
@@ -287,7 +307,7 @@ describe('portable v13 field policy', () => {
         : '1d6c2f83c2f5047b46952e1485bd10591140de7c888431fe5d24f18456be0a53')
       expect(assertPortableSourceSchema(database, 11)).toEqual({ tables: 57, fields: variant === 'normal' ? 546 : 547 })
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
-      expect(assertPortableSourceSchema(database)).toEqual({ tables: 61, fields: variant === 'normal' ? 579 : 580 })
+      expect(assertPortableSourceSchema(database)).toEqual({ tables: 64, fields: variant === 'normal' ? 612 : 613 })
     } finally { database.close() }
   })
 
@@ -308,11 +328,32 @@ describe('portable v13 field policy', () => {
         : '188a053ae4383277590ee57e35c7ec514ecddc6d025225cc1bf8e88b6c1d9900')
       expect(assertPortableSourceSchema(database, 12)).toEqual({ tables: 58, fields: variant === 'normal' ? 553 : 554 })
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
-      expect(assertPortableSourceSchema(database)).toEqual({ tables: 61, fields: variant === 'normal' ? 579 : 580 })
+      expect(assertPortableSourceSchema(database)).toEqual({ tables: 64, fields: variant === 'normal' ? 612 : 613 })
     } finally { database.close() }
   })
 
-  it('同表同字段但删除index的v13 DDL fork被registry fingerprint拒绝', () => {
+  it.each(['normal', 'donor'] as const)('pins the captured immutable c8fc65fa schema-13 %s identity before M13', variant => {
+    const database = new Database(':memory:')
+    try {
+      database.transaction(() => initializeLegacyBaselineSchema(database))()
+      if (variant === 'donor') {
+        const row = database.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='characters'").get() as { sql: string }
+        database.exec('ALTER TABLE characters RENAME TO characters_without_avatar')
+        database.exec(row.sql.replace("      cs_location TEXT DEFAULT '',", "      avatar TEXT NOT NULL DEFAULT '',\n      cs_location TEXT DEFAULT '',"))
+        database.exec('DROP TABLE characters_without_avatar')
+      }
+      migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), 13)
+      // Captured from the immutable c8fc65fa1c8bc0934eda0f8e648237b0b8440ece closure, not generated by M13.
+      expect(sqliteSchemaFingerprint(database)).toBe(variant === 'normal'
+        ? '0085a4739a488e00fcb59d22df89d952facecec62afb311b7f4f3d339f21a540'
+        : '56add2e81a7516281abe9f25091632d441b8c2b55228aeba448cce7feb136e00')
+      expect(assertPortableSourceSchema(database, 13)).toEqual({ tables: 61, fields: variant === 'normal' ? 579 : 580 })
+      migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+      expect(assertPortableSourceSchema(database)).toEqual({ tables: 64, fields: variant === 'normal' ? 612 : 613 })
+    } finally { database.close() }
+  })
+
+  it('同表同字段但删除index的current DDL fork被registry fingerprint拒绝', () => {
     const project = fixture()
     const mutate = new Database(project.databasePath)
     try { mutate.exec('DROP INDEX idx_character_avatar_revision') } finally { mutate.close() }
@@ -324,7 +365,7 @@ describe('portable v13 field policy', () => {
         .all() as Array<{ name: string }>
       const fields = tables.reduce((count, table) => count
         + (database.prepare(`PRAGMA table_info("${table.name}")`).all() as unknown[]).length, 0)
-      expect({ tables: tables.length, fields }).toEqual({ tables: 61, fields: 579 })
+      expect({ tables: tables.length, fields }).toEqual({ tables: 64, fields: 612 })
       expect(() => assertPortableSourceSchema(database)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
     } finally { database.close() }
     expect(fs.readFileSync(project.databasePath)).toEqual(before)

@@ -15,6 +15,7 @@ import type { ProjectSessionContext } from '../shared/ipc-channels'
 import { getActiveProjectSessionContext } from '../shared/project-session-context'
 import type { AiNovelAPI } from '../shared/desktop-api'
 import { isWorkflowDriverChannel, workflowDriverRequiresView } from '../shared/workflow-driver-contract'
+import { isWorkflowBatchChannel, workflowBatchRequiresView } from '../shared/workflow-batch-contract'
 
 /** 获取唯一桌面接口；旧接口不是新运行时的写入后备通道。 */
 function getAPI(): AiNovelAPI {
@@ -41,6 +42,7 @@ function isCapabilityOrAppDataChannel(channel: string): boolean {
 function isProjectScopedChannel(channel: string): boolean {
   if (isCapabilityOrAppDataChannel(channel)) return false
   if (isWorkflowDriverChannel(channel)) return workflowDriverRequiresView(channel)
+  if (isWorkflowBatchChannel(channel)) return workflowBatchRequiresView(channel)
   return channel.startsWith('generation:')
     || channel.startsWith('planning-feedback:')
     || channel.startsWith('character-proposal:')

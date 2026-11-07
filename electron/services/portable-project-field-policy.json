@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 13,
+  "schemaVersion": 14,
   "rules": {
     "D": ["preserve-domain", "signed-domain-value", "portable-domain-copy"],
     "H": ["historical-nonreplayable", "nonreplayable-history", "portable-history-projector"],
@@ -24,6 +24,7 @@
   "m10Tables": ["runtime_feedback_grants"],
   "m11Tables": ["generation_recovery_tails"],
   "m12Tables": ["workflow_tasks", "workflow_steps", "workflow_effects"],
+  "m13Tables": ["workflow_batch_tasks", "workflow_batch_steps", "workflow_batch_effects"],
   "optionalFields": ["characters.avatar"],
   "deltaCharacterFields": ["character_id", "legacy_key", "static_provenance", "identity_revision", "retired"],
   "signedOverrides": {
@@ -139,6 +140,9 @@
     "text_metric_versions": {"metric":"B","version":"B","updated_at":"B"},
     "workflow_tasks": {"task_id":"H","project_id":"H","operation_key":"X","request_hash":"X","template":"H","run_id":"H","revision":"H","state":"H","blocked_code":"H","recipe_json":"R","recipe_hash":"H","created_at":"H","updated_at":"H"},
     "workflow_steps": {"step_id":"H","task_id":"H","ordinal":"H","kind":"H","command_id":"H","invocation_nonce":"X","input_json":"R","input_hash":"H"},
-    "workflow_effects": {"step_id":"H","receipt_kind":"H","receipt_attempt_id":"H","content_hash":"H","acknowledged_at":"H"}
+    "workflow_effects": {"step_id":"H","receipt_kind":"H","receipt_attempt_id":"H","content_hash":"H","acknowledged_at":"H"},
+    "workflow_batch_tasks": {"task_id":"H","project_id":"H","operation_key":"X","request_hash":"X","template":"H","batch_run_id":"H","revision":"H","state":"H","blocked_code":"H","recipe_json":"R","recipe_hash":"H","review_model_id":"X","review_model_hash":"X","created_at":"H","updated_at":"H"},
+    "workflow_batch_steps": {"step_id":"H","task_id":"H","chapter_number":"H","role":"H","kind":"H","slot":"H","command_id":"H","run_id":"H","invocation_nonce":"X","input_json":"R","input_hash":"H"},
+    "workflow_batch_effects": {"step_id":"H","receipt_kind":"H","receipt_attempt_id":"H","content_hash":"H","acknowledged_at":"H","semantic_history_json":"R","semantic_history_hash":"H"}
   }
 }

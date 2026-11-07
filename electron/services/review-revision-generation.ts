@@ -8,12 +8,14 @@ import type { PrepareReviewRevisionRequest, PreparedReviewRevisionContext, Revie
 import { buildReviewGenerationReport, type ReviewReportVersion } from '../../src/shared/review-generation-report'
 import { buildReviewCycleRecheckReport, isNoopRevision, recheckCommitPolicy } from '../../src/shared/review-cycle'
 import { countDraftUnits } from '../../src/shared/draft-units'
+import { serializeHumanConfirmedReviewSnapshot } from '../../src/shared/human-confirmed-review'
 import { assertMateriallyCompleteRevision } from '../../src/services/workflows/commands/refinement-completeness'
 import { GenerationRunRepository, textHash, type DurableGenerationRun } from '../repositories/generation-run-repository'
 import { ReviewRepository } from '../repositories/review-repository'
 import { RevisionRepository } from '../repositories/revision-repository'
 import { ReviewCycleRepository } from '../repositories/review-cycle-repository'
 import { captureReviewRevisionContext, reviewRevisionRequest, REVIEW_REVISION_OPERATIONS } from './review-revision-context'
+import type { PortableRuntimeFreezeTable } from './portable-runtime-freeze'
 
 type ArtifactRef = ReviewGenerationCommitRequest['artifact']
 interface Effect {
@@ -34,7 +36,8 @@ export class ReviewSourceDeletedError extends Error {
 export class ReviewRevisionGeneration {
   private readonly contexts = new Map<string, PreparedReviewRevisionContext>()
   constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository,
-    private readonly scope: { projectId: string; epoch: string }, private readonly assertCurrent: () => void) {}
+    private readonly scope: { projectId: string; epoch: string }, private readonly assertCurrent: () => void,
+    private readonly isFrozen: (table: PortableRuntimeFreezeTable, id: string) => boolean = () => false) {}
 
   private remember(context: ReviewRevisionContext, lineage: { parentRootActionId?: string; modelId?: string } = {}): PreparedReviewRevisionContext {
     const prepared = { contextId: randomUUID(), context: structuredClone(context), ...lineage }
@@ -120,6 +123,100 @@ export class ReviewRevisionGeneration {
       content: row.content, contentHash: effect.contentHash, source: structuredClone(context.source), ...(revisionStatus ? { revisionStatus } : {}),
       ...(context.recheck ? { reviewCycle: { cycleId: context.recheck.cycleId, revisionStatus: 'merge-committed',
         recheckCount: cycle?.disposition === 'completed' ? 1 : 0, disposition: cycle?.disposition ?? 'required' } } : {}) } }
+  }
+  readCommittedReview(runId: string): { attemptId: string; receipt: ReviewRevisionCommitReceipt } | null {
+    this.assertCurrent()
+    const run = this.runs.get(runId)
+    const context = this.context(run)
+    if (run.binding.projectId !== this.scope.projectId || context.operation !== 'review-chapter' || context.recheck)
+      throw new Error('GENERATION_REVIEW_CONTEXT_UNPROVEN')
+    const saved = this.saved(run)
+    if (!saved) return null
+    if (saved.effect.kind !== 'review') throw new Error('GENERATION_REVIEW_RECEIPT_INVALID')
+    const proof = this.proveArtifact(run, saved.effect.artifact)
+    return { attemptId: proof.row.attempt_id, receipt: saved.receipt }
+  }
+  /** A saved ordinary review proves lineage, not permission to execute its protected driver run. */
+  private assertBatchFollowupParent(context: ReviewRevisionContext, rootActionId: string): void {
+    this.assertCurrent()
+    function deny(): never { throw new Error('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED') }
+    if (!context.confirmation && !context.recheck
+      || !this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_batch_tasks'").get()) deny()
+    const cycle = (context.recheck
+      ? this.db.prepare('SELECT * FROM review_cycles WHERE cycle_id=?').get(context.recheck.cycleId)
+      : this.db.prepare('SELECT * FROM review_cycles WHERE review_id=?').get(context.confirmation!.snapshot.sourceReviewId)) as {
+        cycle_id: string; root_action_id: string; review_id: number; review_content_hash: string; source_hash: string;
+        finding_set_hash: string; comparison_version: number; merged_hash: string | null
+      } | undefined
+    if (!cycle || cycle.root_action_id !== rootActionId || this.isFrozen('generation_roots', rootActionId)) deny()
+    const original = this.attempts().filter(row => {
+      const effect = JSON.parse(row.usage_receipt_json)?.reviewRevisionEffect as Effect | undefined
+      return effect?.kind === 'review' && effect.id === cycle.review_id
+    })
+    if (original.length !== 1) deny()
+    const parent = this.runs.get(original[0]!.run_id), saved = this.readCommittedReview(parent.runId)
+    const registrations = this.db.prepare(`SELECT DISTINCT t.task_id,t.project_id,t.request_hash,t.review_model_id,t.review_model_hash,
+      s.chapter_number FROM workflow_batch_tasks t JOIN workflow_batch_steps s ON s.task_id=t.task_id
+      WHERE s.run_id=? AND s.role='review' AND s.kind IN ('review','review_rebuild') AND s.invocation_nonce IS NOT NULL`)
+      .all(parent.runId) as { task_id: string; project_id: string; request_hash: string | null; review_model_id: string | null;
+        review_model_hash: string | null; chapter_number: number }[]
+    if (registrations.length !== 1) deny()
+    const registration = registrations[0]!, parentContext = this.context(parent)
+    const model = parent.binding.sourceManifest.modelReceipt as { modelId?: string } | undefined
+    if (!saved || parent.rootActionId !== rootActionId || parent.binding.projectId !== this.scope.projectId
+      || registration.project_id !== this.scope.projectId || !/^[a-f0-9]{64}$/u.test(registration.request_hash ?? '')
+      || !registration.review_model_id || !/^[a-f0-9]{64}$/u.test(registration.review_model_hash ?? '')
+      || model?.modelId !== registration.review_model_id || parent.binding.fingerprint.modelLeaseRevision !== registration.review_model_hash
+      || registration.chapter_number !== context.source.chapterNumber || cycle.review_content_hash !== saved.receipt.contentHash
+      || cycle.source_hash !== parentContext.sourceHash || this.isFrozen('workflow_batch_tasks', registration.task_id)
+      || this.isFrozen('generation_runs', parent.runId) || this.isFrozen('generation_attempts', saved.attemptId)) deny()
+    const steps = this.db.prepare('SELECT step_id FROM workflow_batch_steps WHERE run_id=?').all(parent.runId) as { step_id: string }[]
+    if (steps.some(step => this.isFrozen('workflow_batch_steps', step.step_id))) deny()
+    if (context.confirmation) {
+      const confirmation = ReviewRepository.getFull(context.confirmation.reviewSourceId, this.db)
+      if (context.operation !== 'refine-from-review' || !confirmation
+        || confirmation.content !== context.confirmation.content || !isDeepStrictEqual(confirmation.sourceDraft, context.source)
+        || serializeHumanConfirmedReviewSnapshot(context.confirmation.snapshot) !== context.confirmation.content
+        || context.confirmation.snapshot.cycleId !== undefined && context.confirmation.snapshot.cycleId !== cycle.cycle_id
+        || !isDeepStrictEqual(saved.receipt.source, context.source)
+        || context.confirmation.originalReviewContentHash !== saved.receipt.contentHash) deny()
+    } else if (context.operation !== 'review-chapter' || context.recheck!.mergedHash !== cycle.merged_hash
+      || context.sourceHash !== cycle.merged_hash || context.recheck!.findingSetHash !== cycle.finding_set_hash
+      || context.recheck!.comparisonVersion !== cycle.comparison_version) deny()
+  }
+  admitBatchFollowup(selection: BeginGenerationRequest): PreparedReviewRevisionContext {
+    const prepared = this.admit(selection)
+    if (!prepared?.parentRootActionId) throw new Error('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    this.assertBatchFollowupParent(prepared.context, prepared.parentRootActionId)
+    const siblings = this.db.prepare('SELECT run_id FROM generation_runs WHERE root_action_id=?').all(prepared.parentRootActionId) as { run_id: string }[]
+    if (siblings.some(row => this.hasUnknownDelivery(row.run_id))) throw new Error('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    return prepared
+  }
+  assertBatchFollowupRun(runId: string): void {
+    this.assertCurrent()
+    const run = this.runs.get(runId), context = this.context(run)
+    if (run.binding.projectId !== this.scope.projectId || this.isFrozen('generation_runs', runId)
+      || run.binding.sourceManifest.batchId !== undefined
+      || this.db.prepare('SELECT 1 FROM workflow_batch_tasks WHERE batch_run_id=?').get(runId)
+      || this.db.prepare('SELECT 1 FROM workflow_batch_steps WHERE run_id=?').get(runId)
+      || this.attempts(runId).some(row => this.isFrozen('generation_attempts', row.attempt_id)))
+      throw new Error('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    this.assertBatchFollowupParent(context, run.rootActionId)
+  }
+  isBatchFollowupRun(runId: string): boolean {
+    try { this.assertBatchFollowupRun(runId); return true } catch { return false }
+  }
+  assertBatchFollowupWritable(runId: string): void {
+    this.assertBatchFollowupRun(runId)
+    if (this.saved(this.runs.get(runId)) || this.hasUnknownDelivery(runId))
+      throw new Error('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+  }
+  hasUnknownDelivery(runId: string): boolean {
+    return this.attempts(runId).some(row => {
+      const receipt = this.runs.receipt(row.attempt_id)
+      return receipt.attempt.status === 'unknown' && (!receipt.result
+        || !['stop', 'length'].includes(receipt.result.finishReason ?? '') || !!receipt.failureCode)
+    })
   }
   private parent(context: ReviewRevisionContext): { parentRootActionId?: string; modelId?: string } {
     if (context.recheck) {

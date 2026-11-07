@@ -6,6 +6,9 @@ import { createRequire } from 'node:module'
 import { CHARACTER_STATE_TEXT_FIELDS } from '../../src/shared/character-roster'
 import { parsePlanningFeedbackScope, parsePlanningFeedbackSource, type PlanningFeedbackSource } from '../../src/shared/planning-feedback'
 import { parseWorkflowDriverRecipe, parseWorkflowDriverStepInput } from '../../src/shared/workflow-driver-contract'
+import { parseWorkflowBatchRecipe, parseWorkflowBatchStepInput } from '../../src/shared/workflow-batch-contract'
+import { materializeOrdinaryReviewHistory, parseOrdinarySemanticHistory, readOrdinaryHistoryDomainRecords,
+  assertOrdinaryHistoryFreezeCoverage } from '../migrations/ordinary-review-history'
 import { readPortableCurrentAuthority } from './portable-current-authority'
 import { parsePortableRuntimeFreeze, readPortableRuntimeFreeze } from './portable-runtime-freeze'
 
@@ -80,6 +83,9 @@ const REQUIRED_JSON_PROJECTORS = new Set([
   'planning_feedback_candidates.origin_json',
   'workflow_tasks.recipe_json',
   'workflow_steps.input_json',
+  'workflow_batch_tasks.recipe_json',
+  'workflow_batch_steps.input_json',
+  'workflow_batch_effects.semantic_history_json',
 ])
 const REVIEW_FINGERPRINT_FIELDS = [
   'chapterBriefHash', 'authorGuidanceHash', 'dependencyHash', 'contextSnapshotHash', 'templateHash',
@@ -96,6 +102,7 @@ const HISTORY_ID_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.f
   chapter_deletion_operations: ['operation_id'],
   character_identity_approvals: ['operation_id'],
   character_relationships: ['relationship_id'],
+  contents: ['id'],
   drafts: ['id'],
   finalization_outbox: ['finalization_id'],
   finalized_draft_import_operations: ['operation_id'],
@@ -117,11 +124,17 @@ const HISTORY_ID_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.f
   planning_feedback_candidates: ['candidate_id'],
   planning_feedback_adoptions: ['adoption_id'],
   runtime_feedback_grants: ['grant_id'],
+  review_cycle_merges: ['cycle_id'],
   review_cycles: ['cycle_id'],
   review_findings: ['cycle_id', 'finding_id'],
+  reviews: ['id'],
+  revisions: ['id'],
   workflow_tasks: ['task_id'],
   workflow_steps: ['step_id'],
   workflow_effects: ['step_id'],
+  workflow_batch_tasks: ['task_id'],
+  workflow_batch_steps: ['step_id'],
+  workflow_batch_effects: ['step_id'],
 })
 const HISTORY_STATE_COLUMNS = [
   'status', 'state', 'publication_status', 'manuscript_status', 'knowledge_status', 'revision_status',
@@ -133,6 +146,7 @@ const HISTORY_KEY_COLUMNS: Readonly<Record<string, { column: string; id: string 
   generation_roots: { column: 'idempotency_key', id: 'root_action_id' },
   generation_runs: { column: 'open_key', id: 'run_id' },
   workflow_tasks: { column: 'operation_key', id: 'task_id' },
+  workflow_batch_tasks: { column: 'operation_key', id: 'task_id' },
 })
 
 export type ProjectArchiveServiceErrorCode =
@@ -824,6 +838,19 @@ function requiredProjection(key: string, value: unknown): unknown {
       try { return parseWorkflowDriverStepInput(parseJson(value)) }
       catch { return fail('PORTABLE_UNSAFE_PROJECTION') }
     }
+    case 'workflow_batch_tasks.recipe_json': {
+      try { return parseWorkflowBatchRecipe(parseJson(value)) }
+      catch { return fail('PORTABLE_UNSAFE_PROJECTION') }
+    }
+    case 'workflow_batch_steps.input_json': {
+      try { return parseWorkflowBatchStepInput(parseJson(value)) }
+      catch { return fail('PORTABLE_UNSAFE_PROJECTION') }
+    }
+    case 'workflow_batch_effects.semantic_history_json': {
+      if (value === null) return null
+      try { return parseOrdinarySemanticHistory(parseJson(value)) }
+      catch { return fail('PORTABLE_UNSAFE_PROJECTION') }
+    }
     default: return fail('PORTABLE_UNSAFE_PROJECTION')
   }
 }
@@ -839,7 +866,7 @@ function neutralValue(key: string, column: { type: string; notnull: number }, va
     }
     if (key === 'generation_artifacts.artifact_json') return JSON.stringify(projectArtifact(value, true))
   }
-  if (value === null && (key === 'planning_feedback_bases.scope_json'
+  if (value === null && (key === 'workflow_batch_effects.semantic_history_json' || key === 'planning_feedback_bases.scope_json'
     || key === 'planning_feedback_adoptions.adopted_scope_json' || key === 'workflow_steps.input_json')) return null
   if (REQUIRED_JSON_PROJECTORS.has(key)) return JSON.stringify(requiredProjection(key, value))
   if (JSON_NEUTRAL.has(key)) {
@@ -900,8 +927,11 @@ export function sanitizePortableDatabase(databasePath: string): {
     db.pragma('secure_delete = ON')
     const sourceSchema = assertPortableSourceSchema(db)
     const avatarRows = readPortableCharacterAvatarRows(db)
+    const batchReviewRoots = new Set((db.prepare("SELECT 1 FROM sqlite_master WHERE name='workflow_batch_steps'").get()
+      ? db.prepare(`SELECT DISTINCT r.root_action_id FROM workflow_batch_steps s JOIN generation_runs r ON r.run_id=s.run_id
+        WHERE s.role='review'`).all() as { root_action_id: string }[] : []).map(row => row.root_action_id))
     const reviewRoots = new Set((db.prepare('SELECT root_action_id FROM review_cycles').all() as Array<{
-      root_action_id: string }>).map(row => row.root_action_id))
+      root_action_id: string }>).filter(row => !batchReviewRoots.has(row.root_action_id)).map(row => row.root_action_id))
     const reviewRuns = new Set((db.prepare('SELECT run_id,root_action_id FROM generation_runs').all() as Array<{
       run_id: string; root_action_id: string }>).filter(row => reviewRoots.has(row.root_action_id)).map(row => row.run_id))
     for (const row of avatarRows) {
@@ -919,6 +949,8 @@ export function sanitizePortableDatabase(databasePath: string): {
     const history: HistoryProjection[] = []
     const tableCounts: Record<string, number> = {}
     db.transaction(() => {
+      materializeOrdinaryReviewHistory(db)
+      const domainHistory = new Set(readOrdinaryHistoryDomainRecords(db).map(row => `${row.table}:${row.recordId}`))
       db.prepare('DELETE FROM import_legacy_identity_bridge').run()
       db.prepare('DELETE FROM text_metric_versions').run()
       db.prepare('DELETE FROM llm_calls').run()
@@ -962,7 +994,7 @@ export function sanitizePortableDatabase(databasePath: string): {
         for (const row of rows) {
           const reviewProof = table === 'generation_artifacts' ? reviewRuns.has(String(row.run_id))
             : reviewRoots.has(String(row.root_action_id))
-          if (hasProjection || hasHistory) {
+          if (hasProjection || hasHistory || domainHistory.has(`${table}:${recordId(table, row, Number(row.__portable_rowid__))}`)) {
             const safe = projectionForRow(table, row, columns)
             const id = recordId(table, row, Number(row.__portable_rowid__))
             const projectionId = `history:${table}:${id}`
@@ -1128,6 +1160,7 @@ export async function exportPortableProject(input: ExportPortableProjectInput): 
     let sourceSchema: ReturnType<typeof assertPortableSourceSchema>
     try {
       sourceSchema = assertPortableSourceSchema(sourceSnapshot)
+      assertOrdinaryHistoryFreezeCoverage(sourceSnapshot, sourceFreeze)
       if (sourceFreeze.active) readPortableCurrentAuthority({ database: sourceSnapshot, projectStorageRoot, projectId: canonicalManifest.projectId })
       avatarRows = readPortableCharacterAvatarRows(sourceSnapshot)
     } finally { sourceSnapshot.close() }

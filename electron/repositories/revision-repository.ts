@@ -10,6 +10,7 @@ import { ContentRepository } from './content-repository'
 import { ReviewCycleRepository } from './review-cycle-repository'
 import type { ExpectedDraftSource } from '../../src/shared/ipc-channels'
 import { assertExpectedDraftSource, LIVE_PARENT, SourceDraftChangedError } from './draft-source-guard'
+import { assertOrdinaryReviewHistoryMutable, readOrdinaryHistoryDomainRecords, readVerifiedOrdinaryHistory } from '../migrations/ordinary-review-history'
 
 const contentHash = (value: string) => createHash('sha256').update(value).digest('hex')
 const hasReviewCycleSchema = (db: import('better-sqlite3').Database) => Boolean(
@@ -147,7 +148,7 @@ export class RevisionRepository {
     }
 
     /**
-     * 原子替换同一草稿的 pending 修稿：新修稿创建失败时，旧 pending
+     * 原子替换同一草稿的可写 pending 修稿，便携历史候选原样保留：新修稿创建失败时，旧 pending
      * 状态与内容池分配会随整个 SQLite 事务一起回滚。
      */
     static replacePending(params: {
@@ -164,6 +165,13 @@ export class RevisionRepository {
         return db.transaction(() => {
             if (!params.expectedSource) throw new SourceDraftChangedError()
             assertExpectedDraftSource(db, params.baseDraftId, params.expectedSource)
+            readVerifiedOrdinaryHistory(db)
+            const historicalRevisionIds = new Set(readOrdinaryHistoryDomainRecords(db)
+                .filter(record => record.table === 'revisions').map(record => record.recordId))
+            const discardedRevisionIds = (db.prepare(`
+        SELECT id FROM revisions WHERE base_draft_id = ? AND status = 'pending' ORDER BY id
+      `).all(params.baseDraftId) as Array<{ id: number }>)
+                .filter(row => !historicalRevisionIds.has(String(row.id))).map(row => row.id)
             const row = db.prepare(`
         SELECT MAX(revision_index) as maxIdx FROM revisions WHERE base_draft_id = ?
       `).get(params.baseDraftId) as { maxIdx: number | null }
@@ -190,15 +198,13 @@ export class RevisionRepository {
                 params.wordCount,
             )
             const id = Number(result.lastInsertRowid)
-            const discardedRevisionIds = (db.prepare(`
-        SELECT id FROM revisions
-        WHERE base_draft_id = ? AND status = 'pending' AND id <> ?
-        ORDER BY id
-      `).all(params.baseDraftId, id) as Array<{ id: number }>).map(row => row.id)
-            db.prepare(`
+            const discard = db.prepare(`
         UPDATE revisions SET status = 'discarded', updated_at = datetime('now')
-        WHERE base_draft_id = ? AND status = 'pending' AND id <> ?
-      `).run(params.baseDraftId, id)
+        WHERE id = ? AND base_draft_id = ? AND status = 'pending'
+      `)
+            for (const revisionId of discardedRevisionIds) {
+                if (discard.run(revisionId, params.baseDraftId).changes !== 1) throw new Error('REVISION_NOT_PENDING')
+            }
             if (hasReviewCycleSchema(db)) {
                 ReviewCycleRepository.reconcileDiscardedRevisions(discardedRevisionIds, db)
             }
@@ -269,6 +275,7 @@ export class RevisionRepository {
         if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         return db.transaction((): MergeRevisionReceipt => {
+            assertOrdinaryReviewHistoryMutable(db, { revisionId: request.revisionId })
             const target = db.prepare(`
               SELECT drafts.chapter_number, drafts.version, drafts.status,
                      drafts.word_count, drafts.content_id, contents.body
@@ -430,6 +437,7 @@ export class RevisionRepository {
         if (!db) throw new Error('PROJECT_NOT_OPEN')
 
         db.transaction(() => {
+            assertOrdinaryReviewHistoryMutable(db, { revisionId: id })
             const result = db.prepare(`
       UPDATE revisions SET status = 'discarded', updated_at = datetime('now')
       WHERE id = ? AND status = 'pending' AND ${LIVE_PARENT}

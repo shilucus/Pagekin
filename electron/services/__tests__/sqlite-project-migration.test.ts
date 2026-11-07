@@ -494,6 +494,20 @@ it('rolls back a failed workflow-driver migration and retains the schema 12 auth
  expect(upgraded.preWorkflowDriverDomain).toEqual(before.domain)
  expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
 })
+it('preserves the exact schema 13 pre-batch domain and retains a failed M13 copy for retry', async () => {
+ const f=fixture()
+ const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:13})
+ const original=fs.readFileSync(f.target), registry=getDesktopMigrationRegistry()
+ const failing={...registry,implementations:registry.implementations.map(step=>step.id==='M13'
+  ? {...step,migrate:(reader: Parameters<typeof step.migrate>[0])=>{step.migrate(reader);throw new Error('batch-migration-interruption')}} : step)}
+ expect(()=>upgradeProjectSqlite({databasePath:f.target,registry:failing})).toThrow('batch-migration-interruption')
+ expect(probeProjectSqlite({databasePath:f.target})).toEqual(before)
+ expect(fs.readFileSync(f.target)).toEqual(original)
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.preWorkflowBatchDomain).toEqual(before.domain)
+ for (const table of ['workflow_batch_tasks','workflow_batch_steps','workflow_batch_effects']) expect(upgraded.domain.tableCounts[table]).toBeUndefined()
+ expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
 it('rolls back a failed grants migration and retains the schema 10 author copy for retry', async () => {
  const f=fixture()
  const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:10})

@@ -1,12 +1,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { migrateSchema } from '../../migrations/runner'
-import { createMainGenerationOwner } from '../main-generation-owner'
+import { createMainGenerationOwner, safeGenerationModelReceipt, type MainGenerationOwnerDependencies } from '../main-generation-owner'
 import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import { readMainGenerationPolicy } from '../main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
@@ -15,7 +16,8 @@ import { RevisionRepository } from '../../repositories/revision-repository'
 import { ReviewCycleRepository } from '../../repositories/review-cycle-repository'
 import { createHumanConfirmedReviewSnapshot, renderHumanConfirmedReviewBrief, serializeHumanConfirmedReviewSnapshot } from '../../../src/shared/human-confirmed-review'
 import { getProjectDb } from '../../database'
-import { textHash } from '../../repositories/generation-run-repository'
+import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
+import { ReviewRevisionGeneration } from '../review-revision-generation'
 import { generationOutputContract, type BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
@@ -30,6 +32,10 @@ import type { WorkflowContext } from '../../../src/stores/workflow-store'
 import * as reviewRevisionMaterials from '../../../src/shared/review-revision-generation'
 import { buildRecoveryEntries, EMPTY_RECOVERY_SOURCES, type ReviewEntry } from '../../../src/components/run/run-recovery'
 import { buildReviewCycleRecheckReport } from '../../../src/shared/review-cycle'
+import { WorkflowBatchAuthority } from '../workflow-batch-authority'
+import type { ProjectRuntime } from '../project-runtime'
+import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
+import { readBuiltinWritingSkill } from '../../../src/shared/builtin-writing-skills'
 
 vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -43,7 +49,7 @@ const materialDecision = (prompt: string): NonNullable<BeginGenerationRequest['m
   capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1', admittedUnits: 0 },
   coverage: { required: 0, included: 0, complete: true }, included: [], omitted: [],
 })
-function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
+function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], batch = false) {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/review-revision-tests')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'owner-'))
@@ -52,18 +58,29 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   db.transaction(() => initializeLegacyBaselineSchema(db))()
   migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
   db.exec("INSERT INTO project_core(id,project_name,words_per_chapter) VALUES('main','合成审稿',100); INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔');")
-  db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(prose)
-  db.exec("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,280)")
+  if (!batch) {
+    db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(prose)
+    db.exec("INSERT INTO drafts_all(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,280)")
+  }
   const model: ModelProfile = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1', apiKey: 'synthetic-key', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'], capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: true, usage: true } }
   const loadModel = (id: string) => id === model.id ? model : id === 'revision-model'
     ? { ...model, id, modelName: 'gpt-4.1-mini', maxTokens: 1024 } : null
   const spy = vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch ?? (async (_request, options) => { options.onVisible({ kind: 'delta', text: report }); return { finishReason: 'stop', usage: null } }))
-  const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: () => '冻结的合成提示词' }
-  const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectPath: root, projectId: 'project', epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel }), loadModel, dispatch: spy,
-    buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
-    rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding })
+  const deps = { db, projectStorageRoot: root, globalDataRoot: root,
+    readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => batch ? JSON.stringify(getBuiltinPromptTemplate(key, language)) : '冻结的合成提示词',
+    ...(batch ? { readBuiltinSkill: readBuiltinWritingSkill } : {}) }
+  const owners: ReturnType<typeof createMainGenerationOwner>[] = []
+  const makeOwner = (epoch: string, extra: Partial<MainGenerationOwnerDependencies> = {}) => {
+    const next = createMainGenerationOwner({ database: db, projectPath: root, projectId: 'project', epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel }), loadModel, dispatch: spy,
+      buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch, modelReceipt, policy,
+        ...(batch ? { freezeWritingLanguage: true as const } : {}), outputContract: generationOutputContract(selection) }).binding,
+      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
+      ...extra })
+    owners.push(next)
+    return next
+  }
   const owner = makeOwner('epoch-1')
-  cleanup.push(() => { owner.suspendForProjectClose(); db.close(); fs.rmSync(root, { recursive: true, force: true }) })
+  cleanup.push(() => { for (const current of owners) current.suspendForProjectClose(); db.close(); fs.rmSync(root, { recursive: true, force: true }) })
   const prepare = (operation: PrepareReviewRevisionRequest['operation'] = 'review-chapter') => owner.prepareReviewRevision({ operation, draftId: 1, expectedDraft: { chapterNumber: 1, version: 1, status: 'draft', contentHash: textHash(prose) }, authorInputs: [], uiLocale: 'zh-CN' })
   const selection = (prepared: ReturnType<typeof prepare>): BeginGenerationRequest => ({ operation: prepared.context.operation, uiActionNonce: 'action', modelId: model.id, chapterNumber: 1, selectedDraftIds: [1], selectedFinalizedDraftIds: [], promptKeys: [prepared.context.operation === 'review-chapter' ? 'consistency_check' : prepared.context.operation === 'refine-draft' ? 'refine_chapter' : 'refine_from_review'], skillStages: [prepared.context.operation === 'review-chapter' ? 'review' : 'refinement'], output: prepared.context.operation === 'review-chapter' ? 'structured-data' : 'visible-text', reviewRevisionContextId: prepared.contextId, authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(prepared.context) }], ...(prepared.parentRootActionId ? { parentRootActionId: prepared.parentRootActionId } : {}) })
   const run = async (operation: PrepareReviewRevisionRequest['operation'] = 'review-chapter') => {
@@ -74,10 +91,312 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
     const artifact = result.run.artifacts.at(-1)!
     return { contextId: prepared.contextId, handle: view.handle, artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } }
   }
-  const reopenStorage = () => { db.close(); db = new Database(path.join(root, 'project.db')); deps.db = db; vi.mocked(getProjectDb).mockReturnValue(db); return makeOwner('epoch-2') }
-  return { get db() { return db }, owner, makeOwner, reopenStorage, prepare, selection, run, spy, deps }
+  const reopenStorage = () => { for (const current of owners) current.suspendForProjectClose(); db.close(); db = new Database(path.join(root, 'project.db')); deps.db = db; vi.mocked(getProjectDb).mockReturnValue(db); return makeOwner('epoch-2') }
+  return { root, model, loadModel, get db() { return db }, owner, makeOwner, reopenStorage, prepare, selection, run, spy, deps }
 }
+
+async function batchFollowupFixture() {
+  const source = prose + '门闩上的裂纹仍在。', revised = prose + '门闩上的裂纹已用石蜡封住。'
+  const machineReport = JSON.stringify({ summary: '修复门闩事实。', items: [{ category: '表达', severity: 'pass', description: '其余表达可接受。' }],
+    goalReviews: [{ id: 'ch1:keyEvents:1', evidence: [{ quote: '门闩上的裂纹仍在' }], description: '门闩裂纹尚未处理。', status: 'unmet' }] })
+  const outputs = ['林岚检查门闩，发现裂纹并安排修复。', source, machineReport]
+  const f = fixture(async (_request, options) => {
+    const output = outputs.shift()
+    if (output === undefined) throw new Error('SYNTHETIC_OUTPUT_EXHAUSTED')
+    options.onVisible({ kind: 'delta', text: output })
+    return { finishReason: 'stop', usage: { promptTokens: 20, completionTokens: 30, totalTokens: 50,
+      reasoningTokens: null, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } }
+  }, true)
+  f.db.prepare("UPDATE project_core SET writing_language='zh-CN',words_per_chapter=?,total_chapters=1 WHERE id='main'").run(countDraftUnits(source))
+  f.db.prepare('UPDATE blueprints SET key_events=? WHERE chapter_number=1').run('修复门闩上的裂纹')
+  f.owner.retireIdle()
+  const runtime = { database: f.db, projectId: 'project', executionEpoch: 'epoch-1', canonicalRoot: f.root,
+    projectStorageRoot: f.root } as ProjectRuntime
+  const leases = new ModelExecutionLeaseRegistry({ loadModel: f.loadModel })
+  const authority = new WorkflowBatchAuthority({ runtime, globalDataRoot: f.root,
+    assertAdmission() {}, assertCapturedResources() {}, acquireWork: () => () => {},
+    readSafeModelReceipt: id => {
+      const lease = leases.begin(id)
+      try { return safeGenerationModelReceipt(lease) } finally { leases.close(lease.leaseId) }
+    },
+    captureKnowledge: async query => ({ version: 1, state: 'empty', storageState: 'absent', query, topK: 5,
+      canonicalRevision: null, documentsRevision: null, items: [] }),
+    withKnowledge: async (_handle, operation) => operation(),
+    withPreparedKnowledge: async (_id, _chapter, operation) => operation(),
+    createOwner: hooks => f.makeOwner('epoch-1', { mode: 'workflow-batch', recoverInterrupted: false, ...hooks }),
+  })
+  const subject = { isDestroyed: () => false, once() {} }
+  const started = await authority.start(subject, { operationKey: randomUUID(), modelId: f.model.id, reviewModelId: f.model.id,
+    uiLocale: 'zh-CN', intent: { mode: 'draft_review', range: { startChapter: 1, endChapter: 1 }, targetUnits: countDraftUnits(source) }, authorInputs: [] }, () => {})
+  if (!started.reference) throw new Error('SYNTHETIC_REFERENCE_MISSING')
+  const reference = started.reference
+  await vi.waitFor(() => {
+    expect(authority.readReceipt(subject, reference).task.state).toBe('waiting_review')
+    expect(authority.hasIssuance()).toBe(false)
+  })
+  const savedReview = authority.readReceipt(subject, reference).chapters[0]!.review!
+  authority.retireIdle()
+  const legacy = f.makeOwner('epoch-1', { recoverInterrupted: false })
+  const cycle = f.db.prepare('SELECT cycle_id,root_action_id FROM review_cycles WHERE review_id=?').get(savedReview.id) as { cycle_id: string; root_action_id: string }
+  const finding = f.db.prepare('SELECT finding_id,target_id FROM review_findings WHERE cycle_id=? AND target_id=?')
+    .get(cycle.cycle_id, 'ch1:keyEvents:1') as { finding_id: string; target_id: string }
+  const snapshot = createHumanConfirmedReviewSnapshot({ cycleId: cycle.cycle_id, sourceReviewId: savedReview.id,
+    sourceDraft: savedReview.source, summary: '作者确认修复门闩', authorGuidance: '', items: [{ findingId: finding.finding_id,
+      category: '本章目标', severity: 'error', description: '门闩裂纹尚未处理。', quote: '门闩上的裂纹仍在',
+      goalId: finding.target_id, decision: 'apply', origin: 'ai' }] })!
+  const content = serializeHumanConfirmedReviewSnapshot(snapshot)
+  const confirmation = f.db.transaction(() => {
+    const saved = ReviewRepository.create({ baseDraftId: savedReview.source.id, content, expectedSource: savedReview.source }, f.db)
+    ReviewCycleRepository.commitAuthorConfirmation({ cycleId: cycle.cycle_id, confirmationReviewId: saved.id }, f.db)
+    return saved
+  })()
+  const request: PrepareReviewRevisionRequest = { operation: 'refine-from-review', draftId: savedReview.source.id,
+    expectedDraft: { chapterNumber: 1, version: savedReview.source.version, status: 'draft', contentHash: textHash(source) },
+    reviewSourceId: confirmation.id, confirmedReviewContent: content, authorInputs: [], uiLocale: 'zh-CN' }
+  const prepare = (owner = legacy) => owner.prepareReviewRevision(request)
+  const bind = (owner: typeof legacy, prepared: ReturnType<typeof prepare>, nonce: string = randomUUID()) => {
+    const view = owner.begin({ ...f.selection(prepared), uiActionNonce: nonce }), prompt = '只修复门闩事实'
+    const brief = renderHumanConfirmedReviewBrief(snapshot, 'zh-CN')
+    owner.bindMaterialDecision(view.handle, { ...materialDecision(prompt),
+      capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1', admittedUnits: Buffer.byteLength(brief) },
+      coverage: { required: 1, included: 1, complete: true }, included: [{ sourceId: `review:confirmed:${confirmation.id}`,
+        revision: confirmation.id, contentHash: textHash(brief), category: 'author', required: true, units: Buffer.byteLength(brief) }] })
+    return { view, task: { purpose: 'refine-from-review', output: 'visible-text' as const, messages: [{ role: 'user' as const, content: prompt }] } }
+  }
+  const output = (text: string) => f.spy.mockImplementationOnce(async (_request, options) => {
+    options.onVisible({ kind: 'delta', text }); return { finishReason: 'stop', usage: null }
+  })
+  return { ...f, get db() { return f.db }, legacy, source, revised, cycle, finding, savedReview, prepare, bind, output }
+}
+
+describe('explicit author followups of protected v2 ordinary review roots', () => {
+  it('uses the original root through confirmation, revision commit, merge and real recheck without exposing driver runs', async () => {
+    const f = await batchFollowupFixture(), prepared = f.prepare(), opened = f.bind(f.legacy, prepared)
+    expect(opened.view.handle.rootActionId).toBe(f.cycle.root_action_id)
+    const runs = new GenerationRunRepository(() => f.db), budget = runs.budget(f.cycle.root_action_id).policy
+    f.output(f.revised)
+    const execution = await f.legacy.execute({ handle: opened.view.handle, invocationNonce: 'author-revision', task: opened.task })
+    const composition = f.legacy.composeVisible(opened.view.handle, [execution.outcome.receipt.visibleArtifact!.artifactId], textHash(f.revised), 'visible-append-v1')
+    const saved = f.legacy.commitRevision({ contextId: prepared.contextId, handle: opened.view.handle, expectedCompositionHash: composition.textHash })
+    const savedState = f.db.serialize()
+    expect(() => f.legacy.pause(opened.view.handle)).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(() => f.legacy.cancel(opened.view.handle)).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(() => f.legacy.restart(opened.view.handle, { ...f.selection(prepared), uiActionNonce: 'saved-restart' })).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(() => f.legacy.discardCandidate(opened.view.handle, execution.outcome.receipt.visibleArtifact!.artifactId)).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    await expect(f.legacy.resume(opened.view.handle)).rejects.toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(f.legacy.commitRevision({ contextId: prepared.contextId, handle: opened.view.handle, expectedCompositionHash: composition.textHash })).toEqual(saved)
+    expect(f.db.serialize()).toEqual(savedState)
+    const merged = RevisionRepository.mergeIntoDraft({ revisionId: saved.id, targetDraftId: f.savedReview.source.id,
+      expectedDraftContent: f.source, mergedContent: f.revised, wordCount: countDraftUnits(f.revised) }, f.db)
+    expect(merged.reviewCycle?.disposition).toBe('required')
+    const recheck = f.legacy.prepareReviewRevision({ operation: 'review-chapter', draftId: merged.targetDraftId,
+      expectedDraft: { chapterNumber: 1, version: merged.version, status: 'revised', contentHash: textHash(f.revised) },
+      reviewCycleId: f.cycle.cycle_id, expectedMergedHash: textHash(f.revised), authorInputs: [], uiLocale: 'zh-CN' })
+    const view = f.legacy.begin({ ...f.selection(recheck), uiActionNonce: 'author-recheck' }), prompt = '复检同一门闩 finding'
+    f.legacy.bindMaterialDecision(view.handle, materialDecision(prompt))
+    f.output(JSON.stringify({ summary: '正文出现修复证据', items: [{ findingId: f.finding.finding_id, targetId: f.finding.target_id,
+      resolved: true, evidenceQuote: '门闩上的裂纹已用石蜡封住', reason: '原问题对应片段已变化。' }] }))
+    const result = await f.legacy.execute({ handle: view.handle, invocationNonce: 'author-recheck-request',
+      task: { purpose: 'review-chapter', output: 'structured-data', messages: [{ role: 'user', content: prompt }] } })
+    const artifact = result.outcome.receipt.visibleArtifact!
+    const receipt = f.legacy.commitReview({ contextId: recheck.contextId, handle: view.handle, artifact: {
+      artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } })
+    expect(receipt.reviewCycle?.recheckCount).toBe(1)
+    expect(view.handle.rootActionId).toBe(f.cycle.root_action_id)
+    expect(runs.budget(f.cycle.root_action_id).policy).toEqual(budget)
+    const registered = f.db.prepare("SELECT run_id FROM workflow_batch_steps WHERE role='review' LIMIT 1").pluck().get() as string
+    const original = runs.get(registered), handle = { projectId: 'project', epoch: original.binding.epoch, runId: original.runId, rootActionId: original.rootActionId }
+    expect(() => f.legacy.read(handle)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    expect(() => f.legacy.readReviewRevisionRecovery(handle)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    expect(() => f.legacy.begin({ ...f.selection(prepared), reviewRevisionContextId: undefined, uiActionNonce: 'generic-parent' }))
+      .toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    const reopened = f.reopenStorage(), recovered = reopened.readReviewRevisionRecovery(view.handle)
+    expect(recovered.saved).toEqual(receipt)
+    expect(reopened.commitReview({ contextId: recheck.contextId, handle: view.handle, artifact: {
+      artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } })).toEqual(receipt)
+    await expect(reopened.resume(view.handle)).rejects.toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    const before = f.db.serialize(), requests = f.spy.mock.calls.length
+    expect(() => reopened.cancel(view.handle)).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(() => reopened.restart(view.handle, { ...f.selection(recheck), uiActionNonce: 'copy-only-restart' })).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(() => reopened.discardCandidate(view.handle, artifact.artifactId)).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(f.db.serialize()).toEqual(before)
+    expect(f.spy).toHaveBeenCalledTimes(requests)
+  })
+  it('requires a fresh private captured context and rechecks it inside the native transaction', async () => {
+    const f = await batchFollowupFixture(), prepared = f.prepare()
+    expect(() => f.legacy.begin({ ...f.selection(prepared), reviewRevisionContextId: randomUUID() })).toThrow('GENERATION_REVIEW_CONTEXT_REQUIRED')
+    const batchId = f.db.prepare('SELECT batch_run_id FROM workflow_batch_tasks').pluck().get() as string
+    expect(() => f.legacy.begin({ ...f.selection(prepared), batchId })).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    const runsBefore = f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()
+    const builder = f.deps.readBuiltinPrompt
+    let changed = false
+    f.deps.readBuiltinPrompt = (...args) => {
+      if (!changed) { changed = true; f.db.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM drafts WHERE id=?)').run(f.source + '作者新改动', f.savedReview.source.id) }
+      return builder(...args)
+    }
+    expect(() => f.legacy.begin({ ...f.selection(prepared), uiActionNonce: 'source-race' })).toThrow()
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(runsBefore)
+    expect(f.spy).toHaveBeenCalledTimes(3)
+  })
+  it('does not publish a child after a real deferred foreign-key COMMIT failure', async () => {
+    const f = await batchFollowupFixture(), prepared = f.prepare(), before = f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()
+    f.db.pragma('foreign_keys = ON')
+    f.db.exec(`CREATE TEMP TABLE failed_followup_parent(root_id TEXT PRIMARY KEY);
+      CREATE TEMP TABLE failed_followup(root_id TEXT REFERENCES failed_followup_parent(root_id) DEFERRABLE INITIALLY DEFERRED);
+      CREATE TEMP TRIGGER fail_followup_commit AFTER INSERT ON main.generation_runs
+      BEGIN INSERT INTO failed_followup(root_id) VALUES('absent-root'); END;`)
+    expect(() => f.legacy.begin({ ...f.selection(prepared), uiActionNonce: 'failed-followup' })).toThrow('FOREIGN KEY constraint failed')
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(before)
+    f.db.exec('DROP TRIGGER fail_followup_commit')
+    const opened = f.bind(f.legacy, prepared, 'failed-followup')
+    expect(f.legacy.read(opened.view.handle).handle).toEqual(opened.view.handle)
+    expect(f.spy).toHaveBeenCalledTimes(3)
+  })
+  it('reauthorizes only the exact unsaved child on a new epoch and resumes with the original root budget', async () => {
+    const f = await batchFollowupFixture(), prepared = f.prepare(), opened = f.bind(f.legacy, prepared)
+    const runs = new GenerationRunRepository(() => f.db), budget = runs.budget(f.cycle.root_action_id).policy
+    const reopened = f.reopenStorage()
+    await expect(reopened.resume(opened.view.handle)).rejects.toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    const recovery = reopened.readReviewRevisionRecovery(opened.view.handle)
+    expect(recovery.canResume).toBe(true)
+    expect(recovery.contextId).toBeTypeOf('string')
+    const resumed = await reopened.resume(opened.view.handle)
+    expect(resumed.handle.rootActionId).toBe(opened.view.handle.rootActionId)
+    f.output(f.revised)
+    const execution = await reopened.execute({ handle: resumed.handle, invocationNonce: 'resumed-author-revision', task: opened.task })
+    const composition = reopened.composeVisible(resumed.handle, [execution.outcome.receipt.visibleArtifact!.artifactId], textHash(f.revised), 'visible-append-v1')
+    const saved = reopened.commitRevision({ contextId: recovery.contextId!, handle: resumed.handle, expectedCompositionHash: composition.textHash })
+    expect(saved.kind).toBe('revision')
+    expect(new GenerationRunRepository(() => f.db).budget(f.cycle.root_action_id).policy).toEqual(budget)
+    expect(f.spy).toHaveBeenCalledTimes(4)
+  })
+  it('honors the cross-owner idle barrier before any exact recovery writes and never resends unknown delivery', async () => {
+    const f = await batchFollowupFixture(), opened = f.bind(f.legacy, f.prepare()), runs = new GenerationRunRepository(() => f.db)
+    const pending = runs.reserve(opened.view.handle.runId, 'sent-before-crash', textHash('sent-before-crash'), 200, 100)
+    runs.markDispatched(pending.attempt.attemptId)
+    f.reopenStorage()
+    let busy = true
+    const barrier = vi.fn(() => { if (busy) throw new Error('GENERATION_OWNER_BUSY') })
+    const reopened = f.makeOwner('epoch-2', { recoverInterrupted: false, assertNoRuntimeClaims: barrier })
+    const current = new GenerationRunRepository(() => f.db), before = f.db.serialize()
+    const siblingFacts = () => ({
+      runs: f.db.prepare('SELECT * FROM generation_runs WHERE root_action_id=? AND run_id<>? ORDER BY run_id').all(f.cycle.root_action_id, opened.view.handle.runId),
+      attempts: f.db.prepare('SELECT * FROM generation_attempts WHERE root_action_id=? AND run_id<>? ORDER BY attempt_id').all(f.cycle.root_action_id, opened.view.handle.runId),
+    })
+    const siblings = siblingFacts()
+    expect(reopened.listRecovery().reviews.some(item => item.view.handle.runId === opened.view.handle.runId)).toBe(true)
+    expect(f.db.serialize()).toEqual(before)
+    expect(() => reopened.readReviewRevisionRecovery(opened.view.handle)).toThrow('GENERATION_OWNER_BUSY')
+    expect(f.db.serialize()).toEqual(before)
+    busy = false
+    const recovery = reopened.readReviewRevisionRecovery(opened.view.handle)
+    expect(barrier).toHaveBeenCalled()
+    expect(recovery.canResume).toBe(false)
+    expect(current.receipt(pending.attempt.attemptId).attempt.status).toBe('unknown')
+    expect(current.receipt(pending.attempt.attemptId).result).toBeNull()
+    expect(current.get(opened.view.handle.runId).binding.epoch).toBe('epoch-1')
+    expect(siblingFacts()).toEqual(siblings)
+    await expect(reopened.resume(opened.view.handle)).rejects.toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    await expect(reopened.execute({ handle: opened.view.handle, invocationNonce: 'do-not-resend', task: opened.task })).rejects.toThrow()
+    const frozen = f.db.serialize()
+    expect(reopened.readReviewRevisionRecovery(opened.view.handle).canResume).toBe(false)
+    expect(f.db.serialize()).toEqual(frozen)
+    expect(() => reopened.cancel(opened.view.handle)).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(() => reopened.restart(opened.view.handle, { ...f.selection(f.prepare(reopened)), uiActionNonce: 'unknown-restart' })).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(() => reopened.discardCandidate(opened.view.handle, pending.artifact!.artifactId)).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(() => f.bind(reopened, f.prepare(reopened))).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(f.db.serialize()).toEqual(frozen)
+    expect(f.spy).toHaveBeenCalledTimes(3)
+  })
+  it.each([false, true])('keeps an already unknown author child read-only without settling or pausing again (reopened=%s)', async reopen => {
+    const f = await batchFollowupFixture(), prepared = f.prepare(), opened = f.bind(f.legacy, prepared)
+    const runs = new GenerationRunRepository(() => f.db)
+    const pending = runs.reserve(opened.view.handle.runId, 'known-unknown', textHash('known-unknown'), 200, 100)
+    runs.markDispatched(pending.attempt.attemptId)
+    runs.settle(pending.attempt.attemptId, null, null, 'NETWORK_ERROR')
+    const hook = vi.fn(() => { throw new Error('GENERATION_OWNER_BUSY') })
+    if (reopen) f.reopenStorage()
+    const owner = reopen ? f.makeOwner('epoch-2', { recoverInterrupted: false, assertNoRuntimeClaims: hook }) : f.legacy
+    const before = f.db.serialize()
+    expect(owner.readReviewRevisionRecovery(opened.view.handle).canResume).toBe(false)
+    expect(owner.readReviewRevisionRecovery(opened.view.handle).canResume).toBe(false)
+    expect(hook).not.toHaveBeenCalled()
+    expect(() => owner.pause(opened.view.handle)).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(() => owner.cancel(opened.view.handle)).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(() => owner.restart(opened.view.handle, { ...f.selection(prepared), uiActionNonce: 'unknown-new-root' })).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(() => owner.discardCandidate(opened.view.handle, pending.artifact!.artifactId)).toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    await expect(owner.resume(opened.view.handle)).rejects.toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    await expect(owner.execute({ handle: opened.view.handle, invocationNonce: 'unknown-new-invocation', task: opened.task })).rejects.toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(f.db.serialize()).toEqual(before)
+    expect(f.spy).toHaveBeenCalledTimes(3)
+  })
+  it('denies cleared execution columns and portable freeze without relying on a task state', async () => {
+    const f = await batchFollowupFixture(), opened = f.bind(f.legacy, f.prepare())
+    const runs = new GenerationRunRepository(() => f.db)
+    const frozen = new ReviewRevisionGeneration(f.db, runs, { projectId: 'project', epoch: 'epoch-1' }, () => {},
+      table => table === 'workflow_batch_tasks')
+    expect(() => frozen.assertBatchFollowupRun(opened.view.handle.runId)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    f.db.prepare('UPDATE workflow_batch_tasks SET request_hash=NULL').run()
+    expect(() => f.legacy.begin({ ...f.selection(f.prepare()), uiActionNonce: 'history-only-followup' })).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    expect(f.spy).toHaveBeenCalledTimes(3)
+  })
+  it('keeps a real storage-failed author request copy-only before and after its tail is preserved', async () => {
+    const f = await batchFollowupFixture(), opened = f.bind(f.legacy, f.prepare())
+    f.db.exec("CREATE TRIGGER reject_author_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'synthetic storage failure'); END")
+    f.output(f.revised)
+    const execution = await f.legacy.execute({ handle: opened.view.handle, invocationNonce: 'storage-failed-author', task: opened.task })
+    const attemptId = execution.run.unsavedTails![0]!.attemptId
+    const receipt = new GenerationRunRepository(() => f.db).receipt(attemptId)
+    expect(receipt.attempt.status).toBe('unknown')
+    expect(receipt.result?.finishReason).toBe('error')
+    expect(receipt.failureCode).toBe('GENERATION_STORAGE_FAILED')
+    expect(execution.run.unsavedTails?.[0]?.text).toBe(f.revised)
+    expect(f.legacy.readReviewRevisionRecovery(opened.view.handle).canResume).toBe(false)
+    await expect(f.legacy.resume(opened.view.handle)).rejects.toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    f.db.exec('DROP TRIGGER reject_author_snapshot')
+    f.legacy.requestProjectClose()
+    expect(f.legacy.read(opened.view.handle).recoveryTails?.[0]?.tailText).toBe(f.revised)
+    const reopened = f.reopenStorage(), before = f.db.serialize()
+    expect(reopened.readReviewRevisionRecovery(opened.view.handle).canResume).toBe(false)
+    expect(reopened.read(opened.view.handle).recoveryTails?.[0]?.tailText).toBe(f.revised)
+    await expect(reopened.execute({ handle: opened.view.handle, invocationNonce: 'do-not-resend-storage-tail', task: opened.task })).rejects.toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+    expect(f.db.serialize()).toEqual(before)
+    expect(f.spy).toHaveBeenCalledTimes(4)
+  })
+  it('keeps frozen model and template checks on the admitted author child', async () => {
+    const f = await batchFollowupFixture(), opened = f.bind(f.legacy, f.prepare())
+    const temperature = f.model.temperature
+    f.model.temperature = 0.2
+    await expect(f.legacy.execute({ handle: opened.view.handle, invocationNonce: 'changed-model', task: opened.task })).rejects.toThrow('GENERATION_SOURCE_CHANGED_MODEL')
+    f.model.temperature = temperature
+    const template = f.deps.readBuiltinPrompt
+    f.deps.readBuiltinPrompt = (...args) => {
+      const original = JSON.parse(template(...args)) as { content: string }
+      return JSON.stringify({ ...original, content: original.content + ' changed' })
+    }
+    await expect(f.legacy.execute({ handle: opened.view.handle, invocationNonce: 'changed-template', task: opened.task })).rejects.toThrow('GENERATION_SOURCE_CHANGED')
+    expect(f.spy).toHaveBeenCalledTimes(3)
+  })
+})
+
 describe('review and revision generation through the actual owner and SQLite', () => {
+  it('proves the original committed ordinary review without writing or creating a recovery context', async () => {
+    const f = fixture()
+    const request = await f.run()
+    const service = new ReviewRevisionGeneration(f.db, new GenerationRunRepository(() => f.db),
+      { projectId: 'project', epoch: 'epoch-1' }, () => {})
+    const before = f.db.serialize()
+    expect(service.readCommittedReview(request.handle.runId)).toBeNull()
+    expect(f.db.serialize()).toEqual(before)
+    const receipt = f.owner.commitReview(request)
+    const attemptId = (f.db.prepare('SELECT attempt_id FROM generation_artifacts WHERE artifact_id=?')
+      .get(request.artifact.artifactId) as { attempt_id: string }).attempt_id
+    const committed = f.db.serialize()
+    expect(service.readCommittedReview(request.handle.runId)).toEqual({ attemptId, receipt })
+    expect(f.db.serialize()).toEqual(committed)
+    f.db.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM reviews WHERE id=?)').run('tampered', receipt.id)
+    expect(() => service.readCommittedReview(request.handle.runId)).toThrow('GENERATION_REVIEW_RECEIPT_INVALID')
+  })
   it.each(['review-chapter', 'refine-draft'] as const)('运行侧页的可恢复列表把中断的 %s 列为审修，不当作单章候选', async operation => {
     const f = fixture(operation === 'review-chapter' ? undefined : async (_request, options) => {
       options.onVisible({ kind: 'delta', text: revisedProse }); return { finishReason: 'stop', usage: null }

@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto'
-import { isDeepStrictEqual } from 'node:util'
 import type Database from 'better-sqlite3'
-import { buildReviewGenerationReport } from '../../src/shared/review-generation-report'
-import { buildReviewCycleRecheckReport, classifyFindingEvidenceChange, unshownMustShowRecheckFindings,
+import { classifyFindingEvidenceChange, unshownMustShowRecheckFindings,
   type ReviewCycleRecheckContext, type ReviewCycleRecheckFinding } from '../../src/shared/review-cycle'
 import { parseHumanConfirmedReviewSnapshot, type HumanConfirmedReviewSnapshot } from '../../src/shared/human-confirmed-review'
-import { composeVisibleContinuation } from '../../src/shared/visible-continuation'
-import type { ReviewRevisionContext } from '../../src/shared/review-revision-generation'
 import type { MigrationImplementation, SchemaReader } from './registry'
+import { canonicalM03FindingSetHash, type M03FindingDescriptor } from './review-cycle-findings'
+import { effect, proveEffect, type AttemptRow } from './review-cycle-effect-proof'
+import { verifyOrdinaryReviewHistoryCycle, assertOrdinaryHistoryContext,
+  type OrdinaryHistoryContext } from './ordinary-review-history'
+
+export { canonicalM03FindingSetHash, type M03FindingDescriptor } from './review-cycle-findings'
 
 const HASH = /^[a-f0-9]{64}$/u
 const CYCLE_STATUSES = new Set(['not-generated', 'generated', 'merge-committed'])
@@ -20,34 +22,6 @@ const record = (value: unknown): Record<string, unknown> | null => value !== nul
   && !Array.isArray(value) ? value as Record<string, unknown> : null
 
 export const M03_REVIEW_CYCLE_TABLES = Object.freeze(['review_cycles', 'review_findings'] as const)
-
-export interface M03FindingDescriptor {
-  findingId: string
-  source: { projectId: string; epoch: string; sourceId: string; revision: number; contentHash: string;
-    span: { start: number; end: number; unit: 'utf16-code-unit' } | null }
-  excerptHash: string | null
-  occurrence: number | null
-  category: string
-  targetId: string | null
-  kind: 'objective' | 'literary'
-  problemText: string
-  expectedText: string | null
-  status: 'unverified' | 'unresolved' | 'unknown' | 'resolved' | 'author-waived'
-  evidenceHash: string | null
-  confirmationItemIndex: number | null
-}
-
-/** Canonical order is finding identity order; a null span is the explicit unverified-anchor marker. */
-export function canonicalM03FindingSetHash(findings: readonly M03FindingDescriptor[]): string {
-  const immutable = findings.map(finding => ({ findingId: finding.findingId,
-    sourceProjectId: finding.source.projectId, sourceEpoch: finding.source.epoch, sourceId: finding.source.sourceId,
-    sourceRevision: finding.source.revision, sourceContentHash: finding.source.contentHash,
-    spanStart: finding.source.span?.start ?? null, spanEnd: finding.source.span?.end ?? null,
-    spanUnit: finding.source.span?.unit ?? null, excerptHash: finding.excerptHash, occurrence: finding.occurrence,
-    category: finding.category, targetId: finding.targetId, kind: finding.kind,
-    problemText: finding.problemText, expectedText: finding.expectedText }))
-  return hash(JSON.stringify(immutable.sort((left, right) => left.findingId < right.findingId ? -1 : left.findingId > right.findingId ? 1 : 0)))
-}
 
 export const M03_REVIEW_CYCLE_SQL = `
 CREATE TABLE review_cycles (
@@ -151,135 +125,6 @@ interface ReviewRow { id: number; base_draft_id: number; source_draft_chapter_nu
 interface RevisionRow { id: number; base_draft_id: number; review_source_id: number | null; source_draft_chapter_number: number | null;
   source_draft_version: number | null; source_draft_status: string | null; source_content: string | null;
   status: string; merged_to_draft_id: number | null; body: string }
-interface AttemptRow { attempt_id: string; run_id: string; root_action_id: string; run_root_action_id: string
-  binding_json: string; attempt_json: string; usage_receipt_json: string | null }
-
-function effect(row: AttemptRow): Record<string, unknown> | null {
-  if (!row.usage_receipt_json) return null
-  const receipt = JSON.parse(row.usage_receipt_json) as { reviewRevisionEffect?: unknown }
-  return receipt.reviewRevisionEffect && typeof receipt.reviewRevisionEffect === 'object'
-    ? receipt.reviewRevisionEffect as Record<string, unknown> : null
-}
-function proveEffect(db: Database.Database, row: AttemptRow, expected: {
-  kind: 'review' | 'revision'; id: number; index: number; contentHash: string
-  source: { id: number; chapterNumber: number; version: number; status: string; content: string }
-  confirmation?: { reviewSourceId: number; content: string; originalReviewContentHash: string;
-    snapshot: HumanConfirmedReviewSnapshot }
-  recheck?: ReviewCycleRecheckContext
-}): boolean {
-  const stored = effect(row)
-  if (!stored || stored.kind !== expected.kind || stored.id !== expected.id || stored.index !== expected.index
-    || stored.contentHash !== expected.contentHash || !HASH.test(String(stored.contextHash))) return false
-  if (stored.reportVersion !== undefined && (stored.reportVersion !== 2 || expected.kind !== 'review')) return false
-  const allowed = expected.kind === 'revision'
-    ? ['artifact', 'compositionHash', 'contentHash', 'contextHash', 'id', 'index', 'kind']
-    : ['artifact', 'contentHash', 'contextHash', 'id', 'index', 'kind', ...(stored.reportVersion === 2 ? ['reportVersion'] : [])]
-  if (Object.keys(stored).sort().join() !== allowed.join()) return false
-  const binding = JSON.parse(row.binding_json) as Record<string, unknown>
-  const manifest = binding.sourceManifest as Record<string, unknown> | undefined
-  const context = manifest?.reviewRevisionContext as Record<string, unknown> | undefined
-  const source = context?.source as Record<string, unknown> | undefined
-  const confirmation = context?.confirmation as Record<string, unknown> | undefined
-  const recheck = context?.recheck as Record<string, unknown> | undefined
-  const validRecheckVersionPair = !expected.recheck || recheck?.version === 1
-    && (expected.recheck.version === 1 || expected.recheck.version === 2)
-    || recheck?.version === 2 && expected.recheck.version === 2
-  const frozenRecheck = validRecheckVersionPair && expected.recheck && recheck
-    ? { ...expected.recheck, version: recheck.version } : expected.recheck
-  const sourceHash = hash(expected.source.content)
-  if (!context || context.version !== 1 || context.operation !== (expected.kind === 'review' ? 'review-chapter' : 'refine-from-review')
-    || !source || Object.keys(source).sort().join() !== 'chapterNumber,content,id,status,version'
-    || source.id !== expected.source.id || source.chapterNumber !== expected.source.chapterNumber
-    || source.version !== expected.source.version || source.status !== expected.source.status || source.content !== expected.source.content
-    || context.sourceHash !== sourceHash || stored.contextHash !== hash(JSON.stringify(context))
-    || !context.config || !['zh-CN', 'en-US'].includes(String(context.writingLanguage))
-    || !['zh-CN', 'en-US'].includes(String(context.uiLocale)) || !Array.isArray(context.authorInputs)
-    || typeof context.characterStates !== 'string' || typeof context.worldbuilding !== 'string'
-    || !Array.isArray(context.history) || !Array.isArray(context.blueprints) || !context.frozenGoals
-    || !Array.isArray(context.preflightFindings)
-    || manifest?.reviewRevisionContextHash !== stored.contextHash || manifest.operation !== context.operation
-    || JSON.stringify(manifest.authorInputs) !== JSON.stringify([{ id: 'review-revision-context', text: JSON.stringify(context) }])
-    || (expected.kind === 'review' && (confirmation !== undefined
-      || !validRecheckVersionPair || !isDeepStrictEqual(recheck, frozenRecheck)))
-    || (expected.kind === 'revision' && (!expected.confirmation || !confirmation
-      || Object.keys(confirmation).sort().join() !== 'content,originalReviewContentHash,reviewSourceId,snapshot'
-      || confirmation.reviewSourceId !== expected.confirmation.reviewSourceId
-      || confirmation.content !== expected.confirmation.content
-      || confirmation.originalReviewContentHash !== expected.confirmation.originalReviewContentHash
-      || !isDeepStrictEqual(confirmation.snapshot, expected.confirmation.snapshot)
-      || recheck !== undefined))) return false
-  const attempt = JSON.parse(row.attempt_json) as Record<string, unknown>
-  const usage = JSON.parse(row.usage_receipt_json!) as Record<string, unknown>
-  const result = usage.result as Record<string, unknown> | undefined
-  if (!['settled', 'unknown'].includes(String(attempt.status)) || result?.finishReason !== 'stop' || result.failureCode !== undefined) return false
-  const artifactRef = stored.artifact as Record<string, unknown> | undefined
-  if (!artifactRef || Object.keys(artifactRef).sort().join() !== 'artifactId,revision,textHash'
-    || !nonempty(artifactRef.artifactId) || !integer(artifactRef.revision) || !HASH.test(String(artifactRef.textHash))) return false
-  const artifactRow = db.prepare(`SELECT artifact_id,attempt_id,run_id,artifact_json,revision,status
-    FROM generation_artifacts WHERE artifact_id=?`).get(artifactRef.artifactId) as {
-      artifact_id: string; attempt_id: string; run_id: string; artifact_json: string; revision: number; status: string
-    } | undefined
-  if (!artifactRow || artifactRow.attempt_id !== row.attempt_id || artifactRow.run_id !== row.run_id
-    || artifactRow.revision !== artifactRef.revision || artifactRow.status === 'discarded') return false
-  const artifact = JSON.parse(artifactRow.artifact_json) as Record<string, unknown>
-  const identity = usage.artifactIdentity as Record<string, unknown> | undefined
-  if (artifact.artifactId !== artifactRef.artifactId || artifact.attemptId !== row.attempt_id
-    || artifact.rootActionId !== row.root_action_id || artifact.projectId !== binding.projectId || !nonempty(artifact.epoch)
-    || artifact.revision !== artifactRef.revision || artifact.textHash !== artifactRef.textHash
-    || typeof artifact.text !== 'string' || hash(artifact.text) !== artifact.textHash
-    || JSON.stringify(artifact.fingerprint) !== JSON.stringify(binding.fingerprint)
-    || identity?.artifactId !== artifact.artifactId || identity.epoch !== artifact.epoch
-    || JSON.stringify(identity.fingerprint) !== JSON.stringify(artifact.fingerprint)) return false
-  if (expected.kind === 'review') {
-    const frozen = context as unknown as ReviewRevisionContext
-    const rebuilt = JSON.stringify(expected.recheck
-      ? (() => { const report = buildReviewCycleRecheckReport(artifact.text as string, frozen.source.content, expected.recheck!, frozen.uiLocale,
-        stored.reportVersion === 2 ? 2 : 1)
-        return { summary: report.summary, items: report.items } })()
-      : buildReviewGenerationReport({ content: artifact.text as string,
-        sourceContent: frozen.source.content, frozenGoals: frozen.frozenGoals, writingLanguage: frozen.writingLanguage,
-        uiLocale: frozen.uiLocale, preflightFindings: frozen.preflightFindings, reportVersion: stored.reportVersion === 2 ? 2 : 1 }), null, 2)
-    if (hash(rebuilt) !== expected.contentHash) return false
-  }
-  if (expected.kind === 'revision') {
-    const composition = usage.visibleComposition as Record<string, unknown> | undefined
-    const sources = composition?.sources as unknown[] | undefined, artifactIds = composition?.artifactIds
-    if (!HASH.test(String(stored.compositionHash)) || stored.compositionHash !== expected.contentHash
-      || composition?.algorithm !== 'visible-append-v1' || composition.textHash !== stored.compositionHash
-      || !Array.isArray(artifactIds) || artifactIds.length < 1 || artifactIds.length > 32
-      || new Set(artifactIds).size !== artifactIds.length || artifactIds.at(-1) !== artifactRef.artifactId
-      || !Array.isArray(sources) || JSON.stringify(sources.at(-1)) !== JSON.stringify(artifactRef)) return false
-    let composed = '', previousOrdinal = -1
-    const rebuiltSources: unknown[] = []
-    for (const artifactId of artifactIds) {
-      if (!nonempty(artifactId)) return false
-      const candidate = db.prepare(`SELECT a.attempt_id,a.run_id,a.status,a.artifact_json,a.revision,t.rowid AS ordinal,
-          t.attempt_json,t.usage_receipt_json FROM generation_artifacts a JOIN generation_attempts t ON t.attempt_id=a.attempt_id
-          WHERE a.artifact_id=?`).get(artifactId) as { attempt_id: string; run_id: string; status: string; artifact_json: string;
-            revision: number; ordinal: number; attempt_json: string; usage_receipt_json: string } | undefined
-      if (!candidate || candidate.run_id !== row.run_id || candidate.status === 'discarded' || candidate.ordinal <= previousOrdinal) return false
-      const visible = JSON.parse(candidate.artifact_json) as Record<string, unknown>
-      const physical = JSON.parse(candidate.attempt_json) as Record<string, unknown>
-      const candidateUsage = JSON.parse(candidate.usage_receipt_json) as Record<string, unknown>
-      const candidateResult = candidateUsage.result as Record<string, unknown> | undefined
-      const candidateIdentity = candidateUsage.artifactIdentity as Record<string, unknown> | undefined
-      if (!['settled', 'unknown'].includes(String(physical.status)) || !['stop', 'length'].includes(String(candidateResult?.finishReason))
-        || typeof visible.text !== 'string' || !visible.text.trim() || hash(visible.text) !== visible.textHash
-        || visible.artifactId !== artifactId || visible.attemptId !== candidate.attempt_id || visible.rootActionId !== row.root_action_id
-        || visible.projectId !== binding.projectId || !nonempty(visible.epoch) || visible.revision !== candidate.revision
-        || JSON.stringify(visible.fingerprint) !== JSON.stringify(binding.fingerprint)
-        || candidateIdentity?.artifactId !== artifactId || candidateIdentity.epoch !== visible.epoch
-        || JSON.stringify(candidateIdentity.fingerprint) !== JSON.stringify(visible.fingerprint)) return false
-      const next = rebuiltSources.length > 0 ? composeVisibleContinuation(composed, visible.text) : visible.text.trim()
-      if (!next.trim() || (rebuiltSources.length > 0
-        && (next.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (composed.match(/[\p{L}\p{N}]/gu)?.length ?? 0))) return false
-      composed = next; previousOrdinal = candidate.ordinal
-      rebuiltSources.push({ artifactId, revision: visible.revision, textHash: visible.textHash })
-    }
-    if (hash(composed) !== stored.compositionHash || JSON.stringify(rebuiltSources) !== JSON.stringify(sources)) return false
-  } else if (stored.compositionHash !== undefined) return false
-  return true
-}
 function descriptor(row: FindingRow): M03FindingDescriptor {
   return { findingId: row.finding_id, source: { projectId: row.source_project_id, epoch: row.source_epoch,
     sourceId: row.source_id, revision: row.source_revision, contentHash: row.source_content_hash,
@@ -298,8 +143,9 @@ function exactSchema(db: Database.Database, table: string, columns: readonly str
   return fragments.every(fragment => compact.includes(fragment.replace(/\s/gu, '').toLowerCase()))
 }
 
-export function verifyM03ReviewCycle(db: Database.Database): boolean {
+export function verifyM03ReviewCycle(db: Database.Database, history?: OrdinaryHistoryContext): boolean {
   try {
+    if (history) assertOrdinaryHistoryContext(db, history)
     if (db.pragma('foreign_keys', { simple: true }) !== 1 || (db.pragma('foreign_key_check') as unknown[]).length) return false
     const mergeTable = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_cycle_merges'").get())
     // M07 起 drafts 是不含回收站的视图；校验要看到全部行，否则删掉一章就让整个作品的审修循环校验失败。
@@ -337,6 +183,10 @@ export function verifyM03ReviewCycle(db: Database.Database): boolean {
       if (!review || !integer(review.source_draft_chapter_number, 1) || !integer(review.source_draft_version, 1)
         || !nonempty(review.source_draft_status) || review.source_content === null || hash(review.body) !== cycle.review_content_hash
         || hash(review.source_content) !== cycle.source_hash) return false
+      if (history?.cycleIds.includes(cycle.cycle_id)) {
+        if (!verifyOrdinaryReviewHistoryCycle(db, cycle.cycle_id, history)) return false
+        continue
+      }
       const root = db.prepare('SELECT action_json FROM generation_roots WHERE root_action_id=?').get(cycle.root_action_id) as { action_json: string } | undefined
       const action = root && JSON.parse(root.action_json) as Record<string, unknown>
       if (!action || !nonempty(action.projectId) || !nonempty(action.epoch)) return false

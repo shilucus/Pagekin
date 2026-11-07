@@ -801,11 +801,15 @@ export class GenerationRunRepository {
             const grantRoot = hasGrants ? this.db().prepare('SELECT 1 FROM runtime_feedback_grants g JOIN generation_runs r ON r.run_id=g.run_id WHERE r.root_action_id=? LIMIT 1') : null;
             const hasDrivers = Boolean(this.db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_tasks'").get());
             const driverRoot = hasDrivers ? this.db().prepare('SELECT 1 FROM workflow_tasks t JOIN generation_runs r ON r.run_id=t.run_id WHERE r.root_action_id=? LIMIT 1') : null;
+            const hasBatchDrivers = Boolean(this.db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_batch_tasks'").get());
+            const batchDriverRoot = hasBatchDrivers ? this.db().prepare(`SELECT 1 FROM generation_runs r WHERE r.root_action_id=? AND (
+                EXISTS(SELECT 1 FROM workflow_batch_tasks t WHERE t.batch_run_id=r.run_id)
+                OR EXISTS(SELECT 1 FROM workflow_batch_steps s WHERE s.run_id=r.run_id)) LIMIT 1`) : null;
             const roots = this.db().prepare('SELECT root_action_id FROM generation_roots').all() as {
                 root_action_id: string;
             }[];
             for (const { root_action_id: id } of roots) {
-                if (this.frozenRoot(id) || driverRoot?.get(id) || grantRoot?.get(id) && !runtimeRoots.includes(id)) continue;
+                if (this.frozenRoot(id) || driverRoot?.get(id) || batchDriverRoot?.get(id) || grantRoot?.get(id) && !runtimeRoots.includes(id)) continue;
                 for (const attempt of this.budget(id).attempts)
                     if (attempt.status === 'dispatch-marked') {
                         attempt.status = 'unknown';
@@ -818,7 +822,15 @@ export class GenerationRunRepository {
     recoverWorkflowDriverRun(runId: string): void {
         this.transaction(() => {
             const run = this.get(runId);
-            if (!this.db().prepare('SELECT 1 FROM workflow_tasks WHERE run_id=?').get(runId) || this.frozenRoot(run.rootActionId))
+            const hasDrivers = Boolean(this.db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_tasks'").get());
+            const driver = hasDrivers ? this.db().prepare('SELECT task_id,request_hash FROM workflow_tasks WHERE run_id=?').get(runId) as { task_id: string; request_hash: string | null } | undefined : undefined;
+            const hasBatchDrivers = Boolean(this.db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_batch_tasks'").get());
+            const batch = hasBatchDrivers ? this.db().prepare(`SELECT t.task_id,t.request_hash,s.step_id FROM workflow_batch_tasks t
+                LEFT JOIN workflow_batch_steps s ON s.task_id=t.task_id AND s.run_id=? WHERE t.batch_run_id=? OR s.run_id=? LIMIT 1`)
+                .get(runId, runId, runId) as { task_id: string; request_hash: string | null; step_id: string | null } | undefined : undefined;
+            if ((!driver || driver.request_hash === null || this.isFrozen('workflow_tasks', driver.task_id))
+                && (!batch || batch.request_hash === null || this.isFrozen('workflow_batch_tasks', batch.task_id)
+                    || batch.step_id !== null && this.isFrozen('workflow_batch_steps', batch.step_id)) || this.frozenRoot(run.rootActionId))
                 fail('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED');
             for (const attempt of this.budget(run.rootActionId).attempts) {
                 if (attempt.status === 'dispatch-marked') {
@@ -827,6 +839,36 @@ export class GenerationRunRepository {
                 }
             }
             this.pause(run.rootActionId);
+        });
+    }
+    recoverReviewRevisionRun(runId: string, admit: () => void): void {
+        this.transaction(() => {
+            admit();
+            const run = this.get(runId);
+            const batch = this.db().prepare(`SELECT DISTINCT t.task_id,t.request_hash,t.review_model_id,t.review_model_hash
+                FROM workflow_batch_tasks t JOIN workflow_batch_steps s ON s.task_id=t.task_id
+                JOIN generation_runs r ON r.run_id=s.run_id WHERE s.role='review' AND r.root_action_id=?`)
+                .all(run.rootActionId) as { task_id: string; request_hash: string | null; review_model_id: string | null; review_model_hash: string | null }[];
+            if (batch.length !== 1 || batch[0]!.request_hash === null || batch[0]!.review_model_id === null || batch[0]!.review_model_hash === null
+                || this.isFrozen('workflow_batch_tasks', batch[0]!.task_id) || this.frozenRoot(run.rootActionId)
+                || this.db().prepare('SELECT 1 FROM workflow_batch_tasks WHERE batch_run_id=?').get(runId)
+                || this.db().prepare('SELECT 1 FROM workflow_batch_steps WHERE run_id=?').get(runId))
+                fail('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED');
+            const budget = this.budget(run.rootActionId);
+            if (['cancelled', 'sealed'].includes(budget.root.status)) fail('GENERATION_RESUME_REFUSED');
+            const attempts = this.db().prepare('SELECT attempt_id FROM generation_attempts WHERE run_id=?').all(runId) as { attempt_id: string }[];
+            for (const row of attempts) {
+                const attempt = this.receipt(row.attempt_id).attempt;
+                if (attempt.status === 'dispatch-marked' || attempt.status === 'reserved') {
+                    attempt.status = attempt.status === 'dispatch-marked' ? 'unknown' : 'cancelled-before-dispatch';
+                    this.db().prepare('UPDATE generation_attempts SET attempt_json=? WHERE attempt_id=?').run(encode(attempt), attempt.attemptId);
+                }
+            }
+            // Author follow-up recovery pauses the original budget without rewriting registered siblings.
+            budget.root.status = 'paused';
+            this.db().prepare('UPDATE generation_roots SET action_json=?,active_elapsed_ms=?,active_since_ms=NULL WHERE root_action_id=?')
+                .run(encode(budget.root), budget.activeElapsedMs, run.rootActionId);
+            this.db().prepare("UPDATE generation_runs SET status='paused' WHERE run_id=?").run(runId);
         });
     }
     private frozenRoot(rootId: string): boolean {

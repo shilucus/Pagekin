@@ -39,6 +39,7 @@ import { runGlobalDataMigration, activateGlobalData } from './services/global-da
 import { ensureVelaHome } from './utils/config-utils'
 import type { StartupBlockedCode, StartupMigrationNotice } from '../src/shared/startup-contract'
 import { APP_BRAND } from '../src/shared/brand'
+import { projectRuntimeHost } from './services/project-runtime'
 
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
@@ -57,6 +58,13 @@ process.env.APP_ROOT = path.join(__dirname, '..')
 export const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 export const MAIN_DIST = path.join(process.env.APP_ROOT, 'dist-electron')
 export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
+
+/** Read-only main-process recovery diagnostics; never exposes an execution capability. */
+export function readProjectRuntimeEpochForDiagnostics(projectId: string): string | null {
+  const matches = projectRuntimeHost.getOpenRuntimes().filter(runtime => runtime.projectId === projectId)
+  if (matches.length > 1) throw new Error('PROJECT_RUNTIME_DIAGNOSTIC_AMBIGUOUS')
+  return matches[0]?.executionEpoch ?? null
+}
 
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   ? path.join(process.env.APP_ROOT, 'public')

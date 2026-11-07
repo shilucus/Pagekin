@@ -152,4 +152,29 @@ describe('project-scoped IPC session transport', () => {
     }
     await expect(ipc.invokeWithProjectSession(frozen, 'workflow-driver:v1:resume', request)).rejects.toThrow('通道不属于项目会话范围')
   })
+  it('uses the captured author view only for v2 batch issuance or history, not task capability control', async () => {
+    const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
+    const taskId = '11111111-1111-4111-8111-111111111111'
+    const start = { operationKey: taskId, modelId: 'fictional-draft', reviewModelId: 'fictional-review', uiLocale: 'en-US' as const,
+      intent: { mode: 'draft_review' as const, range: { startChapter: 2, endChapter: 3 }, targetUnits: 100 }, authorInputs: [] }
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    await ipc.invokeWithProjectSession(frozen, 'workflow-batch:v2:start', start)
+    expect(invoke).toHaveBeenLastCalledWith('workflow-batch:v2:start', start, frozen)
+    for (const channel of ['workflow-batch:v2:reauthorize', 'workflow-batch:v2:read-history'] as const) {
+      await ipc.invokeWithProjectSession(frozen, channel, { taskId })
+      expect(invoke).toHaveBeenLastCalledWith(channel, { taskId }, frozen)
+    }
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('workflow-batch:v2:start', start)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    for (const channel of ['workflow-batch:v2:reauthorize', 'workflow-batch:v2:read-history'] as const) {
+      await expect(ipc.invoke(channel, { taskId })).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    }
+    const request = { reference: { projectId: 'project-A', taskId, revision: 1 } }
+    for (const channel of ['workflow-batch:v2:read-receipt', 'workflow-batch:v2:pause', 'workflow-batch:v2:cancel',
+      'workflow-batch:v2:resume'] as const) {
+      await ipc.invoke(channel, request)
+      expect(invoke).toHaveBeenLastCalledWith(channel, request)
+      await expect(ipc.invokeWithProjectSession(frozen, channel, request)).rejects.toThrow('通道不属于项目会话范围')
+    }
+  })
 })

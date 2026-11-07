@@ -9,7 +9,7 @@ import { createLiveRowViews } from '../../../test/helpers/live-row-views';
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry';
 import { migrateSchema } from '../../migrations/runner';
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter';
-import { buildGenerationSourceBinding, rebuildGenerationSourceBinding, compareGenerationSourceBindings, type GenerationSourceBindingInput } from '../generation-source-binding';
+import { buildGenerationSourceBinding, rebuildGenerationSourceBinding, compareGenerationSourceBindings, generationModelReceiptHash, type GenerationSourceBindingInput } from '../generation-source-binding';
 import { currentDerivedCharacterFields } from '../current-character-projection';
 import { readPortableCurrentAuthority } from '../portable-current-authority';
 import { createPortableTransferAuthority, mapPortableTransferAuthority, serializePortableTransferAuthority } from '../portable-transfer-authority';
@@ -89,6 +89,19 @@ function fixture(migrated = false) {
     return { root, db, input, deps, build: () => buildGenerationSourceBinding(deps, input) };
 }
 describe('main rebuilt generation sources', () => {
+    it('freezes v2 review model identity with the exact production projection and recursive key order', () => {
+        const f = fixture();
+        const original = f.input.modelReceipt;
+        expect(generationModelReceiptHash(original)).toBe(f.build().binding.fingerprint.modelLeaseRevision);
+        const reordered = Object.fromEntries(Object.entries(original).reverse()) as typeof original;
+        expect(generationModelReceiptHash(reordered)).toBe(generationModelReceiptHash(original));
+        const privateModelName = { ...original, modelName: 'C:\\fictional-models\\story-model.gguf' };
+        const expected = buildGenerationSourceBinding(f.deps, { ...f.input, modelReceipt: privateModelName }).binding;
+        expect(generationModelReceiptHash(privateModelName)).toBe(expected.fingerprint.modelLeaseRevision);
+        expect(generationModelReceiptHash(privateModelName)).toBe(generationModelReceiptHash({ ...original, modelName: 'story-model.gguf' }));
+        expect(() => generationModelReceiptHash({ ...original, modelRevision: '' })).toThrow('GENERATION_MODEL_RECEIPT_INVALID');
+    });
+
     it.each(['zh-CN', 'en-US'] as const)('freezes actual %s writing language only for opted-in driver sources', language => {
         const f = fixture();
         f.db.prepare("UPDATE project_core SET writing_language=? WHERE id='main'").run(language);

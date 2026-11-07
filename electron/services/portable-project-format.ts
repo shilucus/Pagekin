@@ -8,7 +8,7 @@ import fieldPolicyDocument from './portable-project-field-policy.json'
 export const PORTABLE_PROJECT_FORMAT_VERSION = 1 as const
 export const PORTABLE_SOURCE_SCHEMA_VERSION = CURRENT_DESKTOP_SCHEMA_VERSION
 /** Old packages are verified at their declared version before the isolated restore copy is migrated. */
-export const PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS = Object.freeze([7, 8, 9, 10, 11, 12, PORTABLE_SOURCE_SCHEMA_VERSION] as const)
+export const PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS = Object.freeze([7, 8, 9, 10, 11, 12, 13, PORTABLE_SOURCE_SCHEMA_VERSION] as const)
 export type PortableSourceSchemaVersion = typeof PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS[number]
 
 export type PortableFieldDisposition = 'preserve-domain' | 'historical-nonreplayable'
@@ -19,7 +19,7 @@ export interface PortableFieldPolicy {
   disposition: PortableFieldDisposition
   validator: string
   consumer: string
-  origin: 'signed-s01' | 'm01-m05-delta' | 'm06-delta' | 'm07-delta' | 'm08-delta' | 'm09-delta' | 'm10-delta' | 'm11-delta' | 'm12-delta' | 'registered-donor'
+  origin: 'signed-s01' | 'm01-m05-delta' | 'm06-delta' | 'm07-delta' | 'm08-delta' | 'm09-delta' | 'm10-delta' | 'm11-delta' | 'm12-delta' | 'm13-delta' | 'registered-donor'
   signedDisposition: string | null
 }
 
@@ -39,6 +39,7 @@ const m09Fields = new Set<string>(fieldPolicyDocument.m09Fields)
 const m10Tables = new Set<string>(fieldPolicyDocument.m10Tables)
 const m11Tables = new Set<string>(fieldPolicyDocument.m11Tables)
 const m12Tables = new Set<string>(fieldPolicyDocument.m12Tables)
+const m13Tables = new Set<string>(fieldPolicyDocument.m13Tables)
 const deltaCharacterFields = new Set<string>(fieldPolicyDocument.deltaCharacterFields)
 const optionalFields = new Set<string>(fieldPolicyDocument.optionalFields)
 const signedOverrides = fieldPolicyDocument.signedOverrides as Record<string, string>
@@ -58,7 +59,7 @@ function loadFieldPolicy(): ReadonlyMap<string, PortableFieldPolicy> {
       const rule = rules[code]
       const key = `${table}.${field}`
       const delta = optionalFields.has(key) || deltaTables.has(table) || m06Tables.has(table) || m07Fields.has(key) || m08Tables.has(table)
-        || m09Tables.has(table) || m09Fields.has(key) || m10Tables.has(table) || m11Tables.has(table) || m12Tables.has(table)
+        || m09Tables.has(table) || m09Fields.has(key) || m10Tables.has(table) || m11Tables.has(table) || m12Tables.has(table) || m13Tables.has(table)
         || table === 'characters' && deltaCharacterFields.has(field)
       const signedDisposition = delta ? null : signedOverrides[key] ?? signedDefaults[code]
       if (!field || !rule || rule.length !== 3 || !PORTABLE_FIELD_DISPOSITIONS.has(rule[0])
@@ -68,7 +69,7 @@ function loadFieldPolicy(): ReadonlyMap<string, PortableFieldPolicy> {
       }
       result.set(key, Object.freeze({ disposition: rule[0], validator: rule[1], consumer: rule[2],
         origin: optionalFields.has(key) ? 'registered-donor'
-          : m12Tables.has(table) ? 'm12-delta' : m11Tables.has(table) ? 'm11-delta' : m10Tables.has(table) ? 'm10-delta' : m09Tables.has(table) || m09Fields.has(key) ? 'm09-delta'
+          : m13Tables.has(table) ? 'm13-delta' : m12Tables.has(table) ? 'm12-delta' : m11Tables.has(table) ? 'm11-delta' : m10Tables.has(table) ? 'm10-delta' : m09Tables.has(table) || m09Fields.has(key) ? 'm09-delta'
             : m08Tables.has(table) ? 'm08-delta' : m06Tables.has(table) ? 'm06-delta'
             : m07Fields.has(key) ? 'm07-delta' : delta ? 'm01-m05-delta' : 'signed-s01', signedDisposition }))
     }
@@ -113,7 +114,8 @@ export function assertPortableSourceSchema(database: Database.Database,
     && (version >= 10 || !m09Tables.has(key.split('.')[0]!) && !m09Fields.has(key))
     && (version >= 11 || !m10Tables.has(key.split('.')[0]!))
     && (version >= 12 || !m11Tables.has(key.split('.')[0]!))
-    && (version >= 13 || !m12Tables.has(key.split('.')[0]!))))
+    && (version >= 13 || !m12Tables.has(key.split('.')[0]!))
+    && (version >= 14 || !m13Tables.has(key.split('.')[0]!))))
   const admittedViews = version >= 8 ? liveRowViews : new Set<string>()
   const actual = new Set<string>()
   const objects = database.prepare("SELECT name,type FROM pragma_table_list WHERE schema='main' AND name NOT LIKE 'sqlite_%' ORDER BY name")

@@ -3,6 +3,7 @@ import type { AiNovelAPI } from '../src/shared/desktop-api'
 import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../src/shared/project-runtime-contract'
 import { isRuntimeFeedbackChannel } from '../src/shared/runtime-feedback-contract'
 import { isWorkflowDriverChannel } from '../src/shared/workflow-driver-contract'
+import { isWorkflowBatchChannel } from '../src/shared/workflow-batch-contract'
 
 /**
  * AI Novel Preload Script — 安全地暴露 IPC 通信能力到渲染进程
@@ -21,6 +22,9 @@ contextBridge.exposeInMainWorld('aiNovelAPI', {
     }
     if (channel.startsWith('workflow-driver:') && !isWorkflowDriverChannel(channel)) {
       return Promise.reject(new Error('WORKFLOW_DRIVER_CHANNEL_NOT_ALLOWED'))
+    }
+    if (channel.startsWith('workflow-batch:') && !isWorkflowBatchChannel(channel)) {
+      return Promise.reject(new Error('WORKFLOW_BATCH_CHANNEL_NOT_ALLOWED'))
     }
     return ipcRenderer.invoke(channel, ...args)
   },

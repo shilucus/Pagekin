@@ -11,7 +11,7 @@ import { getProjectDb } from '../../database'
 import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
 import { MATERIAL_DECISION_MAX_INPUT_UNITS } from '../../../src/shared/generation-owner-contract'
 import type { GenerationKnowledgeSnapshot } from '../../../src/shared/generation-knowledge'
-import { prepareWorkflowBatchMaterials, readWorkflowBatchChapter, type WorkflowBatchMaterialInput } from '../workflow-batch-materials'
+import { prepareWorkflowBatchMaterials, readWorkflowBatchChapter, readWorkflowReviewAssets, type WorkflowBatchMaterialInput } from '../workflow-batch-materials'
 
 vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -42,6 +42,62 @@ function fixture() {
 }
 
 describe('main workflow batch material assembly', () => {
+  it('reads ordinary review assets with project, global and builtin priority without using drafting bindings', () => {
+    const f = fixture(), builtin = getBuiltinPromptTemplate('consistency_check', 'zh-CN')!
+    const input = { projectStorageRoot: f.projectStorageRoot, globalDataRoot: f.globalDataRoot,
+      writingLanguage: 'zh-CN' as const, assertResources: vi.fn(), assertSourcesCurrent: vi.fn() }
+    for (const root of [f.projectStorageRoot, f.globalDataRoot]) fs.mkdirSync(path.join(root, 'prompts'))
+    const local = path.join(f.projectStorageRoot, 'prompts/consistency_check.zh-CN.json')
+    const global = path.join(f.globalDataRoot, 'prompts/consistency_check.zh-CN.json')
+    fs.writeFileSync(local, JSON.stringify({ ...builtin, content: 'PROJECT REVIEW {{chapter_content}}' }))
+    fs.writeFileSync(global, JSON.stringify({ ...builtin, content: 'GLOBAL REVIEW {{chapter_content}}' }))
+    fs.writeFileSync(path.join(f.projectStorageRoot, 'writing-skills.json'), JSON.stringify({ version: 1,
+      bindings: { drafting: 'project:unrelated-drafting', review: 'builtin:long-form-continuity' } }))
+    const selected = readWorkflowReviewAssets(input)
+    expect(selected.template.content).toBe('PROJECT REVIEW {{chapter_content}}')
+    expect(selected.skill?.name).toBe('长篇连续性与场景推进')
+    expect(() => selected.assertUnchanged()).not.toThrow()
+    fs.unlinkSync(local)
+    expect(readWorkflowReviewAssets(input).template.content).toBe('GLOBAL REVIEW {{chapter_content}}')
+    fs.unlinkSync(global)
+    expect(readWorkflowReviewAssets(input).template).toEqual(builtin)
+  })
+
+  it('never substitutes a Chinese legacy review override for an English project', () => {
+    const f = fixture(), directory = path.join(f.projectStorageRoot, 'prompts')
+    fs.mkdirSync(directory)
+    fs.writeFileSync(path.join(directory, 'consistency_check.json'), '{not an English asset}')
+    const result = readWorkflowReviewAssets({ projectStorageRoot: f.projectStorageRoot, globalDataRoot: f.globalDataRoot,
+      writingLanguage: 'en-US', assertResources: () => {}, assertSourcesCurrent: () => {} })
+    expect(result.template).toEqual(getBuiltinPromptTemplate('consistency_check', 'en-US'))
+    expect(result.skill).toBeNull()
+  })
+
+  it.each(['selected', 'new-override', 'bindings'] as const)('detects %s review-asset changes after material preparation', kind => {
+    const f = fixture(), directory = path.join(f.projectStorageRoot, 'prompts')
+    fs.mkdirSync(directory)
+    const local = path.join(directory, 'consistency_check.zh-CN.json')
+    const builtin = getBuiltinPromptTemplate('consistency_check', 'zh-CN')!
+    if (kind === 'selected') fs.writeFileSync(local, JSON.stringify(builtin))
+    const assets = readWorkflowReviewAssets({ projectStorageRoot: f.projectStorageRoot, globalDataRoot: f.globalDataRoot,
+      writingLanguage: 'zh-CN', assertResources: () => {}, assertSourcesCurrent: () => {} })
+    if (kind === 'bindings') fs.writeFileSync(path.join(f.projectStorageRoot, 'writing-skills.json'), JSON.stringify({ version: 1, bindings: {} }))
+    else fs.writeFileSync(local, JSON.stringify({ ...builtin, content: 'Changed fictional review' }))
+    expect(() => assets.assertUnchanged()).toThrow('GENERATION_ASSET_CHANGED_DURING_SNAPSHOT')
+  })
+
+  it('preserves captured-resource, source and synchronous-guard failures in review assets', () => {
+    const f = fixture()
+    const input = { projectStorageRoot: f.projectStorageRoot, globalDataRoot: f.globalDataRoot,
+      writingLanguage: 'zh-CN' as const, assertResources: () => {}, assertSourcesCurrent: () => {} }
+    expect(() => readWorkflowReviewAssets({ ...input, assertResources: () => { throw new Error('GENERATION_DATABASE_CHANGED') } }))
+      .toThrow('GENERATION_DATABASE_CHANGED')
+    expect(() => readWorkflowReviewAssets({ ...input, assertSourcesCurrent: () => { throw new Error('GENERATION_SOURCE_CHANGED') } }))
+      .toThrow('GENERATION_SOURCE_CHANGED')
+    expect(() => readWorkflowReviewAssets({ ...input, assertSourcesCurrent: () => Promise.resolve() }))
+      .toThrow('GENERATION_SOURCE_GUARD_ASYNC')
+  })
+
   it('uses project, then global, then builtin prompt with exact selected template body', async () => {
     const f = fixture(), builtin = getBuiltinPromptTemplate('first_chapter_draft', 'zh-CN')!
     const folder = (root: string) => { const target = path.join(root, 'prompts'); fs.mkdirSync(target, { recursive: true }); return target }

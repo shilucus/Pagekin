@@ -137,6 +137,10 @@ function modelProjection(value: SafeGenerationModelReceipt, verbatimModelName: b
         fail('GENERATION_MODEL_RECEIPT_INVALID');
     return JSON.parse(stable(safe));
 }
+/** V2 admission must freeze the same model identity used by production source bindings. */
+export function generationModelReceiptHash(value: SafeGenerationModelReceipt): string {
+    return hash(stable(modelProjection(value, false)));
+}
 function readFile(root: string, relative: string, optional = false): Buffer | null {
     if (!path.isAbsolute(root) || path.isAbsolute(relative) || relative.split(/[\\/]/).some(part => part === '..' || part === '.'))
         fail('GENERATION_ASSET_PATH_INVALID');

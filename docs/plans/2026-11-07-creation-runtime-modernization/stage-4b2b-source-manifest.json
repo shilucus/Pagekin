@@ -1,0 +1,234 @@
+{
+  "parent": "61f6d3661b895fc0330c7fcb680aa9b9061e2989",
+  "stage": "4B2B",
+  "files": [
+    {
+      "path": "electron/__tests__/preload-bridge.test.ts",
+      "sha256": "31523316769B82CAD757CEDB1C40368DF9770E4D7CDC8B086B3295301B09A677"
+    },
+    {
+      "path": "electron/controllers/__tests__/workflow-batch-controller.test.ts",
+      "sha256": "6092341AF1BF15F688EF543FAF1CB98DD2D36936868F006EC5E68BADFD5060CE"
+    },
+    {
+      "path": "electron/controllers/generation-controller.ts",
+      "sha256": "0AF891EB0919725E4A5880BCAABD40CBFC3EF19E8220A5B14646905D01ABEA00"
+    },
+    {
+      "path": "electron/main.ts",
+      "sha256": "183451544B351863AC7D1EF109CDFE378C01A5E666B5B07854F3D8B1D6B548B0"
+    },
+    {
+      "path": "electron/migrations/__tests__/m13-workflow-batch.test.ts",
+      "sha256": "D0F5D22FF3404D4917FC0298F195502F5F38D6C24C95936C1504D072C7E6BBB6"
+    },
+    {
+      "path": "electron/migrations/__tests__/ordinary-review-history.test.ts",
+      "sha256": "11AE370997CA8F88B54DC6C4B99713FB2A2AE1848689A7ED2D6859122E7A59AA"
+    },
+    {
+      "path": "electron/migrations/__tests__/runner.test.ts",
+      "sha256": "6E39D713550CCDE17E6FD20FB369F49C30453F556D5DBFEF89EBF1A9F3C7A654"
+    },
+    {
+      "path": "electron/migrations/current-review-cycle.ts",
+      "sha256": "C16F01DAE6EE7976B7F017B8587DD65F9E01F01FFBEBE710945D6E25DEB4C7F8"
+    },
+    {
+      "path": "electron/migrations/desktop-registry.ts",
+      "sha256": "E8269C0D4B163B9C15B90159524D57F9BBDE014F0B30872043537D192927840C"
+    },
+    {
+      "path": "electron/migrations/m03-review-cycle.ts",
+      "sha256": "4435A1CA13612338EC8F95FCAA3C90FC787368DA16041B48B1333EB046166338"
+    },
+    {
+      "path": "electron/migrations/m13-workflow-batch.ts",
+      "sha256": "CD841DED45FBD5BEB149034CD78DC4E9F702B2F5C911F94454ECF51236AB136D"
+    },
+    {
+      "path": "electron/migrations/ordinary-review-history.ts",
+      "sha256": "5901FCE74A7F4933711425C3C5189910BF0677483A487D97BC4A196BF6C3148A"
+    },
+    {
+      "path": "electron/migrations/registry.ts",
+      "sha256": "957BC71504D4F4A5D7F8FCAED65F03BF79C5BF2AAFDA84915C4B6464E117C517"
+    },
+    {
+      "path": "electron/migrations/review-cycle-effect-proof.ts",
+      "sha256": "7EDA9B739365B3E332857305B9CBDA2DB586B9BB0EF04D3319EC85146B8176E7"
+    },
+    {
+      "path": "electron/migrations/review-cycle-findings.ts",
+      "sha256": "11C0AF2BFB8EFE15A066765DB29B874F18F65C6BDB6AB66526A25168FF933A29"
+    },
+    {
+      "path": "electron/preload.ts",
+      "sha256": "9B76648C734F98CD8CDF00126B5D425F42F74B53EDEEF776A98F6FD04CFE784F"
+    },
+    {
+      "path": "electron/repositories/__tests__/revision-repository.test.ts",
+      "sha256": "60260BA24D472BD4545CB64BE675CF96DA0A245F40F3908091E35693BB6CA476"
+    },
+    {
+      "path": "electron/repositories/__tests__/workflow-batch-repository.test.ts",
+      "sha256": "5072D939AB7DCFDF1C5EF32B203524B5BA621D93D079F2AF13984D3F442B567A"
+    },
+    {
+      "path": "electron/repositories/generation-run-repository.ts",
+      "sha256": "7A322DE2B3D29E23723880B8497A50D1A70E5CF4E5EA27EA404E254B81DF0295"
+    },
+    {
+      "path": "electron/repositories/review-cycle-repository.ts",
+      "sha256": "A52EAB544E17695AB9C2BBF8E8BAE69BF069E9710B6A76C31C0B5DCD059F8116"
+    },
+    {
+      "path": "electron/repositories/revision-repository.ts",
+      "sha256": "64406D3D694C3D13378E7CD147CBF3DC80D347B790F70B1850AAB2890C4ACC08"
+    },
+    {
+      "path": "electron/repositories/workflow-batch-repository.ts",
+      "sha256": "55BCE736D0E644D6E6863475C38C8C62B1666798EA183F573015AAB35A538F9A"
+    },
+    {
+      "path": "electron/services/__tests__/generation-source-binding.test.ts",
+      "sha256": "FBC6CDEEA4ECDE2645C3117848A72E5D2DAB3C1753C61F42B89ADE21958036B1"
+    },
+    {
+      "path": "electron/services/__tests__/main-generation-owner.test.ts",
+      "sha256": "FDF48A295B6C42D693FD241614F35B4F2568B25EB8943D2CD14739F6F7E4CA9B"
+    },
+    {
+      "path": "electron/services/__tests__/portable-project-format.test.ts",
+      "sha256": "98F1048255DCE799BE8CA1F4CE2334C5B8A13B197E76FA8A3C362A4808456068"
+    },
+    {
+      "path": "electron/services/__tests__/project-archive-service.test.ts",
+      "sha256": "096A05F242E49DE9E14A020B9E779B1064AD0FC17A24AC3E2C98E7E762471515"
+    },
+    {
+      "path": "electron/services/__tests__/project-format-migration.test.ts",
+      "sha256": "BEF020F590E44086247AA79F5FB37E076A0D6885E204D6906C13A4BE1276097A"
+    },
+    {
+      "path": "electron/services/__tests__/review-revision-generation.test.ts",
+      "sha256": "4F7DACA4E4AA9625F4B7FA3DDE6DDF0A62DC40934A81176555581E74041CBD2B"
+    },
+    {
+      "path": "electron/services/__tests__/sqlite-project-migration.test.ts",
+      "sha256": "9CA9033E18225E93C72E7446DA7BD585605851851E5C923EFF28DADCAC54F4EB"
+    },
+    {
+      "path": "electron/services/__tests__/workflow-batch-authority.test.ts",
+      "sha256": "36A5012F23571F6F234E70ED41538E93CB523486F146BDF4C5AF5D767180018B"
+    },
+    {
+      "path": "electron/services/__tests__/workflow-batch-engine.test.ts",
+      "sha256": "6F3E44B7B27D027027BFE605F014E85B4479AFB1130CDE5138BC968A1BA5A73A"
+    },
+    {
+      "path": "electron/services/__tests__/workflow-batch-materials.test.ts",
+      "sha256": "C3952D6A0E672DF5F85422ACA94F33D5D4F1AECA5E84FD599FE082833BB6F575"
+    },
+    {
+      "path": "electron/services/__tests__/workflow-batch-portable.test.ts",
+      "sha256": "7C36A157C867E7255589F88A8EBE95B06905600678E2730DBF9BE0AF3444E2CC"
+    },
+    {
+      "path": "electron/services/generation-source-binding.ts",
+      "sha256": "670F7A84C43C87C626D7320F98C527078C279E3DDAD66B63FA54B48F75DA8899"
+    },
+    {
+      "path": "electron/services/main-generation-owner.ts",
+      "sha256": "F6C3B01FF89FC83E220C90DBB2D8C834A39963133403FC60D6AC5A1651470133"
+    },
+    {
+      "path": "electron/services/portable-project-field-policy.json",
+      "sha256": "626C3D4DA5133BA924493ECA4BC6924587DAB3F5183BD2092C50809D5A510BA8"
+    },
+    {
+      "path": "electron/services/portable-project-format.ts",
+      "sha256": "522C5E2702128C639B5D561E6E18564CDDC245755016C0BED71AE5BC06AB6004"
+    },
+    {
+      "path": "electron/services/portable-runtime-freeze.ts",
+      "sha256": "4F7087A2B2036ADA5B6ADFC3927F7740A87780B1DB9A1FEC216F5D808BC369A5"
+    },
+    {
+      "path": "electron/services/project-archive-service.ts",
+      "sha256": "0BC762B698E9B35DD64CE0F25A59A9CED3F8D4878436099C0F8B4F2350F42959"
+    },
+    {
+      "path": "electron/services/project-format-migration.ts",
+      "sha256": "AEE3C55A940FCF4A838C19472AD875ED8E550CBE5C8A228DAD9208436E0B31D0"
+    },
+    {
+      "path": "electron/services/project-restore-service.ts",
+      "sha256": "0C34F7F9E1398BB7DA25D90F4A54BF168F354A5537D9516931504BAC1706FBD2"
+    },
+    {
+      "path": "electron/services/project-runtime.ts",
+      "sha256": "D7D9718426577504F14BD3A59C5E6CB26374A4D913D7422F33F8FA5006EDCF51"
+    },
+    {
+      "path": "electron/services/review-revision-generation.ts",
+      "sha256": "24E6D7EB810C43C50ACAEE1BCBFF8162B1465CBA85E914F7C792B6C7253A2D6F"
+    },
+    {
+      "path": "electron/services/sqlite-project-migration.ts",
+      "sha256": "DD2B0B31BBD4660F2802F7474FADB427A656DFA8782D20FFD101C0A32122EC0F"
+    },
+    {
+      "path": "electron/services/workflow-batch-authority.ts",
+      "sha256": "4170253E7F5B56028FEA1AF5EB61044A8E3F5573EBAF25208F23E5EE50A562AD"
+    },
+    {
+      "path": "electron/services/workflow-batch-engine.ts",
+      "sha256": "DF08B1EDEF609432B210AD75983E574F09E4483330665CC1C4D3E645524F0160"
+    },
+    {
+      "path": "electron/services/workflow-batch-materials.ts",
+      "sha256": "6F6A845F9E29557861B04EA01FB4987429C3C90960D8C4DA9811CDDFC1538E35"
+    },
+    {
+      "path": "scripts/redesign/__tests__/workflow-batch-scenario.test.mjs",
+      "sha256": "83C57A77CE1A9BD7822EFA5AE657574DBADD2957CEF1DB59D2E2947B123C52C8"
+    },
+    {
+      "path": "scripts/redesign/scenarios.mjs",
+      "sha256": "7A634B3F6DE585111474A0BE3E3459A56EDDB07DCE385281F0CE4A4577959077"
+    },
+    {
+      "path": "scripts/redesign/workflow-batch-scenario.mjs",
+      "sha256": "B0FAB4697F0F02E16ADFF311D9FCF82302A57C92F5FE2F3DFCE1E0C83BF25156"
+    },
+    {
+      "path": "src/services/__tests__/ipc-client-project-session.test.ts",
+      "sha256": "9AB2A7B08565695BE5999A9CF0E55A0F1258BFE8ADB8DA91065E5DCEF78E3C09"
+    },
+    {
+      "path": "src/services/ipc-client.ts",
+      "sha256": "E6970AE2D7230E0D98381E69FD823B5A785DE825F618991811CF58EA3112B80C"
+    },
+    {
+      "path": "src/shared/__tests__/workflow-batch-contract.test.ts",
+      "sha256": "0241AD2B050823BB77B29DCE90C79D642D8AD3233FB9660D280CBA655AF8CD5C"
+    },
+    {
+      "path": "src/shared/ipc-channels.ts",
+      "sha256": "4FE9B46E89F37564B6C6CA8B4F74963201AA70976D44A1B080F49E435FD32D31"
+    },
+    {
+      "path": "src/shared/project-storage.ts",
+      "sha256": "B8613DE561A8F921DC2DE8447B959D5C16CC8534B11559F0DD1D52E41B79DBB2"
+    },
+    {
+      "path": "src/shared/review-cycle.ts",
+      "sha256": "120A1FF092C105B67EC425824FC170509721F114704103236E3439C8545B9863"
+    },
+    {
+      "path": "src/shared/workflow-batch-contract.ts",
+      "sha256": "F4713A6329549E2916B43753970F92370C3AF05128748492672ACF33B4B44F9B"
+    }
+  ]
+}
