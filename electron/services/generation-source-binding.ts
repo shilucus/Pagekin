@@ -540,8 +540,13 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         if (input.importSlot || editorInlineInput || input.finalizationGenerationSlot) importPrompts[key] = JSON.parse(selected?.toString('utf8') ?? builtin);
     }
     const bindingsBytes = observe(deps.projectStorageRoot, 'writing-skills.json', true);
-    const bindings = bindingsBytes ? JSON.parse(bindingsBytes.toString('utf8')) : { version: 1, bindings: {} };
-    if (bindings.version !== 1 || !bindings.bindings || typeof bindings.bindings !== 'object' || Array.isArray(bindings.bindings))
+    let bindings: { version?: unknown; bindings?: Record<string, unknown> } | null;
+    try {
+        bindings = bindingsBytes ? JSON.parse(bindingsBytes.toString('utf8')) : { version: 1, bindings: {} };
+    } catch {
+        fail('GENERATION_SKILL_BINDINGS_INVALID');
+    }
+    if (!bindings || bindings.version !== 1 || !bindings.bindings || typeof bindings.bindings !== 'object' || Array.isArray(bindings.bindings))
         fail('GENERATION_SKILL_BINDINGS_INVALID');
     const skills: {
         stage: string;

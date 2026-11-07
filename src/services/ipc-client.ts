@@ -40,6 +40,7 @@ function isCapabilityOrAppDataChannel(channel: string): boolean {
 function isProjectScopedChannel(channel: string): boolean {
   if (isCapabilityOrAppDataChannel(channel)) return false
   return channel.startsWith('generation:')
+    || channel.startsWith('planning-feedback:')
     || channel.startsWith('character-proposal:')
     || channel.startsWith('character-identity:')
     || channel.startsWith('character-avatar:')

@@ -398,6 +398,16 @@ describe('main rebuilt generation sources', () => {
     it('resolves project over global over builtin while retaining immutable builtin contract changes', () => { const f = fixture(), a = f.build(); put(f.deps.globalDataRoot, 'prompts/draft.zh-CN.json', JSON.stringify({ key: 'draft', writingLanguage: 'zh-CN', content: 'global' })); const global = f.build(); expect(global.binding.fingerprint.templateHash).not.toBe(a.binding.fingerprint.templateHash); put(f.deps.projectStorageRoot, 'prompts/draft.json', JSON.stringify({ key: 'draft', content: 'project' })); const project = f.build(); put(f.deps.globalDataRoot, 'prompts/draft.zh-CN.json', JSON.stringify({ key: 'draft', writingLanguage: 'zh-CN', content: 'unused global edit' })); expect(f.build().binding.fingerprint.templateHash).toBe(project.binding.fingerprint.templateHash); f.deps.readBuiltinPrompt = () => JSON.stringify({ key: 'draft', content: 'builtin', systemRole: 'changed system contract' }); expect(f.build().binding.fingerprint.templateHash).not.toBe(project.binding.fingerprint.templateHash); });
     it('hashes raw selected custom prompt bytes including whitespace', () => { const f = fixture(); put(f.deps.projectStorageRoot, 'prompts/draft.json', '{"key":"draft","content":"同文"}'); const a = f.build(); put(f.deps.projectStorageRoot, 'prompts/draft.json', '{ "key":"draft","content":"同文"}'); expect(f.build().binding.fingerprint.templateHash).not.toBe(a.binding.fingerprint.templateHash); });
     it('binds actual selected Skill bytes and rejects a missing binding target', () => { const f = fixture(); put(f.deps.projectStorageRoot, 'writing-skills.json', JSON.stringify({ version: 1, bindings: { drafting: 'project:author' } })); expect(() => f.build()).toThrow(); put(f.deps.projectStorageRoot, 'skills/author/SKILL.md', '---\nname: author\nlanguage: zh-CN\nstage: drafting\n---\n保持作者事实。'); const a = f.build(); put(f.deps.projectStorageRoot, 'skills/author/SKILL.md', '---\nname: author\nlanguage: zh-CN\nstage: drafting\n---\n新作者规则。'); expect(f.build().binding.fingerprint.skillSnapshotHash).not.toBe(a.binding.fingerprint.skillSnapshotHash); });
+    it.each(['{', 'null', '[]', '{"version":1,"bindings":null}', '{"version":1,"bindings":[]}'])(
+        'reports a classified source error for malformed current Skill bindings: %s', content => {
+            const f = fixture();
+            const original = f.build().binding;
+            put(f.deps.projectStorageRoot, 'writing-skills.json', content);
+            expect(() => f.build()).toThrow('GENERATION_SKILL_BINDINGS_INVALID');
+            expect(() => rebuildGenerationSourceBinding(f.deps, original, 'next-epoch'))
+                .toThrow('GENERATION_SKILL_BINDINGS_INVALID');
+            expect(original.sourceManifest).toHaveProperty('skillStages', ['drafting']);
+        });
     const installFolderSkill = (f: ReturnType<typeof fixture>, files: { path: string; content: string }[]) => {
         const skill = '---\nname: voice\nlanguage: zh-CN\n---\n遵循 references/voice.md。';
         put(f.deps.projectStorageRoot, 'writing-skills.json', JSON.stringify({ version: 1, bindings: { drafting: 'user:voice' } }));

@@ -15,6 +15,8 @@ import { getCurrentProjectPath } from '../database'
 import { PlanningFeedbackService, type PlanningFeedbackGenerationInput } from './planning-feedback-service'
 import { readPlanningFeedbackTask } from './planning-feedback-generation'
 import { assertPlanningFeedbackObject, type AdoptPlanningFeedbackCandidate, type PlanningFeedbackCaptureTarget, type RelineagePlanningFeedbackCandidate, type StagePlanningFeedbackCandidate } from '../../src/shared/planning-feedback'
+import type { PlanningFeedbackCoreTarget } from '../../src/shared/planning-feedback'
+import type { PlanningFeedbackRunRecovery } from '../../src/shared/planning-feedback-ipc'
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
 import { createGenerationRunService, GENERATION_STOPPED, type GenerationRunServiceDependencies } from './generation-run-service'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
@@ -766,6 +768,32 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         }
       } })
   }
+  const fieldFeedbackBase = (baseId: string) => {
+    const base = planningFeedback().getBase(baseId)
+    if (base.schemaVersion !== 1) throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
+    if (base.projectId !== deps.projectId && !runtimeFreeze.isFrozen('planning_feedback_bases', base.baseId))
+      throw new Error('PLANNING_FEEDBACK_HISTORY_FROZEN')
+    return base
+  }
+  const fieldFeedbackCandidate = (candidateId: string) => {
+    const candidate = planningFeedback().getCandidate(candidateId)
+    fieldFeedbackBase(candidate.baseId)
+    if (candidate.schemaVersion !== 1) throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
+    return candidate
+  }
+  const fieldFeedbackRun = (handle: MainGenerationRunHandle) => {
+    const run = requireRun(handle)
+    const manifest = run.binding.sourceManifest
+    if (manifest.operation !== 'planning-feedback') throw new Error('GENERATION_FEEDBACK_ADMISSION_REQUIRED')
+    const input = manifest.planningFeedbackInput as PlanningFeedbackGenerationInput
+    if (!input || typeof input.baseId !== 'string') throw new Error('PLANNING_FEEDBACK_GENERATION_UNPROVEN')
+    const base = fieldFeedbackBase(input.baseId)
+    const context = manifest.planningFeedbackContext as { schemaVersion?: unknown; baseId?: unknown; projectId?: unknown; target?: unknown } | undefined
+    if (context?.schemaVersion !== 1) throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
+    if (context.baseId !== base.baseId || context.projectId !== base.projectId || context.target !== base.target)
+      throw new Error('PLANNING_FEEDBACK_GENERATION_UNPROVEN')
+    return { run, input }
+  }
   const plotOutlineTargetCurrent = (run: DurableGenerationRun, outline: PlotOutlineProgress, target: string): boolean => {
     const raw = deps.database.prepare("SELECT * FROM project_core WHERE id='main'").get() as Record<string, unknown> | undefined
     if (!raw || raw.synopsis !== target) return false
@@ -1155,43 +1183,113 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       attemptCount: deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) as number,
       ...(artifact ? {artifact} : {}), ...(proposal ? {proposal} : {}) }
   }
+  const beginPlanningFeedbackRun = (request: { input: PlanningFeedbackGenerationInput; modelId: string; uiActionNonce: string }) => {
+    assertCurrent()
+    assertPlanningFeedbackObject(request, ['input', 'modelId', 'uiActionNonce'])
+    if (typeof request.uiActionNonce !== 'string' || !request.uiActionNonce.trim() || request.uiActionNonce.length > 256)
+      throw new Error('GENERATION_BEGIN_INVALID')
+    const rows = deps.database.prepare(`SELECT r.run_id FROM generation_runs r JOIN generation_roots g ON g.root_action_id=r.root_action_id
+      WHERE json_extract(g.action_json,'$.operation')='planning-feedback' AND json_extract(g.action_json,'$.projectId')=?
+        AND json_extract(g.action_json,'$.uiActionNonce')=?`).all(deps.projectId, request.uiActionNonce) as { run_id: string }[]
+    if (rows.length > 1) throw new Error('GENERATION_NONCE_CONFLICT')
+    if (rows[0]) {
+      const prior = repository.get(rows[0].run_id)
+      if (!isDeepStrictEqual(request.input, prior.binding.sourceManifest.planningFeedbackInput)
+        || request.modelId !== modelReceipt(prior.binding).modelId) throw new Error('GENERATION_NONCE_CONFLICT')
+      return viewOf(prior)
+    }
+    const prepared = planningFeedback().prepare(request.input)
+    return begin({ operation: 'planning-feedback', uiActionNonce: request.uiActionNonce, modelId: request.modelId,
+      selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: [`planning-feedback-v${prepared.context.schemaVersion}`], skillStages: ['planning'],
+      output: 'visible-text', planningFeedbackInput: structuredClone(request.input) }, false, false, false, false, false, false, true)
+  }
+  const executePlanningFeedbackRun = async (handle: MainGenerationRunHandle) => {
+    const run = requireRun(handle)
+    if (run.binding.sourceManifest.operation !== 'planning-feedback') throw new Error('GENERATION_FEEDBACK_ADMISSION_REQUIRED')
+    const task = readPlanningFeedbackTask(run), invocationNonce = 'planning-feedback:0'
+    const requestHash = textHash(JSON.stringify([task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
+    const prior = repository.findInvocation(run.runId, invocationNonce, requestHash)
+    if (prior) {
+      const running = pending.get(JSON.stringify([run.runId, invocationNonce]))
+      return running ? running.promise : outcomeOf(volatileReceipts.get(prior.attempt.attemptId) ?? prior, task)
+    }
+    if (runAttempts(run.runId).length) throw new Error('GENERATION_FEEDBACK_ATTEMPT_CONFLICT')
+    const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
+    return execute({ handle: current.handle, invocationNonce, task }, false, false, false, false, false, false, undefined, true)
+  }
   return { begin: (selection: BeginGenerationRequest) => begin(selection), bindMaterialDecision, execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent, agents,
+    captureFieldFeedback: (target: PlanningFeedbackCoreTarget) => {
+      const base = planningFeedback().captureBase(target)
+      if (base.schemaVersion !== 1) throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
+      return base
+    },
+    listFieldFeedbackBases: (target: PlanningFeedbackCoreTarget) => planningFeedback().listFieldBases(target),
+    readFieldFeedbackHistory: (baseId: string) => {
+      const base = fieldFeedbackBase(baseId), service = planningFeedback()
+      return { base, candidates: service.listCandidates(baseId).map(candidate => ({ candidate, state: service.candidateState(candidate.candidateId) })),
+        adoptions: service.listAdoptions(baseId) }
+    },
+    beginFieldFeedback: (request: { input: PlanningFeedbackGenerationInput; modelId: string; uiActionNonce: string }) => {
+      fieldFeedbackBase(request.input.baseId)
+      if (request.input.parentCandidateId) fieldFeedbackCandidate(request.input.parentCandidateId)
+      const { parentCandidateId, ...input } = request.input
+      return beginPlanningFeedbackRun({ ...request, input: { ...input, ...(parentCandidateId !== undefined ? { parentCandidateId } : {}) } })
+    },
+    readFieldFeedbackRun: (handle: MainGenerationRunHandle): PlanningFeedbackRunRecovery => {
+      const { run, input } = fieldFeedbackRun(handle)
+      let sourceStatus: 'current' | 'conflict' = 'current'
+      try {
+        planningFeedback().prepare(input)
+        if (!compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding)))) sourceStatus = 'conflict'
+      } catch (error) {
+        if (error instanceof Error && (['PLANNING_FEEDBACK_SOURCE_CONFLICT', 'PLANNING_FEEDBACK_PARENT_CONFLICT',
+          'PLANNING_FEEDBACK_HISTORY_FROZEN', 'GENERATION_MODEL_CHANGED', 'GENERATION_MODEL_MISSING',
+          'GENERATION_SKILL_BINDINGS_INVALID', 'GENERATION_SKILL_ID_INVALID', 'GENERATION_SKILL_MISSING',
+          'GENERATION_SKILL_BUNDLE_DAMAGED', 'GENERATION_SKILL_INCOMPATIBLE', 'GENERATION_SOURCE_CHANGED',
+          'GENERATION_ASSET_CHANGED_DURING_SNAPSHOT', 'GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT'].includes(error.message)
+          || (error as NodeJS.ErrnoException).code === 'ENOENT')) sourceStatus = 'conflict'
+        else throw error
+      }
+      return { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, input: structuredClone(input), sourceStatus }
+    },
+    listFieldFeedbackRuns: (baseId: string) => {
+      fieldFeedbackBase(baseId)
+      const ids = new Set((deps.database.prepare(`SELECT run_id FROM generation_runs WHERE
+        json_extract(binding_json,'$.sourceManifest.operation')='planning-feedback'
+        AND json_extract(binding_json,'$.sourceManifest.planningFeedbackInput.baseId')=?
+        AND json_extract(binding_json,'$.sourceManifest.planningFeedbackContext.schemaVersion')=1`).all(baseId) as { run_id: string }[]).map(row => row.run_id))
+      return runSummaries().filter(item => ids.has(item.handle.runId)).map(({ handle, status, operation }) => ({ handle, status, operation }))
+    },
+    executeFieldFeedback: (handle: MainGenerationRunHandle) => {
+      const { run } = fieldFeedbackRun(handle)
+      if (runtimeFreeze.isFrozen('generation_runs', run.runId)) throw new Error('PLANNING_FEEDBACK_HISTORY_FROZEN')
+      return executePlanningFeedbackRun(handle)
+    },
+    cancelFieldFeedback: (handle: MainGenerationRunHandle) => {
+      const { run } = fieldFeedbackRun(handle)
+      if (runtimeFreeze.isFrozen('generation_runs', run.runId)) throw new Error('PLANNING_FEEDBACK_HISTORY_FROZEN')
+      service.cancel(run.rootActionId)
+      return viewOf(repository.get(run.runId))
+    },
+    stageFieldFeedback: (request: StagePlanningFeedbackCandidate) => {
+      fieldFeedbackBase(request.baseId)
+      if (request.parentCandidateId) fieldFeedbackCandidate(request.parentCandidateId)
+      const { input } = fieldFeedbackRun(handleOf(repository.get(request.runId)))
+      if (input.baseId !== request.baseId) throw new Error('PLANNING_FEEDBACK_GENERATION_UNPROVEN')
+      return planningFeedback().stage(request)
+    },
+    relineageFieldFeedback: (request: RelineagePlanningFeedbackCandidate) => {
+      fieldFeedbackBase(request.baseId); fieldFeedbackCandidate(request.sourceCandidateId)
+      return planningFeedback().relineage(request)
+    },
+    adoptFieldFeedback: (request: AdoptPlanningFeedbackCandidate) => {
+      fieldFeedbackCandidate(request.candidateId)
+      return planningFeedback().adopt(request)
+    },
     capturePlanningFeedbackBase: (target: PlanningFeedbackCaptureTarget) => planningFeedback().captureBase(target),
     preparePlanningFeedback: (input: PlanningFeedbackGenerationInput) => planningFeedback().prepare(input),
-    beginPlanningFeedback: (request: { input: PlanningFeedbackGenerationInput; modelId: string; uiActionNonce: string }) => {
-      assertCurrent()
-      assertPlanningFeedbackObject(request, ['input', 'modelId', 'uiActionNonce'])
-      if (typeof request.uiActionNonce !== 'string' || !request.uiActionNonce.trim() || request.uiActionNonce.length > 256)
-        throw new Error('GENERATION_BEGIN_INVALID')
-      const rows = deps.database.prepare(`SELECT r.run_id FROM generation_runs r JOIN generation_roots g ON g.root_action_id=r.root_action_id
-        WHERE json_extract(g.action_json,'$.operation')='planning-feedback' AND json_extract(g.action_json,'$.projectId')=?
-          AND json_extract(g.action_json,'$.uiActionNonce')=?`).all(deps.projectId, request.uiActionNonce) as { run_id: string }[]
-      if (rows.length > 1) throw new Error('GENERATION_NONCE_CONFLICT')
-      if (rows[0]) {
-        const prior = repository.get(rows[0].run_id)
-        if (!isDeepStrictEqual(request.input, prior.binding.sourceManifest.planningFeedbackInput)
-          || request.modelId !== modelReceipt(prior.binding).modelId) throw new Error('GENERATION_NONCE_CONFLICT')
-        return viewOf(prior)
-      }
-      const prepared = planningFeedback().prepare(request.input)
-      return begin({ operation: 'planning-feedback', uiActionNonce: request.uiActionNonce, modelId: request.modelId,
-        selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: [`planning-feedback-v${prepared.context.schemaVersion}`], skillStages: ['planning'],
-        output: 'visible-text', planningFeedbackInput: structuredClone(request.input) }, false, false, false, false, false, false, true)
-    },
-    executePlanningFeedback: async (handle: MainGenerationRunHandle) => {
-      const run = requireRun(handle)
-      if (run.binding.sourceManifest.operation !== 'planning-feedback') throw new Error('GENERATION_FEEDBACK_ADMISSION_REQUIRED')
-      const task = readPlanningFeedbackTask(run), invocationNonce = 'planning-feedback:0'
-      const requestHash = textHash(JSON.stringify([task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
-      const prior = repository.findInvocation(run.runId, invocationNonce, requestHash)
-      if (prior) {
-        const running = pending.get(JSON.stringify([run.runId, invocationNonce]))
-        return running ? running.promise : outcomeOf(volatileReceipts.get(prior.attempt.attemptId) ?? prior, task)
-      }
-      if (runAttempts(run.runId).length) throw new Error('GENERATION_FEEDBACK_ATTEMPT_CONFLICT')
-      const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
-      return execute({ handle: current.handle, invocationNonce, task }, false, false, false, false, false, false, undefined, true)
-    },
+    beginPlanningFeedback: beginPlanningFeedbackRun,
+    executePlanningFeedback: executePlanningFeedbackRun,
     stagePlanningFeedback: (request: StagePlanningFeedbackCandidate) => planningFeedback().stage(request),
     adoptPlanningFeedback: (request: AdoptPlanningFeedbackCandidate) => planningFeedback().adopt(request),
     relineagePlanningFeedback: (request: RelineagePlanningFeedbackCandidate) => planningFeedback().relineage(request),

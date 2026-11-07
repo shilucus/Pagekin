@@ -10,6 +10,7 @@ import type { EditorInlineGenerationChannels } from '../../src/shared/editor-inl
 import type { FinalizationGenerationChannels } from '../../src/shared/finalization-generation'
 import type { GraphGenerationChannels } from '../../src/shared/graph-generation'
 import type { LegacyRosterGenerationChannels } from '../../src/shared/legacy-roster-generation'
+import { assertPlanningFeedbackRequest, type PlanningFeedbackChannels, type PlanningFeedbackChannel } from '../../src/shared/planning-feedback-ipc'
 import { generationOutputContract } from '../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
@@ -36,7 +37,7 @@ import { getEmbeddingConfig } from './kb-controller'
 import { recordPerformanceComputedMetric, recordPerformanceCount } from '../services/performance-diagnostics'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
-type OwnerChannels = LegacyRosterGenerationChannels & GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
+type OwnerChannels = PlanningFeedbackChannels & LegacyRosterGenerationChannels & GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
 const owners = new Map<Database.Database, { owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
@@ -77,7 +78,7 @@ export function assertImportGenerationSourcesCurrent(handle: MainGenerationRunHa
   entry.owner.assertImportGenerationSources(handle, slot, allowLegacyStyle)
 }
 
-const GENERATION_ERROR_CODE = /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER)_[A-Z_]+$/u
+const GENERATION_ERROR_CODE = /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER|PLANNING_FEEDBACK)_[A-Z_]+$/u
 const DIAGNOSTIC_MESSAGE_LIMIT = 200
 
 /**
@@ -93,6 +94,11 @@ export function generationIpcErrorCode(channel: string, error: unknown): string 
     return 'GENERATION_PROJECT_SESSION_STALE'
   }
   if (error instanceof Error && (error.message === 'SOURCE_DRAFT_CHANGED' || GENERATION_ERROR_CODE.test(error.message))) return error.message
+  if (channel.startsWith('planning-feedback:v1:')) {
+    console.error('[generation] unmapped feedback failure', { channel, name: error instanceof Error ? 'Error' : typeof error,
+      stack: error instanceof Error ? errorStackFrames(error, 7) : undefined })
+    return 'GENERATION_REQUEST_FAILED'
+  }
   console.error('[generation] unmapped failure', {
     channel,
     name: error instanceof Error ? error.name : typeof error,
@@ -186,14 +192,29 @@ export function registerGenerationController(options: {
       try {
         const session = raw.pop()
         if (!isProjectSessionContext(session) || raw.length !== arity && !(channel === 'generation:compose-visible' && raw.length === 3)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
-        const result = await handler(authorizedOwner(session, event), ...raw as OwnerChannels[C]['args'])
+        if (channel.startsWith('planning-feedback:v1:')) assertPlanningFeedbackRequest(channel as PlanningFeedbackChannel, raw[0])
+        const owner = authorizedOwner(session, event)
+        const database = getProjectDb()
+        const result = await handler(owner, ...raw as OwnerChannels[C]['args'])
         projectAccess.assertCurrentProjectContext(session, getCurrentProjectPath())
+        if (channel.startsWith('planning-feedback:v1:') && getProjectDb() !== database) throw new Error('GENERATION_DATABASE_CHANGED')
         return result
       } catch (error) {
         throw new Error(generationIpcErrorCode(channel, error))
       }
     })
   }
+  register('planning-feedback:v1:capture', 1, (owner, request) => owner.captureFieldFeedback(request.target))
+  register('planning-feedback:v1:list-bases', 1, (owner, request) => owner.listFieldFeedbackBases(request.target))
+  register('planning-feedback:v1:read-history', 1, (owner, request) => owner.readFieldFeedbackHistory(request.baseId))
+  register('planning-feedback:v1:begin', 1, (owner, request) => owner.beginFieldFeedback(request))
+  register('planning-feedback:v1:execute', 1, (owner, request) => owner.executeFieldFeedback(request.handle))
+  register('planning-feedback:v1:read-run', 1, (owner, request) => owner.readFieldFeedbackRun(request.handle))
+  register('planning-feedback:v1:list-runs', 1, (owner, request) => owner.listFieldFeedbackRuns(request.baseId))
+  register('planning-feedback:v1:cancel', 1, (owner, request) => owner.cancelFieldFeedback(request.handle))
+  register('planning-feedback:v1:stage', 1, (owner, request) => owner.stageFieldFeedback(request))
+  register('planning-feedback:v1:relineage', 1, (owner, request) => owner.relineageFieldFeedback(request))
+  register('planning-feedback:v1:adopt', 1, (owner, request) => owner.adoptFieldFeedback(request))
   // 补写中间章时，本章及以后章节的定稿正文不能进取材，否则模型会提前写出或照抄后文。
   const laterFinalizedDocuments = (chapterNumber: number) => new Set([...FinalizationRepository.knowledgeDocumentChapters()]
     .filter(([, finalizedChapter]) => finalizedChapter >= chapterNumber).map(([documentId]) => documentId))

@@ -77,4 +77,25 @@ describe('project-scoped IPC session transport', () => {
       'content',
     )
   })
+
+  it('requires a project session for planning-feedback channels instead of treating them as app-data', async () => {
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('planning-feedback:v1:capture', { target: 'premise' })).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('appends an explicitly captured planning-feedback session without substituting the active project', async () => {
+    const frozen = Object.freeze({ projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' })
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    invoke.mockResolvedValue([])
+    await ipc.invokeWithProjectSession(frozen, 'planning-feedback:v1:list-bases', { target: 'premise' })
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('planning-feedback:v1:list-bases', { target: 'premise' }, frozen)
+  })
+
+  it('appends the active session to direct planning-feedback requests', async () => {
+    invoke.mockResolvedValue([])
+    await ipc.invoke('planning-feedback:v1:list-runs', { baseId: 'base-A' })
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('planning-feedback:v1:list-runs', { baseId: 'base-A' },
+      { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' })
+  })
 })

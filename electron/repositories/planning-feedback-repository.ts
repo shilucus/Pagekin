@@ -173,6 +173,16 @@ export class PlanningFeedbackRepository {
     return base
   }
 
+  listFieldBases(target: PlanningFeedbackCoreTarget): import('../../src/shared/planning-feedback-ipc').PlanningFeedbackBaseSummary[] {
+    this.current()
+    if (!isPlanningFeedbackCoreTarget(target)) fail('PLANNING_FEEDBACK_TARGET_INVALID')
+    const rows = this.db.prepare('SELECT base_id,project_id,target,created_at,closed_at,closed_by_adoption_id FROM planning_feedback_bases WHERE schema_version=1 AND target=? ORDER BY created_at DESC,base_id').all(target) as Row[]
+    return rows.filter(row => row.project_id === this.options.projectId || this.options.isFrozen('planning_feedback_bases', text(row.base_id)))
+      .map(row => ({ baseId: text(row.base_id), projectId: text(row.project_id), target,
+      createdAt: integer(row.created_at), closedAt: row.closed_at === null ? null : integer(row.closed_at),
+      closedByAdoptionId: row.closed_by_adoption_id === null ? null : text(row.closed_by_adoption_id) }))
+  }
+
   private ready(base: PlanningFeedbackBase): void {
     this.mutable('planning_feedback_bases', base.baseId, base.projectId)
     if (base.closedAt !== null || this.revision(base.target) !== base.sourceRevision

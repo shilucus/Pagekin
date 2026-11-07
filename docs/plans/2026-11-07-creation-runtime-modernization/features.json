@@ -380,7 +380,9 @@
       ],
       "rollback": "关闭新修订模式，保留旧生成/编辑与已保存历史。",
       "requiredEvidenceTypes": ["deterministic"],
-      "status": "not_started", "passes": false, "evidence": []
+      "status": "in_progress", "passes": false, "evidence": [
+        { "type": "deterministic", "sourceSha": "319846b3b182d20371d31ad6df1eba64fe7da48a", "artifactOrReceipt": "stage-2c-evidence.md#actual-commands", "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0; fictional isolated SQLite projects", "result": "Internal eight-target desktop IPC/client slice: 23 files 931/931, typecheck/lint/i18n/source build exit 0; registered production route and original/portable recovery covered", "limitations": "Partial FEEDBACK-002 only. Parent plus 16 frozen hashes identifies tested bytes. No stage-page mode, dirty-buffer author workflow, visible design, browser/Electron, real-model or platform acceptance; portable redacted run inputs are not reconstructed." }
+      ]
     },
     {
       "id": "FEEDBACK-003",

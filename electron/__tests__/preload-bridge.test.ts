@@ -26,4 +26,15 @@ describe('桌面预加载接口', () => {
     await expect(bridge.invoke('project:open', '合成项目')).resolves.toEqual({ success: true })
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith('project:open', '合成项目')
   })
+  it('原桥逐项转发专用反馈请求和冻结会话，不签发或改写授权', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const request = { target: 'premise' }
+    const session = Object.freeze({ projectId: 'fixture-project', leaseId: 'fixture-lease', projectPath: 'C:/fictional-project' })
+    const result = { baseId: 'fixture-base' }
+    electron.ipcRenderer.invoke.mockResolvedValueOnce(result)
+    await expect(bridge.invoke('planning-feedback:v1:capture', request, session)).resolves.toBe(result)
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith('planning-feedback:v1:capture', request, session)
+    expect(request).toEqual({ target: 'premise' })
+    expect(Object.keys(session)).toEqual(['projectId', 'leaseId', 'projectPath'])
+  })
 })

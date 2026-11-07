@@ -208,7 +208,7 @@ export function assertPlanningFeedbackObject(value: unknown, required: readonly 
 }
 
 export function assertPlanningFeedbackInstructions(feedback: unknown, constraints: unknown): void {
-  if (typeof feedback !== 'string' || !Array.isArray(constraints) || constraints.some(value => typeof value !== 'string')) {
+  if (typeof feedback !== 'string' || !Array.isArray(constraints) || [...constraints].some(value => typeof value !== 'string')) {
     throw new Error('PLANNING_FEEDBACK_PAYLOAD_INVALID')
   }
 }
