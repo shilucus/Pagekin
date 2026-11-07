@@ -11,6 +11,8 @@ import type { FinalizationGenerationChannels } from '../../src/shared/finalizati
 import type { GraphGenerationChannels } from '../../src/shared/graph-generation'
 import type { LegacyRosterGenerationChannels } from '../../src/shared/legacy-roster-generation'
 import { assertPlanningFeedbackRequest, type PlanningFeedbackChannels, type PlanningFeedbackChannel } from '../../src/shared/planning-feedback-ipc'
+import { assertRuntimeFeedbackRequest, RUNTIME_FEEDBACK_CHANNELS } from '../../src/shared/runtime-feedback-contract'
+import type { PrepareRuntimeFeedbackRequest, RuntimeFeedbackReference, RuntimeFeedbackRevocationReceipt } from '../../src/shared/runtime-feedback-contract'
 import { generationOutputContract } from '../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
@@ -22,6 +24,8 @@ import { projectAccess, ProjectSessionStaleError } from '../services/project-acc
 import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
 import { ModelExecutionLeaseRegistry } from '../services/model-execution-lease'
 import { createMainGenerationOwner } from '../services/main-generation-owner'
+import type { MainGenerationOwnerDependencies } from '../services/main-generation-owner'
+import { RuntimeFeedbackAuthority, readRuntimeFeedbackReceipt } from '../services/runtime-feedback-authority'
 import { readMainGenerationPolicy, TaskBudgetPreflightError } from '../services/main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../services/generation-source-binding'
 import { LegacyVectorMigrationBlockedError } from '../services/knowledge-base-migration-error'
@@ -38,48 +42,51 @@ import { recordPerformanceComputedMetric, recordPerformanceCount } from '../serv
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
 type OwnerChannels = PlanningFeedbackChannels & LegacyRosterGenerationChannels & GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
-const owners = new Map<Database.Database, { owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }>()
+type LegacyOwnerEntry = { mode: 'legacy'; owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }
+type RuntimeOwnerEntry = { mode: 'runtime-feedback'; authority: RuntimeFeedbackAuthority; runtime: ProjectRuntime }
+const owners = new Map<Database.Database, LegacyOwnerEntry | RuntimeOwnerEntry>()
+const receiptAuthorities = new Map<Database.Database, Set<RuntimeFeedbackAuthority>>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 const ownerRuntimes = new WeakMap<Owner, ProjectRuntime>()
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
 export function assertGenerationSourcesCurrent(handle: MainGenerationRunHandle, blueprintRange?: { startChapter: number; endChapter: number }): void {
   const database = getProjectDb()
   const entry = database && owners.get(database)
-  if (!entry) throw new Error('GENERATION_OWNER_REQUIRED')
+  if (entry?.mode !== 'legacy') throw new Error('GENERATION_OWNER_REQUIRED')
   entry.owner.assertSourcesCurrent(handle, blueprintRange)
 }
 export function assertGenerationSynopsisCommit(handle: MainGenerationRunHandle, synopsis: string, expected: import('../repositories/project-core-repository').ProjectCoreSynopsisExpected): boolean {
   const database = getProjectDb(), entry = database && owners.get(database)
-  if (!entry || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
+  if (entry?.mode !== 'legacy' || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
   return entry.owner.assertSynopsisCommit(handle, synopsis, expected)
 }
 export function commitGenerationPlotOutlineAuthorEdit(request: import('../repositories/project-core-repository').ProjectCoreSynopsisCommitRequest) {
   const database = getProjectDb(), entry = database && owners.get(database)
-  if (!entry || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
+  if (entry?.mode !== 'legacy' || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
   return entry.owner.commitPlotOutlineAuthorEdit(request)
 }
 export function commitGenerationBlueprintAuthorEdit(request: import('../repositories/blueprint-repository').BlueprintRangeCommitRequest) {
   const database = getProjectDb(), entry = database && owners.get(database)
-  if (!entry || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
+  if (entry?.mode !== 'legacy' || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
   return entry.owner.commitBlueprintAuthorEdit(request)
 }
 export function recordGenerationDirectoryCommit(handle: MainGenerationRunHandle, requestedRange: { startChapter: number; endChapter: number }, receipt: BlueprintRangeCommitReceipt) {
   const database = getProjectDb(), entry = database && owners.get(database)
-  if (!entry || !database?.inTransaction) throw new Error('GENERATION_DIRECTORY_TRANSACTION_REQUIRED')
+  if (entry?.mode !== 'legacy' || !database?.inTransaction) throw new Error('GENERATION_DIRECTORY_TRANSACTION_REQUIRED')
   return entry.owner.recordDirectoryCommit(handle, requestedRange, receipt)
 }
 export function withGenerationAgentChildEffect<T>(handle: MainGenerationRunHandle, effect: () => T): T {
   const database = getProjectDb(), entry = database && owners.get(database)
-  if (!entry || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
+  if (entry?.mode !== 'legacy' || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
   return entry.owner.withAgentChildEffect(handle, effect)
 }
 export function assertImportGenerationSourcesCurrent(handle: MainGenerationRunHandle, slot?: import('../../src/shared/import-generation').ImportGenerationSlot, allowLegacyStyle = false): void {
   const database = getProjectDb(), entry = database && owners.get(database)
-  if (!entry || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
+  if (entry?.mode !== 'legacy' || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
   entry.owner.assertImportGenerationSources(handle, slot, allowLegacyStyle)
 }
 
-const GENERATION_ERROR_CODE = /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER|PLANNING_FEEDBACK)_[A-Z_]+$/u
+const GENERATION_ERROR_CODE = /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER|PLANNING_FEEDBACK|RUNTIME_FEEDBACK)_[A-Z_]+$/u
 const DIAGNOSTIC_MESSAGE_LIMIT = 200
 
 /**
@@ -95,7 +102,7 @@ export function generationIpcErrorCode(channel: string, error: unknown): string 
     return 'GENERATION_PROJECT_SESSION_STALE'
   }
   if (error instanceof Error && (error.message === 'SOURCE_DRAFT_CHANGED' || GENERATION_ERROR_CODE.test(error.message))) return error.message
-  if (channel.startsWith('planning-feedback:v1:')) {
+  if (channel.startsWith('planning-feedback:v1:') || channel.startsWith('runtime-feedback:')) {
     console.error('[generation] unmapped feedback failure', { channel, name: error instanceof Error ? 'Error' : typeof error,
       stack: error instanceof Error ? errorStackFrames(error, 7) : undefined })
     return 'GENERATION_REQUEST_FAILED'
@@ -116,41 +123,97 @@ export function registerGenerationController(options: {
   applyProxyConfig: () => void
 }) {
   const activeHandlers = new Map<ProjectRuntime, number>()
-  projectRuntimeHost.registerBusyPredicate(runtime => (activeHandlers.get(runtime) ?? 0) > 0
-    || (owners.get(runtime.database)?.owner.hasPhysicalInFlight() ?? false))
+  const hasPhysical = (entry: LegacyOwnerEntry | RuntimeOwnerEntry | undefined) => entry?.mode === 'legacy'
+    ? entry.owner.hasPhysicalInFlight() : entry?.authority.hasPhysicalInFlight() ?? false
+  projectRuntimeHost.registerBusyPredicate(runtime => (activeHandlers.get(runtime) ?? 0) > 0 || hasPhysical(owners.get(runtime.database)))
   onProjectDatabaseBeforeClose(({ database }) => {
     const entry = owners.get(database)
-    if (entry) { entry.owner.suspendForProjectClose(); owners.delete(database) }
+    if (entry) {
+      if (entry.mode === 'legacy') entry.owner.suspendForProjectClose()
+      else entry.authority.suspendForProjectClose()
+      owners.delete(database)
+    }
+    for (const authority of receiptAuthorities.get(database) ?? []) {
+      if (entry?.mode !== 'runtime-feedback' || entry.authority !== authority) authority.suspendForProjectClose()
+    }
+    receiptAuthorities.delete(database)
   })
+  const capturedResources = (runtime: ProjectRuntime) => {
+    const database = runtime.database, identity = runtime.databaseIdentity, epoch = runtime.executionEpoch
+    return () => {
+      if (!projectRuntimeHost.getOpenRuntimes().includes(runtime) || !database.open || runtime.database !== database
+        || runtime.databaseIdentity !== identity || runtime.executionEpoch !== epoch || runtime.phase === 'closed') {
+        throw new Error('RUNTIME_FEEDBACK_RESOURCES_CHANGED')
+      }
+    }
+  }
+  const assertRetirable = (runtime: ProjectRuntime, entry: LegacyOwnerEntry | RuntimeOwnerEntry) => {
+    if ((activeHandlers.get(runtime) ?? 0) > 0) throw new Error('GENERATION_OWNER_BUSY')
+    if (entry.mode === 'legacy') entry.owner.assertRetirable()
+    else entry.authority.prepareRetirement()
+  }
+  const retire = (runtime: ProjectRuntime, entry: LegacyOwnerEntry | RuntimeOwnerEntry) => {
+    assertRetirable(runtime, entry)
+    if (entry.mode === 'legacy') entry.owner.retireIdle()
+    else entry.authority.retireIdle()
+    owners.delete(runtime.database)
+  }
+  const makeOwner = (runtime: ProjectRuntime, epoch: string, assertCurrent: () => void,
+    extra: Partial<Pick<MainGenerationOwnerDependencies, 'mode' | 'runtimeFeedback' | 'assertNoRuntimeClaims' | 'recoverInterrupted'>> = {},
+    delivery?: Pick<MainGenerationOwnerDependencies, 'onSnapshot' | 'onReasoning'>) => {
+    const sourceDependencies = { db: runtime.database, projectStorageRoot: runtime.projectStorageRoot,
+      globalDataRoot: getGlobalDataRoot(), readBuiltinSkill: readBuiltinWritingSkill,
+      readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => {
+        const template = getBuiltinPromptTemplate(key, language)
+        if (!template) throw new Error('GENERATION_BUILTIN_PROMPT_MISSING')
+        return JSON.stringify(template)
+      } }
+    return createMainGenerationOwner({ database: runtime.database, projectId: runtime.projectId,
+      projectPath: runtime.canonicalRoot, epoch, assertCurrent, assertRetirementResources: capturedResources(runtime),
+      leases: options.modelExecutionLeases, loadModel: options.loadModel, beforeDispatch: options.applyProxyConfig,
+      transferOrigin: () => readPortableCurrentAuthority({ database: runtime.database,
+        projectStorageRoot: runtime.projectStorageRoot, projectId: runtime.projectId })?.originProjectId,
+      buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDependencies, { ...selection,
+        projectId: runtime.projectId, epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDependencies, previous, epoch,
+        modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
+      ...extra, ...delivery })
+  }
+  const authorizedRuntimeFeedback = (runtime: ProjectRuntime): RuntimeFeedbackAuthority => {
+    const entry = owners.get(runtime.database)
+    if (entry?.mode === 'runtime-feedback') return entry.authority
+    if (entry) assertRetirable(runtime, entry)
+    const authority = new RuntimeFeedbackAuthority({ runtime,
+      assertOpen: () => projectRuntimeHost.assertOpen(runtime), assertCapturedResources: capturedResources(runtime),
+      assertAdmission: () => { projectRuntimeHost.assertLifecycleAvailable(); projectRuntimeHost.assertOpen(runtime) },
+      createOwner: hooks => makeOwner(runtime, runtime.executionEpoch, () => projectRuntimeHost.assertOpen(runtime),
+        { mode: 'runtime-feedback', recoverInterrupted: false, ...hooks }) })
+    if (entry) {
+      try { retire(runtime, entry) }
+      catch (error) {
+        try { authority.retireIdle() }
+        catch (cleanup) { throw new AggregateError([error, cleanup], 'RUNTIME_FEEDBACK_HANDOFF_FAILED') }
+        throw error
+      }
+    }
+    owners.set(runtime.database, { mode: 'runtime-feedback', authority, runtime })
+    let receipts = receiptAuthorities.get(runtime.database)
+    if (!receipts) { receipts = new Set(); receiptAuthorities.set(runtime.database, receipts) }
+    receipts.add(authority)
+    return authority
+  }
   const authorizedOwner = (session: ProjectSessionContext, event: IpcMainInvokeEvent) => {
     const runtime = projectAccess.assertViewContext(session)
     const database = runtime.database
     let entry = owners.get(database)
-    if (entry && (entry.session.projectId !== session.projectId || entry.session.leaseId !== session.leaseId)) {
-      if (entry.owner.hasPhysicalInFlight()) throw new Error('GENERATION_OWNER_BUSY')
-      entry.owner.suspendForProjectClose()
-      owners.delete(database)
-      entry = undefined
-    }
-    if (!entry) {
+    const handoff = Boolean(entry && (entry.mode !== 'legacy' || entry.session.projectId !== session.projectId || entry.session.leaseId !== session.leaseId))
+    if (!entry || handoff) {
+      if (entry) assertRetirable(runtime, entry)
       const captured = Object.freeze({ ...session })
       const subscribers = new Set<WebContents>()
-      const sourceDependencies = { db: database, projectStorageRoot: runtime.projectStorageRoot,
-        globalDataRoot: getGlobalDataRoot(), readBuiltinSkill: readBuiltinWritingSkill,
-        readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => {
-          const template = getBuiltinPromptTemplate(key, language)
-          if (!template) throw new Error('GENERATION_BUILTIN_PROMPT_MISSING')
-          return JSON.stringify(template)
-        } }
-      const owner = createMainGenerationOwner({ database, projectId: runtime.projectId, projectPath: runtime.canonicalRoot, epoch: captured.leaseId,
-        assertCurrent: () => { if (projectAccess.assertViewContext(captured) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED') },
-        leases: options.modelExecutionLeases, loadModel: options.loadModel, beforeDispatch: options.applyProxyConfig,
-        transferOrigin: () => readPortableCurrentAuthority({ database, projectStorageRoot: sourceDependencies.projectStorageRoot,
-          projectId: captured.projectId })?.originProjectId,
-        buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDependencies, { ...selection,
-          projectId: runtime.projectId, epoch: captured.leaseId, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
-        rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDependencies, previous, captured.leaseId,
-          modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
+      const owner = makeOwner(runtime, captured.leaseId,
+        () => { if (projectAccess.assertViewContext(captured) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED') },
+        { recoverInterrupted: !handoff }, {
         onSnapshot: snapshot => {
           try { if (projectAccess.assertViewContext(captured) !== runtime) return } catch { return }
           for (const subscriber of subscribers) {
@@ -170,13 +233,90 @@ export function registerGenerationController(options: {
           else subscriber.send('generation:reasoning', reasoning)
         } },
       })
-      entry = { owner, session: captured, subscribers }
+      if (entry) {
+        try { retire(runtime, entry) }
+        catch (error) {
+          try { owner.retireIdle() }
+          catch (cleanup) { throw new AggregateError([error, cleanup], 'RUNTIME_FEEDBACK_HANDOFF_FAILED') }
+          throw error
+        }
+      }
+      entry = { mode: 'legacy', owner, session: captured, subscribers }
       ownerSessions.set(owner, captured)
       ownerRuntimes.set(owner, runtime)
       owners.set(database, entry)
     }
+    if (entry.mode !== 'legacy') throw new Error('GENERATION_OWNER_REQUIRED')
     entry.subscribers.add(event.sender)
     return entry.owner
+  }
+  const withRuntimeHandler = async <T>(runtime: ProjectRuntime, operation: () => T | Promise<T>): Promise<T> => {
+    activeHandlers.set(runtime, (activeHandlers.get(runtime) ?? 0) + 1)
+    try { return await operation() }
+    finally {
+      const remaining = activeHandlers.get(runtime)! - 1
+      if (remaining) activeHandlers.set(runtime, remaining)
+      else activeHandlers.delete(runtime)
+    }
+  }
+  const capabilityAuthority = (reference: Pick<RuntimeFeedbackReference, 'projectId' | 'grantId'>) => {
+    const authority = [...receiptAuthorities.values()].flatMap(value => [...value]).find(value =>
+      value.runtime.projectId === reference.projectId && value.hasIssuance(reference.grantId))
+    if (!authority) throw new Error('RUNTIME_FEEDBACK_CAPABILITY_REQUIRED')
+    return authority
+  }
+  for (const channel of RUNTIME_FEEDBACK_CHANNELS) {
+    ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
+      try {
+        const requiresView = channel === 'runtime-feedback:v1:prepare' || channel === 'runtime-feedback:v1:read-history'
+        if (raw.length !== (requiresView ? 2 : 1)) throw new Error('RUNTIME_FEEDBACK_PAYLOAD_INVALID')
+        const body = raw[0]
+        assertRuntimeFeedbackRequest(channel, body)
+        if (channel === 'runtime-feedback:v1:revoke-many') {
+          const projects = new Map<string, RuntimeFeedbackRevocationReceipt['projects'][number]>()
+          for (const reference of (body as { references: RuntimeFeedbackReference[] }).references) {
+            let project = projects.get(reference.projectId)
+            if (!project) {
+              project = { projectId: reference.projectId, completeForRequestedScope: true, grants: [] }
+              projects.set(reference.projectId, project)
+            }
+            const fence: RuntimeFeedbackRevocationReceipt['projects'][number]['grants'][number] = {
+              grantId: reference.grantId, requestedRevision: reference.revision, fenced: false, receipt: null, errorCode: null,
+            }
+            try {
+              const authority = capabilityAuthority(reference)
+              fence.receipt = await withRuntimeHandler(authority.runtime, () => authority.revoke(event.sender, reference))
+              fence.fenced = fence.receipt.grant.state === 'revoked' || fence.receipt.grant.state === 'completed'
+            } catch (error) { fence.errorCode = generationIpcErrorCode(channel, error) }
+            project.grants.push(fence)
+            project.completeForRequestedScope &&= fence.fenced
+          }
+          const result = [...projects.values()]
+          return { completeForRequestedScope: result.every(project => project.completeForRequestedScope), projects: result }
+        }
+        if (requiresView) {
+          const session = raw[1]
+          if (!isProjectSessionContext(session)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
+          const runtime = projectAccess.assertViewContext(session)
+          const fresh = () => {
+            if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+          }
+          if (channel === 'runtime-feedback:v1:read-history') {
+            return await withRuntimeHandler(runtime, () => readRuntimeFeedbackReceipt(runtime,
+              (body as { grantId: string }).grantId, capturedResources(runtime)))
+          }
+          const authority = authorizedRuntimeFeedback(runtime)
+          return await withRuntimeHandler(runtime, () => authority.prepare(event.sender, body as PrepareRuntimeFeedbackRequest, fresh))
+        }
+        const reference = body as RuntimeFeedbackReference
+        const authority = capabilityAuthority(reference)
+        return await withRuntimeHandler(authority.runtime, () => {
+          if (channel === 'runtime-feedback:v1:execute') return authority.execute(event.sender, reference)
+          if (channel === 'runtime-feedback:v1:revoke') return authority.revoke(event.sender, reference)
+          return authority.readReceipt(event.sender, reference)
+        })
+      } catch (error) { throw new Error(generationIpcErrorCode(channel, error)) }
+    })
   }
   const guardKnowledge = async <T>(owner: Owner, snapshot: GenerationKnowledgeSnapshot | undefined, operation: () => T | Promise<T>): Promise<T> => {
     if (!snapshot) return operation()

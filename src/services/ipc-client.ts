@@ -60,6 +60,8 @@ function isProjectScopedChannel(channel: string): boolean {
     || channel === 'project:update-config'
     || channel === 'project:delete'
     || channel === 'project:overview-current'
+    || channel === 'runtime-feedback:v1:prepare'
+    || channel === 'runtime-feedback:v1:read-history'
 }
 
 function invokeWithSession<C extends InvokeChannel>(

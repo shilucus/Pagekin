@@ -349,6 +349,21 @@ export class GenerationRunRepository {
             return this.receipt(attempt.attemptId);
         });
     }
+    reserveRuntimeFeedback(request: {
+        runId: string; nonce: string; requestHash: string; reservedTokens: number; requestedOutputTokens: number;
+        usagePolicy: ProviderUsagePolicy; purpose?: string;
+        replayTask?: import('../../src/services/generation/generation-harness').GenerationTask;
+        budgetDecision?: import('../../src/services/generation/task-budget-planner').TaskBudgetDecision;
+    }, admit: () => void): GenerationExecutionReceipt {
+        return this.transaction(() => {
+            admit();
+            if (this.attemptCount(request.runId) !== 0) fail('GENERATION_FEEDBACK_ATTEMPT_CONFLICT');
+            const receipt = this.reserve(request.runId, request.nonce, request.requestHash, request.reservedTokens,
+                request.requestedOutputTokens, request.usagePolicy, request.purpose, request.replayTask, request.budgetDecision);
+            this.markDispatched(receipt.attempt.attemptId);
+            return this.receipt(receipt.attempt.attemptId);
+        });
+    }
     receipt(attemptId: string, budget?: GenerationBudgetReceipt): GenerationExecutionReceipt {
         const row = this.db().prepare(`${receiptSelect} WHERE t.attempt_id=?`).get(attemptId) as ReceiptRow | undefined;
         if (!row)
@@ -764,13 +779,15 @@ export class GenerationRunRepository {
             this.db().prepare('UPDATE generation_runs SET binding_json=?,status=? WHERE run_id=?').run(encode(next), 'running', runId);
         });
     }
-    recoverInterrupted(): void {
+    recoverInterrupted(runtimeRoots: readonly string[] = []): void {
         this.transaction(() => {
+            const hasGrants = Boolean(this.db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_feedback_grants'").get());
+            const grantRoot = hasGrants ? this.db().prepare('SELECT 1 FROM runtime_feedback_grants g JOIN generation_runs r ON r.run_id=g.run_id WHERE r.root_action_id=? LIMIT 1') : null;
             const roots = this.db().prepare('SELECT root_action_id FROM generation_roots').all() as {
                 root_action_id: string;
             }[];
             for (const { root_action_id: id } of roots) {
-                if (this.frozenRoot(id)) continue;
+                if (this.frozenRoot(id) || grantRoot?.get(id) && !runtimeRoots.includes(id)) continue;
                 for (const attempt of this.budget(id).attempts)
                     if (attempt.status === 'dispatch-marked') {
                         attempt.status = 'unknown';

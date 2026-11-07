@@ -172,7 +172,32 @@
       ],
       "rollback": "停止新能力签发、撤销新任务并收敛；不删除历史或恢复旧能力。",
       "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "status": "completed", "passes": true, "evidence": [
+        {
+          "type": "contract_review",
+          "sourceSha": "173e49914f1081d7063b1e3fa23c67d042f8c33a",
+          "artifactOrReceipt": "stage-3b-evidence.md#team-and-review",
+          "environment": "Independent requirements/authority gpt-6.1-terra/high and storage/owner inherited-session reviewers; read-only integrated review",
+          "result": "All three RUNTIME-002 criteria and package-local contract/storage gates accepted; ADR-0030, closed caller-bound capability and per-project batch revocation with partial results",
+          "limitations": "Parent plus 46 frozen source/test hashes identifies tested bytes. Single original-field feedback candidate producer only; no generic workflow, UI, adoption, human approval, second host or headless authorization."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "173e49914f1081d7063b1e3fa23c67d042f8c33a",
+          "artifactOrReceipt": "stage-3b-evidence.md#actual-commands",
+          "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0; fictional isolated native SQLite projects",
+          "result": "44 files 1177/1177, zero pending; native admission/revoke/candidate/COMMIT/maintenance/sender/owner failure cases and two-generation portable frozen history. Typecheck/lint/i18n/source build exit 0.",
+          "limitations": "Focused impact union, not full repository or browser suite. Earlier failed reports retained. Existing real-model quality, platform and future lifecycle/workflow gates are not qualified."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "173e49914f1081d7063b1e3fa23c67d042f8c33a",
+          "artifactOrReceipt": "stage-3b-evidence.md#actual-commands",
+          "environment": "Windows x64; existing Electron 44.9.3 / embedded Node 24.22.0 / Chromium 152; isolated fictional A/B projects and local fake model",
+          "result": "runtime-feedback-v1 exit 0, two guarded/fixture requests, revoke-before zero requests, unknown no resend, completed candidate retained, explicit partial per-project fences, reopen history only, normal quit and empty external/write/residual arrays",
+          "limitations": "Actual registered IPC scene, not author-facing UI. Screenshot inspected. Different sender, exact legacy handle and unsaved-tail cases have deterministic evidence only; network observation ends before quit. No real model or three-target platform evidence."
+        }
+      ]
     },
     {
       "id": "RUNTIME-003",

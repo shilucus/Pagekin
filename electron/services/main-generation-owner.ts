@@ -77,6 +77,17 @@ export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt):
     modelRevision: receipt.modelRevision, endpointFingerprint: receipt.endpointFingerprint, capabilityEvidence: structuredClone(receipt.capabilityEvidence) }
 }
 export interface MainGenerationOwnerDependencies {
+  mode?: 'legacy' | 'runtime-feedback'
+  /** Disable database-wide recovery during an idle owner handoff on the same native DB. */
+  recoverInterrupted?: boolean
+  /** Checks runtime-owned claims before an idle owner handoff. */
+  assertNoRuntimeClaims?: () => void
+  /** Checks captured runtime and native DB identity for idle handoff without renewing a UI lease. */
+  assertRetirementResources?: () => void
+  runtimeFeedback?: {
+    assertActive: (runId: string) => void
+    assertDispatchAdmission: (runId: string) => void
+  }
   database: Database.Database
   projectId: string
   projectPath: string
@@ -130,11 +141,19 @@ async function dispatchProvider(value: unknown, options: Parameters<GenerationRu
 
 /** One owner per captured database/session. No renderer budget, lease or hash is authoritative. */
 export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies) {
+  if (deps.mode === 'runtime-feedback' && !deps.runtimeFeedback) throw new Error('GENERATION_RUNTIME_FEEDBACK_ADMISSION_REQUIRED')
+  const hasRuntimeGrantTable = Boolean(deps.database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_feedback_grants'").get())
+  if (deps.mode === 'runtime-feedback' && !hasRuntimeGrantTable) throw new Error('GENERATION_RUNTIME_FEEDBACK_SCHEMA_REQUIRED')
+  const isGrantRun = (runId: string) => hasRuntimeGrantTable && Boolean(deps.database.prepare('SELECT 1 FROM runtime_feedback_grants WHERE run_id=? LIMIT 1').get(runId))
+  const assertLegacyRunAccess = (runId: string) => {
+    if (deps.mode !== 'runtime-feedback' && isGrantRun(runId)) throw new Error('GENERATION_RUNTIME_FEEDBACK_ACCESS_DENIED')
+  }
   const capturedProjectPath = deps.projectPath
   const runtimeFreeze = readPortableRuntimeFreeze(capturedProjectPath)
   const repository = new GenerationRunRepository(() => deps.database, Date.now, (table, recordId) => runtimeFreeze.isFrozen(table, recordId))
   const draftEffects = new GenerationDraftEffects(deps.database, repository)
   const runLeases = new Map<string, string>()
+  const runtimePreparations = new Map<string, MainGenerationRunHandle>()
   const volatileReceipts = new Map<string, GenerationExecutionReceipt>()
   const pending = new Map<string, { hash: string; promise: Promise<MainGenerationExecuteReceipt> }>()
   const preparations = new Map<string, { binding: RunBinding; knowledgeSnapshot: GenerationKnowledgeSnapshot }>()
@@ -142,6 +161,14 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const assertCurrent = () => {
     if (closed || !deps.database.open) throw new Error('GENERATION_OWNER_CLOSED')
     deps.assertCurrent()
+  }
+  const assertRetirable = () => {
+    if (closed || !deps.database.open) throw new Error('GENERATION_OWNER_CLOSED')
+    if (deps.assertRetirementResources) deps.assertRetirementResources()
+    else deps.assertCurrent()
+    if (physicalDispatches || pending.size) throw new Error('GENERATION_OWNER_BUSY')
+    service.assertRetirable()
+    deps.assertNoRuntimeClaims?.()
   }
   const modelReceipt = (binding: RunBinding): SafeGenerationModelReceipt => {
     const value = binding.sourceManifest.modelReceipt as SafeGenerationModelReceipt | undefined
@@ -162,6 +189,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   }
   const requireRun = (handle: MainGenerationRunHandle, execution = false) => {
     assertCurrent()
+    assertLegacyRunAccess(handle.runId)
     const run = repository.get(handle.runId)
     if (run.binding.projectId !== deps.projectId || !isDeepStrictEqual(handleOf(run), handle)) throw new Error('GENERATION_RUN_IDENTITY_MISMATCH')
     if (execution) {
@@ -313,7 +341,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       }
     },
   })
-  service.recoverInterrupted()
+  const recoverInterrupted = deps.mode !== 'runtime-feedback' && deps.recoverInterrupted !== false
+  if (recoverInterrupted) service.recoverInterrupted()
   function currentModelReceipt(binding: RunBinding): SafeGenerationModelReceipt {
     const model = deps.loadModel(modelReceipt(binding).modelId)
     if (!model) throw new Error('GENERATION_MODEL_MISSING')
@@ -363,7 +392,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const [projectId, epoch, operation, batchId, batchIntent] = JSON.parse(row.identity) as [string, string, string | null, string | null, unknown]
       return { handle: { projectId, epoch, rootActionId: row.root_action_id, runId: row.run_id }, status: row.status, operation: operation ?? undefined,
         batchId, batchRoot: Boolean(batchIntent) }
-    }).filter(run => run.handle.projectId === deps.projectId)
+    }).filter(run => run.handle.projectId === deps.projectId && (deps.mode === 'runtime-feedback' || !isGrantRun(run.handle.runId)))
   const list = (): MainGenerationRunSummary[] => {
     assertCurrent()
     return runSummaries().map(({ handle, status, operation }) => ({ handle, status, operation }))
@@ -494,6 +523,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
           { id: 'planning:target-units', text: String(targetUnits) }] }
       }
       let policy = parentRootActionId ? rootPolicy(parentRootActionId) : newMainGenerationPolicy(selection, deps.leases.resolve(lease.leaseId), importAdmission?.chapterCount)
+      if (deps.mode === 'runtime-feedback' && planningInitialization) policy = { ...policy, budget: { ...policy.budget, maxPhysicalRequests: 1 } }
       if (parentRootActionId && agentWorkflow && scope) policy = { ...policy, planning: scope }
       else if (parentRootActionId && policy.planning) {
         if (continuation && policy.planning.kind === 'directory' && scope?.kind === 'directory') {
@@ -685,6 +715,14 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       ...(plan.budgetDecision ? { budgetDecision: plan.budgetDecision } : {}),
       ...(run.binding.sourceManifest.importSlot || run.binding.sourceManifest.operation === 'planning-feedback' || materialDecision?.shortOutlinePromptHash || repository.readPlotOutline(run.runId) ? { replayTask: task } : {}),
       ...(reconciliationInjected ? { reconciliationInjected } : {}),
+      ...(deps.mode === 'runtime-feedback' && planningExecution ? { runtimeFeedbackAdmission: () => {
+        assertCurrent()
+        assertSourcesCurrent(handleOf(run))
+        deps.runtimeFeedback!.assertDispatchAdmission(run.runId)
+        const frozenModel = deps.leases.resolve(leaseId)
+        const receipt = safeGenerationModelReceipt(createModelExecutionLeaseReceipt(frozenModel, { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
+        if (!isDeepStrictEqual(receipt, modelReceipt(run.binding))) throw new Error('GENERATION_MODEL_CHANGED')
+      } } : {}),
       ...(agentExecution ? { agentToolNames: (run.binding.sourceManifest.agentContext as AgentGenerationContext).input.tools.map(tool => tool.name) } : {}) })
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)
     assertCurrent()
@@ -763,6 +801,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return new PlanningFeedbackService({ database: deps.database, projectId: deps.projectId,
       projectPath: capturedProjectPath, assertCurrent, assertGenerationBindingCurrent: receipt => {
         const binding = receipt.run.binding
+        assertLegacyRunAccess(receipt.run.runId)
         // A settled original-project receipt may be staged after restart; it grants no new dispatch.
         if (runtimeFreeze.isFrozen('generation_runs', receipt.run.runId) || binding.projectId !== deps.projectId
           || !compareGenerationSourceBindings(binding, deps.rebuildBinding(binding, currentModelReceipt(binding)))) {
@@ -1038,7 +1077,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     execute: (handle, invocationNonce, task) => execute({ handle, invocationNonce, task }, true),
     current: (run, expected) => { try { return compareGenerationSourceBindings(expected ?? run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))) } catch { return false } },
     capture: run => deps.rebuildBinding(run.binding, currentModelReceipt(run.binding)),
-  })
+  }, recoverInterrupted)
   const requireEditorInlineRun = (handle: MainGenerationRunHandle) => {
     assertCurrent()
     if (!handle || Object.keys(handle).some(key => !['projectId', 'epoch', 'rootActionId', 'runId'].includes(key))
@@ -1195,6 +1234,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         AND json_extract(g.action_json,'$.uiActionNonce')=?`).all(deps.projectId, request.uiActionNonce) as { run_id: string }[]
     if (rows.length > 1) throw new Error('GENERATION_NONCE_CONFLICT')
     if (rows[0]) {
+      assertLegacyRunAccess(rows[0].run_id)
+      if (deps.mode === 'runtime-feedback') throw new Error('GENERATION_NONCE_CONFLICT')
       const prior = repository.get(rows[0].run_id)
       if (!isDeepStrictEqual(request.input, prior.binding.sourceManifest.planningFeedbackInput)
         || request.modelId !== modelReceipt(prior.binding).modelId) throw new Error('GENERATION_NONCE_CONFLICT')
@@ -1219,7 +1260,62 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
     return execute({ handle: current.handle, invocationNonce, task }, false, false, false, false, false, false, undefined, true)
   }
+  const executeRuntimeFieldFeedback = async (handle: MainGenerationRunHandle) => {
+    if (deps.mode !== 'runtime-feedback' || !deps.runtimeFeedback) throw new Error('GENERATION_RUNTIME_FEEDBACK_ADMISSION_REQUIRED')
+    deps.runtimeFeedback.assertActive(handle.runId)
+    const { run } = fieldFeedbackRun(handle)
+    const task = readPlanningFeedbackTask(run), invocationNonce = 'planning-feedback:0'
+    const requestHash = textHash(JSON.stringify([task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
+    const prior = repository.findInvocation(run.runId, invocationNonce, requestHash)
+    if (prior) {
+      const running = pending.get(JSON.stringify([run.runId, invocationNonce]))
+      return running ? running.promise : outcomeOf(volatileReceipts.get(prior.attempt.attemptId) ?? prior, task)
+    }
+    if (runAttempts(run.runId).length) throw new Error('GENERATION_FEEDBACK_ATTEMPT_CONFLICT')
+    return execute({ handle, invocationNonce, task }, false, false, false, false, false, false, undefined, true)
+  }
   return { begin: (selection: BeginGenerationRequest) => begin(selection), bindMaterialDecision, execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent, agents,
+    executeRuntimeFieldFeedback,
+    beginRuntimeFieldFeedback: (request: { input: PlanningFeedbackGenerationInput; modelId: string; uiActionNonce: string }) => {
+      if (deps.mode !== 'runtime-feedback') throw new Error('GENERATION_RUNTIME_FEEDBACK_ADMISSION_REQUIRED')
+      fieldFeedbackBase(request.input.baseId)
+      if (request.input.parentCandidateId) fieldFeedbackCandidate(request.input.parentCandidateId)
+      const view = beginPlanningFeedbackRun(request)
+      runtimePreparations.set(view.handle.runId, { ...view.handle })
+      return view
+    },
+    rollbackRuntimeFieldFeedbackPreparation: (handle: MainGenerationRunHandle) => {
+      if (deps.mode !== 'runtime-feedback') throw new Error('GENERATION_RUNTIME_FEEDBACK_ADMISSION_REQUIRED')
+      if (closed || !deps.database.open) throw new Error('GENERATION_OWNER_CLOSED')
+      if (deps.assertRetirementResources) deps.assertRetirementResources()
+      else deps.assertCurrent()
+      if (deps.database.inTransaction) throw new Error('GENERATION_RUNTIME_FEEDBACK_TRANSACTION_OPEN')
+      if (!isDeepStrictEqual(runtimePreparations.get(handle.runId), handle)) throw new Error('GENERATION_RUNTIME_FEEDBACK_PREPARATION_INVALID')
+      if (deps.database.prepare('SELECT 1 FROM generation_runs WHERE run_id=?').get(handle.runId)
+        || deps.database.prepare('SELECT 1 FROM generation_attempts WHERE run_id=?').get(handle.runId)
+        || deps.database.prepare('SELECT 1 FROM runtime_feedback_grants WHERE run_id=?').get(handle.runId))
+        throw new Error('GENERATION_RUNTIME_FEEDBACK_PREPARATION_DURABLE')
+      const leaseId = runLeases.get(handle.runId)
+      if (leaseId) {
+        deps.leases.close(leaseId)
+        runLeases.delete(handle.runId)
+      }
+      runtimePreparations.delete(handle.runId)
+    },
+    stageRuntimeFieldFeedback: (request: StagePlanningFeedbackCandidate) => {
+      if (deps.mode !== 'runtime-feedback') throw new Error('GENERATION_RUNTIME_FEEDBACK_ADMISSION_REQUIRED')
+      if (!deps.database.inTransaction) throw new Error('GENERATION_RUNTIME_FEEDBACK_TRANSACTION_REQUIRED')
+      fieldFeedbackBase(request.baseId)
+      if (request.parentCandidateId) fieldFeedbackCandidate(request.parentCandidateId)
+      const { input } = fieldFeedbackRun(handleOf(repository.get(request.runId)))
+      if (input.baseId !== request.baseId) throw new Error('PLANNING_FEEDBACK_GENERATION_UNPROVEN')
+      return planningFeedback().stage(request)
+    },
+    cancelRuntimeFieldFeedback: (handle: MainGenerationRunHandle) => {
+      if (deps.mode !== 'runtime-feedback') throw new Error('GENERATION_RUNTIME_FEEDBACK_ADMISSION_REQUIRED')
+      if (!isDeepStrictEqual(runtimePreparations.get(handle.runId), handle)) throw new Error('GENERATION_RUNTIME_FEEDBACK_PREPARATION_INVALID')
+      service.cancelRuntimeFeedback(handle.rootActionId)
+    },
     captureFieldFeedback: (target: PlanningFeedbackCoreTarget) => {
       const base = planningFeedback().captureBase(target)
       if (base.schemaVersion !== 1) throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
@@ -1292,7 +1388,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     preparePlanningFeedback: (input: PlanningFeedbackGenerationInput) => planningFeedback().prepare(input),
     beginPlanningFeedback: beginPlanningFeedbackRun,
     executePlanningFeedback: executePlanningFeedbackRun,
-    stagePlanningFeedback: (request: StagePlanningFeedbackCandidate) => planningFeedback().stage(request),
+    stagePlanningFeedback: (request: StagePlanningFeedbackCandidate) => { assertLegacyRunAccess(request.runId); return planningFeedback().stage(request) },
     adoptPlanningFeedback: (request: AdoptPlanningFeedbackCandidate) => planningFeedback().adopt(request),
     relineagePlanningFeedback: (request: RelineagePlanningFeedbackCandidate) => planningFeedback().relineage(request),
     listPlanningFeedbackCandidates: (baseId: string) => planningFeedback().listCandidates(baseId),
@@ -1821,16 +1917,28 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return viewOf(run)
     },
     hasPhysicalInFlight: () => physicalDispatches > 0 || pending.size > 0,
+    assertRetirable,
+    retireIdle: () => {
+      assertRetirable()
+      preparations.clear()
+      finalizedCharacters.close()
+      reviewRevisions.close()
+      closed = true
+      for (const leaseId of runLeases.values()) deps.leases.close(leaseId)
+      runLeases.clear()
+      runtimePreparations.clear()
+    },
     suspendForProjectClose: () => {
       preparations.clear()
       finalizedCharacters.close()
       reviewRevisions.close()
       if (closed) return
       for (const recordCancelled of [...unrecordedCalls]) recordCancelled()
-      service.suspendForProjectClose()
+      service.suspendForProjectClose(deps.mode === 'runtime-feedback')
       closed = true
       for (const leaseId of runLeases.values()) deps.leases.close(leaseId)
       runLeases.clear()
+      runtimePreparations.clear()
     },
   }
 }

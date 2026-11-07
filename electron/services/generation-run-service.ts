@@ -50,6 +50,11 @@ export interface ExecuteGenerationRequest {
     replayTask?: import('../../src/services/generation/generation-harness').GenerationTask;
     /** 首稿提示经主进程复核确实带有生成前定稿对账注入块；恢复据此决定续写/压缩是否沿用对账结果。 */
     reconciliationInjected?: boolean;
+    /** Main-only admission checked inside the same immediate transaction as reserve and dispatch marking. */
+    runtimeFeedbackAdmission?: () => void;
+}
+class RuntimeFeedbackAdmissionError extends Error {
+    constructor(readonly original: unknown) { super('GENERATION_RUNTIME_FEEDBACK_ADMISSION_REJECTED'); }
 }
 /** 作者暂停、取消、重开或本次运行总时长用尽时中止请求的原因；调用记录据此记为已取消，而不是服务商失败。存储失败、流不合规与关闭作品的中止不带它。 */
 export const GENERATION_STOPPED = new DOMException('GENERATION_STOPPED', 'AbortError');
@@ -131,10 +136,17 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 throw new Error('GENERATION_RESERVATION_INVALID');
             let receipt: GenerationExecutionReceipt;
             try {
-                receipt = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask, request.budgetDecision, request.reconciliationInjected);
+                receipt = request.runtimeFeedbackAdmission
+                    ? deps.repository.reserveRuntimeFeedback({ runId: request.runId, nonce: request.invocationNonce, requestHash,
+                        reservedTokens: request.reservedTokens, requestedOutputTokens: request.requestedOutputTokens,
+                        usagePolicy: policy, purpose: request.purpose, replayTask: request.replayTask, budgetDecision: request.budgetDecision }, () => {
+                        try { request.runtimeFeedbackAdmission!(); } catch (error) { throw new RuntimeFeedbackAdmissionError(error); }
+                    })
+                    : deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask, request.budgetDecision, request.reconciliationInjected);
             }
             catch (error) {
-                if (!/BUDGET|RESERVATION|EPOCH|DISPATCH|INVOCATION|CANCELLED/.test(error instanceof Error ? error.message : '')) {
+                if (error instanceof RuntimeFeedbackAdmissionError) throw error.original;
+                if (!/BUDGET|RESERVATION|EPOCH|DISPATCH|INVOCATION|CANCELLED|FEEDBACK_ATTEMPT_CONFLICT/.test(error instanceof Error ? error.message : '')) {
                     failedRoots.add(run.rootActionId);
                     try {
                         deps.repository.block(run.rootActionId, 'GENERATION_STORAGE_FAILED');
@@ -143,7 +155,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 }
                 throw error;
             }
-            if (receipt.attempt.status !== 'reserved')
+            if (receipt.attempt.status !== (request.runtimeFeedbackAdmission ? 'dispatch-marked' : 'reserved'))
                 return receipt;
             const attemptId = receipt.attempt.attemptId, controller = new AbortController();
             let text = receipt.artifact!.text, durable = text, revision = receipt.artifact!.revision, storageFailed = false, streamFailed = false, terminal = false, suspended = false;
@@ -194,7 +206,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             let timedOut = false;
             try {
                 try {
-                    deps.repository.markDispatched(attemptId);
+                    if (!request.runtimeFeedbackAdmission) deps.repository.markDispatched(attemptId);
                 }
                 catch (error) {
                     storageFailed = true;
@@ -360,12 +372,16 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             item.controller.abort(GENERATION_STOPPED); };
     return {
         open: (request: OpenGenerationRunRequest) => deps.repository.open(request), execute,
-        suspendForProjectClose: () => {
+        assertRetirable: () => {
+            if (pending.size || controllers.size) throw new Error('GENERATION_OWNER_BUSY');
+            if (unsavedTails.size) throw new Error('GENERATION_UNSAVED_TAIL_PRESENT');
+        },
+        suspendForProjectClose: (runtimeFeedback = false) => {
             // Flush synchronously while the captured DB is still open, then
             // persist unknown accounting before its owner closes the handle.
             for (const item of controllers.values()) item.flush();
             let failure: unknown;
-            try { deps.repository.recoverInterrupted(); } catch (error) { failure = error; }
+            try { deps.repository.recoverInterrupted(runtimeFeedback ? [...controllers.values()].map(item => item.rootId) : []); } catch (error) { failure = error; }
             for (const item of controllers.values()) {
                 try { item.suspend(); } catch (error) { failure ??= error; item.controller.abort(); }
             }
@@ -382,6 +398,10 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
         },
         pause: (rootId: string) => { deps.repository.pause(rootId); stopRoot(rootId); },
         cancel: (rootId: string) => { deps.repository.pause(rootId, true); stopRoot(rootId); },
+        cancelRuntimeFeedback: (rootId: string) => {
+            try { deps.repository.pause(rootId, true); }
+            finally { stopRoot(rootId); }
+        },
         resume: async (runId: string, next: RunBinding) => { const old = deps.repository.get(runId); if (!isDeepStrictEqual(old.binding.fingerprint, next.fingerprint) || old.binding.contextSnapshotId !== next.contextSnapshotId || !isDeepStrictEqual(old.binding.sourceManifest, next.sourceManifest) || !deps.validateRecovery || !await deps.validateRecovery(old.binding, next))
             throw new Error('GENERATION_RECOVERY_UNAUTHORIZED'); deps.repository.resume(runId, next); return deps.repository.get(runId); },
         restart: (oldRootId: string, request: OpenGenerationRunRequest) => { deps.repository.pause(oldRootId, true); stopRoot(oldRootId); return deps.repository.open(request); },

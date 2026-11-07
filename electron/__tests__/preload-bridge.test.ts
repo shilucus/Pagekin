@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AiNovelAPI } from '../../src/shared/desktop-api'
 import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../src/shared/project-runtime-contract'
+import { RUNTIME_FEEDBACK_CHANNELS } from '../../src/shared/runtime-feedback-contract'
 
 const electron = vi.hoisted(() => ({
   contextBridge: { exposeInMainWorld: vi.fn() },
@@ -51,5 +52,18 @@ describe('桌面预加载接口', () => {
     await expect(bridge.invoke('project-runtime:v1:dispatch', target))
       .rejects.toThrow('PROJECT_RUNTIME_CHANNEL_NOT_ALLOWED')
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(callsBefore)
+  })
+  it('forwards only closed runtime-feedback literals without manufacturing an execution grant', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const request = Object.freeze({ grantId: 'fictional-reference' })
+    for (const channel of RUNTIME_FEEDBACK_CHANNELS) {
+      await bridge.invoke(channel, request)
+      expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, request)
+    }
+    const calls = electron.ipcRenderer.invoke.mock.calls.length
+    for (const channel of ['runtime-feedback:v2:prepare', 'runtime-feedback:v1:adopt', 'runtime-feedback:v1:execute-any']) {
+      await expect(bridge.invoke(channel, request)).rejects.toThrow('RUNTIME_FEEDBACK_CHANNEL_NOT_ALLOWED')
+    }
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)
   })
 })

@@ -111,4 +111,27 @@ describe('project-scoped IPC session transport', () => {
     expect(invoke).toHaveBeenCalledExactlyOnceWith('planning-feedback:v1:list-runs', { baseId: 'base-A' },
       { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' })
   })
+  it('requires an explicit project session for runtime issuance and history, never for own-capability operations', async () => {
+    const request = { operationId: '11111111-1111-4111-8111-111111111111',
+      input: { baseId: 'base-A', feedback: 'Keep facts', constraints: [] }, modelId: 'fixture' }
+    const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    await ipc.invokeWithProjectSession(frozen, 'runtime-feedback:v1:prepare', request)
+    expect(invoke).toHaveBeenLastCalledWith('runtime-feedback:v1:prepare', request, frozen)
+    await ipc.invokeWithProjectSession(frozen, 'runtime-feedback:v1:read-history', { grantId: 'grant-A' })
+    expect(invoke).toHaveBeenLastCalledWith('runtime-feedback:v1:read-history', { grantId: 'grant-A' }, frozen)
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('runtime-feedback:v1:prepare', request)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    await expect(ipc.invoke('runtime-feedback:v1:read-history', { grantId: 'grant-A' })).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    const reference = { projectId: 'project-A', grantId: 'grant-A', revision: 1 }
+    for (const channel of ['runtime-feedback:v1:execute', 'runtime-feedback:v1:revoke'] as const) {
+      await ipc.invoke(channel, reference)
+      expect(invoke).toHaveBeenLastCalledWith(channel, reference)
+    }
+    await ipc.invoke('runtime-feedback:v1:read-receipt', { projectId: 'project-A', grantId: 'grant-A' })
+    expect(invoke).toHaveBeenLastCalledWith('runtime-feedback:v1:read-receipt', { projectId: 'project-A', grantId: 'grant-A' })
+    await ipc.invoke('runtime-feedback:v1:revoke-many', { references: [reference] })
+    expect(invoke).toHaveBeenLastCalledWith('runtime-feedback:v1:revoke-many', { references: [reference] })
+    await expect(ipc.invokeWithProjectSession(frozen, 'runtime-feedback:v1:execute', reference)).rejects.toThrow('通道不属于项目会话范围')
+  })
 })

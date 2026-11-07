@@ -25,10 +25,11 @@ type StoredUsage = { agentActions?: Record<string, ActionState>; agentAuthorSele
 /** Agent navigation/control lives on existing runs and attempt receipts. No second budget or writer. */
 export class AgentGeneration {
   constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository,
-    private readonly scope: { projectId: string; epoch: string }, private readonly assertCurrent: () => void, private readonly host: AgentHost) {
+    private readonly scope: { projectId: string; epoch: string }, private readonly assertCurrent: () => void, private readonly host: AgentHost,
+    recoverInterrupted = true) {
     // A renderer-owned tool may have crossed its commit point before the old owner
     // closed. Its unfinished claim is an unknown result, never permission to rerun.
-    this.db.transaction(() => {
+    if (recoverInterrupted) this.db.transaction(() => {
       const rows = this.db.prepare("SELECT a.attempt_id,a.usage_receipt_json FROM generation_attempts a JOIN generation_runs r ON r.run_id=a.run_id WHERE json_extract(r.binding_json,'$.projectId')=? AND json_extract(r.binding_json,'$.sourceManifest.operation')='agent-round'").all(scope.projectId) as { attempt_id: string; usage_receipt_json: string | null }[]
       for (const row of rows) {
         const usage = JSON.parse(row.usage_receipt_json ?? '{}') as StoredUsage

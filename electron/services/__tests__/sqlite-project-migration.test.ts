@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type BetterSqlite3 from 'better-sqlite3'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { ensureBaselineBlueprintTables } from '../../migrations/baseline-blueprint-schema'
-import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
 import { sqliteSchemaFingerprint } from '../../migrations/sqlite-schema-adapter'
 import { logicalTableName } from '../../migrations/m07-chapter-recycle'
 import { backupProjectSqlite, probeProjectSqlite, verifyProjectSqlite, upgradeProjectSqlite } from '../sqlite-project-migration'
@@ -440,6 +440,28 @@ it('preserves M08 rows in the pre-range domain when upgrading schema 9 to the in
  expect(upgraded.preFeedbackDomain).not.toEqual(before.domain)
  expect(upgraded.domain.tableCounts.planning_feedback_outline_revision).toBe(1)
  expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
+it('preserves schema 10 rows in the pre-grants domain when upgrading to the installed lane', async () => {
+ const f=fixture()
+ const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:10})
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
+ expect(upgraded.preGrantsDomain).toEqual(before.domain)
+ expect(upgraded.domain.tableCounts.runtime_feedback_grants).toBeUndefined()
+ expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
+it('rolls back a failed grants migration and retains the schema 10 author copy for retry', async () => {
+ const f=fixture()
+ const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:10})
+ const original=fs.readFileSync(f.target), registry=getDesktopMigrationRegistry()
+ const failing={...registry,implementations:registry.implementations.map(step=>step.id==='M10'
+  ? {...step,migrate:(reader: Parameters<typeof step.migrate>[0])=>{step.migrate(reader);throw new Error('grants-migration-interruption')}} : step)}
+ expect(()=>upgradeProjectSqlite({databasePath:f.target,registry:failing})).toThrow('grants-migration-interruption')
+ expect(probeProjectSqlite({databasePath:f.target})).toEqual(before)
+ expect(fs.readFileSync(f.target)).toEqual(original)
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.preGrantsDomain).toEqual(before.domain)
+ expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
 })
 it('resolves a trusted system scratch junction before validating its private snapshot', () => {
  const f=fixture(), physical=path.join(f.root,'scratch'), link=path.join(f.root,'scratch-link')

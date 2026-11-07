@@ -13,7 +13,7 @@ import { GenerationRunRepository } from '../../repositories/generation-run-repos
 import { PlanningFeedbackService } from '../planning-feedback-service'
 import { buildPlanningFeedbackTask } from '../planning-feedback-generation'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
-import { getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
 import { migrateSchema } from '../../migrations/runner'
 import { SqliteSchemaAdapter, sqliteSchemaFingerprint } from '../../migrations/sqlite-schema-adapter'
 import { exportPortableProject, sanitizePortableDatabase } from '../project-archive-service'
@@ -81,7 +81,7 @@ async function archive(base: string, root: string, projectId: string, name: stri
   const receipt = await exportPortableProject({ sourceProjectRoot: root,
     projectSession: { projectId, projectPath: root, leaseId: `lease-${name}` }, targetArchivePath, attemptParentPath,
     assertCurrentContext: () => undefined, assets: { snapshot: () => ({ files: [], verifyUnchanged: () => undefined }) } })
-  expect(receipt.sourceEvidence.schemaVersion).toBe(10)
+  expect(receipt.sourceEvidence.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
   return targetArchivePath
 }
 
@@ -268,7 +268,7 @@ describe('planning feedback portable history', () => {
     }
   })
 
-  it.each([8, 9] as const)('restores a schema-%s package without re-encoding v1 history and can export schema 10', async version => {
+  it.each([8, 9, 10] as const)('restores a schema-%s package without re-encoding v1 history and can export current schema', async version => {
     const f = fixture()
     const oldBase = repository(f.root, f.projectId).captureBase('coreOutline')
     closeProjectDatabase()
@@ -276,8 +276,8 @@ describe('planning feedback portable history', () => {
     try {
       db.transaction(() => initializeLegacyBaselineSchema(db))()
       migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), version)
-      if (version === 9) {
-        expect(sqliteSchemaFingerprint(db)).toBe('361b1c5416492d9e4a827119aaf8bcfdea25ecd52fc26e65207c77f901e780d2')
+      if (version >= 9) {
+        if (version === 9) expect(sqliteSchemaFingerprint(db)).toBe('361b1c5416492d9e4a827119aaf8bcfdea25ecd52fc26e65207c77f901e780d2')
         expect(JSON.stringify(oldBase.source)).toBe(schema9V1SourceJson)
         expect(oldBase.sourceHash).toBe(hash(schema9V1SourceJson))
         db.prepare("INSERT INTO project_core(id,core_outline,world_setting) VALUES('main','F0 outline','F0 world')").run()
@@ -335,7 +335,7 @@ describe('planning feedback portable history', () => {
     const target = path.join(f.base, `schema${version}-restored`)
     const restored = await restorePortableProject({ archivePath, targetProjectRoot: target })
     initProjectDatabase(target)
-    expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(10)
+    expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
     if (version === 8) expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM planning_feedback_candidates').pluck().get()).toBe(0)
     else {
       const history = repository(target, restored.targetProjectId)
@@ -352,7 +352,7 @@ describe('planning feedback portable history', () => {
     const twiceRoot = path.join(f.base, `schema${version}-twice`)
     const twice = await restorePortableProject({ archivePath: upgraded, targetProjectRoot: twiceRoot })
     initProjectDatabase(twiceRoot)
-    if (version === 9) {
+    if (version >= 9) {
       const history = repository(twiceRoot, twice.targetProjectId)
       expect(history.getBase(oldBase.baseId).sourceHash).toBe(oldBase.sourceHash)
       expect(history.candidateState('old-v1-candidate')).toBe('frozen')

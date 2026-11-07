@@ -35,7 +35,7 @@ describe('installed M08 planning feedback lane', () => {
     try {
       const before = { core: db.prepare('SELECT * FROM project_core').all(), contents: db.prepare('SELECT * FROM contents').all() }
       const result = migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), 9)
-      expect(CURRENT_DESKTOP_SCHEMA_VERSION).toBe(10)
+      expect(CURRENT_DESKTOP_SCHEMA_VERSION).toBe(11)
       expect(result.completedSteps).toEqual(['M08'])
       expect(db.prepare('SELECT * FROM project_core').all()).toEqual(before.core)
       expect(db.prepare('SELECT * FROM contents').all()).toEqual(before.contents)

@@ -11,9 +11,12 @@ export interface ProjectSqliteEvidence {
   domain: { tableCounts: Record<string, number>; authorContentHash: string }
   preIdentityDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preAssetDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
+  /** Target comparison across asset migration, not an old-source compatibility projection. */
+  assetMigrationDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preRecycleDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preFeedbackDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preFeedbackRangesDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
+  preGrantsDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
 }
 export interface ProjectAssetSourceEntry {
   readonly relativePath: string
@@ -275,7 +278,8 @@ export async function migrateProjectFormat<V, A = unknown>(options: {
         journal.sourceSchema.schemaVersion < 3 ? targetSchema.preIdentityDomain
           : journal.sourceSchema.schemaVersion < 8 ? targetSchema.preRecycleDomain
             : journal.sourceSchema.schemaVersion < 9 ? targetSchema.preFeedbackDomain
-              : journal.sourceSchema.schemaVersion < 10 ? targetSchema.preFeedbackRangesDomain : targetSchema.domain,
+              : journal.sourceSchema.schemaVersion < 10 ? targetSchema.preFeedbackRangesDomain
+                : journal.sourceSchema.schemaVersion < 11 ? targetSchema.preGrantsDomain : targetSchema.domain,
         journal.sourceSchema.domain,
       )) fail('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
       checkpoint('sqlite-backed-up')
@@ -300,8 +304,9 @@ export async function migrateProjectFormat<V, A = unknown>(options: {
       const verifiedTargetSchema = deps.verifySqlite(path.join(staging, deps.databaseName))
       if (verifiedTargetSchema.schemaVersion !== targetSchema.schemaVersion
         || verifiedTargetSchema.fingerprint !== targetSchema.fingerprint
-        || !isDeepStrictEqual(verifiedTargetSchema.preAssetDomain ?? verifiedTargetSchema.domain,
-          targetSchema.preAssetDomain ?? targetSchema.domain)) fail('PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED')
+        || !targetSchema.assetMigrationDomain || !verifiedTargetSchema.assetMigrationDomain
+        || !isDeepStrictEqual(verifiedTargetSchema.assetMigrationDomain,
+          targetSchema.assetMigrationDomain)) fail('PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED')
       await deps.closeHandles()
       if (treeFingerprint(source) !== journal.sourceFingerprint) fail('PROJECT_MIGRATION_SOURCE_CHANGED')
       journal.targetSchema = verifiedTargetSchema; journal.targetFingerprint = treeFingerprint(staging)

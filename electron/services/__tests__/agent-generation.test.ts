@@ -39,7 +39,9 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   const model: ModelProfile = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1', apiKey: 'synthetic-key', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'], capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: true, usage: true } }
   const spy = vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch ?? (async (_request, options) => { options.onVisible({ kind: 'delta', text: '我会检查。<tool_call>{"name":"read_project_state","arguments":{}}</tool_call>' }); return { finishReason: 'stop', usage: null } }))
   const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: () => JSON.stringify({key:'assistant_writing_identity',content:'冻结的合成提示词',systemRole:'写作助手'}) }
-  const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectPath: root, projectId: 'project', epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: spy,
+  const makeOwner = (epoch: string, mode?: 'runtime-feedback' | 'handoff') => createMainGenerationOwner({ database: db, projectPath: root, projectId: 'project', epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: spy,
+    ...(mode === 'runtime-feedback' ? { mode, runtimeFeedback: { assertActive: () => {}, assertDispatchAdmission: () => {} } } : {}),
+    ...(mode === 'handoff' ? { recoverInterrupted: false } : {}),
     buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
     rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding })
   const owner = makeOwner('epoch-1')
@@ -49,10 +51,26 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   const request={uiActionNonce:'作者动作',modelId:model.id,input}
   const begin=()=>owner.agents.begin(request)
   const round=async()=>{const start=begin();return owner.agents.executeRound({handle:start.handle,index:0})}
-  return {get db(){return db},owner,spy,request,begin,round,reopenStorage,model,deps}
+  return {get db(){return db},owner,spy,request,begin,round,reopenStorage,makeOwner,model,deps}
 }
 
 describe('Agent actual owner 与文件 SQLite',()=>{
+ it('runtime and idle handoff owners do not recover another Agent claim',async()=>{
+  const f=fixture(), result=await f.round(), ref=result.rounds[0]!.actions[0]!.ref
+  expect(f.owner.agents.claimTool({ref,confirmed:true}).execute).toBe(true)
+  const read=()=>f.db.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts WHERE attempt_id=?').get(ref.attemptId)
+  const before=read()
+  const runtime=f.makeOwner('runtime-epoch','runtime-feedback')
+  expect(read()).toEqual(before)
+  runtime.retireIdle()
+  const handoff=f.makeOwner('epoch-1','handoff')
+  expect(read()).toEqual(before)
+  handoff.retireIdle()
+  const restarted=f.makeOwner('epoch-2')
+  expect(read()).not.toEqual(before)
+  expect(restarted.agents.read(result.handle).rounds[0]!.actions[0]!.status).toBe('unknown')
+  restarted.retireIdle()
+ })
  it.each(['xml','json'])('仅visible进入artifact，%s工具协议保存为attempt控制元数据',async format=>{
   const raw=format==='xml'?'可见回答。<tool_call>{"name":"read_project_state","arguments":{"section":"core"}}</tool_call>':JSON.stringify({name:'read_project_state',arguments:{section:'core'}})
   const f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:raw});return {finishReason:'stop',usage:null}}), result=await f.round(), round=result.rounds[0]!

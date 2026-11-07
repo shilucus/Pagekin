@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { M01_GENERATION_SQL } from '../../migrations/m01-generation-runs';
 import { GenerationRunRepository, textHash, type OpenGenerationRunRequest } from '../../repositories/generation-run-repository';
-import { createGenerationRunService, settleProviderUsage, type ExecuteGenerationRequest, type GenerationProviderUsage } from '../generation-run-service';
+import { createGenerationRunService, settleProviderUsage, type ExecuteGenerationRequest, type GenerationProviderUsage, type GenerationRunServiceDependencies } from '../generation-run-service';
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3');
 const handles: import('better-sqlite3').Database[] = [];
 afterEach(() => { for (const db of handles.splice(0))
@@ -24,6 +24,77 @@ function fixture() {
     return { db, repository, open, policy, request, setNow: (value: number) => { now = value; } };
 }
 const usage: GenerationProviderUsage = { promptTokens: 50, completionTokens: 50, totalTokens: 100, reasoningTokens: 20, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true };
+describe('runtime feedback admission', () => {
+    it('aborts the admitted request even when cancellation persistence fails and retains an unsaved tail', async () => {
+        const f = fixture(), run = f.repository.open(f.open);
+        let finish!: (value: { usage: typeof usage; finishReason: string }) => void;
+        let signal!: AbortSignal, physicalPending = true;
+        const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>((_request, options) => {
+            signal = options.signal;
+            options.onVisible({ kind: 'delta', text: 'unsaved prefix' });
+            return new Promise<{ usage: typeof usage; finishReason: string }>(resolve => { finish = resolve; }).finally(() => { physicalPending = false; });
+        });
+        const service = createGenerationRunService({ repository: f.repository, dispatch });
+        const operation = service.execute({ ...f.request(run.runId), runtimeFeedbackAdmission: () => {} });
+        vi.spyOn(f.repository, 'pause').mockImplementation(() => { throw new Error('pause disk failure'); });
+        vi.spyOn(f.repository, 'snapshot').mockImplementation(() => { throw new Error('snapshot disk failure'); });
+        expect(() => service.cancelRuntimeFeedback(run.rootActionId)).toThrow('pause disk failure');
+        expect(signal.aborted).toBe(true);
+        expect(() => service.assertRetirable()).toThrow('GENERATION_OWNER_BUSY');
+        const receipt = await operation;
+        expect(receipt.failureCode).toBe('GENERATION_STORAGE_FAILED');
+        expect(receipt.unsavedTail).toBe('unsaved prefix');
+        expect(physicalPending).toBe(true);
+        expect(() => service.assertRetirable()).toThrow('GENERATION_UNSAVED_TAIL_PRESENT');
+        await expect(service.execute({ ...f.request(run.runId, 'another'), runtimeFeedbackAdmission: () => {} })).rejects.toThrow('GENERATION_STORAGE_FAILED');
+        expect(f.repository.budget(run.rootActionId).attempts).toHaveLength(1);
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        finish({ usage, finishReason: 'stop' });
+        await Promise.resolve();
+    });
+    it('rolls back denied admission without a storage failure or provider invocation', async () => {
+        const f = fixture(), run = f.repository.open(f.open), dispatch = vi.fn();
+        const service = createGenerationRunService({ repository: f.repository, dispatch });
+        const admission = vi.fn(() => { expect(f.db.inTransaction).toBe(true); throw new Error('GRANT_REVOKED'); });
+        await expect(service.execute({ ...f.request(run.runId), runtimeFeedbackAdmission: admission })).rejects.toThrow('GRANT_REVOKED');
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(f.repository.budget(run.rootActionId)).toMatchObject({ blockedCode: null, attempts: [] });
+        service.assertRetirable();
+    });
+    it('commits one dispatch before provider entry and settles only that attempt after revocation', async () => {
+        const f = fixture(), run = f.repository.open(f.open);
+        let active = true, finish!: (value: { usage: typeof usage; finishReason: string }) => void;
+        const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>((_request, options) => {
+            expect(f.db.inTransaction).toBe(false);
+            expect(f.repository.budget(run.rootActionId).attempts[0].status).toBe('dispatch-marked');
+            options.onVisible({ kind: 'delta', text: 'durable tail' });
+            return new Promise<{ usage: typeof usage; finishReason: string }>(resolve => { finish = resolve; });
+        });
+        const service = createGenerationRunService({ repository: f.repository, dispatch });
+        const operation = service.execute({ ...f.request(run.runId), runtimeFeedbackAdmission: () => {
+            expect(f.db.inTransaction).toBe(true);
+            if (!active) throw new Error('GRANT_REVOKED');
+        } });
+        expect(() => service.assertRetirable()).toThrow('GENERATION_OWNER_BUSY');
+        active = false;
+        finish({ usage, finishReason: 'stop' });
+        const result = await operation;
+        expect(result.attempt.status).toBe('settled');
+        expect(result.artifact?.text).toBe('durable tail');
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        service.assertRetirable();
+        await expect(service.execute({ ...f.request(run.runId, 'different'), runtimeFeedbackAdmission: () => { throw new Error('GRANT_REVOKED'); } })).rejects.toThrow('GRANT_REVOKED');
+        expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+    it('rejects a second invocation inside the immediate transaction', async () => {
+        const f = fixture(), run = f.repository.open(f.open), dispatch = vi.fn(async () => ({ usage, finishReason: 'stop' }));
+        const service = createGenerationRunService({ repository: f.repository, dispatch });
+        await service.execute({ ...f.request(run.runId), runtimeFeedbackAdmission: () => {} });
+        await expect(service.execute({ ...f.request(run.runId, 'second'), runtimeFeedbackAdmission: () => {} })).rejects.toThrow('GENERATION_FEEDBACK_ATTEMPT_CONFLICT');
+        expect(f.repository.budget(run.rootActionId).blockedCode).toBeNull();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+});
 describe('single durable generation owner', () => {
     it('rejects an invalid reservation before dispatch independently of unknown model liability', async () => {
         const f = fixture(), run = f.repository.open(f.open), dispatch = vi.fn();

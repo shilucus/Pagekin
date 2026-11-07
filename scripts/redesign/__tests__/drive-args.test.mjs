@@ -142,6 +142,12 @@ it('runtime routing is an independent extra scenario, not a baseline-all session
   assert.equal(parseArgs(['--scenario', 'runtime-routing-v1']).scenario, 'runtime-routing-v1')
 })
 
+it('runtime feedback is an independent extra scenario, not a baseline-all session', () => {
+  assert.equal(EXTRA_SCENARIOS['runtime-feedback-v1']?.shell, 'stage')
+  assert.equal(SCENARIOS['runtime-feedback-v1'], undefined)
+  assert.equal(parseArgs(['--scenario', 'runtime-feedback-v1']).scenario, 'runtime-feedback-v1')
+})
+
 it('启动参数固定中文界面，非中文宿主上场景照样按中文找控件', () => {
   const roots = createIsolatedRoots(tempParent())
   const args = launchArgs(roots)

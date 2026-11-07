@@ -5,6 +5,8 @@ import { createRequire } from 'node:module'
 import * as lance from '@lancedb/lancedb'
 import { Field, Schema, Utf8, Int32 } from 'apache-arrow'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
+import { GenerationRunRepository } from '../../repositories/generation-run-repository'
+import { PlanningFeedbackRepository } from '../../repositories/planning-feedback-repository'
 import { m05CharacterAssetMigrationAdapter, type M05CharacterAssetReceipt } from '../../migrations/m05-character-assets'
 import { probeProjectSqlite, backupProjectSqlite, verifyProjectSqlite } from '../sqlite-project-migration'
 import { exportVectorStoreForMigration, importVectorStoreForMigration, verifyVectorStoreForMigration, type VectorMigrationSnapshot } from '../vector-migration-snapshot'
@@ -42,6 +44,7 @@ function fixture() {
   put(path.join(legacy, 'unknown.txt'), 'preserved only')
   const evidence = (database: string, schemaVersion: number): ProjectSqliteEvidence => ({ schemaVersion, fingerprint: `fixture-schema-${schemaVersion}`,
     domain: { tableCounts: { contents: 1 }, authorContentHash: createHash('sha256').update(fs.readFileSync(database)).digest('hex') },
+    ...(schemaVersion >= 6 ? { assetMigrationDomain: { tableCounts: { contents: 1 }, authorContentHash: createHash('sha256').update(fs.readFileSync(database)).digest('hex') } } : {}),
     ...(schemaVersion >= 3 ? { preIdentityDomain: { tableCounts: { contents: 1 }, authorContentHash: createHash('sha256').update(fs.readFileSync(database)).digest('hex') } } : {}) })
   // This suite validates coordination with deterministic adapters; real SQLite/WAL/Lance tests are separate.
   const dependencies: ProjectMigrationDependencies<{ empty: true }, FixtureCharacterAssetReceipt> = {
@@ -324,12 +327,14 @@ it('rechecks restored physical state without overwriting later author edits', as
   expect(await migrateProjectFormat(options)).toMatchObject({ code: 'PROJECT_MIGRATION_RESTORE_CONFLICT' })
 })
 
-it.each(['missing-old-projection', 'changed-current-domain'] as const)('refuses %s in a schema3 conversion receipt', async mode => {
+it.each(['missing-old-projection', 'missing-asset-projection', 'changed-current-domain'] as const)('refuses %s in a schema3 conversion receipt', async mode => {
   const options = fixture(), backup = options.dependencies.backupSqlite
   options.dependencies.backupSqlite = async (...args) => {
     const result = await backup(...args)
     if (mode === 'missing-old-projection') { const copy = { ...result }; delete copy.preIdentityDomain; return copy }
-    return { ...result, domain: { ...result.domain, authorContentHash: 'wrong-current-domain' } }
+    if (mode === 'missing-asset-projection') { const copy = { ...result }; delete copy.assetMigrationDomain; return copy }
+    return { ...result, domain: { ...result.domain, authorContentHash: 'wrong-current-domain' },
+      assetMigrationDomain: { ...result.assetMigrationDomain!, authorContentHash: 'wrong-current-domain' } }
   }
   const result = await migrateProjectFormat(options)
   expect(result).toMatchObject({ state: 'blocked', code: mode === 'missing-old-projection' ? 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' : 'PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED' })
@@ -337,10 +342,11 @@ it.each(['missing-old-projection', 'changed-current-domain'] as const)('refuses 
   expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
 })
 
-it.each([8, 9])('checks old feedback-domain cutover from schema %s', async sourceVersion => {
- for (const mode of ['valid', 'missing', 'tampered'] as const) {
+it.each([8, 9, 10])('checks old feedback-domain cutover from schema %s', async sourceVersion => {
+ for (const mode of ['valid', 'missing', 'tampered', 'grant-pollution'] as const) {
   const options = fixture()
-  const projectionKey = sourceVersion === 8 ? 'preFeedbackDomain' : 'preFeedbackRangesDomain'
+  const projectionKey = sourceVersion === 8 ? 'preFeedbackDomain'
+    : sourceVersion === 9 ? 'preFeedbackRangesDomain' : 'preGrantsDomain'
   const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
   const sourcePath = path.join(options.legacy, 'vela.db')
   fs.unlinkSync(sourcePath)
@@ -358,7 +364,7 @@ it.each([8, 9])('checks old feedback-domain cutover from schema %s', async sourc
   const original = fs.readFileSync(sourcePath)
   const before = probeProjectSqlite({ databasePath: sourcePath })
   expect(before.schemaVersion).toBe(sourceVersion)
-  expect(CURRENT_DESKTOP_SCHEMA_VERSION).toBe(10)
+  expect(CURRENT_DESKTOP_SCHEMA_VERSION).toBe(11)
   const captured: { upgraded?: Awaited<ReturnType<typeof backupProjectSqlite>> } = {}
   options.dependencies.probeSqlite = databasePath => probeProjectSqlite({ databasePath })
   options.dependencies.backupSqlite = async (sourceDatabasePath, targetDatabasePath) => {
@@ -375,14 +381,41 @@ it.each([8, 9])('checks old feedback-domain cutover from schema %s', async sourc
     return upgraded
   }
   options.dependencies.verifySqlite = databasePath => verifyProjectSqlite({ databasePath })
+  if (mode === 'grant-pollution') {
+    const migrateAssets = options.dependencies.characterAssets.migrate
+    options.dependencies.characterAssets.migrate = async input => {
+      const receipt = await migrateAssets(input), target = new Database(input.stagingDatabasePath)
+      try {
+        target.pragma('foreign_keys = ON')
+        const planning = new PlanningFeedbackRepository(target, { projectId: options.projectId,
+          assertCurrent: () => undefined, isFrozen: () => false, assertGenerationCurrent: () => undefined, now: () => 100 })
+        const base = planning.captureBase('coreOutline'), proof = 'a'.repeat(64)
+        const run = new GenerationRunRepository(() => target, () => 100).open({ projectId: options.projectId,
+          epoch: 'unexpected-staging-runtime', operation: 'planning-feedback', uiActionNonce: 'unexpected-action',
+          frozenInputHash: proof, contextSnapshotId: 'unexpected-context', sourceRefs: [],
+          sourceManifest: { operation: 'planning-feedback' }, fingerprint: { chapterBriefHash: proof,
+            authorGuidanceHash: proof, dependencyHash: proof, contextSnapshotHash: proof, templateHash: proof,
+            skillSnapshotHash: proof, modelLeaseRevision: proof, policyHash: proof, outputContractHash: proof },
+          budget: { maxPhysicalRequests: 1, maxTokenLiability: 100, maxOutputPerRequest: 50, maxActiveElapsedMs: 1000 } })
+        target.prepare(`INSERT INTO runtime_feedback_grants
+          (grant_id,operation_key,project_id,revision,action,target,base_id,parent_candidate_id,run_id,request_hash,
+           state,candidate_id,decision_source,created_at,revoked_at)
+          VALUES(?,?,?,1,'planning-feedback-candidate','coreOutline',?,NULL,?,?,'active',NULL,'author-action',100,NULL)`)
+          .run(randomUUID(), randomUUID(), options.projectId, base.baseId, run.runId, proof)
+      } finally { target.close() }
+      return receipt
+    }
+  }
   const checkpoints: string[] = []
   const result = await migrateProjectFormat({ ...options, checkpoint: stage => { checkpoints.push(stage) } })
-  expect(captured.upgraded?.schemaVersion).toBe(10)
+  expect(captured.upgraded?.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
   expect(captured.upgraded?.[projectionKey]).toEqual(before.domain)
-  expect(captured.upgraded?.domain).not.toEqual(before.domain)
+  if (sourceVersion < 10) expect(captured.upgraded?.domain).not.toEqual(before.domain)
+  else expect(captured.upgraded?.domain).toEqual(before.domain)
   expect(captured.upgraded?.domain.tableCounts.planning_feedback_core_revision).toBe(1)
   if (mode !== 'valid') {
-    expect(result).toMatchObject({ state: 'blocked', code: 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' })
+    expect(result).toMatchObject({ state: 'blocked', code: mode === 'grant-pollution'
+      ? 'PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED' : 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' })
     expect(checkpoints).not.toContain('legacy-renamed')
     expect(checkpoints).not.toContain('target-renamed')
     expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
@@ -395,7 +428,7 @@ it.each([8, 9])('checks old feedback-domain cutover from schema %s', async sourc
   expect(fs.readFileSync(path.join(options.projectRoot, '.ai-novel-migration', `${result.migrationId}.legacy`, 'vela.db'))).toEqual(original)
   const target = new Database(path.join(result.storageRoot, 'project.db'), { readonly: true })
   try {
-    expect(target.pragma('user_version', { simple: true })).toBe(10)
+    expect(target.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
     expect(target.prepare('SELECT body FROM contents').pluck().get()).toBe('Synthetic author text')
     expect(target.prepare("SELECT core_outline FROM project_core WHERE id='main'").pluck().get()).toBe('Original outline')
     expect(target.prepare('SELECT COUNT(*) FROM planning_feedback_core_revision').pluck().get()).toBe(1)

@@ -25,6 +25,7 @@ export type PortableRuntimeFreezeTable =
   | 'planning_feedback_bases'
   | 'planning_feedback_candidates'
   | 'planning_feedback_adoptions'
+  | 'runtime_feedback_grants'
 
 export class PortableRuntimeFreezeError extends Error {
   constructor(readonly code: 'PORTABLE_RUNTIME_FREEZE_INVALID' | 'PORTABLE_RUNTIME_FROZEN') {

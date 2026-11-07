@@ -16,6 +16,7 @@ import * as settings from './pages/settings.mjs'
 import * as shell from './pages/shell.mjs'
 import * as stage from './pages/stage.mjs'
 import { RUNTIME_ROUTING_SCENARIOS } from './runtime-routing-scenario.mjs'
+import { RUNTIME_FEEDBACK_SCENARIOS } from './runtime-feedback-scenario.mjs'
 import { countUnits, STAGE_SAMPLE, stageChapterTitle } from './stage-sample.mjs'
 
 export const SAMPLE = Object.freeze({ name: '灯塔', chapterNumber: 1, blueprints: [[1, '旧港'], [2, '北堤']] })
@@ -157,6 +158,7 @@ function stableShape(value, key = '') {
  */
 export const EXTRA_SCENARIOS = {
   ...RUNTIME_ROUTING_SCENARIOS,
+  ...RUNTIME_FEEDBACK_SCENARIOS,
   /** 计划 RD-5 lane 1：两种外壳、trunk 与 head 各跑一次新建作品，比较作品文件夹里建出的文件。 */
   'new-project-files': { model: false, run: async ({ app, page, roots }) => {
     await stubOpenDialog(app, roots.projects)
