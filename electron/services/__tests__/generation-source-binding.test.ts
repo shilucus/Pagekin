@@ -89,6 +89,24 @@ function fixture(migrated = false) {
     return { root, db, input, deps, build: () => buildGenerationSourceBinding(deps, input) };
 }
 describe('main rebuilt generation sources', () => {
+    it.each(['zh-CN', 'en-US'] as const)('freezes actual %s writing language only for opted-in driver sources', language => {
+        const f = fixture();
+        f.db.prepare("UPDATE project_core SET writing_language=? WHERE id='main'").run(language);
+        const legacy = f.build().binding;
+        expect(legacy.sourceManifest).not.toHaveProperty('writingLanguage');
+        expect(legacy.sourceManifest).not.toHaveProperty('freezeWritingLanguage');
+        expect(compareGenerationSourceBindings(legacy, rebuildGenerationSourceBinding(f.deps, legacy, 'next').binding)).toBe(true);
+        const input = { ...f.input, freezeWritingLanguage: true as const };
+        const original = buildGenerationSourceBinding(f.deps, input).binding;
+        expect(original.sourceManifest).toMatchObject({ freezeWritingLanguage: true, writingLanguage: language });
+        expect(compareGenerationSourceBindings(original, rebuildGenerationSourceBinding(f.deps, original, 'next').binding)).toBe(true);
+        const other = language === 'zh-CN' ? 'en-US' : 'zh-CN';
+        f.db.prepare("UPDATE project_core SET writing_language=? WHERE id='main'").run(other);
+        const changed = rebuildGenerationSourceBinding(f.deps, original, 'next').binding;
+        expect(changed.sourceManifest.writingLanguage).toBe(other);
+        expect(compareGenerationSourceBindings(original, changed)).toBe(false);
+    });
+
     it.each([
         ['empty provenance', ''],
         ['missing field provenance', '{}'],

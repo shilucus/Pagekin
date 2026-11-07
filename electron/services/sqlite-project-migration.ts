@@ -51,6 +51,7 @@ export interface ProjectSqliteEvidence {
   preFeedbackRangesDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preGrantsDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preRecoveryTailsDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
+  preWorkflowDriverDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
 }
 
 function regular(file: string): void {
@@ -110,8 +111,9 @@ function physicalSnapshot(source: string) {
 type DomainColumns = { name: string; columns: string[] }[]
 const quoteIdentifier = (value: string) => '"' + value.replaceAll('"', '""') + '"'
 const M05_ASSET_TABLES = ['character_avatar_assets', 'character_avatar_unresolved'] as const
+const M12_WORKFLOW_TABLES = ['workflow_tasks', 'workflow_steps', 'workflow_effects'] as const
 function domainColumns(db: BetterSqlite3.Database, preIdentity = false, preAsset = false, preRecycle = preIdentity,
-  preFeedback = false, preFeedbackRanges = false, preGrants = false, preRecoveryTails = false): DomainColumns {
+  preFeedback = false, preFeedbackRanges = false, preGrants = false, preRecoveryTails = false, preWorkflowDriver = false): DomainColumns {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]
   const postLegacyTables = [...M02_AUXILIARY_TABLES, ...M03_REVIEW_CYCLE_TABLES, ...M05_ASSET_TABLES] as readonly string[]
   return tables.filter(({ name }) => (!preIdentity || !postLegacyTables.includes(name))
@@ -122,7 +124,9 @@ function domainColumns(db: BetterSqlite3.Database, preIdentity = false, preAsset
     && (!(preIdentity || preAsset || preRecycle || preFeedback || preFeedbackRanges || preGrants)
       || name !== 'runtime_feedback_grants')
     && (!(preIdentity || preAsset || preRecycle || preFeedback || preFeedbackRanges || preGrants || preRecoveryTails)
-      || name !== 'generation_recovery_tails')).map(({ name }) => ({ name,
+      || name !== 'generation_recovery_tails')
+    && (!(preIdentity || preAsset || preRecycle || preFeedback || preFeedbackRanges || preGrants || preRecoveryTails || preWorkflowDriver)
+      || !(M12_WORKFLOW_TABLES as readonly string[]).includes(name))).map(({ name }) => ({ name,
     columns: (db.prepare(`PRAGMA table_info(${quoteIdentifier(name)})`).all() as { name: string }[]).map(column => column.name)
       .filter(column => !preIdentity || name !== 'characters' || !(M02_ADDED_CHARACTER_COLUMNS as readonly string[]).includes(column))
       .filter(column => !preRecycle || logicalTableName(name) !== 'drafts' || !(M07_DRAFT_COLUMNS as readonly string[]).includes(column))
@@ -155,7 +159,8 @@ function inspect(db: BetterSqlite3.Database, registry: MigrationRegistry, target
     ...(result.version >= 9 ? { preFeedbackDomain: domain(db, domainColumns(db, false, false, false, true)) } : {}),
     ...(result.version >= 10 ? { preFeedbackRangesDomain: domain(db, domainColumns(db, false, false, false, false, true)) } : {}),
     ...(result.version >= 11 ? { preGrantsDomain: domain(db, domainColumns(db, false, false, false, false, false, true)) } : {}),
-    ...(result.version >= 12 ? { preRecoveryTailsDomain: domain(db, domainColumns(db, false, false, false, false, false, false, true)) } : {}) }
+    ...(result.version >= 12 ? { preRecoveryTailsDomain: domain(db, domainColumns(db, false, false, false, false, false, false, true)) } : {}),
+    ...(result.version >= 13 ? { preWorkflowDriverDomain: domain(db, domainColumns(db, false, false, false, false, false, false, false, true)) } : {}) }
 }
 function qualifiedLegacySource(db: BetterSqlite3.Database): string | null {
   const adapter = new SqliteSchemaAdapter(db)

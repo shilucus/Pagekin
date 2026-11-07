@@ -382,7 +382,7 @@ function draftTooShortError(
   ))
 }
 
-function chapterLengthContractText(writingLanguage: WritingLanguage, targetUnits: number): string {
+export function chapterLengthContractText(writingLanguage: WritingLanguage, targetUnits: number): string {
   const { minimum, maximum } = draftTargetUnitRange(targetUnits)
   const aimLow = Math.round(targetUnits * 0.85)
   return promptLanguageText(
@@ -396,7 +396,7 @@ function chapterLengthContractText(writingLanguage: WritingLanguage, targetUnits
  * 固定解释规则与作者原文分开角色；规则仅按写作语言和是否有前驱分支。
  * 首稿、续写、压缩和历史恢复共用规则，但不扩大各次请求的操作范围。
  */
-function chapterExecutionContractText(writingLanguage: WritingLanguage, chapterInfo: WriterChapterInfo): {
+export function chapterExecutionContractText(writingLanguage: WritingLanguage, chapterInfo: WriterChapterInfo): {
   rules: string
   authorItems: string
 } {

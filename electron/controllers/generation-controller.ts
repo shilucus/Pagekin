@@ -13,6 +13,8 @@ import type { LegacyRosterGenerationChannels } from '../../src/shared/legacy-ros
 import { assertPlanningFeedbackRequest, type PlanningFeedbackChannels, type PlanningFeedbackChannel } from '../../src/shared/planning-feedback-ipc'
 import { assertRuntimeFeedbackRequest, RUNTIME_FEEDBACK_CHANNELS } from '../../src/shared/runtime-feedback-contract'
 import type { PrepareRuntimeFeedbackRequest, RuntimeFeedbackReference, RuntimeFeedbackRevocationReceipt } from '../../src/shared/runtime-feedback-contract'
+import { assertWorkflowDriverRequest, WORKFLOW_DRIVER_CHANNELS, workflowDriverRequiresView } from '../../src/shared/workflow-driver-contract'
+import type { StartWorkflowDriverRequest, WorkflowDriverReference } from '../../src/shared/workflow-driver-contract'
 import { generationOutputContract } from '../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
@@ -26,6 +28,7 @@ import { ModelExecutionLeaseRegistry } from '../services/model-execution-lease'
 import { createMainGenerationOwner } from '../services/main-generation-owner'
 import type { MainGenerationOwnerDependencies } from '../services/main-generation-owner'
 import { RuntimeFeedbackAuthority, readRuntimeFeedbackReceipt } from '../services/runtime-feedback-authority'
+import { WorkflowDriverAuthority, readWorkflowDriverReceipt } from '../services/workflow-driver-authority'
 import { readMainGenerationPolicy, TaskBudgetPreflightError } from '../services/main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../services/generation-source-binding'
 import { LegacyVectorMigrationBlockedError } from '../services/knowledge-base-migration-error'
@@ -45,8 +48,11 @@ type Owner = ReturnType<typeof createMainGenerationOwner>
 type OwnerChannels = PlanningFeedbackChannels & LegacyRosterGenerationChannels & GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
 type LegacyOwnerEntry = { mode: 'legacy'; owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }
 type RuntimeOwnerEntry = { mode: 'runtime-feedback'; authority: RuntimeFeedbackAuthority; runtime: ProjectRuntime }
-const owners = new Map<Database.Database, LegacyOwnerEntry | RuntimeOwnerEntry>()
+type DriverOwnerEntry = { mode: 'workflow-driver'; authority: WorkflowDriverAuthority; runtime: ProjectRuntime }
+type OwnerEntry = LegacyOwnerEntry | RuntimeOwnerEntry | DriverOwnerEntry
+const owners = new Map<Database.Database, OwnerEntry>()
 const receiptAuthorities = new Map<Database.Database, Set<RuntimeFeedbackAuthority>>()
+const driverReceiptAuthorities = new Map<Database.Database, Set<WorkflowDriverAuthority>>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 const ownerRuntimes = new WeakMap<Owner, ProjectRuntime>()
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
@@ -87,7 +93,7 @@ export function assertImportGenerationSourcesCurrent(handle: MainGenerationRunHa
   entry.owner.assertImportGenerationSources(handle, slot, allowLegacyStyle)
 }
 
-const GENERATION_ERROR_CODE = /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER|PLANNING_FEEDBACK|RUNTIME_FEEDBACK)_[A-Z_]+$/u
+const GENERATION_ERROR_CODE = /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER|PLANNING_FEEDBACK|RUNTIME_FEEDBACK|WORKFLOW_DRIVER)_[A-Z_]+$/u
 const DIAGNOSTIC_MESSAGE_LIMIT = 200
 
 /**
@@ -103,7 +109,7 @@ export function generationIpcErrorCode(channel: string, error: unknown): string 
     return 'GENERATION_PROJECT_SESSION_STALE'
   }
   if (error instanceof Error && (error.message === 'SOURCE_DRAFT_CHANGED' || GENERATION_ERROR_CODE.test(error.message))) return error.message
-  if (channel.startsWith('planning-feedback:v1:') || channel.startsWith('runtime-feedback:')) {
+  if (channel.startsWith('planning-feedback:v1:') || channel.startsWith('runtime-feedback:') || channel.startsWith('workflow-driver:')) {
     console.error('[generation] unmapped feedback failure', { channel, name: error instanceof Error ? 'Error' : typeof error,
       stack: error instanceof Error ? errorStackFrames(error, 7) : undefined })
     return 'GENERATION_REQUEST_FAILED'
@@ -124,7 +130,7 @@ export function registerGenerationController(options: {
   applyProxyConfig: () => void
 }) {
   const activeHandlers = new Map<ProjectRuntime, number>()
-  const hasPhysical = (entry: LegacyOwnerEntry | RuntimeOwnerEntry | undefined) => entry?.mode === 'legacy'
+  const hasPhysical = (entry: OwnerEntry | undefined) => entry?.mode === 'legacy'
     ? entry.owner.hasPhysicalInFlight() : entry?.authority.hasPhysicalInFlight() ?? false
   projectRuntimeHost.registerBusyPredicate(runtime => (activeHandlers.get(runtime) ?? 0) > 0 || hasPhysical(owners.get(runtime.database)))
   projectRuntimeHost.onCloseRequested(runtime => {
@@ -137,6 +143,10 @@ export function registerGenerationController(options: {
     } catch (error) { failures.push(error) }
     for (const authority of receiptAuthorities.get(runtime.database) ?? []) {
       if (entry?.mode === 'runtime-feedback' && entry.authority === authority) continue
+      try { authority.requestProjectClose() } catch (error) { failures.push(error) }
+    }
+    for (const authority of driverReceiptAuthorities.get(runtime.database) ?? []) {
+      if (entry?.mode === 'workflow-driver' && entry.authority === authority) continue
       try { authority.requestProjectClose() } catch (error) { failures.push(error) }
     }
     if (failures.length) throw new AggregateError(failures, 'GENERATION_PROJECT_CLOSE_FAILED')
@@ -152,6 +162,11 @@ export function registerGenerationController(options: {
       if (entry?.mode !== 'runtime-feedback' || entry.authority !== authority) authority.suspendForProjectClose()
     }
     receiptAuthorities.delete(database)
+    for (const authority of driverReceiptAuthorities.get(database) ?? []) {
+      if (entry?.mode === 'workflow-driver' && entry.authority === authority) continue
+      authority.suspendForProjectClose()
+    }
+    driverReceiptAuthorities.delete(database)
   })
   const capturedResources = (runtime: ProjectRuntime) => {
     const database = runtime.database, identity = runtime.databaseIdentity, epoch = runtime.executionEpoch
@@ -162,19 +177,20 @@ export function registerGenerationController(options: {
       }
     }
   }
-  const assertRetirable = (runtime: ProjectRuntime, entry: LegacyOwnerEntry | RuntimeOwnerEntry) => {
+  const assertRetirable = (runtime: ProjectRuntime, entry: OwnerEntry) => {
     if ((activeHandlers.get(runtime) ?? 0) > 0) throw new Error('GENERATION_OWNER_BUSY')
     if (entry.mode === 'legacy') entry.owner.assertRetirable()
-    else entry.authority.prepareRetirement()
+    else if (entry.mode === 'runtime-feedback') entry.authority.prepareRetirement()
+    else entry.authority.assertRetirable()
   }
-  const retire = (runtime: ProjectRuntime, entry: LegacyOwnerEntry | RuntimeOwnerEntry) => {
+  const retire = (runtime: ProjectRuntime, entry: OwnerEntry) => {
     assertRetirable(runtime, entry)
     if (entry.mode === 'legacy') entry.owner.retireIdle()
     else entry.authority.retireIdle()
     owners.delete(runtime.database)
   }
   const makeOwner = (runtime: ProjectRuntime, epoch: string, assertCurrent: () => void,
-    extra: Partial<Pick<MainGenerationOwnerDependencies, 'mode' | 'runtimeFeedback' | 'assertNoRuntimeClaims' | 'recoverInterrupted'>> = {},
+    extra: Partial<Pick<MainGenerationOwnerDependencies, 'mode' | 'runtimeFeedback' | 'workflowDriver' | 'assertNoRuntimeClaims' | 'recoverInterrupted'>> = {},
     delivery?: Pick<MainGenerationOwnerDependencies, 'onSnapshot' | 'onReasoning'>) => {
     const sourceDependencies = { db: runtime.database, projectStorageRoot: runtime.projectStorageRoot,
       globalDataRoot: getGlobalDataRoot(), readBuiltinSkill: readBuiltinWritingSkill,
@@ -190,6 +206,7 @@ export function registerGenerationController(options: {
       transferOrigin: () => readPortableCurrentAuthority({ database: runtime.database,
         projectStorageRoot: runtime.projectStorageRoot, projectId: runtime.projectId })?.originProjectId,
       buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDependencies, { ...selection,
+        ...(extra.mode === 'workflow-driver' ? { freezeWritingLanguage: true as const } : {}),
         projectId: runtime.projectId, epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
       rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDependencies, previous, epoch,
         modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
@@ -352,6 +369,122 @@ export function registerGenerationController(options: {
     const context = owner.readContext(handle)
     if (context.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
     return context
+  }
+  const guardRuntimeKnowledge = async <T>(runtime: ProjectRuntime, snapshot: GenerationKnowledgeSnapshot | undefined,
+    operation: () => T | Promise<T>): Promise<T> => {
+    const assertResources = capturedResources(runtime)
+    assertResources()
+    projectRuntimeHost.assertWorkAvailable(runtime)
+    if (!snapshot) return operation()
+    return withKnowledgeSourceGate(runtime.projectStorageRoot, async () => {
+      const { verifyGenerationKnowledge } = await import('../services/generation-knowledge-source')
+      await verifyGenerationKnowledge({ projectStorageRoot: runtime.projectStorageRoot, snapshot })
+      assertResources()
+      projectRuntimeHost.assertWorkAvailable(runtime)
+      return operation()
+    })
+  }
+  const driverLaterFinalizedDocuments = (runtime: ProjectRuntime, chapterNumber: number) => new Set([
+    ...FinalizationRepository.knowledgeDocumentChapters(runtime.database),
+  ].filter(([, finalizedChapter]) => finalizedChapter >= chapterNumber).map(([documentId]) => documentId))
+  const authorizedWorkflowDriver = (runtime: ProjectRuntime): WorkflowDriverAuthority => {
+    const entry = owners.get(runtime.database)
+    if (entry?.mode === 'workflow-driver') {
+      projectRuntimeHost.assertWorkAvailable(runtime)
+      return entry.authority
+    }
+    projectRuntimeHost.assertTaskAvailable(runtime)
+    if (entry) assertRetirable(runtime, entry)
+    let driverOwner: Owner
+    const authority = new WorkflowDriverAuthority({ runtime,
+      assertAdmission: () => projectRuntimeHost.assertWorkAvailable(runtime),
+      assertCapturedResources: capturedResources(runtime),
+      acquireWork: () => projectRuntimeHost.acquireWork(runtime),
+      withKnowledge: (handle, operation) => guardRuntimeKnowledge(runtime,
+        readActionContext(driverOwner, handle).knowledgeSnapshot, operation),
+      withPreparedKnowledge: (preparationId, chapterNumber, operation) => {
+        const knowledge = driverOwner.preparedKnowledge(preparationId)
+        return guardRuntimeKnowledge(runtime, knowledge, () => {
+          const later = driverLaterFinalizedDocuments(runtime, chapterNumber)
+          if (knowledge.items.some(item => later.has(item.documentId))) throw new Error('GENERATION_KNOWLEDGE_SOURCE_STALE')
+          return operation()
+        })
+      },
+      createOwner: hooks => {
+        driverOwner = makeOwner(runtime, runtime.executionEpoch, () => projectRuntimeHost.assertOpen(runtime),
+          { mode: 'workflow-driver', recoverInterrupted: false, ...hooks })
+        ownerRuntimes.set(driverOwner, runtime)
+        return driverOwner
+      } })
+    if (entry) {
+      try { retire(runtime, entry) }
+      catch (error) {
+        try { authority.retireIdle() }
+        catch (cleanup) { throw new AggregateError([error, cleanup], 'WORKFLOW_DRIVER_HANDOFF_FAILED') }
+        throw error
+      }
+    }
+    owners.set(runtime.database, { mode: 'workflow-driver', authority, runtime })
+    let receipts = driverReceiptAuthorities.get(runtime.database)
+    if (!receipts) { receipts = new Set(); driverReceiptAuthorities.set(runtime.database, receipts) }
+    receipts.add(authority)
+    return authority
+  }
+  const driverCapabilityAuthority = (reference: WorkflowDriverReference, subject: WebContents): WorkflowDriverAuthority => {
+    const authority = [...driverReceiptAuthorities.values()].flatMap(value => [...value]).reverse().find(value =>
+      value.runtime.projectId === reference.projectId && value.hasIssuance(reference.taskId, subject))
+    if (!authority) throw new Error('WORKFLOW_DRIVER_CAPABILITY_REQUIRED')
+    return authority
+  }
+  for (const channel of WORKFLOW_DRIVER_CHANNELS) {
+    ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
+      try {
+        const requiresView = workflowDriverRequiresView(channel)
+        if (raw.length !== (requiresView ? 2 : 1)) throw new Error('WORKFLOW_DRIVER_PAYLOAD_INVALID')
+        const body = raw[0]
+        assertWorkflowDriverRequest(channel, body)
+        if (requiresView) {
+          const session = raw[1]
+          if (!isProjectSessionContext(session)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
+          const runtime = projectAccess.assertViewContext(session)
+          const fresh = () => {
+            if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+          }
+          if (channel === 'workflow-driver:v1:read-history') {
+            return await withRuntimeHandler(runtime, () => readWorkflowDriverReceipt(runtime,
+              (body as { taskId: string }).taskId, capturedResources(runtime)))
+          }
+          const authority = authorizedWorkflowDriver(runtime)
+          return await withRuntimeHandler(runtime, async () => {
+            if (channel === 'workflow-driver:v1:reauthorize') return authority.reauthorize(event.sender, (body as { taskId: string }).taskId, fresh)
+            if (channel === 'workflow-driver:v1:start') return authority.start(event.sender, body as StartWorkflowDriverRequest, fresh)
+            projectRuntimeHost.assertTaskAvailable(runtime)
+            const request = (body as { request: import('../../src/shared/generation-owner-contract').PrepareDraftContextRequest }).request
+            const baseline = authority.prepareDraftContextBinding(request)
+            const kb = await knowledgeBaseLoader.load()
+            fresh()
+            projectRuntimeHost.assertWorkAvailable(runtime)
+            const knowledge = await kb.captureWritingKnowledgeSnapshot(request.query, runtime.canonicalRoot, getEmbeddingConfig(),
+              [...driverLaterFinalizedDocuments(runtime, request.chapterNumber)], () => {
+                fresh()
+                projectRuntimeHost.assertWorkAvailable(runtime)
+              })
+            return guardRuntimeKnowledge(runtime, knowledge, () => {
+              fresh()
+              return authority.prepareDraftContext(request, knowledge, baseline)
+            })
+          })
+        }
+        const reference = (body as { reference: WorkflowDriverReference }).reference
+        const authority = driverCapabilityAuthority(reference, event.sender)
+        return await withRuntimeHandler(authority.runtime, () => {
+          if (channel === 'workflow-driver:v1:pause') return authority.pause(event.sender, reference)
+          if (channel === 'workflow-driver:v1:cancel') return authority.cancel(event.sender, reference)
+          if (channel === 'workflow-driver:v1:resume') return authority.resume(event.sender, reference)
+          return authority.readReceipt(event.sender, reference)
+        })
+      } catch (error) { throw new Error(generationIpcErrorCode(channel, error)) }
+    })
   }
   function register<C extends keyof OwnerChannels>(channel: C, arity: number,
     handler: (owner: Owner, ...args: OwnerChannels[C]['args']) => OwnerChannels[C]['return'] | Promise<OwnerChannels[C]['return']>,

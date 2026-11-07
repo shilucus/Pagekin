@@ -472,6 +472,28 @@ it('rolls back a failed recovery-tail migration and retains the schema 11 author
  expect(upgraded.preRecoveryTailsDomain).toEqual(before.domain)
  expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
 })
+it('preserves schema 12 rows in the pre-workflow-driver domain when upgrading to the installed lane', async () => {
+ const f=fixture()
+ const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:12})
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
+ expect(upgraded.preWorkflowDriverDomain).toEqual(before.domain)
+ for (const table of ['workflow_tasks','workflow_steps','workflow_effects']) expect(upgraded.domain.tableCounts[table]).toBeUndefined()
+ expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
+it('rolls back a failed workflow-driver migration and retains the schema 12 author copy for retry', async () => {
+ const f=fixture()
+ const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:12})
+ const original=fs.readFileSync(f.target), registry=getDesktopMigrationRegistry()
+ const failing={...registry,implementations:registry.implementations.map(step=>step.id==='M12'
+  ? {...step,migrate:(reader: Parameters<typeof step.migrate>[0])=>{step.migrate(reader);throw new Error('workflow-migration-interruption')}} : step)}
+ expect(()=>upgradeProjectSqlite({databasePath:f.target,registry:failing})).toThrow('workflow-migration-interruption')
+ expect(probeProjectSqlite({databasePath:f.target})).toEqual(before)
+ expect(fs.readFileSync(f.target)).toEqual(original)
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.preWorkflowDriverDomain).toEqual(before.domain)
+ expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
+})
 it('rolls back a failed grants migration and retains the schema 10 author copy for retry', async () => {
  const f=fixture()
  const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:10})

@@ -10,7 +10,8 @@ import { applyM07ChapterRecycle, createM07Migration } from './m07-chapter-recycl
 import { applyM08PlanningFeedback, createM08Migration, verifyM08PlanningFeedback } from './m08-planning-feedback'
 import { applyM09PlanningFeedbackRanges, createM09Migration } from './m09-planning-feedback-ranges'
 import { applyM10RuntimeFeedbackGrants, createM10Migration } from './m10-runtime-feedback-grants'
-import { applyM11GenerationRecoveryTails, createM11Migration } from './m11-generation-recovery-tails'
+import { applyM11GenerationRecoveryTails, createM11Migration, verifyM11GenerationRecoveryTails } from './m11-generation-recovery-tails'
+import { applyM12WorkflowDriver, createM12Migration } from './m12-workflow-driver'
 import { createM00Migration } from './m00-baseline'
 import { initializeLegacyBaselineSchema, applyBaselineTables } from './baseline-schema'
 import { ensureBaselineBlueprintTables } from './baseline-blueprint-schema'
@@ -18,7 +19,7 @@ import { SqliteSchemaAdapter, sqliteSchemaFingerprint } from './sqlite-schema-ad
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
-export const CURRENT_DESKTOP_SCHEMA_VERSION = 12
+export const CURRENT_DESKTOP_SCHEMA_VERSION = 13
 let installed: MigrationRegistry | undefined
 
 function installKnownDonorAvatarColumn(db: import('better-sqlite3').Database): void {
@@ -108,11 +109,17 @@ export function getDesktopMigrationRegistry(): MigrationRegistry {
     const m11 = createM11Migration({ database: native,
       verifyKnownSchema: db => recoveryTailFingerprints.has(sqliteSchemaFingerprint(native(db)))
         && verifyM02CharacterIdentity(native(db)) && verifyM03ReviewCycle(native(db)) && verifyM08PlanningFeedback(native(db)) })
-    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05, m06, m07, m08, m09, m10, m11], [
+    for (const db of references) db.transaction(() => applyM12WorkflowDriver(db))()
+    const driverSchemas = schemas(13), driverFingerprints = new Set(driverSchemas.map(item => item.fingerprint))
+    const m12 = createM12Migration({ database: native,
+      verifyKnownSchema: db => driverFingerprints.has(sqliteSchemaFingerprint(native(db)))
+        && verifyM02CharacterIdentity(native(db)) && verifyM03ReviewCycle(native(db)) && verifyM08PlanningFeedback(native(db))
+        && verifyM11GenerationRecoveryTails(native(db)) })
+    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05, m06, m07, m08, m09, m10, m11, m12], [
       ...sourceSchemas, ...baselineSchemas.map(schema => ({ ...schema, version: 0 })),
       ...baselineSchemas, ...generationSchemas, ...identitySchemas,
       ...reviewCycleSchemas, ...importEffectSchemas, ...characterAssetSchemas, ...mergeSnapshotSchemas, ...recycleSchemas, ...feedbackSchemas,
-      ...feedbackRangeSchemas, ...runtimeGrantSchemas, ...recoveryTailSchemas,
+      ...feedbackRangeSchemas, ...runtimeGrantSchemas, ...recoveryTailSchemas, ...driverSchemas,
     ])
     return installed
   } finally { reference.close(); donor.close() }

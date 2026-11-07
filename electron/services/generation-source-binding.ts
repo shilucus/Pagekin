@@ -55,6 +55,8 @@ export interface GenerationSourceBindingInput {
     batchId?: string;
     batchIntent?: GenerationBatchIntent;
     knowledgeSnapshot?: GenerationKnowledgeSnapshot;
+    /** Main-only opt-in for new driver runs; legacy source manifests stay byte-compatible. */
+    freezeWritingLanguage?: true;
     /** Injected only after the owner admits a main-issued finalized identity context. */
     finalizedCharacterContextHash?: string;
     /** Main-issued inputs persisted so recovery can revalidate the original selection. */
@@ -615,6 +617,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     if (deps.db.pragma('data_version', { simple: true }) !== dataVersion || deps.db.prepare('SELECT total_changes()').pluck().get() !== changes)
         fail('GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT');
     const sourceManifest = { version: 1, ...(input.finalizedCharacterContextHash ? { finalizedCharacterContextHash: input.finalizedCharacterContextHash } : {}), operation: input.operation, ...(input.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(input.knowledgeSnapshot) } : {}), ...(input.batchId ? { batchId: input.batchId } : {}), ...(input.batchIntent ? { batchIntent: structuredClone(input.batchIntent) } : {}), ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), ...(materialDecision ? { materialDecision, materialDecisionHash } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
+    if (input.freezeWritingLanguage) Object.assign(sourceManifest, { freezeWritingLanguage: true, writingLanguage: facts.language });
     if (planningFeedbackContext) {
         const task = buildPlanningFeedbackTask(planningFeedbackContext, planningFeedbackSkillText);
         Object.assign(sourceManifest, { planningFeedbackInput: structuredClone(input.planningFeedbackInput),

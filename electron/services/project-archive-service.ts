@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 
 import { CHARACTER_STATE_TEXT_FIELDS } from '../../src/shared/character-roster'
 import { parsePlanningFeedbackScope, parsePlanningFeedbackSource, type PlanningFeedbackSource } from '../../src/shared/planning-feedback'
+import { parseWorkflowDriverRecipe, parseWorkflowDriverStepInput } from '../../src/shared/workflow-driver-contract'
 import { readPortableCurrentAuthority } from './portable-current-authority'
 import { parsePortableRuntimeFreeze, readPortableRuntimeFreeze } from './portable-runtime-freeze'
 
@@ -77,6 +78,8 @@ const REQUIRED_JSON_PROJECTORS = new Set([
   'planning_feedback_adoptions.adopted_scope_json',
   'planning_feedback_candidates.constraints_json',
   'planning_feedback_candidates.origin_json',
+  'workflow_tasks.recipe_json',
+  'workflow_steps.input_json',
 ])
 const REVIEW_FINGERPRINT_FIELDS = [
   'chapterBriefHash', 'authorGuidanceHash', 'dependencyHash', 'contextSnapshotHash', 'templateHash',
@@ -116,6 +119,9 @@ const HISTORY_ID_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.f
   runtime_feedback_grants: ['grant_id'],
   review_cycles: ['cycle_id'],
   review_findings: ['cycle_id', 'finding_id'],
+  workflow_tasks: ['task_id'],
+  workflow_steps: ['step_id'],
+  workflow_effects: ['step_id'],
 })
 const HISTORY_STATE_COLUMNS = [
   'status', 'state', 'publication_status', 'manuscript_status', 'knowledge_status', 'revision_status',
@@ -126,6 +132,7 @@ const HISTORY_KEY_COLUMNS: Readonly<Record<string, { column: string; id: string 
   generation_attempts: { column: 'invocation_nonce', id: 'attempt_id' },
   generation_roots: { column: 'idempotency_key', id: 'root_action_id' },
   generation_runs: { column: 'open_key', id: 'run_id' },
+  workflow_tasks: { column: 'operation_key', id: 'task_id' },
 })
 
 export type ProjectArchiveServiceErrorCode =
@@ -808,6 +815,15 @@ function requiredProjection(key: string, value: unknown): unknown {
     case 'planning_feedback_adoptions.adopted_scope_json': return projectPlanningScope(value)
     case 'planning_feedback_candidates.constraints_json': return projectPlanningConstraints(value)
     case 'planning_feedback_candidates.origin_json': return projectPlanningOrigin(value)
+    case 'workflow_tasks.recipe_json': {
+      try { return parseWorkflowDriverRecipe(parseJson(value)) }
+      catch { return fail('PORTABLE_UNSAFE_PROJECTION') }
+    }
+    case 'workflow_steps.input_json': {
+      if (value === null) return null
+      try { return parseWorkflowDriverStepInput(parseJson(value)) }
+      catch { return fail('PORTABLE_UNSAFE_PROJECTION') }
+    }
     default: return fail('PORTABLE_UNSAFE_PROJECTION')
   }
 }
@@ -824,7 +840,7 @@ function neutralValue(key: string, column: { type: string; notnull: number }, va
     if (key === 'generation_artifacts.artifact_json') return JSON.stringify(projectArtifact(value, true))
   }
   if (value === null && (key === 'planning_feedback_bases.scope_json'
-    || key === 'planning_feedback_adoptions.adopted_scope_json')) return null
+    || key === 'planning_feedback_adoptions.adopted_scope_json' || key === 'workflow_steps.input_json')) return null
   if (REQUIRED_JSON_PROJECTORS.has(key)) return JSON.stringify(requiredProjection(key, value))
   if (JSON_NEUTRAL.has(key)) {
     if (value !== null) parseJson(value)

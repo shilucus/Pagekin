@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { AiNovelAPI } from '../../src/shared/desktop-api'
 import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../src/shared/project-runtime-contract'
 import { RUNTIME_FEEDBACK_CHANNELS } from '../../src/shared/runtime-feedback-contract'
+import { WORKFLOW_DRIVER_CHANNELS } from '../../src/shared/workflow-driver-contract'
 
 const electron = vi.hoisted(() => ({
   contextBridge: { exposeInMainWorld: vi.fn() },
@@ -63,6 +64,19 @@ describe('桌面预加载接口', () => {
     const calls = electron.ipcRenderer.invoke.mock.calls.length
     for (const channel of ['runtime-feedback:v2:prepare', 'runtime-feedback:v1:adopt', 'runtime-feedback:v1:execute-any']) {
       await expect(bridge.invoke(channel, request)).rejects.toThrow('RUNTIME_FEEDBACK_CHANNEL_NOT_ALLOWED')
+    }
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)
+  })
+  it('forwards only closed workflow driver literals and never adds an approval or generic execute route', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const request = Object.freeze({ taskId: 'fictional-task' })
+    for (const channel of WORKFLOW_DRIVER_CHANNELS) {
+      await bridge.invoke(channel, request)
+      expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, request)
+    }
+    const calls = electron.ipcRenderer.invoke.mock.calls.length
+    for (const channel of ['workflow-driver:v2:start', 'workflow-driver:v1:approve', 'workflow-driver:v1:execute']) {
+      await expect(bridge.invoke(channel, request)).rejects.toThrow('WORKFLOW_DRIVER_CHANNEL_NOT_ALLOWED')
     }
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)
   })

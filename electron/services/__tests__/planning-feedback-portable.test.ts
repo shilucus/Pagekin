@@ -268,7 +268,7 @@ describe('planning feedback portable history', () => {
     }
   })
 
-  it.each([8, 9, 10, 11] as const)('restores a schema-%s package without re-encoding v1 history and can export current schema', async version => {
+  it.each([8, 9, 10, 11, 12] as const)('restores a schema-%s package without re-encoding v1 history and can export current schema', async version => {
     const f = fixture()
     const oldBase = repository(f.root, f.projectId).captureBase('coreOutline')
     closeProjectDatabase()
@@ -278,6 +278,8 @@ describe('planning feedback portable history', () => {
       migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), version)
       // Captured by root from the immutable 546486a82832cf1c63d6754b98c9be5ebc28371a source closure.
       if (version === 11) expect(sqliteSchemaFingerprint(db)).toBe('3b151d5a40e96963f9f0e467823df87ece9002bc37de80b67c967f35122d2c7a')
+      // Captured by root from the immutable d33a907e50e4ece4bdaa334a40f6627d4a87cc39 source closure.
+      if (version === 12) expect(sqliteSchemaFingerprint(db)).toBe('5a3b32060a5e785f7a86872c6a32c2dc42646c50ba329c14af8a03fd0eccd9e0')
       if (version >= 9) {
         if (version === 9) expect(sqliteSchemaFingerprint(db)).toBe('361b1c5416492d9e4a827119aaf8bcfdea25ecd52fc26e65207c77f901e780d2')
         expect(JSON.stringify(oldBase.source)).toBe(schema9V1SourceJson)

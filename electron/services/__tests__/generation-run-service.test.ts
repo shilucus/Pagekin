@@ -27,6 +27,50 @@ function fixture() {
     return { db, repository, open, policy, request, setNow: (value: number) => { now = value; } };
 }
 const usage: GenerationProviderUsage = { promptTokens: 50, completionTokens: 50, totalTokens: 100, reasoningTokens: 20, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true };
+describe('workflow driver admission', () => {
+    it('keeps driver runs out of global recovery and recovers only the selected original run', () => {
+        const f = fixture();
+        f.db.exec('CREATE TABLE workflow_tasks (run_id TEXT NOT NULL)');
+        const run = f.repository.open(f.open), other = f.repository.open({ ...f.open, uiActionNonce: 'other' });
+        f.db.prepare('INSERT INTO workflow_tasks VALUES(?)').run(run.runId);
+        const held = f.repository.reserve(run.runId, 'held', textHash('held'), 200, 100);
+        f.repository.markDispatched(held.attempt.attemptId);
+        f.repository.recoverInterrupted();
+        expect(f.repository.receipt(held.attempt.attemptId).attempt.status).toBe('dispatch-marked');
+        const otherBefore = f.repository.get(other.runId);
+        f.repository.recoverWorkflowDriverRun(run.runId);
+        expect(f.repository.receipt(held.attempt.attemptId).attempt.status).toBe('unknown');
+        expect(f.repository.get(run.runId).status).toBe('paused');
+        expect(f.repository.get(other.runId)).toEqual(otherBefore);
+    });
+    it('admits two distinct model steps inside their reservation and dispatch transactions', async () => {
+        const f = fixture(), run = f.repository.open(f.open);
+        const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, events) => {
+            events.onVisible({ kind: 'delta', text: 'fictional output' });
+            return { usage, finishReason: 'stop' };
+        });
+        const service = createGenerationRunService({ repository: f.repository, dispatch });
+        const admit = vi.fn(() => { expect(f.db.inTransaction).toBe(true); });
+        const first = await service.execute({ ...f.request(run.runId, 'outline'), workflowDriverAdmission: admit });
+        const second = await service.execute({ ...f.request(run.runId, 'draft'), workflowDriverAdmission: admit });
+        expect(first.result?.finishReason).toBe('stop');
+        expect(second.result?.finishReason).toBe('stop');
+        expect(admit).toHaveBeenCalledTimes(2);
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        await service.execute({ ...f.request(run.runId, 'draft'), workflowDriverAdmission: admit });
+        expect(dispatch).toHaveBeenCalledTimes(2);
+    });
+    it('does not reserve, dispatch, or mark storage failure when final driver admission is revoked', async () => {
+        const f = fixture(), run = f.repository.open(f.open), dispatch = vi.fn();
+        const service = createGenerationRunService({ repository: f.repository, dispatch });
+        await expect(service.execute({ ...f.request(run.runId), workflowDriverAdmission: () => {
+            expect(f.db.inTransaction).toBe(true); throw new Error('WORKFLOW_DRIVER_REVOKED');
+        } })).rejects.toThrow('WORKFLOW_DRIVER_REVOKED');
+        expect(f.repository.budget(run.rootActionId).attempts).toHaveLength(0);
+        expect(f.repository.budget(run.rootActionId).blockedCode).toBeNull();
+        expect(dispatch).not.toHaveBeenCalled();
+    });
+});
 describe('runtime feedback admission', () => {
     it('does not preserve an unsaved tail until its logical attempt has settled', async () => {
         const f = fixture(), run = f.repository.open(f.open), recoveryTails = new GenerationRecoveryTailRepository(f.db, f.repository);

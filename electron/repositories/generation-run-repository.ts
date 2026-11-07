@@ -364,6 +364,21 @@ export class GenerationRunRepository {
             return this.receipt(receipt.attempt.attemptId);
         });
     }
+    reserveWorkflowDriver(request: {
+        runId: string; nonce: string; requestHash: string; reservedTokens: number; requestedOutputTokens: number;
+        usagePolicy: ProviderUsagePolicy; purpose?: string;
+        replayTask?: import('../../src/services/generation/generation-harness').GenerationTask;
+        budgetDecision?: import('../../src/services/generation/task-budget-planner').TaskBudgetDecision;
+    }, admit: () => void): GenerationExecutionReceipt {
+        return this.transaction(() => {
+            admit();
+            if (this.findInvocation(request.runId, request.nonce, request.requestHash)) fail('GENERATION_INVOCATION_CONFLICT');
+            const receipt = this.reserve(request.runId, request.nonce, request.requestHash, request.reservedTokens,
+                request.requestedOutputTokens, request.usagePolicy, request.purpose, request.replayTask, request.budgetDecision);
+            this.markDispatched(receipt.attempt.attemptId);
+            return this.receipt(receipt.attempt.attemptId);
+        });
+    }
     receipt(attemptId: string, budget?: GenerationBudgetReceipt): GenerationExecutionReceipt {
         const row = this.db().prepare(`${receiptSelect} WHERE t.attempt_id=?`).get(attemptId) as ReceiptRow | undefined;
         if (!row)
@@ -765,8 +780,9 @@ export class GenerationRunRepository {
                 }
         });
     }
-    resume(runId: string, next: RunBinding): void {
+    resume(runId: string, next: RunBinding, admit?: () => void): void {
         this.transaction(() => {
+            admit?.();
             this.assertBlueprintRecoveryWritable(runId);
             this.assertPlotOutlineWritable(runId);
             const run = this.get(runId), budget = this.budget(run.rootActionId);
@@ -783,11 +799,13 @@ export class GenerationRunRepository {
         this.transaction(() => {
             const hasGrants = Boolean(this.db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_feedback_grants'").get());
             const grantRoot = hasGrants ? this.db().prepare('SELECT 1 FROM runtime_feedback_grants g JOIN generation_runs r ON r.run_id=g.run_id WHERE r.root_action_id=? LIMIT 1') : null;
+            const hasDrivers = Boolean(this.db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_tasks'").get());
+            const driverRoot = hasDrivers ? this.db().prepare('SELECT 1 FROM workflow_tasks t JOIN generation_runs r ON r.run_id=t.run_id WHERE r.root_action_id=? LIMIT 1') : null;
             const roots = this.db().prepare('SELECT root_action_id FROM generation_roots').all() as {
                 root_action_id: string;
             }[];
             for (const { root_action_id: id } of roots) {
-                if (this.frozenRoot(id) || grantRoot?.get(id) && !runtimeRoots.includes(id)) continue;
+                if (this.frozenRoot(id) || driverRoot?.get(id) || grantRoot?.get(id) && !runtimeRoots.includes(id)) continue;
                 for (const attempt of this.budget(id).attempts)
                     if (attempt.status === 'dispatch-marked') {
                         attempt.status = 'unknown';
@@ -795,6 +813,20 @@ export class GenerationRunRepository {
                     }
                 this.pause(id);
             }
+        });
+    }
+    recoverWorkflowDriverRun(runId: string): void {
+        this.transaction(() => {
+            const run = this.get(runId);
+            if (!this.db().prepare('SELECT 1 FROM workflow_tasks WHERE run_id=?').get(runId) || this.frozenRoot(run.rootActionId))
+                fail('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED');
+            for (const attempt of this.budget(run.rootActionId).attempts) {
+                if (attempt.status === 'dispatch-marked') {
+                    attempt.status = 'unknown';
+                    this.db().prepare('UPDATE generation_attempts SET attempt_json=? WHERE attempt_id=?').run(encode(attempt), attempt.attemptId);
+                }
+            }
+            this.pause(run.rootActionId);
         });
     }
     private frozenRoot(rootId: string): boolean {

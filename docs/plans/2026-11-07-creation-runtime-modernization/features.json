@@ -260,7 +260,32 @@
       ],
       "rollback": "停止受理，暂停/排空可恢复任务；保留step/effect/receipt，不回滚已提交事实。",
       "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "status": "completed", "passes": true, "evidence": [
+        {
+          "type": "contract_review",
+          "sourceSha": "d33a907e50e4ece4bdaa334a40f6627d4a87cc39",
+          "artifactOrReceipt": "stage-4a-evidence.md#feature-acceptance",
+          "environment": "Windows x64; parent plus 45 frozen source/test hashes; accepted ADR-0032; independent requirements and lifecycle/storage reviewers",
+          "result": "Both reviewers accepted all three DRIVER-001 criteria and this package's G-CONTRACT/G-STORAGE: stable pre-effect commands/inputs, original receipt reconciliation, unknown no resend and frozen non-executable copied history",
+          "limitations": "Real bounded prepared-first-chapter-v1 infrastructure only. DRIVER-002 full batch/continuation/review, UI, real-model quality and platform qualification remain separate; global future gates are not accepted."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "d33a907e50e4ece4bdaa334a40f6627d4a87cc39",
+          "artifactOrReceipt": "stage-4a-evidence.md#actual-execution",
+          "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0; isolated fictional native SQLite and mock transport",
+          "result": "33-file union 1105/1105; later four updated scene/test files 81/81; current-verifier immutable schema12 two-copy conservation 1/1; typecheck/lint/color/i18n/source build exit 0",
+          "limitations": "Reports cover distinct frozen byte versions and overlapping cases, not a summed/full-suite result. Earlier failed reports remain failures. COMMIT gaps, native rollback, original recovery and close races are deterministic evidence, not all exercised by Electron."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "d33a907e50e4ece4bdaa334a40f6627d4a87cc39",
+          "artifactOrReceipt": "stage-4a-evidence.md#electron-execution",
+          "environment": "Windows x64; Electron 44.9.3; frozen three build hashes; isolated A/B projects; local fake model; light 1440x900",
+          "result": "Happy four real effects/two requests across view detach and original receipt resubscription; separate paused unknown/reauthorize/resume/cancel stays at one request with no draft save; normal quits and empty external/write/ignored/residual arrays",
+          "limitations": "Direct registered IPC, not renderer author workflow or real-model quality. PNGs inspected; network observation ends before quit. No actual process-restart, headless, installer or supported-platform qualification. Initial instrumentation failure retained."
+        }
+      ]
     },
     {
       "id": "DRIVER-002",

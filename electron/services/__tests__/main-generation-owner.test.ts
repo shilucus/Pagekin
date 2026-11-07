@@ -2,6 +2,7 @@ import { planBlueprintGenerationCost } from '../../../src/services/workflows/blu
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import contextLengthSamples from '../../llm/__tests__/provider-context-length-samples.json'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
@@ -18,6 +19,7 @@ import { readBuiltinWritingSkill } from '../../../src/shared/builtin-writing-ski
 import type { ArchitecturePlanningIntent, BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import { generationOutputContract, MAX_BATCH_CHAPTERS } from '../../../src/shared/generation-owner-contract'
 import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
+import { WorkflowDriverRepository } from '../../repositories/workflow-driver-repository'
 import type { GenerationTask } from '../../../src/services/generation/generation-harness'
 import { createMainOwnedGenerationRuntime, type MainGenerationSnapshot, type MainGenerationTransport } from '../../../src/services/generation/generation-runtime'
 import { formatGenerationBudgetDiagnostic } from '../../../src/services/generation/prompt-budget-failure'
@@ -53,7 +55,7 @@ afterEach(() => { vi.unstubAllGlobals(); for (const cleanup of cleanups.splice(0
 const task = { purpose: 'chapter-draft', output: 'visible-text' as const, messages: [{ role: 'user' as const, content: '保留作者事实，创作中文段落。' }] }
 function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silicon = false,
   onReasoning?: (event: { projectId: string; epoch: string; rootActionId: string; runId: string; attemptId: string; text: string }) => void,
-  onSnapshot?: import('../main-generation-owner').MainGenerationOwnerDependencies['onSnapshot']) {
+  onSnapshot?: import('../main-generation-owner').MainGenerationOwnerDependencies['onSnapshot'], freezeWritingLanguage = false) {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/s05-owner-tests')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'owner-'))
@@ -80,7 +82,8 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
       onReasoning,
       onSnapshot,
       buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDeps, { ...selection, projectId: 'project', epoch: capturedEpoch,
-        modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+        modelReceipt, policy, outputContract: generationOutputContract(selection),
+        ...(freezeWritingLanguage ? { freezeWritingLanguage: true as const } : {}) }).binding,
       rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDeps, previous, capturedEpoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
     })
   }
@@ -151,6 +154,8 @@ describe('early project close', () => {
       const attemptBefore = f.db.prepare('SELECT attempt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(tail.attemptId) as string
       expect(JSON.parse(attemptBefore).status).toBe('dispatch-marked')
       expect(f.owner.hasPhysicalInFlight()).toBe(true)
+      let physicalIdle = false
+      const physicalDrain = f.owner.whenPhysicalIdle().then(() => { physicalIdle = true })
       expect(() => f.owner.requestProjectClose()).toThrow('GENERATION_CLOSE_QUIESCE_FAILED')
       expect(f.owner.read(view.handle).unsavedTails![0].text).toBe(tail.text)
       f.db.exec('DROP TRIGGER reject_snapshot; DROP TRIGGER reject_settle')
@@ -163,7 +168,10 @@ describe('early project close', () => {
       lateVisible(' MUST NOT APPEAR')
       expect(f.owner.read(view.handle).recoveryTails![0].tailText).toBe('Retained fictional suffix')
       expect(dispatch).toHaveBeenCalledTimes(1)
+      expect(physicalIdle).toBe(false)
       release()
+      await physicalDrain
+      expect(physicalIdle).toBe(true)
       await vi.waitFor(() => expect(f.owner.hasPhysicalInFlight()).toBe(false))
       expect(() => f.owner.requestProjectClose()).not.toThrow()
     } finally {
@@ -1076,6 +1084,24 @@ describe('automatic short outline binding', () => {
     coverage: { required: 1, included: 1, complete: true }, included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author' as const, required: true, units: 1 }], omitted: [] }
   const outlineTask = { purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text' as const, messages: [{ role: 'user' as const, content: outlinePrompt }] }
   const draftTask = (content: string) => ({ ...task, messages: [{ role: 'user' as const, content }] })
+  it('hides a driver-bound run from legacy read and execution entry points', async () => {
+    const f = fixture(undefined, false, undefined, undefined, true)
+    f.db.prepare("UPDATE project_core SET writing_language='zh-CN' WHERE id='main'").run()
+    const run = f.owner.begin({ ...f.begin, materialDecision: decision })
+    const repository = new WorkflowDriverRepository(f.db, { projectId: 'project', assertCurrent: () => {}, isFrozen: () => false })
+    repository.issue({ taskId: randomUUID(), operationKey: randomUUID(), requestHash: textHash('fictional-driver'), runId: run.handle.runId,
+      recipe: { schemaVersion: 1, writingLanguage: 'zh-CN', outlineTask, baseDraftTask: draftTask(base) } })
+    expect(f.owner.list().some(item => item.handle.runId === run.handle.runId)).toBe(false)
+    expect(() => f.owner.read(run.handle)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    expect(() => f.owner.readContext(run.handle)).toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'legacy', task: outlineTask }))
+      .rejects.toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    await expect(f.owner.resume(run.handle)).rejects.toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    expect(() => f.owner.composeVisible(run.handle, ['missing'], undefined, DRAFT_VISIBLE_TEXT_VERSION))
+      .toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+    expect(() => f.owner.commitDraft({ handle: run.handle, chapterNumber: 1, source: 'write', expectedCompositionHash: textHash('fictional') }))
+      .toThrow('GENERATION_WORKFLOW_DRIVER_ACCESS_DENIED')
+  })
   it('generates and saves three chapters with edited blueprints in one owner session', async () => {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>()
     const f = fixture(dispatch)

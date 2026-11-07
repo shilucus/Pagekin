@@ -12,6 +12,7 @@ import { m05CharacterAssetMigrationAdapter, type M05CharacterAssetReceipt } from
 import { probeProjectSqlite, backupProjectSqlite, verifyProjectSqlite } from '../sqlite-project-migration'
 import { exportVectorStoreForMigration, importVectorStoreForMigration, verifyVectorStoreForMigration, type VectorMigrationSnapshot } from '../vector-migration-snapshot'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
+import { parseWorkflowDriverRecipe } from '../../../src/shared/workflow-driver-contract'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
@@ -343,12 +344,14 @@ it.each(['missing-old-projection', 'missing-asset-projection', 'changed-current-
   expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
 })
 
-it.each([8, 9, 10, 11])('checks old feedback-domain cutover from schema %s', async sourceVersion => {
- for (const mode of ['valid', 'missing', 'tampered', 'grant-pollution', 'tail-pollution'] as const) {
+it.each([8, 9, 10, 11, 12])('checks old feedback-domain cutover from schema %s', async sourceVersion => {
+ for (const mode of ['valid', 'missing', 'tampered', 'grant-pollution', 'tail-pollution', 'workflow-pollution'] as const) {
   const options = fixture()
   const projectionKey = sourceVersion === 8 ? 'preFeedbackDomain'
-    : sourceVersion === 9 ? 'preFeedbackRangesDomain' : sourceVersion === 10 ? 'preGrantsDomain' : 'preRecoveryTailsDomain'
+    : sourceVersion === 9 ? 'preFeedbackRangesDomain' : sourceVersion === 10 ? 'preGrantsDomain'
+      : sourceVersion === 11 ? 'preRecoveryTailsDomain' : 'preWorkflowDriverDomain'
   let tailInput: PreserveGenerationTailInput | undefined
+  let workflowRunId: string | undefined
   const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
   const sourcePath = path.join(options.legacy, 'vela.db')
   fs.unlinkSync(sourcePath)
@@ -362,20 +365,25 @@ it.each([8, 9, 10, 11])('checks old feedback-domain cutover from schema %s', asy
     if (sourceVersion === 9) source.prepare(`INSERT INTO planning_feedback_bases
       (base_id,schema_version,project_id,target,source_revision,source_hash,source_json,value,value_hash,created_at)
       VALUES('old-base',1,?,'coreOutline',1,'old-source-hash','{}','Original outline','old-value-hash',1)`).run(options.projectId)
-    if (mode === 'tail-pollution') {
+    if (mode === 'tail-pollution' || mode === 'workflow-pollution') {
+      if (mode === 'workflow-pollution') source.prepare("UPDATE project_core SET writing_language='en-US' WHERE id='main'").run()
       const runs = new GenerationRunRepository(() => source, () => 100), proof = 'a'.repeat(64)
       const run = runs.open({ projectId: options.projectId, epoch: 'fictional-source-epoch', operation: 'planning-feedback',
         uiActionNonce: 'fictional-source-action', frozenInputHash: proof, contextSnapshotId: 'fictional-source-context',
-        sourceRefs: [], sourceManifest: { operation: 'planning-feedback' }, fingerprint: { chapterBriefHash: proof,
+        sourceRefs: [], sourceManifest: { operation: 'planning-feedback', ...(mode === 'workflow-pollution'
+          ? { freezeWritingLanguage: true, writingLanguage: 'en-US' } : {}) }, fingerprint: { chapterBriefHash: proof,
           authorGuidanceHash: proof, dependencyHash: proof, contextSnapshotHash: proof, templateHash: proof,
           skillSnapshotHash: proof, modelLeaseRevision: proof, policyHash: proof, outputContractHash: proof },
         budget: { maxPhysicalRequests: 1, maxTokenLiability: 100, maxOutputPerRequest: 50, maxActiveElapsedMs: 1000 } })
-      const reserved = runs.reserve(run.runId, 'fictional-source-invocation', proof, 100, 50)
-      runs.markDispatched(reserved.attempt.attemptId)
-      const artifact = runs.snapshot(reserved.attempt.attemptId, 0, 'Fictional durable prefix')
-      runs.settle(reserved.attempt.attemptId, null, 'error')
-      tailInput = { attemptId: reserved.attempt.attemptId, artifactId: artifact.artifactId,
-        durableRevision: artifact.revision, prefixHash: artifact.textHash, text: 'Unexpected staging-only tail' }
+      if (mode === 'workflow-pollution') workflowRunId = run.runId
+      else {
+        const reserved = runs.reserve(run.runId, 'fictional-source-invocation', proof, 100, 50)
+        runs.markDispatched(reserved.attempt.attemptId)
+        const artifact = runs.snapshot(reserved.attempt.attemptId, 0, 'Fictional durable prefix')
+        runs.settle(reserved.attempt.attemptId, null, 'error')
+        tailInput = { attemptId: reserved.attempt.attemptId, artifactId: artifact.artifactId,
+          durableRevision: artifact.revision, prefixHash: artifact.textHash, text: 'Unexpected staging-only tail' }
+      }
     }
   } finally { source.close() }
   const original = fs.readFileSync(sourcePath)
@@ -433,6 +441,33 @@ it.each([8, 9, 10, 11])('checks old feedback-domain cutover from schema %s', asy
       return receipt
     }
   }
+  if (mode === 'workflow-pollution') {
+    const migrateAssets = options.dependencies.characterAssets.migrate
+    options.dependencies.characterAssets.migrate = async input => {
+      const receipt = await migrateAssets(input), target = new Database(input.stagingDatabasePath)
+      try {
+        target.pragma('foreign_keys=ON')
+        const taskId = randomUUID(), recipe = parseWorkflowDriverRecipe({ schemaVersion: 1, writingLanguage: 'en-US',
+          outlineTask: { purpose: 'chapter-draft-short-outline', output: 'visible-text', messages: [{ role: 'user', content: 'Fictional outline' }] },
+          baseDraftTask: { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: 'Fictional draft' }] } })
+        const json = JSON.stringify(recipe), recipeHash = createHash('sha256').update(json).digest('hex')
+        const requestHash = createHash('sha256').update('Fictional staging-only workflow request').digest('hex')
+        target.prepare(`INSERT INTO workflow_tasks
+          (task_id,project_id,operation_key,request_hash,template,run_id,revision,state,blocked_code,recipe_json,recipe_hash,created_at,updated_at)
+          VALUES(?,?,?,?,'prepared-first-chapter-v1',?,1,'ready',NULL,?,?,100,100)`)
+          .run(taskId, options.projectId, randomUUID(), requestHash, workflowRunId, json, recipeHash)
+        const insert = target.prepare(`INSERT INTO workflow_steps
+          (step_id,task_id,ordinal,kind,command_id,invocation_nonce,input_json,input_hash) VALUES(?,?,?,?,?,?,NULL,NULL)`)
+        for (const [ordinal, kind] of ['outline', 'draft', 'compose', 'commit'].entries()) {
+          insert.run(randomUUID(), taskId, ordinal, kind, randomUUID(), ordinal < 2 ? randomUUID() : null)
+        }
+      } finally { target.close() }
+      const injected = verifyProjectSqlite({ databasePath: input.stagingDatabasePath })
+      expect(injected.assetMigrationDomain?.tableCounts.workflow_tasks).toBe(1)
+      expect(injected.preWorkflowDriverDomain?.tableCounts.workflow_tasks).toBeUndefined()
+      return receipt
+    }
+  }
   const checkpoints: string[] = []
   const result = await migrateProjectFormat({ ...options, checkpoint: stage => { checkpoints.push(stage) } })
   expect(captured.upgraded?.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
@@ -441,7 +476,7 @@ it.each([8, 9, 10, 11])('checks old feedback-domain cutover from schema %s', asy
   else expect(captured.upgraded?.domain).toEqual(before.domain)
   expect(captured.upgraded?.domain.tableCounts.planning_feedback_core_revision).toBe(1)
   if (mode !== 'valid') {
-    expect(result).toMatchObject({ state: 'blocked', code: mode === 'grant-pollution' || mode === 'tail-pollution'
+    expect(result, JSON.stringify({ sourceVersion, mode, result, checkpoints })).toMatchObject({ state: 'blocked', code: mode === 'grant-pollution' || mode === 'tail-pollution' || mode === 'workflow-pollution'
       ? 'PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED' : 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' })
     expect(checkpoints).not.toContain('legacy-renamed')
     expect(checkpoints).not.toContain('target-renamed')

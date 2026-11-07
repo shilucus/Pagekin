@@ -156,6 +156,15 @@ it('runtime lifecycle is an independent fake-model extra scenario', () => {
   assert.throws(() => parseArgs(['--scenario', 'runtime-lifecycle-v1', '--real-model']))
 })
 
+it.each(['workflow-driver-v1', 'workflow-driver-unknown-v1'])('registers %s only as an isolated fake-model extra', name => {
+  assert.equal(EXTRA_SCENARIOS[name]?.shell, 'stage')
+  assert.equal(EXTRA_SCENARIOS[name]?.model, true)
+  assert.equal(SCENARIOS[name], undefined)
+  assert.equal(JSON.stringify(BASELINE_SESSIONS).includes(name), false)
+  assert.equal(parseArgs(['--scenario', name]).scenario, name)
+  assert.throws(() => parseArgs(['--scenario', name, '--real-model']))
+})
+
 it('启动参数固定中文界面，非中文宿主上场景照样按中文找控件', () => {
   const roots = createIsolatedRoots(tempParent())
   const args = launchArgs(roots)

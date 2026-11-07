@@ -134,4 +134,22 @@ describe('project-scoped IPC session transport', () => {
     expect(invoke).toHaveBeenLastCalledWith('runtime-feedback:v1:revoke-many', { references: [reference] })
     await expect(ipc.invokeWithProjectSession(frozen, 'runtime-feedback:v1:execute', reference)).rejects.toThrow('通道不属于项目会话范围')
   })
+  it('keeps fresh driver authorization separate from view-independent task control', async () => {
+    const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
+    const taskId = '11111111-1111-4111-8111-111111111111'
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    await ipc.invokeWithProjectSession(frozen, 'workflow-driver:v1:reauthorize', { taskId })
+    expect(invoke).toHaveBeenLastCalledWith('workflow-driver:v1:reauthorize', { taskId }, frozen)
+    await ipc.invokeWithProjectSession(frozen, 'workflow-driver:v1:read-history', { taskId })
+    expect(invoke).toHaveBeenLastCalledWith('workflow-driver:v1:read-history', { taskId }, frozen)
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('workflow-driver:v1:reauthorize', { taskId })).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    await expect(ipc.invoke('workflow-driver:v1:read-history', { taskId })).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    const request = { reference: { projectId: 'project-A', taskId, revision: 1 } }
+    for (const channel of ['workflow-driver:v1:read-receipt', 'workflow-driver:v1:pause', 'workflow-driver:v1:cancel', 'workflow-driver:v1:resume'] as const) {
+      await ipc.invoke(channel, request)
+      expect(invoke).toHaveBeenLastCalledWith(channel, request)
+    }
+    await expect(ipc.invokeWithProjectSession(frozen, 'workflow-driver:v1:resume', request)).rejects.toThrow('通道不属于项目会话范围')
+  })
 })
