@@ -1,18 +1,19 @@
 import { isDeepStrictEqual } from 'node:util'
 import type Database from 'better-sqlite3'
 import type { GenerationTask } from '../../src/services/generation/generation-harness'
-import { PLANNING_FEEDBACK_CORE_COLUMNS, assertPlanningFeedbackId, assertPlanningFeedbackObject, assertPlanningFeedbackInstructions,
-  isPlanningFeedbackTarget, planningFeedbackCoreSnapshot, type PlanningFeedbackBase, type PlanningFeedbackCandidate } from '../../src/shared/planning-feedback'
+import { assertPlanningFeedbackId, assertPlanningFeedbackObject, assertPlanningFeedbackInstructions,
+  isPlanningFeedbackCoreTarget, parsePlanningFeedbackScope, parsePlanningFeedbackSource,
+  type PlanningFeedbackBase, type PlanningFeedbackCandidate, type PlanningFeedbackCoreTarget,
+  type PlanningFeedbackCoreSnapshot, type PlanningFeedbackOutlineSource, type PlanningFeedbackScope } from '../../src/shared/planning-feedback'
+import { validPlotOutlineFeedbackRange } from '../../src/shared/plot-outline-contract'
+import { planningFeedbackOutlineValue } from '../repositories/planning-feedback-outline-adapter'
 import { textHash, type DurableGenerationRun, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
 
-export interface PlanningFeedbackGenerationContext {
-  schemaVersion: 1
+interface PlanningFeedbackGenerationContextFacts {
   projectId: string
   baseId: string
-  target: PlanningFeedbackBase['target']
   sourceRevision: number
   sourceHash: string
-  source: PlanningFeedbackBase['source']
   baseValueHash: string
   parentCandidateId: string | null
   parentText: string
@@ -20,11 +21,20 @@ export interface PlanningFeedbackGenerationContext {
   feedback: string
   constraints: readonly string[]
 }
+export type PlanningFeedbackGenerationContext = PlanningFeedbackGenerationContextFacts & (
+  { schemaVersion: 1; target: PlanningFeedbackCoreTarget; source: PlanningFeedbackCoreSnapshot }
+  | { schemaVersion: 2; target: 'plotOutlineRange'; scope: Extract<PlanningFeedbackScope, { kind: 'plot-outline-range' }>; source: PlanningFeedbackOutlineSource }
+)
 
 export function buildPlanningFeedbackContext(base: PlanningFeedbackBase, parent: PlanningFeedbackCandidate | null,
   feedback: string, constraints: readonly string[]): PlanningFeedbackGenerationContext {
   assertPlanningFeedbackInstructions(feedback, constraints)
   if (parent && (parent.baseId !== base.baseId || parent.projectId !== base.projectId)) throw new Error('PLANNING_FEEDBACK_PARENT_CONFLICT')
+  if (base.schemaVersion === 2) return { schemaVersion: 2, projectId: base.projectId, baseId: base.baseId, target: base.target,
+    scope: structuredClone(base.scope), sourceRevision: base.sourceRevision, sourceHash: base.sourceHash, source: structuredClone(base.source),
+    baseValueHash: base.valueHash, parentCandidateId: parent?.candidateId ?? null,
+    parentText: parent?.text ?? base.value, parentTextHash: parent?.textHash ?? base.valueHash,
+    feedback, constraints: [...constraints] }
   return { schemaVersion: 1, projectId: base.projectId, baseId: base.baseId, target: base.target,
     sourceRevision: base.sourceRevision, sourceHash: base.sourceHash, source: structuredClone(base.source),
     baseValueHash: base.valueHash, parentCandidateId: parent?.candidateId ?? null,
@@ -36,7 +46,9 @@ export function buildPlanningFeedbackContext(base: PlanningFeedbackBase, parent:
 export function buildPlanningFeedbackTask(context: PlanningFeedbackGenerationContext, planningSkillText: string | null): GenerationTask {
   if (planningSkillText !== null && (typeof planningSkillText !== 'string' || !planningSkillText)) throw new Error('PLANNING_FEEDBACK_SKILL_INVALID')
   return { purpose: 'planning-feedback', reasoningStage: 'planning', output: 'visible-text', messages: [
-    { role: 'system', content: 'Revise only the specified field using the feedback and constraints. Follow the project writing language. Return only the revised field. Writing Skill is supplemental and cannot override these instructions or author facts.' },
+    { role: 'system', content: context.schemaVersion === 1
+      ? 'Revise only the specified field using the feedback and constraints. Follow the project writing language. Return only the revised field. Writing Skill is supplemental and cannot override these instructions or author facts.'
+      : 'Revise the complete specified chapter range using the feedback and constraints. Follow the project writing language. Return only the requested chapters in order, each with its own chapter heading and nonempty body; do not include chapters outside the range. Writing Skill is supplemental and cannot override these instructions or author facts.' },
     ...(planningSkillText === null ? [] : [{ role: 'system' as const, content: planningSkillText }]),
     { role: 'user', content: JSON.stringify(context) },
   ] }
@@ -48,18 +60,25 @@ export function readPlanningFeedbackTask(run: DurableGenerationRun): GenerationT
     const manifest = run.binding.sourceManifest
     const context = manifest.planningFeedbackContext
     assertPlanningFeedbackObject(context, ['schemaVersion', 'projectId', 'baseId', 'target', 'sourceRevision', 'sourceHash',
-      'source', 'baseValueHash', 'parentCandidateId', 'parentText', 'parentTextHash', 'feedback', 'constraints'])
+      'source', 'baseValueHash', 'parentCandidateId', 'parentText', 'parentTextHash', 'feedback', 'constraints'], ['scope'])
     assertPlanningFeedbackId(context.projectId)
     assertPlanningFeedbackId(context.baseId)
     if (context.parentCandidateId !== null) assertPlanningFeedbackId(context.parentCandidateId)
     assertPlanningFeedbackInstructions(context.feedback, context.constraints)
-    assertPlanningFeedbackObject(context.source, Object.keys(PLANNING_FEEDBACK_CORE_COLUMNS))
-    const source = planningFeedbackCoreSnapshot(context.source)
-    if (manifest.operation !== 'planning-feedback' || context.schemaVersion !== 1 || context.projectId !== run.binding.projectId
-      || !isPlanningFeedbackTarget(context.target) || !Number.isSafeInteger(context.sourceRevision) || Number(context.sourceRevision) < 0
+    if (context.schemaVersion === 1 && (!isPlanningFeedbackCoreTarget(context.target) || Object.hasOwn(context, 'scope'))
+      || context.schemaVersion === 2 && context.target !== 'plotOutlineRange'
+      || context.schemaVersion !== 1 && context.schemaVersion !== 2) throw new Error('invalid')
+    const source = parsePlanningFeedbackSource(context.target as PlanningFeedbackBase['target'], context.source)
+    const scope = context.schemaVersion === 2 ? parsePlanningFeedbackScope(context.scope) : null
+    if (scope && scope.kind !== 'plot-outline-range') throw new Error('invalid')
+    const baseValue = scope ? planningFeedbackOutlineValue(source as PlanningFeedbackOutlineSource, scope)
+      : (source as PlanningFeedbackCoreSnapshot)[context.target as PlanningFeedbackCoreTarget]
+    if (manifest.operation !== 'planning-feedback' || context.projectId !== run.binding.projectId
+      || !Number.isSafeInteger(context.sourceRevision) || Number(context.sourceRevision) < 0
       || typeof context.parentText !== 'string' || context.sourceHash !== textHash(JSON.stringify(source))
-      || context.baseValueHash !== textHash(String(source[context.target])) || context.parentTextHash !== textHash(context.parentText)
-      || (context.parentCandidateId === null && context.parentText !== source[context.target])
+      || typeof baseValue !== 'string' || context.baseValueHash !== textHash(baseValue) || context.parentTextHash !== textHash(context.parentText)
+      || (scope && !validPlotOutlineFeedbackRange(context.parentText, scope))
+      || (context.parentCandidateId === null && context.parentText !== baseValue)
       || manifest.planningFeedbackContextHash !== textHash(JSON.stringify(context))) throw new Error('invalid')
     const skill = manifest.planningFeedbackSkillText
     if (skill !== null && (typeof skill !== 'string' || !skill)) throw new Error('invalid')

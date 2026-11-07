@@ -1,9 +1,69 @@
 import { describe, expect, it } from 'vitest'
 import { validPlotOutlineEntry, plotOutlineConfirmedPrefix, plotOutlineRangeEffect, renderPlotOutlineRange, renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix, isPlotOutlineCoverageNote,
-  plotOutlineNextChapter, plotOutlineRequestContract, derivePlotOutlineCursor, plotOutlineRecoveryDraft, PLOT_OUTLINE_CONTENT, PLOT_OUTLINE_PROTOCOL } from '../plot-outline-contract'
+  plotOutlineNextChapter, plotOutlineRequestContract, derivePlotOutlineCursor, plotOutlineRecoveryDraft, PLOT_OUTLINE_CONTENT, PLOT_OUTLINE_PROTOCOL,
+  readExistingPlotOutlineRange, validPlotOutlineFeedbackRange, renderExistingPlotOutlineFeedbackRange } from '../plot-outline-contract'
 import { outlineProgress } from '../plot-outline-checkpoint'
 import type { ProjectCoreSynopsisExpected } from '../../../electron/repositories/project-core-repository'
 import { synopsisForDraftChapter } from '../../services/workflows/commands/generate-draft.command'
+
+describe('feedback range payload contract', () => {
+  const chapter = (number: number, newline = '\n') => `## Chapter ${number}: Scene ${number}${newline}Author e\u0301 text ${number}.`
+  const source = (numbers = [1, 2, 3, 4, 5], newline = '\n') => ({ totalChapters: 8, writingLanguage: 'en-US' as const,
+    synopsis: `# Author title${newline}${newline}${numbers.map(number => chapter(number, newline)).join(newline + newline)}${newline}${newline}> This outline covers chapters 1-5 of 8; the remaining chapters will be generated in later batches.` })
+
+  it.each(['\n', '\r\n'])('reads only the existing chapters without changing source bytes (%j)', newline => {
+    const expected = source(undefined, newline), before = expected.synopsis
+    expect(readExistingPlotOutlineRange(expected, { from: 3, to: 4 })).toBe([chapter(3, newline), chapter(4, newline)].join(newline + newline))
+    expect(readExistingPlotOutlineRange(expected, { from: 5, to: 5 })).toBe(chapter(5, newline))
+    expect(expected.synopsis).toBe(before)
+  })
+
+  it.each([[1, 2, 4, 5], [1, 2, 3, 3, 4, 5], [1, 2, 4, 3, 5]])('rejects missing, duplicate or unordered source chapters: %j', (...numbers) => {
+    expect(() => readExistingPlotOutlineRange(source(numbers), { from: 3, to: 4 })).toThrow('GENERATION_PLOT_OUTLINE_PREFIX_INVALID')
+  })
+
+  it('rejects grouped or malformed source entries and chapter ranges outside the book', () => {
+    const expected = source()
+    expect(() => readExistingPlotOutlineRange({ ...expected, synopsis: expected.synopsis.replace('Chapter 3:', 'Chapters 3-4:') }, { from: 3, to: 4 })).toThrow()
+    expect(() => readExistingPlotOutlineRange({ ...expected, synopsis: expected.synopsis.replace('## Chapter 3:', '# Chapter 3:') }, { from: 3, to: 4 })).toThrow()
+    expect(() => readExistingPlotOutlineRange(expected, { from: 3, to: 9 })).toThrow()
+  })
+
+  it('validates the actual final chapter set rather than accepting a whole synopsis or filling gaps', () => {
+    const range = { from: 3, to: 4 }, valid = [chapter(3), chapter(4)].join('\n\n')
+    expect(validPlotOutlineFeedbackRange(valid, range)).toBe(true)
+    for (const body of [chapter(3), [chapter(3), chapter(3)].join('\n\n'), [chapter(4), chapter(3)].join('\n\n'),
+      [chapter(2), valid].join('\n\n'), source().synopsis, `${valid}\n\n> Outline batch progress`]) {
+      expect(validPlotOutlineFeedbackRange(body, range), body).toBe(false)
+    }
+    expect(validPlotOutlineFeedbackRange(chapter(3), { from: 3, to: 3 })).toBe(true)
+    expect(validPlotOutlineFeedbackRange(valid, { from: 4, to: 3 })).toBe(false)
+    expect(validPlotOutlineFeedbackRange(valid, { from: 1, to: 11 })).toBe(false)
+  })
+
+  it.each(['\n', '\r\n'])('preserves raw separators and the untouched suffix when replacing an existing middle range (%j)', newline => {
+    const expected = source(undefined, newline), original = readExistingPlotOutlineRange(expected, { from: 3, to: 4 })
+    const body = `## Chapter 3: New${newline}New event.${newline}${newline}## Chapter 4: New${newline}Later event.`
+    expect(renderExistingPlotOutlineFeedbackRange(body, { from: 3, to: 4 }, expected))
+      .toBe(expected.synopsis.replace(original, body))
+  })
+
+  it.each(['', '\n\n', '\r\n\r\n'])('does not add coverage metadata when replacing the current last chapter (%j)', trailing => {
+    const original = chapter(1), synopsis = `# Handwritten title\r\n\r\n${original}${trailing}`
+    const body = '## Chapter 1: Revised\nThe revised event.'
+    expect(renderExistingPlotOutlineFeedbackRange(body, { from: 1, to: 1 }, { synopsis, totalChapters: 10, writingLanguage: 'en-US' }))
+      .toBe(synopsis.replace(original, body))
+  })
+
+  it.each(['\n', '\r\n'])('preserves old cross-language coverage notes and final blank lines exactly (%j)', newline => {
+    const original = chapter(1, newline), tail = `${newline}${newline}> 本大纲已覆盖至第 5 章（全书 20 章），其余章节将在后续批次继续生成。${newline}${newline}`
+      + `> This outline covers chapters 1-2 of 9; the remaining chapters will be generated in later batches.${newline}${newline} \t${newline}`
+    const synopsis = `# Author title${newline}${newline}${original}${tail}`, body = '## Chapter 1: Revised\nThe revised event.'
+    const expected = { synopsis, totalChapters: 10, writingLanguage: 'en-US' as const }
+    expect(readExistingPlotOutlineRange(expected, { from: 1, to: 1 })).toBe(original)
+    expect(renderExistingPlotOutlineFeedbackRange(body, { from: 1, to: 1 }, expected)).toBe(synopsis.replace(original, body))
+  })
+})
 
 describe('chapter Markdown outline contract', () => {
   it('作者手动调过章节顺序（1、5、2、3、4）时按范围重写会丢掉第 2 章：判无效，开跑与写回都拒绝', () => {

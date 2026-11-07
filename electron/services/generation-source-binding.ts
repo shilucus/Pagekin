@@ -38,6 +38,7 @@ import { plotOutlinePolicy, plotOutlineExpected, plotOutlineConfirmedPrefix, typ
 import { capturePlanningFeedbackContext, type PlanningFeedbackGenerationInput } from './planning-feedback-service';
 import { buildPlanningFeedbackTask, type PlanningFeedbackGenerationContext } from './planning-feedback-generation';
 import { readPortableRuntimeFreeze } from './portable-runtime-freeze';
+import { planningFeedbackSourceCore } from '../../src/shared/planning-feedback';
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>;
 export interface GenerationSourceBindingInput {
     plotOutlineSource?: PlotOutlineSource;
@@ -297,7 +298,8 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     const graphInput = input.graphGenerationInput ? validateGraphGenerationInput(input.graphGenerationInput) : undefined;
     if (input.planningFeedbackInput !== undefined || input.operation === 'planning-feedback') {
         if (input.operation !== 'planning-feedback' || !input.planningFeedbackInput
-            || !isDeepStrictEqual(input.promptKeys, ['planning-feedback-v1']) || !isDeepStrictEqual(input.skillStages, ['planning'])
+            || !(['planning-feedback-v1', 'planning-feedback-v2'].some(key => isDeepStrictEqual(input.promptKeys, [key])))
+            || !isDeepStrictEqual(input.skillStages, ['planning'])
             || input.selectedDraftIds.length || input.selectedFinalizedDraftIds.length || input.selectedBlueprintChapterNumbers?.length
             || input.chapterNumber !== undefined || input.authorInputs?.length || input.outputContract !== 'visible-text'
             || input.importSlot || input.editorInlineInput || input.graphGenerationInput || input.legacyRosterKey
@@ -383,10 +385,13 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
             planningFeedbackContext = capturePlanningFeedbackContext(deps.db, input.planningFeedbackInput, {
                 projectId: input.projectId, assertCurrent: () => {}, isFrozen: (table, id) => guard.isFrozen(table, id),
             });
+            if (!isDeepStrictEqual(input.promptKeys, [`planning-feedback-v${planningFeedbackContext.schemaVersion}`]))
+                fail('GENERATION_FEEDBACK_SELECTION_INVALID');
         }
         const core = planningFeedbackContext ? { ...planningFeedbackContext.source }
             : without(raw, ['created_at', 'updated_at', 'character_states', 'plot_tree_snapshot']);
-        const language: WritingLanguage = (planningFeedbackContext?.source.writingLanguage ?? core.writing_language) === 'en-US' ? 'en-US' : 'zh-CN';
+        const language: WritingLanguage = (planningFeedbackContext
+            ? planningFeedbackSourceCore(planningFeedbackContext.source).writingLanguage : core.writing_language) === 'en-US' ? 'en-US' : 'zh-CN';
         add('project-core:main', 0, stable(core), 'author-constraint', 'current project settings');
         if (planningFeedbackContext) add('planning-feedback:context', planningFeedbackContext.sourceRevision,
             JSON.stringify(planningFeedbackContext), 'author-constraint', 'original adoption baseline, actual immutable generation parent and explicit feedback');

@@ -14,7 +14,7 @@ import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunB
 import { getCurrentProjectPath } from '../database'
 import { PlanningFeedbackService, type PlanningFeedbackGenerationInput } from './planning-feedback-service'
 import { readPlanningFeedbackTask } from './planning-feedback-generation'
-import { assertPlanningFeedbackObject, type AdoptPlanningFeedbackCandidate, type PlanningFeedbackTarget, type RelineagePlanningFeedbackCandidate, type StagePlanningFeedbackCandidate } from '../../src/shared/planning-feedback'
+import { assertPlanningFeedbackObject, type AdoptPlanningFeedbackCandidate, type PlanningFeedbackCaptureTarget, type RelineagePlanningFeedbackCandidate, type StagePlanningFeedbackCandidate } from '../../src/shared/planning-feedback'
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
 import { createGenerationRunService, GENERATION_STOPPED, type GenerationRunServiceDependencies } from './generation-run-service'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
@@ -1156,7 +1156,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       ...(artifact ? {artifact} : {}), ...(proposal ? {proposal} : {}) }
   }
   return { begin: (selection: BeginGenerationRequest) => begin(selection), bindMaterialDecision, execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent, agents,
-    capturePlanningFeedbackBase: (target: PlanningFeedbackTarget) => planningFeedback().captureBase(target),
+    capturePlanningFeedbackBase: (target: PlanningFeedbackCaptureTarget) => planningFeedback().captureBase(target),
     preparePlanningFeedback: (input: PlanningFeedbackGenerationInput) => planningFeedback().prepare(input),
     beginPlanningFeedback: (request: { input: PlanningFeedbackGenerationInput; modelId: string; uiActionNonce: string }) => {
       assertCurrent()
@@ -1173,9 +1173,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
           || request.modelId !== modelReceipt(prior.binding).modelId) throw new Error('GENERATION_NONCE_CONFLICT')
         return viewOf(prior)
       }
-      planningFeedback().prepare(request.input)
+      const prepared = planningFeedback().prepare(request.input)
       return begin({ operation: 'planning-feedback', uiActionNonce: request.uiActionNonce, modelId: request.modelId,
-        selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['planning-feedback-v1'], skillStages: ['planning'],
+        selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: [`planning-feedback-v${prepared.context.schemaVersion}`], skillStages: ['planning'],
         output: 'visible-text', planningFeedbackInput: structuredClone(request.input) }, false, false, false, false, false, false, true)
     },
     executePlanningFeedback: async (handle: MainGenerationRunHandle) => {

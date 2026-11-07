@@ -7,12 +7,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { applyBaselineTables } from '../../migrations/baseline-schema'
 import { M01_GENERATION_SQL } from '../../migrations/m01-generation-runs'
 import { applyM08PlanningFeedback, verifyM08PlanningFeedback } from '../../migrations/m08-planning-feedback'
+import { applyM09PlanningFeedbackRanges } from '../../migrations/m09-planning-feedback-ranges'
 import { PLANNING_FEEDBACK_CORE_COLUMNS, type PlanningFeedbackBase, type PlanningFeedbackCandidate,
   type StagePlanningFeedbackCandidate } from '../../../src/shared/planning-feedback'
 import { GenerationRunRepository } from '../generation-run-repository'
 import { PlanningFeedbackRepository, planningFeedbackSourceHash, readPlanningFeedbackCoreSnapshot,
   type PlanningFeedbackRepositoryOptions } from '../planning-feedback-repository'
 import { ProjectCoreRepository } from '../project-core-repository'
+import { plotOutlineCoverageNote } from '../../../src/shared/plot-outline-contract'
 
 const handles: Database.Database[] = []
 const directories: string[] = []
@@ -31,6 +33,7 @@ function fixture(file = ':memory:') {
   db.exec("INSERT INTO project_core(id,project_name,premise,worldbuilding) VALUES('main','Synthetic book','F0','World F0')")
   db.exec(M01_GENERATION_SQL)
   db.transaction(() => applyM08PlanningFeedback(db))()
+  db.transaction(() => applyM09PlanningFeedbackRanges(db))()
   const frozen = new Set<string>()
   const assertCurrent = vi.fn(() => {})
   const assertGenerationCurrent: PlanningFeedbackRepositoryOptions['assertGenerationCurrent'] = vi.fn((receipt, base, parent, request) => {
@@ -421,5 +424,207 @@ describe('restart, portable history and migration ownership', () => {
     expect(verifyM08PlanningFeedback(db)).toBe(false)
     db.transaction(() => applyM08PlanningFeedback(db))()
     expect(verifyM08PlanningFeedback(db)).toBe(true)
+  })
+})
+
+const outlineEntry = (chapter: number, label = 'F0') => `## Chapter ${chapter}: ${label}\n${label} complete chapter ${chapter}.`
+const outlineBody = (from: number, to: number, label = 'F0') => Array.from({ length: to - from + 1 }, (_, index) => outlineEntry(from + index, label)).join('\n\n')
+function outlineFixture(file = ':memory:') {
+  const f = fixture(file)
+  const synopsis = `Author preface e\u0301\r\n\r\n# Plot Outline\n\n${outlineBody(1, 6)}`
+  ProjectCoreRepository.update({ synopsis, totalChapters: 6 }, f.db)
+  f.db.prepare("UPDATE project_core SET characters_arch=? WHERE id='main'").run('Original author character architecture')
+  return { ...f, synopsis }
+}
+
+describe('fixed plot-outline range feedback adapter', () => {
+  it('keeps F0 while C2 records C1 as the real parent, then adopts only the exact range with the existing synopsis CAS writer', () => {
+    const f = outlineFixture(), base = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 })
+    const before = ProjectCoreRepository.get(f.db)!, first = stage(f, base, outlineBody(3, 4, 'C1')), second = stage(f, base, outlineBody(3, 4, 'C2'), first)
+    expect(base).toMatchObject({ schemaVersion: 2, target: 'plotOutlineRange', value: outlineBody(3, 4),
+      scope: { kind: 'plot-outline-range', from: 3, to: 4 }, source: { synopsis: f.synopsis, charactersArch: before.charactersArch } })
+    expect(second).toMatchObject({ schemaVersion: 2, baseId: base.baseId, parentCandidateId: first.candidateId, generationParentHash: first.textHash })
+    expect(ProjectCoreRepository.get(f.db)).toEqual(before)
+    const writer = vi.spyOn(ProjectCoreRepository, 'commitSynopsis'), ordinaryWriter = vi.spyOn(ProjectCoreRepository, 'update')
+    const request = { candidateId: second.candidateId, idempotencyKey: 'range-c2', decision: 'full' as const, text: second.text }
+    const adoption = f.repository.adopt(request)
+    expect(writer).toHaveBeenCalledTimes(1)
+    expect(ordinaryWriter).not.toHaveBeenCalled()
+    expect(ProjectCoreRepository.get(f.db)).toEqual({ ...before, synopsis: f.synopsis.replace(outlineBody(3, 4), second.text) })
+    expect(adoption).toMatchObject({ schemaVersion: 2, beforeValue: base.value, sourceRevision: base.sourceRevision,
+      committedRevision: base.sourceRevision + 1, adoptedScope: base.scope, decisionSource: 'author-action' })
+    expect(f.repository.candidateState(first.candidateId)).toBe('conflict')
+    expect(f.repository.adopt(request)).toEqual(adoption)
+    expect(writer).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([3, 4])('partially adopts only chapter %s within 3-4 and preserves every outside chapter and field', chapter => {
+    const f = outlineFixture(), base = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 })
+    const first = stage(f, base, outlineBody(3, 4, 'C1')), second = stage(f, base, outlineBody(3, 4, 'C2'), first)
+    const before = ProjectCoreRepository.get(f.db)!, text = outlineEntry(chapter, 'Author final')
+    const request = { candidateId: second.candidateId, idempotencyKey: `only-${chapter}`, decision: 'partial' as const,
+      adoptedRange: { from: chapter, to: chapter }, text }
+    const receipt = f.repository.adopt(request)
+    expect(ProjectCoreRepository.get(f.db)).toEqual({ ...before, synopsis: f.synopsis.replace(outlineEntry(chapter), text) })
+    expect(receipt.adoptedScope).toEqual({ kind: 'plot-outline-range', from: chapter, to: chapter })
+    expect(receipt.beforeValue).toBe(outlineBody(3, 4))
+    expect(f.repository.candidateState(first.candidateId)).toBe('conflict')
+    expect(() => stage(f, base, outlineBody(3, 4, 'C3'), second)).toThrow('PLANNING_FEEDBACK_SOURCE_CONFLICT')
+    expect(f.repository.adopt(request)).toEqual(receipt)
+    expect(() => f.repository.adopt({ ...request, adoptedRange: { from: 3, to: 4 }, text: outlineBody(3, 4, 'different') }))
+      .toThrow('PLANNING_FEEDBACK_IDEMPOTENCY_CONFLICT')
+  })
+
+  it.each([
+    { label: 'no coverage note', eol: '\n', language: 'zh-CN' as const, tail: '\n\n\n' },
+    { label: 'CRLF without coverage note', eol: '\r\n', language: 'zh-CN' as const, tail: '\r\n\r\n \t\r\n' },
+    { label: 'old English coverage note with changed total', eol: '\n', language: 'zh-CN' as const,
+      tail: `\n\n\n${plotOutlineCoverageNote(4, 30, 'en-US')}` },
+    { label: 'old Chinese coverage note with changed language and total', eol: '\n', language: 'en-US' as const,
+      tail: `\n\n${plotOutlineCoverageNote(4, 24, 'zh-CN')}` },
+    { label: 'CRLF and mixed old coverage notes', eol: '\r\n', language: 'en-US' as const,
+      tail: `\r\n\r\n\r\n${plotOutlineCoverageNote(4, 30, 'en-US')}\r\n\r\n${plotOutlineCoverageNote(4, 24, 'zh-CN')}\r\n\r\n \t\r\n` },
+  ].flatMap(scenario => (['full', 'partial'] as const).map(mode => ({ ...scenario, mode }))))('preserves all bytes outside the existing last-chapter span ($label / $mode)', ({ eol, language, tail, mode }) => {
+    const f = fixture(), entry = (chapter: number) => outlineEntry(chapter).replaceAll('\n', eol)
+    const gap = `${eol}${eol} \t${eol}${eol}`
+    const prefix = `Author preface e\u0301${eol}${eol}# Existing outline title${gap}${entry(1)}${gap}${entry(2)}${gap}`
+      + (mode === 'partial' ? `${entry(3)}${gap}` : '')
+    const selected = mode === 'partial' ? entry(4) : `${entry(3)}${gap}${entry(4)}`
+    const synopsis = `${prefix}${selected}${tail}`
+    ProjectCoreRepository.update({ synopsis, totalChapters: 12, writingLanguage: language }, f.db)
+    f.db.prepare("UPDATE project_core SET characters_arch=? WHERE id='main'").run('Original author character architecture')
+    const base = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 })
+    const candidate = stage(f, base, outlineBody(3, 4, 'Generated'))
+    const before = ProjectCoreRepository.get(f.db)!, writer = vi.spyOn(ProjectCoreRepository, 'commitSynopsis')
+    const text = mode === 'full' ? candidate.text : outlineEntry(4, 'Author final')
+    const receipt = f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'last-existing-chapter',
+      decision: mode, text, ...(mode === 'partial' ? { adoptedRange: { from: 4, to: 4 } } : {}) })
+    const expected = `${prefix}${text}${tail}`, after = ProjectCoreRepository.get(f.db)!
+    expect(writer).toHaveBeenCalledTimes(1)
+    expect(after).toEqual({ ...before, synopsis: expected })
+    expect(after.synopsis.slice(0, prefix.length)).toBe(prefix)
+    expect(after.synopsis.slice(prefix.length + text.length)).toBe(tail)
+    expect(receipt).toMatchObject({ committedRevision: base.sourceRevision + 1,
+      adoptedScope: { kind: 'plot-outline-range', from: mode === 'partial' ? 4 : 3, to: 4 } })
+  })
+
+  it.each([
+    { text: outlineEntry(3) },
+    { text: `${outlineEntry(3)}\n\n${outlineEntry(3)}` },
+    { text: `${outlineEntry(3)}\n\n${outlineEntry(5)}` },
+    { text: `${outlineEntry(4)}\n\n${outlineEntry(3)}` },
+    { text: `Unauthorized preface\n\n${outlineBody(3, 4)}` },
+    { text: outlineBody(3, 4), adoptedRange: { from: 2, to: 4 } },
+    { text: outlineBody(3, 4), adoptedRange: { from: 3, to: 5 } },
+  ])('rejects malformed final chapter coverage or scope expansion before any formal write: %j', payload => {
+    const f = outlineFixture(), base = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 }), candidate = stage(f, base, outlineBody(3, 4, 'C1'))
+    const writer = vi.spyOn(ProjectCoreRepository, 'commitSynopsis')
+    expect(() => f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'invalid-range', decision: 'edited', ...payload })).toThrow()
+    expect(writer).not.toHaveBeenCalled()
+    expect(ProjectCoreRepository.get(f.db)?.synopsis).toBe(f.synopsis)
+    expect(f.repository.listAdoptions(base.baseId)).toEqual([])
+    expect(f.repository.candidateState(candidate.candidateId)).toBe('ready')
+  })
+
+  it('rejects full-selection scope narrowing and incomplete generated candidates', () => {
+    const f = outlineFixture(), base = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 }), candidate = stage(f, base, outlineBody(3, 4, 'C1'))
+    expect(() => f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'full-but-narrow', decision: 'full',
+      text: candidate.text, adoptedRange: { from: 3, to: 3 } })).toThrow('PLANNING_FEEDBACK_TEXT_INVALID')
+    expect(() => stage(f, base, outlineEntry(3, 'Missing chapter 4'))).toThrow('PLANNING_FEEDBACK_TEXT_INVALID')
+    expect(f.repository.listCandidates(base.baseId)).toEqual([candidate])
+    expect(ProjectCoreRepository.get(f.db)?.synopsis).toBe(f.synopsis)
+  })
+
+  it.each([
+    outlineEntry(1), `${outlineBody(1, 3)}\n\n${outlineEntry(5)}`, `${outlineBody(1, 3)}\n\n${outlineEntry(3)}\n\n${outlineBody(4, 6)}`,
+    `${outlineBody(1, 2)}\n\n## Chapters 3-4: Grouped\nNot exact chapters.`,
+  ])('never fills missing or malformed existing chapter ranges during capture', synopsis => {
+    const f = outlineFixture()
+    ProjectCoreRepository.update({ synopsis }, f.db)
+    expect(() => f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 })).toThrow()
+    expect(f.db.prepare('SELECT COUNT(*) FROM planning_feedback_bases').pluck().get()).toBe(0)
+    expect(ProjectCoreRepository.get(f.db)?.synopsis).toBe(synopsis)
+  })
+
+  it.each([...Object.entries(PLANNING_FEEDBACK_CORE_COLUMNS), ['synopsis', 'synopsis'], ['charactersArch', 'characters_arch']])('detects raw %s A -> B -> A writes through the range source revision', (_field, column) => {
+    const f = outlineFixture(), base = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 }), candidate = stage(f, base, outlineBody(3, 4, 'C1'))
+    const original = f.db.prepare(`SELECT ${column} FROM project_core WHERE id='main'`).pluck().get() as string | number
+    f.db.prepare(`UPDATE project_core SET ${column}=? WHERE id='main'`).run(typeof original === 'number' ? original + 1 : `${original} changed`)
+    f.db.prepare(`UPDATE project_core SET ${column}=? WHERE id='main'`).run(original)
+    expect(f.repository.candidateState(candidate.candidateId)).toBe('conflict')
+    expect(() => f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'range-aba', decision: 'full', text: candidate.text }))
+      .toThrow('PLANNING_FEEDBACK_SOURCE_CONFLICT')
+    expect(ProjectCoreRepository.get(f.db)?.synopsis).toBe(f.synopsis)
+  })
+
+  it('consumes same-content range baselines without invalidating unrelated core fields or derived caches', () => {
+    const f = outlineFixture(), base = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 })
+    const otherBase = f.repository.captureBase({ kind: 'plot-outline-range', from: 1, to: 2 })
+    const candidate = stage(f, base, base.value), other = stage(f, otherBase, outlineBody(1, 2, 'Other'))
+    const fieldBase = f.repository.captureBase('premise'), field = stage(f, fieldBase, 'Core candidate')
+    f.db.exec("UPDATE project_core SET synopsis=synopsis,character_states='derived',plot_tree_snapshot='cache',updated_at='later' WHERE id='main'")
+    expect(f.repository.candidateState(candidate.candidateId)).toBe('ready')
+    const receipt = f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'range-same', decision: 'full', text: candidate.text })
+    expect(receipt.committedRevision).toBe(base.sourceRevision + 1)
+    expect(ProjectCoreRepository.get(f.db)?.synopsis).toBe(f.synopsis)
+    expect(f.repository.candidateState(other.candidateId)).toBe('conflict')
+    expect(f.repository.candidateState(field.candidateId)).toBe('ready')
+  })
+
+  it('consumes dependent outline baselines when a same-content core adoption consumes their frozen upstream', () => {
+    const f = outlineFixture(), range = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 })
+    const candidate = stage(f, range, outlineBody(3, 4, 'C1')), fieldBase = f.repository.captureBase('premise'), field = stage(f, fieldBase, 'Field C1')
+    f.repository.adopt({ candidateId: field.candidateId, idempotencyKey: 'core-same', decision: 'edited', text: fieldBase.value })
+    expect(f.repository.candidateState(candidate.candidateId)).toBe('conflict')
+    expect(ProjectCoreRepository.get(f.db)?.synopsis).toBe(f.synopsis)
+  })
+
+  it.each(['same', 'changed'] as const)('rolls back synopsis, revisions and history if range adoption persistence fails (%s)', mode => {
+    const f = outlineFixture(), base = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 }), candidate = stage(f, base, outlineBody(3, 4, 'C1'))
+    const before = f.repository.readSource('plotOutlineRange')
+    f.db.exec("CREATE TRIGGER fail_range_history BEFORE INSERT ON planning_feedback_adoptions BEGIN SELECT RAISE(ABORT,'range history failure'); END")
+    expect(() => f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'range-failed', decision: 'edited',
+      text: mode === 'same' ? base.value : candidate.text })).toThrow('range history failure')
+    expect(f.repository.readSource('plotOutlineRange')).toEqual(before)
+    expect(f.repository.getBase(base.baseId).closedAt).toBeNull()
+    expect(f.repository.listAdoptions(base.baseId)).toEqual([])
+    expect(f.repository.candidateState(candidate.candidateId)).toBe('ready')
+  })
+
+  it('preserves range lineage and partial-adoption idempotence across a real database reopen', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pagekin-feedback-range-'))
+    directories.push(directory)
+    const file = path.join(directory, 'project.sqlite'), f = outlineFixture(file)
+    const base = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 }), first = stage(f, base, outlineBody(3, 4, 'C1'))
+    const second = stage(f, base, outlineBody(3, 4, 'C2'), first)
+    const request = { candidateId: second.candidateId, idempotencyKey: 'saved-range', decision: 'partial' as const,
+      adoptedRange: { from: 3, to: 3 }, text: outlineEntry(3, 'Final') }
+    const receipt = f.repository.adopt(request)
+    f.db.close()
+    const reopened = new Database(file)
+    handles.push(reopened)
+    const repository = new PlanningFeedbackRepository(reopened, f.options)
+    expect(repository.getCandidate(second.candidateId).parentCandidateId).toBe(first.candidateId)
+    expect(repository.adopt(request)).toEqual(receipt)
+    expect(repository.candidateState(first.candidateId)).toBe('conflict')
+    expect(repository.readSource('plotOutlineRange').sourceRevision).toBe(receipt.committedRevision)
+  })
+
+  it('permits only explicit same-scope new-copy lineage and never adopts a frozen old range candidate', () => {
+    const f = outlineFixture(), base = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 }), candidate = stage(f, base, outlineBody(3, 4, 'Old'))
+    f.frozen.add(`planning_feedback_bases:${base.baseId}`)
+    f.frozen.add(`planning_feedback_candidates:${candidate.candidateId}`)
+    const copy = new PlanningFeedbackRepository(f.db, { ...f.options, projectId: 'new-copy' })
+    expect(copy.getCandidate(candidate.candidateId)).toEqual(candidate)
+    expect(() => copy.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'old-range', decision: 'full', text: candidate.text }))
+      .toThrow('PLANNING_FEEDBACK_HISTORY_FROZEN')
+    const other = copy.captureBase({ kind: 'plot-outline-range', from: 1, to: 2 })
+    expect(() => copy.relineageCandidate({ baseId: other.baseId, sourceCandidateId: candidate.candidateId, feedback: 'Copy', constraints: [] }))
+      .toThrow('PLANNING_FEEDBACK_PARENT_CONFLICT')
+    const freshBase = copy.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 })
+    const fresh = copy.relineageCandidate({ baseId: freshBase.baseId, sourceCandidateId: candidate.candidateId, feedback: 'Explicit new copy', constraints: [] })
+    expect(fresh.origin).toMatchObject({ kind: 'copied', sourceCandidateId: candidate.candidateId })
+    copy.adopt({ candidateId: fresh.candidateId, idempotencyKey: 'fresh-range', decision: 'full', text: fresh.text })
+    expect(copy.getCandidate(candidate.candidateId)).toEqual(candidate)
   })
 })

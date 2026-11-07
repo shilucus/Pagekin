@@ -15,7 +15,7 @@ import { buildPlanningFeedbackTask } from '../planning-feedback-generation'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
 import { migrateSchema } from '../../migrations/runner'
-import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
+import { SqliteSchemaAdapter, sqliteSchemaFingerprint } from '../../migrations/sqlite-schema-adapter'
 import { exportPortableProject, sanitizePortableDatabase } from '../project-archive-service'
 import { restorePortableProject } from '../project-restore-service'
 import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
@@ -28,6 +28,15 @@ const roots: string[] = []
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 const modelHash = 'a'.repeat(64), skillHash = 'b'.repeat(64), contextHash = 'c'.repeat(64)
 const originalNonce = 'private-original-adoption-nonce'
+// The v1 core19 encoding predates M09; do not derive its order from the current parser.
+const schema9V1SourceJson = JSON.stringify({ projectName: '', genre: '', subGenre: '', targetAudience: '',
+  totalChapters: 100, wordsPerChapter: 3000, writingLanguage: 'zh-CN', creativeStrategy: 'auto',
+  plotStructure: 'three_act', narrativePov: 'third_limited', writingStyle: '', referenceWorks: '',
+  globalGuidance: '', goldenFinger: '', coreOutline: 'F0 outline', worldSetting: 'F0 world',
+  protagonistProfile: '', premise: '', worldbuilding: '' })
+const outlineEntry = (chapter: number, label = 'F0') => `## Chapter ${chapter}: ${label}\n${label} complete chapter ${chapter}.`
+const outlineBody = (from: number, to: number, label = 'F0') => Array.from({ length: to - from + 1 },
+  (_, index) => outlineEntry(from + index, label)).join('\n\n')
 
 afterEach(() => {
   closeProjectDatabase()
@@ -58,7 +67,7 @@ function candidate(db: Sqlite.Database, base: PlanningFeedbackBase, id: string, 
   parent: { id: string; text: string } | null = null): void {
   db.prepare(`INSERT INTO planning_feedback_candidates
     (candidate_id,schema_version,project_id,base_id,parent_candidate_id,generation_parent_hash,text,text_hash,feedback,constraints_json,origin_json,created_at)
-    VALUES(?,1,?,?,?,?,?,?,?,?,?,100)`).run(id, base.projectId, base.baseId, parent?.id ?? null,
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,100)`).run(id, base.schemaVersion, base.projectId, base.baseId, parent?.id ?? null,
     parent ? hash(parent.text) : base.valueHash, text, hash(text), 'retain the premise', JSON.stringify(['keep the lead']),
     JSON.stringify({ kind: 'generated', runId: `run-${id}`, attemptId: `attempt-${id}`, artifactId: `artifact-${id}`,
       modelLeaseRevision: modelHash, skillSnapshotHash: skillHash, contextSnapshotHash: contextHash }))
@@ -72,16 +81,22 @@ async function archive(base: string, root: string, projectId: string, name: stri
   const receipt = await exportPortableProject({ sourceProjectRoot: root,
     projectSession: { projectId, projectPath: root, leaseId: `lease-${name}` }, targetArchivePath, attemptParentPath,
     assertCurrentContext: () => undefined, assets: { snapshot: () => ({ files: [], verifyUnchanged: () => undefined }) } })
-  expect(receipt.sourceEvidence.schemaVersion).toBe(9)
+  expect(receipt.sourceEvidence.schemaVersion).toBe(10)
   return targetArchivePath
 }
 
 describe('planning feedback portable history', () => {
-  it('projects a real settled planning ledger and its mixed main proof without retaining request capabilities on either copy', async () => {
+  it.each(['field', 'range'] as const)('projects a real settled %s planning ledger and mixed main proof on both copies', async mode => {
     const f = fixture(), db = getProjectDb()!
+    const synopsis = `Author preface\n\n# Plot Outline\n\n${outlineBody(1, 6)}`
+    if (mode === 'range') db.prepare('UPDATE project_core SET synopsis=?,characters_arch=?,total_chapters=6')
+      .run(synopsis, 'Author character architecture')
     const planning = new PlanningFeedbackService({ database: db, projectId: f.projectId, projectPath: f.root,
       assertCurrent: () => undefined, assertGenerationBindingCurrent: () => undefined })
-    const base = planning.captureBase('coreOutline')
+    const v1 = planning.captureBase('worldSetting')
+    candidate(db, v1, 'mixed-v1-candidate', 'Readable field candidate')
+    const base = mode === 'range' ? planning.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 })
+      : planning.captureBase('coreOutline')
     const input = { baseId: base.baseId, feedback: 'Keep the main promise', constraints: ['Keep the lead'] }
     const { context } = planning.prepare(input), skill = 'synthetic-planning-skill-proof-only'
     const task = buildPlanningFeedbackTask(context, skill)
@@ -103,12 +118,18 @@ describe('planning feedback portable history', () => {
     const requestHash = hash(JSON.stringify([task, modelHash, policyHash]))
     const reserved = generation.reserve(run.runId, invocationNonce, requestHash, 200, 100, policy, 'planning-feedback', task)
     generation.markDispatched(reserved.attempt.attemptId)
-    const visible = generation.snapshot(reserved.attempt.attemptId, 0, 'Candidate from settled planning ledger')
+    const visible = generation.snapshot(reserved.attempt.attemptId, 0,
+      mode === 'range' ? outlineBody(3, 4, 'Generated') : 'Candidate from settled planning ledger')
     const receipt = generation.settle(reserved.attempt.attemptId, { policy, trusted: true, actualTokens: 50,
       inputTokens: 25, completionTokens: 25 }, 'stop')
     expect(receipt.attempt.status).toBe('settled')
     const staged = planning.stage({ ...input, runId: run.runId, attemptId: receipt.attempt.attemptId, artifactId: visible.artifactId })
     expect(planning.getCandidate(staged.candidateId).origin).toMatchObject({ kind: 'generated', runId: run.runId })
+    const adoptedText = outlineEntry(3, 'Author final')
+    const adoption = mode === 'range' ? planning.adopt({ candidateId: staged.candidateId, idempotencyKey: originalNonce,
+      decision: 'partial', adoptedRange: { from: 3, to: 3 }, text: adoptedText }) : null
+    if (adoption) expect(db.prepare('SELECT synopsis FROM project_core').pluck().get())
+      .toBe(synopsis.replace(outlineEntry(3), adoptedText))
     generation.open({ ...openRequest, uiActionNonce: `${uiNonce}-child`, parentRootActionId: run.rootActionId })
     const other = generation.open({ ...openRequest, uiActionNonce: `${uiNonce}-other` })
     const extraAttempts = [run, other].map((extra, index) => {
@@ -125,6 +146,7 @@ describe('planning feedback portable history', () => {
     const openKey = db.prepare('SELECT open_key FROM generation_runs WHERE run_id=?').pluck().get(run.runId) as string
     let sourceRoot = f.root
     let sourceProjectId: string = f.projectId
+    let fresh: { candidateId: string; baseId: string } | null = null
     for (const index of [1, 2]) {
       closeProjectDatabase()
       const sourceDatabasePath = path.join(sourceRoot, '.ai-novel', 'project.db'), before = fs.readFileSync(sourceDatabasePath)
@@ -134,21 +156,30 @@ describe('planning feedback portable history', () => {
       const restored = await restorePortableProject({ archivePath, targetProjectRoot: target })
       initProjectDatabase(target)
       const copied = getProjectDb()!
+      const history = repository(target, restored.targetProjectId)
+      expect(history.getBase(v1.baseId)).toMatchObject({ schemaVersion: 1, target: 'worldSetting',
+        scope: { kind: 'field', field: 'worldSetting' }, sourceHash: v1.sourceHash })
+      expect(copied.prepare('SELECT scope_json FROM planning_feedback_bases WHERE base_id=?').pluck().get(v1.baseId)).toBeNull()
       expect(copied.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(run.runId)).toBe('{}')
       expect(copied.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(receipt.attempt.attemptId)).toBeNull()
       const artifact = JSON.parse(copied.prepare('SELECT artifact_json FROM generation_artifacts WHERE artifact_id=?')
         .pluck().get(visible.artifactId) as string)
       expect(artifact).toEqual({ artifactId: visible.artifactId, attemptId: receipt.attempt.attemptId,
         rootActionId: run.rootActionId, revision: visible.revision, text: visible.text, textHash: visible.textHash })
-      expect(repository(target, restored.targetProjectId).getCandidate(staged.candidateId)).toMatchObject({ text: visible.text,
+      expect(history.getCandidate(staged.candidateId)).toMatchObject({ schemaVersion: base.schemaVersion, text: visible.text,
         feedback: input.feedback, constraints: input.constraints, origin: { kind: 'portable-history', sourceKind: 'generated',
           runId: run.runId, attemptId: receipt.attempt.attemptId, artifactId: visible.artifactId } })
       const serialized = JSON.stringify({ roots: copied.prepare('SELECT * FROM generation_roots').all(),
         runs: copied.prepare('SELECT * FROM generation_runs').all(), attempts: copied.prepare('SELECT * FROM generation_attempts').all(),
-        artifacts: copied.prepare('SELECT * FROM generation_artifacts').all(), candidates: copied.prepare('SELECT * FROM planning_feedback_candidates').all() })
+        artifacts: copied.prepare('SELECT * FROM generation_artifacts').all(), candidates: copied.prepare('SELECT * FROM planning_feedback_candidates').all(),
+        adoptions: copied.prepare('SELECT * FROM planning_feedback_adoptions').all() })
+      const databaseBytes = fs.readFileSync(path.join(target, '.ai-novel', 'project.db'))
+      const historyBytes = fs.readFileSync(path.join(target, '.ai-novel', 'portable-runtime-freeze.json'))
       for (const excluded of ['planningFeedbackInput', 'planningFeedbackContext', 'planningFeedbackTask', skill,
-        ...Object.values(fingerprint), inputProofHash, taskProofHash, frozenInputHash, requestHash, uiNonce, invocationNonce]) {
+        ...Object.values(fingerprint), inputProofHash, taskProofHash, frozenInputHash, requestHash, uiNonce, invocationNonce, originalNonce]) {
         expect(serialized).not.toContain(excluded)
+        expect(databaseBytes.includes(Buffer.from(excluded))).toBe(false)
+        expect(historyBytes.includes(Buffer.from(excluded))).toBe(false)
       }
       expect(copied.prepare('SELECT idempotency_key FROM generation_roots WHERE root_action_id=?').pluck().get(run.rootActionId)).not.toBe(rootKey)
       expect(copied.prepare('SELECT open_key FROM generation_runs WHERE run_id=?').pluck().get(run.runId)).not.toBe(openKey)
@@ -171,6 +202,28 @@ describe('planning feedback portable history', () => {
       expect(guard.isFrozen('generation_roots', run.rootActionId)).toBe(true)
       expect(guard.isFrozen('generation_runs', run.runId)).toBe(true)
       expect(guard.isFrozen('generation_attempts', receipt.attempt.attemptId)).toBe(true)
+      expect(history.candidateState(staged.candidateId)).toBe('frozen')
+      if (adoption) {
+        expect(history.getBase(base.baseId)).toMatchObject({ schemaVersion: 2, source: base.source,
+          scope: { kind: 'plot-outline-range', from: 3, to: 4 }, sourceHash: hash(JSON.stringify(base.source)) })
+        expect(history.listAdoptions(base.baseId)[0]).toMatchObject({ adoptionId: adoption.adoptionId, schemaVersion: 2,
+          adoptedScope: { kind: 'plot-outline-range', from: 3, to: 3 }, text: adoptedText, beforeValue: base.value })
+        expect(() => history.adopt({ candidateId: staged.candidateId, idempotencyKey: originalNonce,
+          decision: 'full', text: visible.text })).toThrow('PLANNING_FEEDBACK_HISTORY_FROZEN')
+        if (index === 1) {
+          expect(copied.prepare('SELECT synopsis FROM project_core').pluck().get()).toBe(synopsis.replace(outlineEntry(3), adoptedText))
+          const nextBase = history.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 })
+          const next = history.relineageCandidate({ baseId: nextBase.baseId, sourceCandidateId: staged.candidateId,
+            feedback: 'New author authorization', constraints: [] })
+          history.adopt({ candidateId: next.candidateId, idempotencyKey: 'new-range-authorization', decision: 'full', text: next.text })
+          fresh = { candidateId: next.candidateId, baseId: nextBase.baseId }
+        } else {
+          expect(fresh).not.toBeNull()
+          expect(history.candidateState(fresh!.candidateId)).toBe('frozen')
+          expect(history.listAdoptions(fresh!.baseId)).toHaveLength(1)
+          expect(copied.prepare('SELECT synopsis FROM project_core').pluck().get()).toBe(synopsis.replace(outlineBody(3, 4), visible.text))
+        }
+      }
       sourceRoot = target
       sourceProjectId = restored.targetProjectId
     }
@@ -215,24 +268,51 @@ describe('planning feedback portable history', () => {
     }
   })
 
-  it('restores a schema-8 package with M07 views, migrates empty feedback tables and can export schema 9', async () => {
+  it.each([8, 9] as const)('restores a schema-%s package without re-encoding v1 history and can export schema 10', async version => {
     const f = fixture()
+    const oldBase = repository(f.root, f.projectId).captureBase('coreOutline')
     closeProjectDatabase()
-    const oldDatabasePath = path.join(f.base, 'schema8.db'), db = new Database(oldDatabasePath)
+    const oldDatabasePath = path.join(f.base, `schema${version}.db`), db = new Database(oldDatabasePath)
     try {
       db.transaction(() => initializeLegacyBaselineSchema(db))()
-      migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), 8)
+      migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), version)
+      if (version === 9) {
+        expect(sqliteSchemaFingerprint(db)).toBe('361b1c5416492d9e4a827119aaf8bcfdea25ecd52fc26e65207c77f901e780d2')
+        expect(JSON.stringify(oldBase.source)).toBe(schema9V1SourceJson)
+        expect(oldBase.sourceHash).toBe(hash(schema9V1SourceJson))
+        db.prepare("INSERT INTO project_core(id,core_outline,world_setting) VALUES('main','F0 outline','F0 world')").run()
+        db.prepare(`INSERT INTO planning_feedback_bases
+          (base_id,schema_version,project_id,target,source_revision,source_hash,source_json,value,value_hash,created_at,closed_at,closed_by_adoption_id)
+          VALUES(?,1,?,'coreOutline',?,?,?,?,?,100,100,'old-adoption')`).run(oldBase.baseId, f.projectId,
+          oldBase.sourceRevision, hash(schema9V1SourceJson), schema9V1SourceJson, oldBase.value, oldBase.valueHash)
+        candidate(db, oldBase, 'old-v1-candidate', 'Old adopted outline')
+        db.prepare('UPDATE planning_feedback_candidates SET origin_json=?').run(JSON.stringify({ kind: 'portable-history',
+          sourceKind: 'generated', runId: 'old-run', attemptId: 'old-attempt', artifactId: 'old-artifact' }))
+        db.prepare(`INSERT INTO planning_feedback_adoptions
+          (adoption_id,schema_version,project_id,base_id,candidate_id,idempotency_key,request_hash,target,decision,decision_source,
+           text,text_hash,before_value,before_hash,source_revision,committed_revision,created_at)
+          VALUES('old-adoption',1,?,?,'old-v1-candidate','portable-history:old-adoption','','coreOutline','full','author-action',?,?,?,?,?,?,100)`)
+          .run(f.projectId, oldBase.baseId, 'Old adopted outline', hash('Old adopted outline'), oldBase.value, oldBase.valueHash,
+            oldBase.sourceRevision, oldBase.sourceRevision + 1)
+        db.prepare("UPDATE project_core SET core_outline='Old adopted outline'").run()
+      }
     } finally { db.close() }
     const databaseBytes = fs.readFileSync(oldDatabasePath)
+    const records = version === 8 ? [] : [
+      ['planning_feedback_bases', oldBase.baseId], ['planning_feedback_candidates', 'old-v1-candidate'],
+      ['planning_feedback_adoptions', 'old-adoption'],
+    ].map(([table, recordId]) => ({ projectionId: `history:${table}:${recordId}`, table, recordId,
+      terminalState: 'historical', projection: {}, projectionHash: hash('{}'), excludedFields: [],
+      nonReplayable: true, originalReceiptVerified: false }))
     const freezeBytes = Buffer.from(JSON.stringify({ version: 1, originProjectId: f.projectId,
-      snapshotGeneration: 'schema8-history', nonReplayable: true, requiresRuntimeFreezeGuard: true,
-      records: [], avatarReferenceProjections: [] }))
+      snapshotGeneration: `schema${version}-history`, nonReplayable: true, requiresRuntimeFreezeGuard: true,
+      records, avatarReferenceProjections: [] }))
     const source = new Database(oldDatabasePath, { readonly: true })
     let authorityBytes: Buffer
     let receiptId: string
     try {
       const authority = { ...createPortableTransferAuthority({ database: source, originProjectId: f.projectId,
-        snapshotGeneration: 'schema8-history', portableDatabaseSha256: hash(databaseBytes) }), sourceSchemaVersion: 8 as const }
+        snapshotGeneration: `schema${version}-history`, portableDatabaseSha256: hash(databaseBytes) }), sourceSchemaVersion: version }
       authorityBytes = serializePortableTransferAuthority(authority)
       receiptId = authority.receiptId
     } finally { source.close() }
@@ -247,17 +327,37 @@ describe('planning feedback portable history', () => {
       return { sourcePath, entry: { path: payload.path, byteSize: payload.bytes.length,
         sha256: hash(payload.bytes), disposition: payload.disposition } }
     })
-    const archivePath = path.join(f.base, 'schema8.ainovel'), total = payloads.reduce((sum, item) => sum + item.bytes.length, 0)
-    await writePortableProjectArchive({ targetPath: archivePath, sources, manifest: { formatVersion: 1, sourceSchemaVersion: 8,
-      originProjectId: f.projectId, snapshotGeneration: 'schema8-history', createdAt: '2026-11-07T00:00:00.000Z',
+    const archivePath = path.join(f.base, `schema${version}.ainovel`), total = payloads.reduce((sum, item) => sum + item.bytes.length, 0)
+    await writePortableProjectArchive({ targetPath: archivePath, sources, manifest: { formatVersion: 1, sourceSchemaVersion: version,
+      originProjectId: f.projectId, snapshotGeneration: `schema${version}-history`, createdAt: '2026-11-07T00:00:00.000Z',
       declaredUncompressedBytes: total, declaredCompressedBytes: total, entries: sources.map(item => item.entry),
-      semanticCounts: {}, omittedItems: [], transferReceiptIds: [receiptId], historyProjectionIds: [] } })
-    const target = path.join(f.base, 'schema8-restored')
+      semanticCounts: {}, omittedItems: [], transferReceiptIds: [receiptId], historyProjectionIds: records.map(record => record.projectionId) } })
+    const target = path.join(f.base, `schema${version}-restored`)
     const restored = await restorePortableProject({ archivePath, targetProjectRoot: target })
     initProjectDatabase(target)
-    expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(9)
-    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM planning_feedback_candidates').pluck().get()).toBe(0)
-    await archive(f.base, target, restored.targetProjectId, 'upgraded-schema8')
+    expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(10)
+    if (version === 8) expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM planning_feedback_candidates').pluck().get()).toBe(0)
+    else {
+      const history = repository(target, restored.targetProjectId)
+      expect(history.getBase(oldBase.baseId)).toEqual({ ...oldBase, closedAt: 100, closedByAdoptionId: 'old-adoption' })
+      expect(history.getCandidate('old-v1-candidate')).toMatchObject({ schemaVersion: 1,
+        generationParentHash: oldBase.valueHash, textHash: hash('Old adopted outline') })
+      expect(history.listAdoptions(oldBase.baseId)[0]).toMatchObject({ adoptedScope: { kind: 'field', field: 'coreOutline' },
+        beforeHash: oldBase.valueHash, decisionSource: 'author-action' })
+      expect(getProjectDb()!.prepare('SELECT scope_json FROM planning_feedback_bases').pluck().get()).toBeNull()
+      expect(getProjectDb()!.prepare('SELECT adopted_scope_json FROM planning_feedback_adoptions').pluck().get()).toBeNull()
+      expect(history.candidateState('old-v1-candidate')).toBe('frozen')
+    }
+    const upgraded = await archive(f.base, target, restored.targetProjectId, `upgraded-schema${version}`)
+    const twiceRoot = path.join(f.base, `schema${version}-twice`)
+    const twice = await restorePortableProject({ archivePath: upgraded, targetProjectRoot: twiceRoot })
+    initProjectDatabase(twiceRoot)
+    if (version === 9) {
+      const history = repository(twiceRoot, twice.targetProjectId)
+      expect(history.getBase(oldBase.baseId).sourceHash).toBe(oldBase.sourceHash)
+      expect(history.candidateState('old-v1-candidate')).toBe('frozen')
+      expect(history.listAdoptions(oldBase.baseId)[0]!.text).toBe('Old adopted outline')
+    }
   })
 
   it('preserves readable chains and adoption history, drops mixed proofs, freezes old authority and supports explicit new lineage twice', async () => {
@@ -312,6 +412,25 @@ describe('planning feedback portable history', () => {
       .run(JSON.stringify({ kind: 'generated', secretRef: 'not-portable' }))
     else getProjectDb()!.prepare('UPDATE planning_feedback_bases SET source_json=?')
       .run(JSON.stringify({ ...base.source, secretRef: 'not-portable' }))
+    closeProjectDatabase()
+    expect(() => sanitizePortableDatabase(f.databasePath)).toThrow('PORTABLE_UNSAFE_PROJECTION')
+  })
+
+  it.each(['range-source', 'range-core', 'scope', 'adopted-scope'] as const)('rejects unknown %s fields without retaining opaque authority', mode => {
+    const f = fixture(), db = getProjectDb()!
+    db.prepare('UPDATE project_core SET synopsis=?,total_chapters=6').run(outlineBody(1, 6))
+    const repo = repository(f.root, f.projectId), base = repo.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 })
+    candidate(db, base, 'range-opaque-candidate', outlineBody(3, 4, 'Candidate'))
+    if (mode === 'adopted-scope') {
+      repo.adopt({ candidateId: 'range-opaque-candidate', idempotencyKey: originalNonce, decision: 'partial',
+        adoptedRange: { from: 3, to: 3 }, text: outlineEntry(3, 'Adopted') })
+      db.prepare('UPDATE planning_feedback_adoptions SET adopted_scope_json=?')
+        .run(JSON.stringify({ kind: 'plot-outline-range', from: 3, to: 3, secretRef: 'not-portable' }))
+    } else if (mode === 'scope') db.prepare('UPDATE planning_feedback_bases SET scope_json=?')
+      .run(JSON.stringify({ ...base.scope, secretRef: 'not-portable' }))
+    else db.prepare('UPDATE planning_feedback_bases SET source_json=?').run(JSON.stringify(mode === 'range-source'
+      ? { ...base.source, secretRef: 'not-portable' }
+      : { ...base.source, core: { ...base.source.core, secretRef: 'not-portable' } }))
     closeProjectDatabase()
     expect(() => sanitizePortableDatabase(f.databasePath)).toThrow('PORTABLE_UNSAFE_PROJECTION')
   })

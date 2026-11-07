@@ -337,8 +337,10 @@ it.each(['missing-old-projection', 'changed-current-domain'] as const)('refuses 
   expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
 })
 
-it.each(['valid', 'missing', 'tampered'] as const)('checks the schema 8 pre-feedback domain before cutover: %s', async mode => {
+it.each([8, 9])('checks old feedback-domain cutover from schema %s', async sourceVersion => {
+ for (const mode of ['valid', 'missing', 'tampered'] as const) {
   const options = fixture()
+  const projectionKey = sourceVersion === 8 ? 'preFeedbackDomain' : 'preFeedbackRangesDomain'
   const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
   const sourcePath = path.join(options.legacy, 'vela.db')
   fs.unlinkSync(sourcePath)
@@ -346,14 +348,17 @@ it.each(['valid', 'missing', 'tampered'] as const)('checks the schema 8 pre-feed
   try {
     source.pragma('foreign_keys = ON')
     source.transaction(() => initializeLegacyBaselineSchema(source))()
-    migrateSchema(new SqliteSchemaAdapter(source), getDesktopMigrationRegistry(), 8)
+    migrateSchema(new SqliteSchemaAdapter(source), getDesktopMigrationRegistry(), sourceVersion)
     source.prepare("INSERT INTO project_core(id,project_name,core_outline) VALUES('main','Fiction','Original outline')").run()
     source.prepare('INSERT INTO contents(body) VALUES(?)').run('Synthetic author text')
+    if (sourceVersion === 9) source.prepare(`INSERT INTO planning_feedback_bases
+      (base_id,schema_version,project_id,target,source_revision,source_hash,source_json,value,value_hash,created_at)
+      VALUES('old-base',1,?,'coreOutline',1,'old-source-hash','{}','Original outline','old-value-hash',1)`).run(options.projectId)
   } finally { source.close() }
   const original = fs.readFileSync(sourcePath)
   const before = probeProjectSqlite({ databasePath: sourcePath })
-  expect(before.schemaVersion).toBe(8)
-  expect(CURRENT_DESKTOP_SCHEMA_VERSION).toBe(9)
+  expect(before.schemaVersion).toBe(sourceVersion)
+  expect(CURRENT_DESKTOP_SCHEMA_VERSION).toBe(10)
   const captured: { upgraded?: Awaited<ReturnType<typeof backupProjectSqlite>> } = {}
   options.dependencies.probeSqlite = databasePath => probeProjectSqlite({ databasePath })
   options.dependencies.backupSqlite = async (sourceDatabasePath, targetDatabasePath) => {
@@ -361,19 +366,19 @@ it.each(['valid', 'missing', 'tampered'] as const)('checks the schema 8 pre-feed
     captured.upgraded = upgraded
     if (mode === 'missing') {
       const withoutProjection = { ...upgraded }
-      delete withoutProjection.preFeedbackDomain
+      delete withoutProjection[projectionKey]
       return withoutProjection
     }
-    if (mode === 'tampered') return { ...upgraded, preFeedbackDomain: {
-      ...upgraded.preFeedbackDomain!, authorContentHash: 'tampered',
+    if (mode === 'tampered') return { ...upgraded, [projectionKey]: {
+      ...upgraded[projectionKey]!, authorContentHash: 'tampered',
     } }
     return upgraded
   }
   options.dependencies.verifySqlite = databasePath => verifyProjectSqlite({ databasePath })
   const checkpoints: string[] = []
   const result = await migrateProjectFormat({ ...options, checkpoint: stage => { checkpoints.push(stage) } })
-  expect(captured.upgraded?.schemaVersion).toBe(9)
-  expect(captured.upgraded?.preFeedbackDomain).toEqual(before.domain)
+  expect(captured.upgraded?.schemaVersion).toBe(10)
+  expect(captured.upgraded?.[projectionKey]).toEqual(before.domain)
   expect(captured.upgraded?.domain).not.toEqual(before.domain)
   expect(captured.upgraded?.domain.tableCounts.planning_feedback_core_revision).toBe(1)
   if (mode !== 'valid') {
@@ -382,17 +387,21 @@ it.each(['valid', 'missing', 'tampered'] as const)('checks the schema 8 pre-feed
     expect(checkpoints).not.toContain('target-renamed')
     expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
     expect(fs.readFileSync(sourcePath)).toEqual(original)
-    return
+    continue
   }
   expect(result).toMatchObject({ state: 'ready' })
-  if (result.state !== 'ready') throw new Error('schema 8 fixture failed to migrate')
+  if (result.state !== 'ready') throw new Error('old feedback fixture failed to migrate')
   expect(fs.existsSync(options.legacy)).toBe(false)
   expect(fs.readFileSync(path.join(options.projectRoot, '.ai-novel-migration', `${result.migrationId}.legacy`, 'vela.db'))).toEqual(original)
   const target = new Database(path.join(result.storageRoot, 'project.db'), { readonly: true })
   try {
-    expect(target.pragma('user_version', { simple: true })).toBe(9)
+    expect(target.pragma('user_version', { simple: true })).toBe(10)
     expect(target.prepare('SELECT body FROM contents').pluck().get()).toBe('Synthetic author text')
     expect(target.prepare("SELECT core_outline FROM project_core WHERE id='main'").pluck().get()).toBe('Original outline')
     expect(target.prepare('SELECT COUNT(*) FROM planning_feedback_core_revision').pluck().get()).toBe(1)
+    expect(target.prepare('SELECT COUNT(*) FROM planning_feedback_outline_revision').pluck().get()).toBe(1)
+    if (sourceVersion === 9) expect(target.prepare('SELECT base_id,scope_json FROM planning_feedback_bases').all())
+      .toEqual([{ base_id: 'old-base', scope_json: null }])
   } finally { target.close() }
+ }
 })

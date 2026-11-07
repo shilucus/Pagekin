@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 
 import { CHARACTER_STATE_TEXT_FIELDS } from '../../src/shared/character-roster'
-import { PLANNING_FEEDBACK_CORE_COLUMNS, planningFeedbackCoreSnapshot } from '../../src/shared/planning-feedback'
+import { parsePlanningFeedbackScope, parsePlanningFeedbackSource, type PlanningFeedbackSource } from '../../src/shared/planning-feedback'
 import { readPortableCurrentAuthority } from './portable-current-authority'
 import { parsePortableRuntimeFreeze, readPortableRuntimeFreeze } from './portable-runtime-freeze'
 
@@ -73,6 +73,8 @@ const REQUIRED_JSON_PROJECTORS = new Set([
   'import_runs.source_display_json',
   'recovery_candidates.source_snapshot',
   'planning_feedback_bases.source_json',
+  'planning_feedback_bases.scope_json',
+  'planning_feedback_adoptions.adopted_scope_json',
   'planning_feedback_candidates.constraints_json',
   'planning_feedback_candidates.origin_json',
 ])
@@ -743,11 +745,22 @@ function projectDisplay(value: unknown, many: boolean): unknown {
   return many ? projected : projected[0]
 }
 
-function projectPlanningSource(value: unknown): Record<string, string | number> {
-  const keys = Object.keys(PLANNING_FEEDBACK_CORE_COLUMNS)
-  const source = object(parseJson(value), keys)
-  try { return planningFeedbackCoreSnapshot(source) }
+function projectPlanningSource(value: unknown): PlanningFeedbackSource {
+  const source = parseJson(value)
+  try {
+    const target = source && typeof source === 'object' && Object.hasOwn(source, 'core') ? 'plotOutlineRange' : 'premise'
+    return parsePlanningFeedbackSource(target, source)
+  }
   catch { return fail('PORTABLE_UNSAFE_PROJECTION') }
+}
+
+function projectPlanningScope(value: unknown): unknown {
+  if (value === null) return null
+  try {
+    const scope = parsePlanningFeedbackScope(parseJson(value))
+    if (scope.kind !== 'plot-outline-range') fail('PORTABLE_UNSAFE_PROJECTION')
+    return scope
+  } catch { return fail('PORTABLE_UNSAFE_PROJECTION') }
 }
 
 function projectPlanningConstraints(value: unknown): string[] {
@@ -788,6 +801,8 @@ function requiredProjection(key: string, value: unknown): unknown {
     case 'import_runs.source_display_json': return projectDisplay(value, true)
     case 'recovery_candidates.source_snapshot': return projectRecoverySource(value)
     case 'planning_feedback_bases.source_json': return projectPlanningSource(value)
+    case 'planning_feedback_bases.scope_json':
+    case 'planning_feedback_adoptions.adopted_scope_json': return projectPlanningScope(value)
     case 'planning_feedback_candidates.constraints_json': return projectPlanningConstraints(value)
     case 'planning_feedback_candidates.origin_json': return projectPlanningOrigin(value)
     default: return fail('PORTABLE_UNSAFE_PROJECTION')
@@ -805,6 +820,8 @@ function neutralValue(key: string, column: { type: string; notnull: number }, va
     }
     if (key === 'generation_artifacts.artifact_json') return JSON.stringify(projectArtifact(value, true))
   }
+  if (value === null && (key === 'planning_feedback_bases.scope_json'
+    || key === 'planning_feedback_adoptions.adopted_scope_json')) return null
   if (REQUIRED_JSON_PROJECTORS.has(key)) return JSON.stringify(requiredProjection(key, value))
   if (JSON_NEUTRAL.has(key)) {
     if (value !== null) parseJson(value)

@@ -1,10 +1,16 @@
+import { assertPlanningActionRange, type PlotOutlineRange } from './plot-outline-contract'
+
 export const PLANNING_FEEDBACK_SCHEMA_VERSION = 1 as const
 
 export const PLANNING_FEEDBACK_TARGETS = [
   'coreOutline', 'worldSetting', 'goldenFinger', 'protagonistProfile',
   'globalGuidance', 'writingStyle', 'premise', 'worldbuilding',
 ] as const
-export type PlanningFeedbackTarget = typeof PLANNING_FEEDBACK_TARGETS[number]
+export type PlanningFeedbackCoreTarget = typeof PLANNING_FEEDBACK_TARGETS[number]
+export type PlanningFeedbackTarget = PlanningFeedbackCoreTarget | 'plotOutlineRange'
+export type PlanningFeedbackScope = { kind: 'field'; field: PlanningFeedbackCoreTarget }
+  | { kind: 'plot-outline-range'; from: number; to: number }
+export type PlanningFeedbackCaptureTarget = PlanningFeedbackCoreTarget | Extract<PlanningFeedbackScope, { kind: 'plot-outline-range' }>
 export type PlanningFeedbackDecision = 'full' | 'partial' | 'edited'
 export type PlanningFeedbackTable = 'planning_feedback_bases' | 'planning_feedback_candidates' | 'planning_feedback_adoptions'
 
@@ -18,6 +24,41 @@ export const PLANNING_FEEDBACK_CORE_COLUMNS = Object.freeze({
   premise: 'premise', worldbuilding: 'worldbuilding',
 } as const)
 export type PlanningFeedbackCoreSnapshot = Readonly<Record<keyof typeof PLANNING_FEEDBACK_CORE_COLUMNS, string | number>>
+export interface PlanningFeedbackOutlineSource {
+  core: PlanningFeedbackCoreSnapshot
+  synopsis: string
+  charactersArch: string
+}
+export type PlanningFeedbackSource = PlanningFeedbackCoreSnapshot | PlanningFeedbackOutlineSource
+
+export function parsePlanningFeedbackScope(value: unknown): PlanningFeedbackScope {
+  if (!value || typeof value !== 'object') throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
+  if ((value as Record<string, unknown>).kind === 'field') {
+    assertPlanningFeedbackObject(value, ['kind', 'field'])
+    if (!isPlanningFeedbackCoreTarget(value.field)) throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
+    return { kind: 'field', field: value.field }
+  }
+  assertPlanningFeedbackObject(value, ['kind', 'from', 'to'])
+  if (value.kind !== 'plot-outline-range') throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
+  assertPlanningActionRange(value as unknown as PlotOutlineRange)
+  return { kind: 'plot-outline-range', from: Number(value.from), to: Number(value.to) }
+}
+
+export function parsePlanningFeedbackSource(target: PlanningFeedbackTarget, value: unknown): PlanningFeedbackSource {
+  if (target === 'plotOutlineRange') {
+    assertPlanningFeedbackObject(value, ['core', 'synopsis', 'charactersArch'])
+    assertPlanningFeedbackObject(value.core, Object.keys(PLANNING_FEEDBACK_CORE_COLUMNS))
+    if (typeof value.synopsis !== 'string' || typeof value.charactersArch !== 'string') throw new Error('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    return { core: planningFeedbackCoreSnapshot(value.core), synopsis: value.synopsis, charactersArch: value.charactersArch }
+  }
+  if (!isPlanningFeedbackCoreTarget(target)) throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
+  assertPlanningFeedbackObject(value, Object.keys(PLANNING_FEEDBACK_CORE_COLUMNS))
+  return planningFeedbackCoreSnapshot(value)
+}
+
+export function planningFeedbackSourceCore(source: PlanningFeedbackSource): PlanningFeedbackCoreSnapshot {
+  return planningFeedbackCoreSnapshot(Object.hasOwn(source, 'core') ? (source as PlanningFeedbackOutlineSource).core : source)
+}
 
 /** Only the author planning facts consumed by the v1 feedback context, not derived caches. */
 export function planningFeedbackCoreSnapshot(value: unknown): PlanningFeedbackCoreSnapshot {
@@ -34,20 +75,28 @@ export function planningFeedbackCoreSnapshot(value: unknown): PlanningFeedbackCo
   return Object.fromEntries(entries) as PlanningFeedbackCoreSnapshot
 }
 
-export interface PlanningFeedbackBase {
-  schemaVersion: 1
+interface PlanningFeedbackBaseFacts {
   baseId: string
   projectId: string
-  target: PlanningFeedbackTarget
   sourceRevision: number
   sourceHash: string
-  source: PlanningFeedbackCoreSnapshot
   value: string
   valueHash: string
   createdAt: number
   closedAt: number | null
   closedByAdoptionId: string | null
 }
+export type PlanningFeedbackBase = PlanningFeedbackBaseFacts & ({
+  schemaVersion: 1
+  target: PlanningFeedbackCoreTarget
+  scope: Extract<PlanningFeedbackScope, { kind: 'field' }>
+  source: PlanningFeedbackCoreSnapshot
+} | {
+  schemaVersion: 2
+  target: 'plotOutlineRange'
+  scope: Extract<PlanningFeedbackScope, { kind: 'plot-outline-range' }>
+  source: PlanningFeedbackOutlineSource
+})
 
 export type PlanningFeedbackOrigin = {
   kind: 'generated'
@@ -78,7 +127,7 @@ export type PlanningFeedbackOrigin = {
 }
 
 export interface PlanningFeedbackCandidate {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   candidateId: string
   projectId: string
   baseId: string
@@ -114,10 +163,11 @@ export interface AdoptPlanningFeedbackCandidate {
   idempotencyKey: string
   decision: PlanningFeedbackDecision
   text: string
+  adoptedRange?: PlotOutlineRange
 }
 
 export interface PlanningFeedbackAdoption {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   adoptionId: string
   projectId: string
   baseId: string
@@ -125,6 +175,7 @@ export interface PlanningFeedbackAdoption {
   idempotencyKey: string
   requestHash: string
   target: PlanningFeedbackTarget
+  adoptedScope: PlanningFeedbackScope
   decision: PlanningFeedbackDecision
   decisionSource: 'author-action'
   text: string
@@ -137,6 +188,10 @@ export interface PlanningFeedbackAdoption {
 }
 
 export function isPlanningFeedbackTarget(value: unknown): value is PlanningFeedbackTarget {
+  return value === 'plotOutlineRange' || isPlanningFeedbackCoreTarget(value)
+}
+
+export function isPlanningFeedbackCoreTarget(value: unknown): value is PlanningFeedbackCoreTarget {
   return typeof value === 'string' && (PLANNING_FEEDBACK_TARGETS as readonly string[]).includes(value)
 }
 
@@ -159,16 +214,37 @@ export function assertPlanningFeedbackInstructions(feedback: unknown, constraint
 }
 
 export function assertPlanningFeedbackAdoption(value: unknown): asserts value is AdoptPlanningFeedbackCandidate {
-  assertPlanningFeedbackObject(value, ['candidateId', 'idempotencyKey', 'decision', 'text'])
+  assertPlanningFeedbackObject(value, ['candidateId', 'idempotencyKey', 'decision', 'text'], ['adoptedRange'])
   assertPlanningFeedbackId(value.candidateId)
   assertPlanningFeedbackId(value.idempotencyKey)
   if (typeof value.decision !== 'string' || !['full', 'partial', 'edited'].includes(value.decision) || typeof value.text !== 'string') {
     throw new Error('PLANNING_FEEDBACK_PAYLOAD_INVALID')
   }
+  if (Object.hasOwn(value, 'adoptedRange')) {
+    assertPlanningFeedbackObject(value.adoptedRange, ['from', 'to'])
+    assertPlanningActionRange(value.adoptedRange as unknown as PlotOutlineRange)
+  }
+}
+
+export function planningFeedbackAdoptedScope(base: PlanningFeedbackBase, adoptedRange?: PlotOutlineRange): PlanningFeedbackScope {
+  if (base.target !== 'plotOutlineRange') {
+    if (adoptedRange !== undefined) throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
+    return base.scope
+  }
+  const selected = adoptedRange === undefined ? base.scope
+    : parsePlanningFeedbackScope({ kind: 'plot-outline-range', ...adoptedRange })
+  if (selected.kind !== 'plot-outline-range' || selected.from < base.scope.from || selected.to > base.scope.to) {
+    throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
+  }
+  return selected
 }
 
 export function planningFeedbackAdoptionBinding(request: AdoptPlanningFeedbackCandidate, candidate: PlanningFeedbackCandidate,
   base: PlanningFeedbackBase, payloadHash: string): string {
+  const adoptedScope = planningFeedbackAdoptedScope(base, request.adoptedRange)
+  if (base.schemaVersion === 2) return JSON.stringify([2, candidate.candidateId, candidate.schemaVersion,
+    base.baseId, base.projectId, base.target, base.scope, adoptedScope, base.sourceRevision, base.sourceHash,
+    candidate.textHash, candidate.generationParentHash, request.decision, 'author-action', payloadHash])
   return JSON.stringify([PLANNING_FEEDBACK_SCHEMA_VERSION, candidate.candidateId, candidate.schemaVersion,
     base.baseId, base.projectId, base.target, 'field', base.sourceRevision, base.sourceHash,
     candidate.textHash, candidate.generationParentHash, request.decision, 'author-action', payloadHash])

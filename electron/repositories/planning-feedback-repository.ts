@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import {
-  PLANNING_FEEDBACK_CORE_COLUMNS, assertPlanningFeedbackAdoption, assertPlanningFeedbackId,
-  assertPlanningFeedbackInstructions, assertPlanningFeedbackObject, isPlanningFeedbackTarget,
-  planningFeedbackAdoptionBinding, planningFeedbackCoreSnapshot,
+  assertPlanningFeedbackAdoption, assertPlanningFeedbackId,
+  assertPlanningFeedbackInstructions, assertPlanningFeedbackObject, isPlanningFeedbackTarget, isPlanningFeedbackCoreTarget,
+  planningFeedbackAdoptionBinding, planningFeedbackCoreSnapshot, planningFeedbackAdoptedScope,
+  parsePlanningFeedbackScope, parsePlanningFeedbackSource,
   type AdoptPlanningFeedbackCandidate, type PlanningFeedbackAdoption, type PlanningFeedbackBase,
   type PlanningFeedbackCandidate, type PlanningFeedbackCoreSnapshot, type PlanningFeedbackOrigin,
+  type PlanningFeedbackCaptureTarget, type PlanningFeedbackSource, type PlanningFeedbackOutlineSource, type PlanningFeedbackScope, type PlanningFeedbackCoreTarget,
   type PlanningFeedbackTable, type PlanningFeedbackTarget, type RelineagePlanningFeedbackCandidate,
   type StagePlanningFeedbackCandidate,
 } from '../../src/shared/planning-feedback'
@@ -13,6 +15,8 @@ import { isContentHash } from '../../src/shared/source-ref'
 import { isGeneratedGlobalGuidanceValid } from '../../src/services/workflows/novel-config-expansion'
 import { GenerationRunRepository, type GenerationExecutionReceipt } from './generation-run-repository'
 import { ProjectCoreRepository } from './project-core-repository'
+import { validPlotOutlineFeedbackRange } from '../../src/shared/plot-outline-contract'
+import { readPlanningFeedbackOutlineSource, planningFeedbackOutlineValue, commitPlanningFeedbackOutline } from './planning-feedback-outline-adapter'
 
 type Row = Record<string, unknown>
 const hash = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex')
@@ -33,18 +37,12 @@ function digest(value: unknown): string {
   if (typeof value !== 'string' || !isContentHash(value)) return fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
   return value
 }
-function coreSnapshot(value: unknown): PlanningFeedbackCoreSnapshot {
-  const keys = Object.keys(PLANNING_FEEDBACK_CORE_COLUMNS)
-  assertPlanningFeedbackObject(value, keys)
-  return planningFeedbackCoreSnapshot(value)
-}
-
 export function readPlanningFeedbackCoreSnapshot(db: Database.Database): PlanningFeedbackCoreSnapshot {
   return planningFeedbackCoreSnapshot(ProjectCoreRepository.get(db))
 }
 
-export function planningFeedbackSourceHash(source: PlanningFeedbackCoreSnapshot): string {
-  return hash(JSON.stringify(planningFeedbackCoreSnapshot(source)))
+export function planningFeedbackSourceHash(source: PlanningFeedbackSource): string {
+  return hash(JSON.stringify(parsePlanningFeedbackSource(Object.hasOwn(source, 'core') ? 'plotOutlineRange' : 'premise', source)))
 }
 function originSnapshot(value: unknown, frozenHistory = false): PlanningFeedbackOrigin {
   if (!value || typeof value !== 'object') return fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
@@ -106,20 +104,24 @@ export class PlanningFeedbackRepository {
     if (projectId !== this.options.projectId || this.options.isFrozen(table, id)) fail('PLANNING_FEEDBACK_HISTORY_FROZEN')
   }
 
-  private revision(): number {
-    const row = this.db.prepare('SELECT revision FROM planning_feedback_core_revision WHERE id=1').get() as Row | undefined
+  private revision(target: PlanningFeedbackTarget = 'premise'): number {
+    const table = target === 'plotOutlineRange' ? 'planning_feedback_outline_revision' : 'planning_feedback_core_revision'
+    const row = this.db.prepare(`SELECT revision FROM ${table} WHERE id=1`).get() as Row | undefined
     if (!row) return fail('PLANNING_FEEDBACK_REVISION_MISSING')
     return integer(row.revision)
   }
 
-  private source(): PlanningFeedbackCoreSnapshot {
-    return readPlanningFeedbackCoreSnapshot(this.db)
+  private source(target: PlanningFeedbackTarget = 'premise'): PlanningFeedbackSource {
+    return target === 'plotOutlineRange' ? readPlanningFeedbackOutlineSource(this.db) : readPlanningFeedbackCoreSnapshot(this.db)
   }
 
-  readSource(): { source: PlanningFeedbackCoreSnapshot; sourceHash: string; sourceRevision: number } {
+  readSource(target?: PlanningFeedbackCoreTarget): { source: PlanningFeedbackCoreSnapshot; sourceHash: string; sourceRevision: number }
+  readSource(target: 'plotOutlineRange'): { source: PlanningFeedbackOutlineSource; sourceHash: string; sourceRevision: number }
+  readSource(target: PlanningFeedbackTarget): { source: PlanningFeedbackSource; sourceHash: string; sourceRevision: number }
+  readSource(target: PlanningFeedbackTarget = 'premise'): { source: PlanningFeedbackSource; sourceHash: string; sourceRevision: number } {
     this.current()
-    const source = this.source()
-    return { source, sourceHash: planningFeedbackSourceHash(source), sourceRevision: this.revision() }
+    const source = this.source(target)
+    return { source, sourceHash: planningFeedbackSourceHash(source), sourceRevision: this.revision(target) }
   }
 
   assertBaseCurrent(baseId: string): PlanningFeedbackBase {
@@ -128,17 +130,24 @@ export class PlanningFeedbackRepository {
     return base
   }
 
-  captureBase(target: PlanningFeedbackTarget): PlanningFeedbackBase {
-    if (!isPlanningFeedbackTarget(target)) fail('PLANNING_FEEDBACK_TARGET_INVALID')
+  captureBase(input: PlanningFeedbackCoreTarget): Extract<PlanningFeedbackBase, { schemaVersion: 1 }>
+  captureBase(input: Extract<PlanningFeedbackScope, { kind: 'plot-outline-range' }>): Extract<PlanningFeedbackBase, { schemaVersion: 2 }>
+  captureBase(input: PlanningFeedbackCaptureTarget): PlanningFeedbackBase
+  captureBase(input: PlanningFeedbackCaptureTarget): PlanningFeedbackBase {
+    if (typeof input === 'string' && !isPlanningFeedbackCoreTarget(input)) fail('PLANNING_FEEDBACK_TARGET_INVALID')
+    const scope = parsePlanningFeedbackScope(typeof input === 'string' ? { kind: 'field', field: input } : input)
+    if (typeof input !== 'string' && scope.kind !== 'plot-outline-range') fail('PLANNING_FEEDBACK_SCOPE_INVALID')
+    const target = scope.kind === 'field' ? scope.field : 'plotOutlineRange'
     return this.transaction(() => {
-      const source = this.source(), value = text(source[target])
-      const base: PlanningFeedbackBase = { schemaVersion: 1, baseId: randomUUID(), projectId: this.options.projectId,
-        target, sourceRevision: this.revision(), sourceHash: hash(JSON.stringify(source)), source,
-        value, valueHash: hash(value), createdAt: this.now(), closedAt: null, closedByAdoptionId: null }
+      const source = this.source(target), value = scope.kind === 'plot-outline-range'
+        ? planningFeedbackOutlineValue(source as PlanningFeedbackOutlineSource, scope) : text((source as PlanningFeedbackCoreSnapshot)[scope.field])
+      const base = { schemaVersion: target === 'plotOutlineRange' ? 2 : 1, baseId: randomUUID(), projectId: this.options.projectId,
+        target, scope, sourceRevision: this.revision(target), sourceHash: planningFeedbackSourceHash(source), source,
+        value, valueHash: hash(value), createdAt: this.now(), closedAt: null, closedByAdoptionId: null } as PlanningFeedbackBase
       this.db.prepare(`INSERT INTO planning_feedback_bases
-        (base_id,schema_version,project_id,target,source_revision,source_hash,source_json,value,value_hash,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(base.baseId, 1, base.projectId, target, base.sourceRevision,
-        base.sourceHash, JSON.stringify(source), value, base.valueHash, base.createdAt)
+        (base_id,schema_version,project_id,target,source_revision,source_hash,source_json,value,value_hash,created_at,scope_json)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(base.baseId, base.schemaVersion, base.projectId, target, base.sourceRevision,
+        base.sourceHash, JSON.stringify(source), value, base.valueHash, base.createdAt, base.schemaVersion === 1 ? null : JSON.stringify(scope))
       return base
     })
   }
@@ -148,22 +157,26 @@ export class PlanningFeedbackRepository {
     assertPlanningFeedbackId(baseId)
     const row = this.db.prepare('SELECT * FROM planning_feedback_bases WHERE base_id=?').get(baseId) as Row | undefined
     if (!row) return fail('PLANNING_FEEDBACK_BASE_MISSING')
-    if (row.schema_version !== 1 || !isPlanningFeedbackTarget(row.target)) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
-    const source = coreSnapshot(parse(row.source_json)), value = text(row.value)
-    const base: PlanningFeedbackBase = { schemaVersion: 1, baseId: text(row.base_id), projectId: text(row.project_id),
+    if (!isPlanningFeedbackTarget(row.target)
+      || (row.target === 'plotOutlineRange' ? row.schema_version !== 2 : row.schema_version !== 1 || row.scope_json !== null)) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    const source = parsePlanningFeedbackSource(row.target, parse(row.source_json)), value = text(row.value)
+    const scope = parsePlanningFeedbackScope(row.target === 'plotOutlineRange' ? parse(row.scope_json) : { kind: 'field', field: row.target })
+    if ((row.target === 'plotOutlineRange') !== (scope.kind === 'plot-outline-range')) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    const base = { schemaVersion: row.schema_version, baseId: text(row.base_id), projectId: text(row.project_id), scope,
       target: row.target, sourceRevision: integer(row.source_revision), sourceHash: digest(row.source_hash), source,
       value, valueHash: digest(row.value_hash), createdAt: integer(row.created_at),
       closedAt: row.closed_at === null ? null : integer(row.closed_at),
-      closedByAdoptionId: row.closed_by_adoption_id === null ? null : text(row.closed_by_adoption_id) }
-    if (hash(JSON.stringify(source)) !== base.sourceHash || hash(value) !== base.valueHash || source[base.target] !== value
+      closedByAdoptionId: row.closed_by_adoption_id === null ? null : text(row.closed_by_adoption_id) } as PlanningFeedbackBase
+    const expectedValue = base.target === 'plotOutlineRange' ? planningFeedbackOutlineValue(base.source, base.scope) : base.source[base.target]
+    if (planningFeedbackSourceHash(source) !== base.sourceHash || hash(value) !== base.valueHash || expectedValue !== value
       || (base.closedAt === null) !== (base.closedByAdoptionId === null)) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
     return base
   }
 
   private ready(base: PlanningFeedbackBase): void {
     this.mutable('planning_feedback_bases', base.baseId, base.projectId)
-    if (base.closedAt !== null || this.revision() !== base.sourceRevision
-      || hash(JSON.stringify(this.source())) !== base.sourceHash) fail('PLANNING_FEEDBACK_SOURCE_CONFLICT')
+    if (base.closedAt !== null || this.revision(base.target) !== base.sourceRevision
+      || planningFeedbackSourceHash(this.source(base.target)) !== base.sourceHash) fail('PLANNING_FEEDBACK_SOURCE_CONFLICT')
   }
 
   getCandidate(candidateId: string): PlanningFeedbackCandidate {
@@ -171,16 +184,17 @@ export class PlanningFeedbackRepository {
     assertPlanningFeedbackId(candidateId)
     const row = this.db.prepare('SELECT * FROM planning_feedback_candidates WHERE candidate_id=?').get(candidateId) as Row | undefined
     if (!row) return fail('PLANNING_FEEDBACK_CANDIDATE_MISSING')
-    if (row.schema_version !== 1) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    if (row.schema_version !== 1 && row.schema_version !== 2) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
     const constraints = parse(row.constraints_json)
     assertPlanningFeedbackInstructions(row.feedback, constraints)
-    const candidate: PlanningFeedbackCandidate = { schemaVersion: 1, candidateId: text(row.candidate_id), projectId: text(row.project_id),
+    const candidate: PlanningFeedbackCandidate = { schemaVersion: row.schema_version, candidateId: text(row.candidate_id), projectId: text(row.project_id),
       baseId: text(row.base_id), parentCandidateId: row.parent_candidate_id === null ? null : text(row.parent_candidate_id),
       generationParentHash: digest(row.generation_parent_hash), text: text(row.text), textHash: digest(row.text_hash),
       feedback: text(row.feedback), constraints: constraints as string[],
       origin: originSnapshot(parse(row.origin_json), this.options.isFrozen('planning_feedback_candidates', candidateId)), createdAt: integer(row.created_at) }
     const base = this.getBase(candidate.baseId)
-    if (hash(candidate.text) !== candidate.textHash || base.projectId !== candidate.projectId) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    if (hash(candidate.text) !== candidate.textHash || base.projectId !== candidate.projectId || candidate.schemaVersion !== base.schemaVersion
+      || (base.target === 'plotOutlineRange' && !validPlotOutlineFeedbackRange(candidate.text, base.scope))) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
     const parent = candidate.parentCandidateId
       ? this.db.prepare('SELECT base_id,project_id,text,text_hash FROM planning_feedback_candidates WHERE candidate_id=?').get(candidate.parentCandidateId) as Row | undefined
       : undefined
@@ -204,17 +218,17 @@ export class PlanningFeedbackRepository {
       const adoption = this.db.prepare('SELECT candidate_id FROM planning_feedback_adoptions WHERE adoption_id=?').get(base.closedByAdoptionId) as Row | undefined
       return adoption?.candidate_id === candidateId ? 'adopted' : 'conflict'
     }
-    return this.revision() === base.sourceRevision && hash(JSON.stringify(this.source())) === base.sourceHash ? 'ready' : 'conflict'
+    return this.revision(base.target) === base.sourceRevision && planningFeedbackSourceHash(this.source(base.target)) === base.sourceHash ? 'ready' : 'conflict'
   }
 
   private insertCandidate(base: PlanningFeedbackBase, parent: PlanningFeedbackCandidate | null, value: string,
     feedback: string, constraints: readonly string[], origin: Exclude<PlanningFeedbackOrigin, { kind: 'portable-history' }>): PlanningFeedbackCandidate {
-    const candidate: PlanningFeedbackCandidate = { schemaVersion: 1, candidateId: randomUUID(), projectId: this.options.projectId,
+    const candidate: PlanningFeedbackCandidate = { schemaVersion: base.schemaVersion, candidateId: randomUUID(), projectId: this.options.projectId,
       baseId: base.baseId, parentCandidateId: parent?.candidateId ?? null, generationParentHash: parent?.textHash ?? base.valueHash,
       text: value, textHash: hash(value), feedback, constraints: [...constraints], origin, createdAt: this.now() }
     this.db.prepare(`INSERT INTO planning_feedback_candidates
       (candidate_id,schema_version,project_id,base_id,parent_candidate_id,generation_parent_hash,text,text_hash,feedback,constraints_json,origin_json,created_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(candidate.candidateId, 1, candidate.projectId, base.baseId, candidate.parentCandidateId,
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(candidate.candidateId, candidate.schemaVersion, candidate.projectId, base.baseId, candidate.parentCandidateId,
       candidate.generationParentHash, value, candidate.textHash, feedback, JSON.stringify(constraints), JSON.stringify(origin), candidate.createdAt)
     return candidate
   }
@@ -241,6 +255,7 @@ export class PlanningFeedbackRepository {
         || receipt.failureCode || receipt.unsavedTail || receipt.budget.root.status === 'cancelled'
         || discarded || !artifact.text.trim()) fail('PLANNING_FEEDBACK_GENERATION_UNPROVEN')
       if (base.target === 'globalGuidance' && !isGeneratedGlobalGuidanceValid(artifact.text)) fail('PLANNING_FEEDBACK_TEXT_INVALID')
+      if (base.target === 'plotOutlineRange' && !validPlotOutlineFeedbackRange(artifact.text, base.scope)) fail('PLANNING_FEEDBACK_TEXT_INVALID')
       const proof: unknown = this.options.assertGenerationCurrent(receipt, base, parent, request)
       if (proof !== undefined) fail('PLANNING_FEEDBACK_ASYNC_PROOF_INVALID')
       this.current()
@@ -263,31 +278,40 @@ export class PlanningFeedbackRepository {
       const base = this.getBase(request.baseId)
       this.ready(base)
       const source = this.getCandidate(request.sourceCandidateId), sourceBase = this.getBase(source.baseId)
-      if (sourceBase.target !== base.target || source.baseId === base.baseId) fail('PLANNING_FEEDBACK_PARENT_CONFLICT')
+      if (sourceBase.target !== base.target || source.baseId === base.baseId || JSON.stringify(sourceBase.scope) !== JSON.stringify(base.scope)) fail('PLANNING_FEEDBACK_PARENT_CONFLICT')
       return this.insertCandidate(base, null, source.text, request.feedback, request.constraints, { kind: 'copied',
         sourceCandidateId: source.candidateId, originProjectId: source.projectId, sourceTextHash: source.textHash })
     })
   }
 
   private adoption(row: Row): PlanningFeedbackAdoption {
-    if (row.schema_version !== 1 || !isPlanningFeedbackTarget(row.target) || row.decision_source !== 'author-action') {
+    if (!isPlanningFeedbackTarget(row.target) || row.decision_source !== 'author-action'
+      || (row.target === 'plotOutlineRange' ? row.schema_version !== 2 : row.schema_version !== 1 || row.adopted_scope_json !== null)) {
       return fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
     }
+    const adoptedScope = parsePlanningFeedbackScope(row.target === 'plotOutlineRange' ? parse(row.adopted_scope_json)
+      : { kind: 'field', field: row.target })
     const portableHistory = this.options.isFrozen('planning_feedback_adoptions', text(row.adoption_id))
       && row.request_hash === '' && row.idempotency_key === `portable-history:${text(row.adoption_id)}`
-    const result: PlanningFeedbackAdoption = { schemaVersion: 1, adoptionId: text(row.adoption_id), projectId: text(row.project_id),
+    const result: PlanningFeedbackAdoption = { schemaVersion: row.target === 'plotOutlineRange' ? 2 : 1, adoptionId: text(row.adoption_id), projectId: text(row.project_id), adoptedScope,
       baseId: text(row.base_id), candidateId: text(row.candidate_id), idempotencyKey: text(row.idempotency_key),
       requestHash: portableHistory ? '' : digest(row.request_hash),
       target: row.target, decision: row.decision as PlanningFeedbackAdoption['decision'], decisionSource: 'author-action',
       text: text(row.text), textHash: digest(row.text_hash),
       beforeValue: text(row.before_value), beforeHash: digest(row.before_hash), sourceRevision: integer(row.source_revision),
       committedRevision: integer(row.committed_revision), createdAt: integer(row.created_at) }
-    assertPlanningFeedbackAdoption({ candidateId: result.candidateId, idempotencyKey: result.idempotencyKey, decision: result.decision, text: result.text })
+    const request: AdoptPlanningFeedbackCandidate = { candidateId: result.candidateId, idempotencyKey: result.idempotencyKey, decision: result.decision, text: result.text,
+      ...(adoptedScope.kind === 'plot-outline-range' ? { adoptedRange: { from: adoptedScope.from, to: adoptedScope.to } } : {}) }
+    assertPlanningFeedbackAdoption(request)
     const candidate = this.getCandidate(result.candidateId), base = this.getBase(result.baseId)
     if (hash(result.text) !== result.textHash || hash(result.beforeValue) !== result.beforeHash
       || base.projectId !== result.projectId || candidate.baseId !== base.baseId || result.target !== base.target
+      || result.schemaVersion !== base.schemaVersion || candidate.schemaVersion !== base.schemaVersion
+      || JSON.stringify(planningFeedbackAdoptedScope(base, request.adoptedRange)) !== JSON.stringify(adoptedScope)
+      || (base.target === 'plotOutlineRange' && (adoptedScope.kind !== 'plot-outline-range' || !validPlotOutlineFeedbackRange(result.text, adoptedScope)
+        || (result.decision === 'full' && (JSON.stringify(adoptedScope) !== JSON.stringify(base.scope) || result.text !== candidate.text))))
       || result.sourceRevision !== base.sourceRevision || result.beforeValue !== base.value
-      || (!portableHistory && hash(planningFeedbackAdoptionBinding(result, candidate, base, result.textHash)) !== result.requestHash)) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+      || (!portableHistory && hash(planningFeedbackAdoptionBinding(request, candidate, base, result.textHash)) !== result.requestHash)) fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
     return result
   }
 
@@ -306,6 +330,7 @@ export class PlanningFeedbackRepository {
       const candidate = this.getCandidate(request.candidateId), base = this.getBase(candidate.baseId)
       this.mutable('planning_feedback_candidates', candidate.candidateId, candidate.projectId)
       this.mutable('planning_feedback_bases', base.baseId, base.projectId)
+      const adoptedScope = planningFeedbackAdoptedScope(base, request.adoptedRange)
       const payloadHash = hash(request.text), requestHash = hash(planningFeedbackAdoptionBinding(request, candidate, base, payloadHash))
       if (prior) {
         const receipt = this.adoption(prior)
@@ -314,24 +339,36 @@ export class PlanningFeedbackRepository {
         return receipt
       }
       this.ready(base)
-      if (request.decision === 'full' && request.text !== candidate.text) fail('PLANNING_FEEDBACK_TEXT_INVALID')
+      if (request.decision === 'full' && (request.text !== candidate.text || JSON.stringify(adoptedScope) !== JSON.stringify(base.scope))) fail('PLANNING_FEEDBACK_TEXT_INVALID')
       // Author-edited/partial text uses the existing free-text field contract, not generated-only formatting rules.
       const adoptionId = randomUUID(), createdAt = this.now()
-      ProjectCoreRepository.update({ [base.target]: request.text }, this.db)
-      this.current()
-      if (hash(JSON.stringify(this.source())) !== hash(JSON.stringify({ ...base.source, [base.target]: request.text }))) fail('PLANNING_FEEDBACK_WRITE_FAILED')
-      // A successful adoption consumes F0 even if its final text is unchanged; raw same-value edits do not.
-      if (request.text === base.value) {
-        const consumed = this.db.prepare('UPDATE planning_feedback_core_revision SET revision=revision+1 WHERE id=1 AND revision=?').run(base.sourceRevision)
-        if (consumed.changes !== 1) fail('PLANNING_FEEDBACK_SOURCE_CONFLICT')
+      let expectedSource: PlanningFeedbackSource
+      if (base.target === 'plotOutlineRange') {
+        if (adoptedScope.kind !== 'plot-outline-range') fail('PLANNING_FEEDBACK_SCOPE_INVALID')
+        const synopsis = commitPlanningFeedbackOutline(this.db, base, adoptedScope, request.text)
+        expectedSource = { ...base.source, synopsis }
+      } else {
+        ProjectCoreRepository.update({ [base.target]: request.text }, this.db)
+        expectedSource = { ...base.source, [base.target]: request.text }
       }
-      const committedRevision = this.revision()
+      this.current()
+      const expectedHash = planningFeedbackSourceHash(expectedSource)
+      if (planningFeedbackSourceHash(this.source(base.target)) !== expectedHash) fail('PLANNING_FEEDBACK_WRITE_FAILED')
+      // A successful adoption consumes F0 even if its final text is unchanged; raw same-value edits do not.
+      if (expectedHash === base.sourceHash) {
+        const table = base.target === 'plotOutlineRange' ? 'planning_feedback_outline_revision' : 'planning_feedback_core_revision'
+        const consumed = this.db.prepare(`UPDATE ${table} SET revision=revision+1 WHERE id=1 AND revision=?`).run(base.sourceRevision)
+        if (consumed.changes !== 1) fail('PLANNING_FEEDBACK_SOURCE_CONFLICT')
+        if (base.target !== 'plotOutlineRange'
+          && this.db.prepare('UPDATE planning_feedback_outline_revision SET revision=revision+1 WHERE id=1').run().changes !== 1) fail('PLANNING_FEEDBACK_WRITE_FAILED')
+      }
+      const committedRevision = this.revision(base.target)
       if (committedRevision !== base.sourceRevision + 1) fail('PLANNING_FEEDBACK_WRITE_FAILED')
       this.db.prepare(`INSERT INTO planning_feedback_adoptions
-        (adoption_id,schema_version,project_id,base_id,candidate_id,idempotency_key,request_hash,target,decision,decision_source,text,text_hash,before_value,before_hash,source_revision,committed_revision,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(adoptionId, 1, this.options.projectId, base.baseId, candidate.candidateId,
+        (adoption_id,schema_version,project_id,base_id,candidate_id,idempotency_key,request_hash,target,decision,decision_source,text,text_hash,before_value,before_hash,source_revision,committed_revision,created_at,adopted_scope_json)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(adoptionId, base.schemaVersion, this.options.projectId, base.baseId, candidate.candidateId,
         request.idempotencyKey, requestHash, base.target, request.decision, 'author-action', request.text, payloadHash, base.value, base.valueHash,
-        base.sourceRevision, committedRevision, createdAt)
+        base.sourceRevision, committedRevision, createdAt, base.schemaVersion === 1 ? null : JSON.stringify(adoptedScope))
       const closed = this.db.prepare('UPDATE planning_feedback_bases SET closed_at=?,closed_by_adoption_id=? WHERE base_id=? AND closed_at IS NULL')
         .run(createdAt, adoptionId, base.baseId)
       if (closed.changes !== 1) fail('PLANNING_FEEDBACK_SOURCE_CONFLICT')

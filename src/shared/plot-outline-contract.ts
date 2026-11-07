@@ -166,6 +166,48 @@ export function validPlotOutlineEntry(text: string, chapter: number): boolean {
   return !/^[\t ]*(?:#{1,6}[\t ]+|(?:[-*+][\t ]+)?(?:第[^\r\n]*章|Chapters?\b))/imu.test(body)
 }
 
+/** Feedback payloads contain exactly the frozen chapters, never a whole-synopsis replacement. */
+export function validPlotOutlineFeedbackRange(text: string, range: PlotOutlineRange): boolean {
+  try { assertPlanningActionRange(range) } catch { return false }
+  if (typeof text !== 'string') return false
+  const body = text.trim(), entries = headings(body)
+  if (entries.length !== range.to - range.from + 1 || body.slice(0, entries[0]?.index).trim()) return false
+  return entries.every((entry, index) => !entry.grouped && entry.from === range.from + index && entry.to === entry.from
+    && validPlotOutlineEntry(body.slice(entry.index, entries[index + 1]?.index).trim(), entry.from))
+}
+
+function existingPlotOutlineFeedbackRange(expected: PlotOutlineRangeSource, range: PlotOutlineRange): { value: string; start: number; end: number } {
+  assertPlanningActionRange(range)
+  if (!Number.isSafeInteger(expected.totalChapters) || range.to > expected.totalChapters) {
+    throw new Error('GENERATION_PLOT_OUTLINE_PREFIX_INVALID')
+  }
+  plotOutlineConfirmedPrefix(expected, range)
+  const entries = headings(expected.synopsis), first = entries.find(entry => entry.from === range.from)
+  if (!first) throw new Error('GENERATION_PLOT_OUTLINE_PREFIX_INVALID')
+  const after = entries.find(entry => entry.from > range.to)
+  const selected = expected.synopsis.slice(first.index, after?.index)
+  // Ignore trailing blank lines when locating app metadata, retaining spaces on the last nonblank line.
+  const textEnd = selected.trimEnd().length, trailingLineEnd = selected.indexOf('\n', textEnd)
+  const withoutBlankLines = trailingLineEnd < 0 ? selected
+    : selected.slice(0, trailingLineEnd - Number(selected[trailingLineEnd - 1] === '\r'))
+  const body = (after ? selected : stripStaleCoverageNotes(withoutBlankLines)).trim()
+  if (!validPlotOutlineFeedbackRange(body, range)) throw new Error('GENERATION_PLOT_OUTLINE_PREFIX_INVALID')
+  const start = first.index + selected.length - selected.trimStart().length
+  return { value: body, start, end: start + body.length }
+}
+
+/** Freeze an existing range using the same chapter parser and prefix rules as the writer. */
+export function readExistingPlotOutlineRange(expected: PlotOutlineRangeSource, range: PlotOutlineRange): string {
+  return existingPlotOutlineFeedbackRange(expected, range).value
+}
+
+/** Feedback replaces existing chapter bodies without regenerating surrounding separators or coverage notes. */
+export function renderExistingPlotOutlineFeedbackRange(body: string, range: PlotOutlineRange, expected: PlotOutlineRangeSource): string {
+  const selection = existingPlotOutlineFeedbackRange(expected, range)
+  if (!validPlotOutlineFeedbackRange(body, range)) throw new Error('PLANNING_FEEDBACK_TEXT_INVALID')
+  return expected.synopsis.slice(0, selection.start) + body.trim() + expected.synopsis.slice(selection.end)
+}
+
 export function derivePlotOutlineCursor(range: PlotOutlineRange, acceptedCount: number, attempts: readonly PlotOutlineAttempt[]): PlotOutlineCursor {
   const chapter = range.from + acceptedCount
   if (chapter > range.to) return { kind: 'complete' }

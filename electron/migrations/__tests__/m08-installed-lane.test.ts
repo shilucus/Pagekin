@@ -34,14 +34,14 @@ describe('installed M08 planning feedback lane', () => {
     const db = fixture(donor)
     try {
       const before = { core: db.prepare('SELECT * FROM project_core').all(), contents: db.prepare('SELECT * FROM contents').all() }
-      const result = migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry())
-      expect(CURRENT_DESKTOP_SCHEMA_VERSION).toBe(9)
+      const result = migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), 9)
+      expect(CURRENT_DESKTOP_SCHEMA_VERSION).toBe(10)
       expect(result.completedSteps).toEqual(['M08'])
       expect(db.prepare('SELECT * FROM project_core').all()).toEqual(before.core)
       expect(db.prepare('SELECT * FROM contents').all()).toEqual(before.contents)
       expect(revision(db)).toBe(0)
       expect(verifySchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), 9).version).toBe(9)
-      expect(migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry()).completedSteps).toEqual([])
+      expect(migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), 9).completedSteps).toEqual([])
     } finally { db.close() }
   })
 

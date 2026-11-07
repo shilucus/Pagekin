@@ -11,6 +11,7 @@ import { createCanonicalProjectManifest } from '../../../src/shared/project-form
 import { exportPortableProject } from '../project-archive-service'
 import { restorePortableProject } from '../project-restore-service'
 import { readPortableCurrentAuthority } from '../portable-current-authority'
+import { PORTABLE_SOURCE_SCHEMA_VERSION } from '../portable-project-format'
 import { ChapterDeletionService } from '../chapter-deletion-service'
 import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
 import { registerAsReopenDraft } from '../../../test/helpers/reopened-draft'
@@ -127,10 +128,10 @@ describe('备份恢复的项目替换一章定稿', { timeout: 60_000 }, () => {
     expect(currentAuthority(restored)).not.toBeNull()
   })
 
-  it.each([7, 8])('旧导入的作品（收据记 schema %s）升级后，转移授权仍可读', async version => {
+  it.each([7, 8, 9])('旧导入的作品（收据记 schema %s）升级后，转移授权仍可读', async version => {
     const { restored } = await restoredProject(`v${version}-receipt`)
     const file = path.join(restored.root, '.ai-novel', 'portable-transfer-authority.json')
-    expect(JSON.parse(fs.readFileSync(file, 'utf8')).sourceSchemaVersion).toBe(9)
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).sourceSchemaVersion).toBe(PORTABLE_SOURCE_SCHEMA_VERSION)
     fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), sourceSchemaVersion: version }))
     expect(currentAuthority(restored)).not.toBeNull()
   })

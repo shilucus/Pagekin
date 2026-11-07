@@ -431,6 +431,16 @@ it('preserves the exact pre-feedback domain when upgrading schema 8 to the insta
  expect(upgraded.domain.tableCounts.planning_feedback_core_revision).toBe(1)
  expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
 })
+it('preserves M08 rows in the pre-range domain when upgrading schema 9 to the installed lane', async () => {
+ const f=fixture()
+ const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:9})
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
+ expect(upgraded.preFeedbackRangesDomain).toEqual(before.domain)
+ expect(upgraded.preFeedbackDomain).not.toEqual(before.domain)
+ expect(upgraded.domain.tableCounts.planning_feedback_outline_revision).toBe(1)
+ expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
 it('resolves a trusted system scratch junction before validating its private snapshot', () => {
  const f=fixture(), physical=path.join(f.root,'scratch'), link=path.join(f.root,'scratch-link')
  fs.mkdirSync(physical);fs.symlinkSync(physical,link,'junction')
