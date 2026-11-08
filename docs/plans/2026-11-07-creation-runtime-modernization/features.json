@@ -1480,9 +1480,18 @@
         "browser",
         "electron"
       ],
-      "status": "not_started",
-      "passes": false,
-      "evidence": []
+      "status": "completed",
+      "passes": true,
+      "evidence": [
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-15-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Background project tasks and transition presentation tests passed (12/12 passed, 52/52 lifecycle regression passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
+          "limitations": "In-app background multi-project presentation qualified; external API and CLI admission belongs to subsequent features"
+        }
+      ]
     },
     {
       "id": "UI-002",

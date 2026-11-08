@@ -528,6 +528,32 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `IMPORT-004` marked `completed` / `passes=true`.
   - Total completed features: 16/35 (45.7%).
 
+## Stage 15: UI-001 后台作品任务与切换关闭呈现
+- Target Feature: `UI-001` (后台作品任务与切换关闭呈现)
+- Review Date: 2026-11-09
+- Reviewer: Stage 15 Independent Reviewer (`pro` model, subagent `3a2bc601-d39c-4982-8c72-a02322e5882e`)
+- Scope & Verification:
+  - ADR Reference: `docs/adr/0049-background-project-tasks-and-transition-presentation.md`
+  - Evidence Document: `docs/plans/2026-11-07-creation-runtime-modernization/stage-15-evidence.md`
+  - Code Changes:
+    - `src/shared/workflow-background-qualification.ts`
+    - `src/stores/project-store.ts`
+    - `src/stores/workflow-store.ts`
+    - `src/components/stage/run/RunSheet.tsx`
+    - `src/components/stage/run/run-sheet.css`
+  - Test Suite:
+    - `src/shared/__tests__/workflow-background-qualification.test.ts` (5/5 passed)
+    - `src/stores/__tests__/project-transition-background.test.ts` (4/4 passed)
+    - `src/components/stage/run/__tests__/run-sheet-background.test.tsx` (3/3 passed)
+    - `src/stores/__tests__/project-close-lifecycle.test.ts` (52/52 passed)
+  - Gates:
+    - `typecheck` exit 0, `lint` exit 0, `check:i18n` exit 0, `build` exit 0.
+- Acceptance:
+  - Verdict: PASS.
+  - `UI-001` marked `completed` / `passes=true`.
+  - Total completed features: 17/35 (48.6%).
+
+
 
 
 

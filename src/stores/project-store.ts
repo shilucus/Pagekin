@@ -137,28 +137,39 @@ async function confirmAndCancelProjectWorkflows(
   shouldContinue: () => boolean = () => true,
 ): Promise<boolean> {
   const { useWorkflowStore } = await import('./workflow-store')
-  const activeCount = useWorkflowStore.getState().activeRuns.filter(run => (
+  const { isWorkflowBackgroundQualified } = await import('../shared/workflow-background-qualification')
+  const projectRuns = useWorkflowStore.getState().activeRuns.filter(run => (
     sameProjectPathKey(run.projectPath, projectPath)
-  )).length
-  if (activeCount > 0) {
-    const operationCopy = operation === 'create'
-      ? projectCopy('新建项目', 'create a project')
-      : operation === 'open'
-        ? projectCopy('打开其他项目', 'open another project')
-        : projectCopy('关闭项目', 'close the project')
-    const approved = await confirm(
-      projectText(
-        `当前项目有 ${activeCount} 个创作任务。继续${operationCopy.zhCNText}将取消并等待这些任务停止。`,
-        `This project has ${activeCount} active creative task${activeCount === 1 ? '' : 's'}. Continuing to ${operationCopy.enUSText} will cancel and wait for them to stop.`,
-      ),
-      {
-        title: projectText('创作任务仍在运行', 'Creative tasks are still running'),
-        confirmText: projectText('取消任务并继续', 'Cancel tasks and continue'),
-        danger: true,
-      },
-    )
-    if (!approved) return false
+  ))
+  const activeCount = projectRuns.length
+  if (activeCount === 0) return true
+
+  // UI-001 / ADR-0049: 切换查看 (open) 时，若当前项目的所有活动工作流均满足后台运行资格，
+  // 则放行切换查看，无需取消，任务在后台继续运行。
+  if (operation === 'open') {
+    const unqualifiedCount = projectRuns.filter(run => !isWorkflowBackgroundQualified(run)).length
+    if (unqualifiedCount === 0) {
+      return shouldContinue()
+    }
   }
+
+  const operationCopy = operation === 'create'
+    ? projectCopy('新建项目', 'create a project')
+    : operation === 'open'
+      ? projectCopy('打开其他项目', 'open another project')
+      : projectCopy('关闭项目', 'close the project')
+  const approved = await confirm(
+    projectText(
+      `当前项目有 ${activeCount} 个创作任务。继续${operationCopy.zhCNText}将取消并等待这些任务停止。`,
+      `This project has ${activeCount} active creative task${activeCount === 1 ? '' : 's'}. Continuing to ${operationCopy.enUSText} will cancel and wait for them to stop.`,
+    ),
+    {
+      title: projectText('创作任务仍在运行', 'Creative tasks are still running'),
+      confirmText: projectText('取消任务并继续', 'Cancel tasks and continue'),
+      danger: true,
+    },
+  )
+  if (!approved) return false
   if (!shouldContinue()) return false
   await useWorkflowStore.getState().cancelProjectWorkflowsAndWait(projectPath)
   return shouldContinue()

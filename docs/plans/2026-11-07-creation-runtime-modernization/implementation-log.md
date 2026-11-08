@@ -673,6 +673,29 @@ The observations below retain their chronological state. The final acceptance at
   - `IMPORT-004` marked `completed` / `passes=true`.
   - Completed feature count reaches 16/35 (45.7%).
 
+### Stage 15: UI-001 后台作品任务与切换关闭呈现
+- Target Feature: `UI-001` (后台作品任务与切换关闭呈现)
+- ADR Reference: `docs/adr/0049-background-project-tasks-and-transition-presentation.md`
+- Evidence Document: `docs/plans/2026-11-07-creation-runtime-modernization/stage-15-evidence.md`
+- Key Modifications:
+  - `src/shared/workflow-background-qualification.ts`: 引入 `isWorkflowBackgroundQualified(run)` 资格判定函数，严格校验 `projectId`、`leaseId`、`projectPath` 完整性；
+  - `src/stores/project-store.ts`: 在 `confirmAndCancelProjectWorkflows` 中精细分流：当 `operation === 'open'` 且所有运行均具备后台资格时放行切换查看；存在未迁任务时准确拦截提示取消；显式关闭或新建项目时严格保留确认与取消等待；
+  - `src/components/stage/run/RunSheet.tsx` & `run-sheet.css`: 渲染“后台作品任务”专属分区，标注其他作品名称与步骤进度，提供“切换查看”按钮；当前作品无任务时提供智能 Notice 提示；100% 遵循 `paper-ink` 调色板令牌，无硬编码颜色；完整支持双语；
+- Acceptance Criteria Verification:
+  - AC-1: 后台任务资格校验与跨书隔离。只有具备完整三字段合法会话且满足后台运行资格的任务方可在切换作品时免于强制中断；
+  - AC-2: 切换查看与关闭退出的精细生命周期分流。在打开/切换其他作品时对合法后台任务静默维持运行，关闭/退出/新建时严格触发取消确认与资源清理；
+  - AC-3: 运行抽屉后台专区展示与一键切换。在当前作品 RunSheet 中清晰展示后台运行任务及其所属作品，并支持一键无感切换到目标作品。
+- Actual Execution:
+  - 12 focus/integration tests passed across 3 test suites (`workflow-background-qualification.test.ts` 5/5, `project-transition-background.test.ts` 4/4, `run-sheet-background.test.tsx` 3/3; 回归套件 `project-close-lifecycle.test.ts` 52/52).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 15 Independent Reviewer (`pro` model, subagent `3a2bc601-d39c-4982-8c72-a02322e5882e`).
+  - Verdict: PASS.
+- Acceptance:
+  - `UI-001` marked `completed` / `passes=true`.
+  - Completed feature count reaches 17/35 (48.6%).
+
+
 
 
 

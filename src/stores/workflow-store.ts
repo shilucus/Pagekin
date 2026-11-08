@@ -80,6 +80,8 @@ export interface WorkflowStep {
 
 /** 工作流运行实例 */
 export interface WorkflowRun {
+  /** 是否已获资格在切换作品后继续在后台执行（UI-001 / ADR-0049）。 */
+  backgroundQualified?: boolean
   characterProposalBatch?: CharacterProposalBatch
   characterProposalChoices?: CharacterProposalChoices
   id: string

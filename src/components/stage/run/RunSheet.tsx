@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, CircleCheck, CircleMinus, CircleX } from 'lucide-react'
+import { sameProjectPathKey } from '../../../shared/project-session-context'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useStageStore, type RunSheetTab, type StageSheet } from '../../../stores/navigation/stage-store'
 import { useProjectStore } from '../../../stores/project-store'
@@ -8,6 +9,7 @@ import { projectRuns } from '../../run/run-output'
 import { useRunRecovery, type RunRecovery } from '../../run/use-run-recovery'
 import { Button } from '../../ui/Button'
 import { EmptyState } from '../../ui/EmptyState'
+import { Notice } from '../../ui/Notice'
 import { Sheet } from '../../ui/Sheet'
 import { RunCard, RunDetails } from './RunCard'
 import { RunDiagnostics } from './RunDiagnostics'
@@ -32,10 +34,17 @@ const close = () => useStageStore.setState({ sheet: null })
  * 历史看结束的运行；诊断是宽版，放日志与 AI 调用记录。要看的运行已经结束时，「进行中」自动换成「历史」并展开它。
  */
 export default function RunSheet({ sheet }: { sheet: Extract<StageSheet, { kind: 'run' }> }) {
-  const text = useLocaleStore(s => s.text)
-  const projectPath = useProjectStore(s => s.currentProject?.path)
-  const active = projectRuns(useWorkflowStore(s => s.activeRuns), projectPath)
-  const history = projectRuns(useWorkflowStore(s => s.history), projectPath)
+  const storeText = useLocaleStore(s => s.text)
+  const text = storeText ?? useLocaleStore.getState().text
+  const currentProject = useProjectStore(s => s.currentProject) ?? useProjectStore.getState().currentProject
+  const projectPath = currentProject?.path
+  const storeActiveRuns = useWorkflowStore(s => s.activeRuns)
+  const allActive = storeActiveRuns.length > 0 ? storeActiveRuns : useWorkflowStore.getState().activeRuns
+  const active = projectRuns(allActive, projectPath)
+  const backgroundRuns = allActive.filter(run => !projectPath || !sameProjectPathKey(run.projectPath, projectPath))
+  const storeHistory = useWorkflowStore(s => s.history)
+  const allHistory = storeHistory.length > 0 ? storeHistory : useWorkflowStore.getState().history
+  const history = projectRuns(allHistory, projectPath)
   const recovery = useRunRecovery()
   const ended = sheet.runId !== undefined && !active.some(run => run.id === sheet.runId) && history.some(run => run.id === sheet.runId)
   const tab: RunSheetTab = sheet.tab === 'active' && ended ? 'history' : sheet.tab
@@ -54,15 +63,64 @@ export default function RunSheet({ sheet }: { sheet: Extract<StageSheet, { kind:
         style: 'segmented',
       }}
     >
-      {tab === 'active' && <ActiveRuns runs={active} last={history[0]} recovery={recovery} focusRunId={sheet.runId} hasHistory={history.length > 0} text={text} />}
+      {tab === 'active' && <ActiveRuns runs={active} backgroundRuns={backgroundRuns} last={history[0]} recovery={recovery} focusRunId={sheet.runId} hasHistory={history.length > 0} text={text} />}
       {tab === 'history' && <RunHistory key={sheet.runId} runs={history} focusRunId={sheet.runId} text={text} />}
       {tab === 'diagnostics' && <RunDiagnostics />}
     </Sheet>
   )
 }
 
-function ActiveRuns({ runs, last, recovery, focusRunId, hasHistory, text }: {
+function BackgroundRunsList({ runs, text }: { runs: WorkflowRun[]; text: Text }) {
+  if (runs.length === 0) return null
+  return (
+    <div className="run-background-section" aria-label={text('后台作品任务', 'Background project tasks')}>
+      <div className="run-background-heading">
+        <span>{text(`后台作品任务 (${runs.length})`, `Background project tasks (${runs.length})`)}</span>
+      </div>
+      {runs.map(run => (
+        <BackgroundRunCard key={run.id} run={run} text={text} />
+      ))}
+    </div>
+  )
+}
+
+function BackgroundRunCard({ run, text }: { run: WorkflowRun; text: Text }) {
+  const storeRecent = useProjectStore(s => s.recentProjects)
+  const recentProjects = (storeRecent && storeRecent.length > 0) ? storeRecent : (useProjectStore.getState().recentProjects ?? [])
+  const projectName = recentProjects.find(p => sameProjectPathKey(p.path, run.projectPath))?.name
+    || run.projectPath.split(/[/\\]/).filter(Boolean).pop()
+    || text('其他作品', 'Other project')
+
+  const handleSwitchView = () => {
+    void useProjectStore.getState().openProject(run.projectPath)
+  }
+
+  const doneSteps = run.steps.filter(s => s.status === 'completed').length
+  const totalSteps = run.steps.length
+
+  return (
+    <div className="run-background-card" data-state={run.status}>
+      <div className="run-background-card-head">
+        <span className="run-background-tag" title={run.projectPath}>
+          {projectName}
+        </span>
+        <Button variant="secondary" size="sm" onClick={handleSwitchView}>
+          {text('切换查看', 'Switch & View')}
+        </Button>
+      </div>
+      <div className="run-card-titleline">
+        <h4 className="run-card-title">{run.title}</h4>
+        <span className="run-badge" data-tone={run.status === 'running' ? 'accent' : run.status === 'failed' ? 'danger' : undefined}>
+          {run.status === 'running' ? `${doneSteps}/${totalSteps}` : text(run.status, run.status)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function ActiveRuns({ runs, backgroundRuns, last, recovery, focusRunId, hasHistory, text }: {
   runs: WorkflowRun[]
+  backgroundRuns: WorkflowRun[]
   last: WorkflowRun | undefined
   recovery: RunRecovery
   focusRunId: string | undefined
@@ -74,6 +132,20 @@ function ActiveRuns({ runs, last, recovery, focusRunId, hasHistory, text }: {
   const primaryId = ordered[0]?.status === 'waiting' ? ordered[0].id : undefined
   const nothing = ordered.length === 0 && !showLast && !recovery.entries.length && !recovery.generationError && !recovery.candidateError
   if (nothing) {
+    if (backgroundRuns.length > 0) {
+      return (
+        <div className="run-list">
+          <Notice
+            tone="info"
+            title={text(
+              `当前作品没有进行中的任务，但其他作品有 ${backgroundRuns.length} 个任务在后台运行。`,
+              `No tasks running in current project, but ${backgroundRuns.length} task${backgroundRuns.length === 1 ? '' : 's'} running in background.`,
+            )}
+          />
+          <BackgroundRunsList runs={backgroundRuns} text={text} />
+        </div>
+      )
+    }
     return (
       <EmptyState
         heading={text('没有进行中的运行', 'Nothing is running')}
@@ -89,6 +161,7 @@ function ActiveRuns({ runs, last, recovery, focusRunId, hasHistory, text }: {
       {ordered.map(run => <RunCard key={run.id} run={run} focused={run.id === focusRunId} primary={run.id === primaryId} />)}
       {showLast && <RunCard run={last} caption={text('上一次运行', 'Last run')} primary />}
       <RunRecoveryList recovery={recovery} liveRuns={runs} />
+      <BackgroundRunsList runs={backgroundRuns} text={text} />
     </div>
   )
 }
