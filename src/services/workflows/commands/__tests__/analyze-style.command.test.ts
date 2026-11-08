@@ -243,4 +243,87 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
     expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle)
       .toBe('新项目原有文风')
   })
+
+  it('in importRuntime, writes style to DB even if project was switched, without corrupting current store', async () => {
+    let resolveSave: ((value: { success: boolean }) => void) | undefined
+    const invoke = vi.fn((channel: string) => {
+      if (channel === 'prompt:load-global') return Promise.resolve({ templates: [], diagnostics: [] })
+      if (channel === 'db:project-core-update') {
+        return new Promise<{ success: boolean }>((resolve) => { resolveSave = resolve })
+      }
+      return Promise.resolve(null)
+    })
+    vi.stubGlobal('window', {
+      aiNovelAPI: {
+        invoke,
+        on: vi.fn(),
+        once: vi.fn(),
+        send: vi.fn(),
+        setZoomLevel: vi.fn(),
+        setZoomFactor: vi.fn(),
+        getZoomLevel: vi.fn(),
+      },
+    })
+    const slot = { runId: 'run-style-1', stage: 'style' as const, batchId: 'batch-0' }
+    const frozen = {
+      slot,
+      core: {
+        writingLanguage: 'zh-CN',
+        genre: '玄幻',
+        subGenre: '',
+        targetAudience: '男频',
+        totalChapters: 1,
+        wordsPerChapter: 3000,
+        plotStructure: 'three_act',
+        narrativePov: 'third_limited',
+        coreOutline: '',
+        worldSetting: '',
+        goldenFinger: '',
+        protagonistProfile: '',
+        globalGuidance: '',
+        writingStyle: '',
+      },
+      chapters: [{ number: 1, title: '第 1 章', content: '短句密集，动作推进快。', wordCount: 10 }],
+      totalWords: 10,
+      prompts: {
+        analyze_writing_style: { id: 'analyze_writing_style', content: '分析提示词' },
+      },
+    }
+    const importContext: WorkflowContext = {
+      ...context,
+      data: {
+        importGenerationSlot: slot,
+        importRunExecution: { ownerId: 'style-owner-1' },
+        importGenerationContext: frozen,
+      },
+    }
+    const command = new AnalyzeWritingStyleCommand({
+      sampleTexts: ['短句密集，动作推进快。'],
+    })
+    modelReply(command)
+      .mockResolvedValue('拆解出的目标作品文风')
+
+    const execution = command.execute({ step: {}, context: importContext, callbacks })
+    await vi.waitFor(() => expect(resolveSave).toBeTypeOf('function'))
+    useProjectStore.setState({
+      currentProject: {
+        ...useProjectStore.getState().currentProject!,
+        id: 'project-2',
+        path: 'C:\\tmp\\other-project',
+        novelConfig: {
+          ...useProjectStore.getState().currentProject!.novelConfig,
+          writingStyle: '新项目原有文风',
+        },
+      },
+    })
+    resolveSave!({ success: true })
+
+    const result = await execution
+    expect(result).toBe('拆解出的目标作品文风')
+    expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle)
+      .toBe('新项目原有文风')
+    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(
+      expect.stringContaining('当前正在查看其他作品，文风特征已安全保存至目标作品库'),
+    )
+  })
 })

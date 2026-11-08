@@ -15,32 +15,98 @@
   "status": "in_progress",
   "authorizationScope": "2026-11-07本轮用户明确授权实施F2全部35项功能及范围内代码、测试、文档、ADR、版本化接口和迁移；授权所列pnpm命令、隔离虚构项目持久化验证和主Agent按阶段路径本地add/commit。真实模型、真实配置/作品、外部状态、平台安装/发布不在授权内；设计、契约、便携恢复、人工批准与实际验收门禁保留。详见implementation-log.md。",
   "completionPolicy": {
-    "featureStatusValues": ["not_started", "in_progress", "blocked", "completed"],
+    "featureStatusValues": [
+      "not_started",
+      "in_progress",
+      "blocked",
+      "completed"
+    ],
     "passesMeaning": "只有该增量验收条件全部满足、适用门禁已获确认且requiredEvidenceTypes均有本轮对应证据，才能设completed及passes=true。方案审查或既有部分能力不能代替实现。",
-    "evidenceRecordFields": ["type", "sourceSha", "artifactOrReceipt", "environment", "result", "limitations"],
+    "evidenceRecordFields": [
+      "type",
+      "sourceSha",
+      "artifactOrReceipt",
+      "environment",
+      "result",
+      "limitations"
+    ],
     "dependencyMeaning": "dependsOn为功能前置DAG，不是授权；同一phase不是自动全串行。phase完成须该包全部适用增量完成。",
     "persistentStateRule": "每个新增持久状态功能独立按方案7.8完成本包字段分类、迁移、归档/新副本恢复验收；不得用未来全部状态已实现作为循环前置。",
     "executionRule": "执行前另核定具体命令、副作用及授权；此文件不是运行脚本，命令名或验收条件不授予执行权。",
     "qualityRule": "静态、确定性、性能、真实模型质量、桌面交互与目标平台证据分开；不承诺随机输出逐字相同，不用mock证明文学质量。"
   },
   "requirements": [
-    { "id": "R1", "description": "降低小说拆解与仿写的卡顿和未响应。" },
-    { "id": "R2", "description": "多书后台处理，切换查看不取消已获准任务。" },
-    { "id": "R3", "description": "设定、大纲、架构、蓝图等按意见多轮修订。" },
-    { "id": "R4", "description": "在保留功能、材料、产出合同与恢复语义前提下安全并行提速。" },
-    { "id": "R5", "description": "API/CLI/Skills驱动多书创作，机器初验，作者最终验收。" },
-    { "id": "R6", "description": "吸收固定基线InkOS的优秀设计，不整体迁入或未经许可复制。" }
+    {
+      "id": "R1",
+      "description": "降低小说拆解与仿写的卡顿和未响应。"
+    },
+    {
+      "id": "R2",
+      "description": "多书后台处理，切换查看不取消已获准任务。"
+    },
+    {
+      "id": "R3",
+      "description": "设定、大纲、架构、蓝图等按意见多轮修订。"
+    },
+    {
+      "id": "R4",
+      "description": "在保留功能、材料、产出合同与恢复语义前提下安全并行提速。"
+    },
+    {
+      "id": "R5",
+      "description": "API/CLI/Skills驱动多书创作，机器初验，作者最终验收。"
+    },
+    {
+      "id": "R6",
+      "description": "吸收固定基线InkOS的优秀设计，不整体迁入或未经许可复制。"
+    }
   ],
   "gates": [
-    { "id": "G-IMPLEMENT", "status": "confirmed", "condition": "2026-11-07用户已明确授权实施F2全部35项功能；各阶段冻结具体范围，其他门禁不豁免。" },
-    { "id": "G-RUN", "status": "confirmed", "condition": "2026-11-07用户已明确授权所列pnpm命令及已审查的本地隔离verify:drive场景；执行前逐项核查脚本、副作用和隔离范围，禁止--real-model及超范围副作用。" },
-    { "id": "G-CONTRACT", "status": "pending", "condition": "接受对应新ADR/版本化IPC或API、运行时和错误/恢复合同，明确替代旧单项目假设的范围。" },
-    { "id": "G-STORAGE", "status": "pending", "condition": "核定持久化范围、可恢复备份、registry迁移与本包7.8便携字段/历史冻结/新副本恢复合同。" },
-    { "id": "G-DESIGN", "status": "pending", "condition": "逐项确认对应可见输出、状态、文案及桌面视口；现有ADR或截图不覆盖的新状态不得自行补齐。" },
-    { "id": "G-POLICY", "status": "pending", "condition": "作者决定任务可写规划/字段/空位、章范围、模型/已安装Skill及机器修复轮数；默认不扩大授权。" },
-    { "id": "G-HUMAN", "status": "pending", "condition": "确认可信作者批准渠道、manifest限定能力与封存/解封协议；未满足前不开放公共approve写入口。" },
-    { "id": "G-MODEL", "status": "pending", "condition": "真实模型、费用、配置与固定虚构语料另授权；不读取真实作品或暴露秘密，沿现行质量协议评估。" },
-    { "id": "G-PLATFORM", "status": "pending", "condition": "目标平台构建/安装/运行逐命令授权，隔离用户profile；三目标资格不由源码构建替代。" }
+    {
+      "id": "G-IMPLEMENT",
+      "status": "confirmed",
+      "condition": "2026-11-07用户已明确授权实施F2全部35项功能；各阶段冻结具体范围，其他门禁不豁免。"
+    },
+    {
+      "id": "G-RUN",
+      "status": "confirmed",
+      "condition": "2026-11-07用户已明确授权所列pnpm命令及已审查的本地隔离verify:drive场景；执行前逐项核查脚本、副作用和隔离范围，禁止--real-model及超范围副作用。"
+    },
+    {
+      "id": "G-CONTRACT",
+      "status": "pending",
+      "condition": "接受对应新ADR/版本化IPC或API、运行时和错误/恢复合同，明确替代旧单项目假设的范围。"
+    },
+    {
+      "id": "G-STORAGE",
+      "status": "pending",
+      "condition": "核定持久化范围、可恢复备份、registry迁移与本包7.8便携字段/历史冻结/新副本恢复合同。"
+    },
+    {
+      "id": "G-DESIGN",
+      "status": "pending",
+      "condition": "逐项确认对应可见输出、状态、文案及桌面视口；现有ADR或截图不覆盖的新状态不得自行补齐。"
+    },
+    {
+      "id": "G-POLICY",
+      "status": "pending",
+      "condition": "作者决定任务可写规划/字段/空位、章范围、模型/已安装Skill及机器修复轮数；默认不扩大授权。"
+    },
+    {
+      "id": "G-HUMAN",
+      "status": "pending",
+      "condition": "确认可信作者批准渠道、manifest限定能力与封存/解封协议；未满足前不开放公共approve写入口。"
+    },
+    {
+      "id": "G-MODEL",
+      "status": "pending",
+      "condition": "真实模型、费用、配置与固定虚构语料另授权；不读取真实作品或暴露秘密，沿现行质量协议评估。"
+    },
+    {
+      "id": "G-PLATFORM",
+      "status": "pending",
+      "condition": "目标平台构建/安装/运行逐命令授权，隔离用户profile；三目标资格不由源码构建替代。"
+    }
   ],
   "invariants": [
     "保留作者事实与原文、唯一领域writer、定稿事务/outbox、重开替换和回收站边界；不自动改后续章。",
@@ -54,125 +120,323 @@
       "id": "PERF-001",
       "phase": "P0-A",
       "name": "脱敏性能基线与来源诊断",
-      "requirementIds": ["R1", "R4", "R6"],
-      "planSections": ["3.1", "3.3", "5.3", "8", "10"],
-      "sourceEvidence": ["E04", "E05", "E06", "E07", "E24", "I05"],
+      "requirementIds": [
+        "R1",
+        "R4",
+        "R6"
+      ],
+      "planSections": [
+        "3.1",
+        "3.3",
+        "5.3",
+        "8",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E04",
+        "E05",
+        "E06",
+        "E07",
+        "E24",
+        "I05"
+      ],
       "scope": "拆分本地准备/队列/模型/解析/保存成本，复用诊断并增加来源可追溯元数据，不记录正文、提示词或秘密。",
       "dependsOn": [],
-      "gateIds": ["G-IMPLEMENT", "G-RUN"],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN"
+      ],
       "acceptanceCriteria": [
         "固定虚构语料按10/100/1000章和适用的1/2/4书采样；未支持规模标未执行，记录SHA/环境/语料hash、失败分母。",
         "记录事件循环、读取字节、IPC/快照、队列、内存、物理请求与usage；区分首响应/思考/可见正文，不能把网络等待判UI卡死。",
         "来源/选择诊断能解释材料来源而不减少作者事实；p95 100ms及主线程500ms只是候选目标，不写成已达成或永久门槛。"
       ],
       "rollback": "停用新增诊断，不改历史事实或运行收据。",
-      "requiredEvidenceTypes": ["static", "deterministic", "performance"],
-      "status": "in_progress", "passes": false, "evidence": [
-        { "type": "static", "sourceSha": "0679303231cc439a0d2285f5c683041d1b347f0f", "artifactOrReceipt": "stage-1-evidence.md#frozen-implementation-sha256", "environment": "Windows x64; Node 24.13.0; pnpm 11.11.0; base SHA plus listed file hashes", "result": "1A implementation slice re-reviewed; typecheck/lint/i18n/build passed", "limitations": "Not complete PERF-001 acceptance. 1B and strict monitoring retest remain open; no dependent feature unlocked." },
-        { "type": "deterministic", "sourceSha": "0679303231cc439a0d2285f5c683041d1b347f0f", "artifactOrReceipt": "stage-1-evidence.md#actual-commands", "environment": "Windows x64; isolated fictional fixtures; frozen file hashes", "result": "615 focused production tests; 58 driver tests passed after review fixes", "limitations": "Not a full-suite PASS, literary-quality, remote-model, installer or platform qualification." },
-        { "type": "performance", "sourceSha": "0679303231cc439a0d2285f5c683041d1b347f0f", "artifactOrReceipt": "stage-1-evidence.md#performance-observations", "environment": "Windows x64; Electron 44.9.3; loopback fixture; 1440x900 light; uncontrolled disk cache", "result": "Partial: 10/100 chapter measurements captured; 100-chapter drive isolation failed and was preserved", "limitations": "Both runs predate added business-root monitoring and need strict retest. 1000 chapters pending; 2/4 books unsupported/not executed; no complete feature PASS." },
-        { "type": "deterministic", "sourceSha": "f5a95d3026819623cfd5dddc803996c6fe5c79eb", "artifactOrReceipt": "stage-1b-evidence.md#actual-b1-commands", "environment": "Windows x64; nine frozen driver/test hashes over parent SHA; isolated fictional fixtures", "result": "B1 driver repair: 7 files 125/125; typecheck/lint/i18n exit 0; independent source and raw receipt review", "limitations": "Driver-only slice, not full-suite or PERF-001 completion. Production build is unchanged and separately hashed." },
-        { "type": "performance", "sourceSha": "f5a95d3026819623cfd5dddc803996c6fe5c79eb", "artifactOrReceipt": "stage-1b-evidence.md#actual-short-pressure-observations", "environment": "Windows x64; Electron 44.9.3; loopback fake; 1440x900 light; uncontrolled cache; strict profile/business monitoring", "result": "Attributed 10/100 import rows and long-stream/slow-embedding/429 paths have qualified clean samples. Four final-version pressure attempts include one preserved isolation failure and three qualified runs.", "limitations": "1000-chapter attempt is failed/unqualified; B2 and full feature acceptance remain pending. One book only, 2/4 unsupported; pre-quit network cutoff, no independent Skill digest, no real-model quality or platform claim. No dependent feature unlocked." }
+      "requiredEvidenceTypes": [
+        "static",
+        "deterministic",
+        "performance"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "evidence": [
+        {
+          "type": "static",
+          "sourceSha": "0679303231cc439a0d2285f5c683041d1b347f0f",
+          "artifactOrReceipt": "stage-1-evidence.md#frozen-implementation-sha256",
+          "environment": "Windows x64; Node 24.13.0; pnpm 11.11.0; base SHA plus listed file hashes",
+          "result": "1A implementation slice re-reviewed; typecheck/lint/i18n/build passed",
+          "limitations": "Not complete PERF-001 acceptance. 1B and strict monitoring retest remain open; no dependent feature unlocked."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "0679303231cc439a0d2285f5c683041d1b347f0f",
+          "artifactOrReceipt": "stage-1-evidence.md#actual-commands",
+          "environment": "Windows x64; isolated fictional fixtures; frozen file hashes",
+          "result": "615 focused production tests; 58 driver tests passed after review fixes",
+          "limitations": "Not a full-suite PASS, literary-quality, remote-model, installer or platform qualification."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "0679303231cc439a0d2285f5c683041d1b347f0f",
+          "artifactOrReceipt": "stage-1-evidence.md#performance-observations",
+          "environment": "Windows x64; Electron 44.9.3; loopback fixture; 1440x900 light; uncontrolled disk cache",
+          "result": "Partial: 10/100 chapter measurements captured; 100-chapter drive isolation failed and was preserved",
+          "limitations": "Both runs predate added business-root monitoring and need strict retest. 1000 chapters pending; 2/4 books unsupported/not executed; no complete feature PASS."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "f5a95d3026819623cfd5dddc803996c6fe5c79eb",
+          "artifactOrReceipt": "stage-1b-evidence.md#actual-b1-commands",
+          "environment": "Windows x64; nine frozen driver/test hashes over parent SHA; isolated fictional fixtures",
+          "result": "B1 driver repair: 7 files 125/125; typecheck/lint/i18n exit 0; independent source and raw receipt review",
+          "limitations": "Driver-only slice, not full-suite or PERF-001 completion. Production build is unchanged and separately hashed."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "f5a95d3026819623cfd5dddc803996c6fe5c79eb",
+          "artifactOrReceipt": "stage-1b-evidence.md#actual-short-pressure-observations",
+          "environment": "Windows x64; Electron 44.9.3; loopback fake; 1440x900 light; uncontrolled cache; strict profile/business monitoring",
+          "result": "Attributed 10/100 import rows and long-stream/slow-embedding/429 paths have qualified clean samples. Four final-version pressure attempts include one preserved isolation failure and three qualified runs.",
+          "limitations": "1000-chapter attempt is failed/unqualified; B2 and full feature acceptance remain pending. One book only, 2/4 unsupported; pre-quit network cutoff, no independent Skill digest, no real-model quality or platform claim. No dependent feature unlocked."
+        }
       ]
     },
     {
       "id": "PERF-002",
       "phase": "P0-B",
       "name": "拆书精确取样与范围读取",
-      "requirementIds": ["R1", "R4"],
-      "planSections": ["3.1", "3.2", "5.3"],
-      "sourceEvidence": ["E04", "E05"],
+      "requirementIds": [
+        "R1",
+        "R4"
+      ],
+      "planSections": [
+        "3.1",
+        "3.2",
+        "5.3"
+      ],
+      "sourceEvidence": [
+        "E04",
+        "E05"
+      ],
       "scope": "数据库只取实际批次/代表章节，renderer不为抽样搬运整书，主进程仍冻结并核验权威正文。",
-      "dependsOn": ["PERF-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN"],
+      "dependsOn": [
+        "PERF-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN"
+      ],
       "acceptanceCriteria": [
         "短书、章号缺口、首尾重合与范围边界的样本/排序/指纹/冻结提示与原算法一致。",
         "小批次正文读取量随选定范围而非全书增长；不信任renderer自报正文或hash。",
         "来源变化、非法checkpoint和恢复拒绝语义不变，保留原始失败分母。"
       ],
       "rollback": "局部回退查询/取样代码；不改schema或重放模型请求。",
-      "requiredEvidenceTypes": ["deterministic", "performance"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "deterministic",
+        "performance"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "PERF-003",
       "phase": "P0-B",
       "name": "流式快照与通知去重",
-      "requirementIds": ["R1", "R4"],
-      "planSections": ["3.1", "3.2", "10"],
-      "sourceEvidence": ["E06", "E24", "E25"],
+      "requirementIds": [
+        "R1",
+        "R4"
+      ],
+      "planSections": [
+        "3.1",
+        "3.2",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E06",
+        "E24",
+        "E25"
+      ],
       "scope": "在可信发布端减少同durable revision重复回读和累计全文发送，诊断合并但不改持久化尾窗。",
-      "dependsOn": ["PERF-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN"],
+      "dependsOn": [
+        "PERF-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN"
+      ],
       "acceptanceCriteria": [
         "高频长流下相同durable revision不随delta重复同规模全文传输；终态/取消/故障/最终flush及时到达。",
         "hash、单调性、身份校验保留；异常同revision不同正文、乱序、存储失败、断连重连均有确定结果。",
         "重连仍用权威完整快照；不扩大崩溃可丢尾部窗口，不在此包暗换delta协议。"
       ],
       "rollback": "回退发布端去重/节流实现，保留原快照和收据。",
-      "requiredEvidenceTypes": ["deterministic", "performance", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "deterministic",
+        "performance",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "PERF-004",
       "phase": "P0-B",
       "name": "测量驱动的解析与纯计算优化",
-      "requirementIds": ["R1", "R4"],
-      "planSections": ["3.1", "3.2", "3.3"],
-      "sourceEvidence": ["E07"],
+      "requirementIds": [
+        "R1",
+        "R4"
+      ],
+      "planSections": [
+        "3.1",
+        "3.2",
+        "3.3"
+      ],
+      "sourceEvidence": [
+        "E07"
+      ],
       "scope": "先消除重复解析/哈希；仅在采样证实必要时隔离纯计算，不预设每书独立进程或新增依赖。",
-      "dependsOn": ["PERF-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN"],
+      "dependsOn": [
+        "PERF-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN"
+      ],
       "acceptanceCriteria": [
         "优化选择绑定本轮profile与实际热路径；无隔离必要时记录理由，不为完成条目强加worker。",
         "拆章/计数/哈希结果及错误传播一致；主进程保留路径/大小/授权与事务检查，不跨线程传native DB句柄。",
         "报告主线程停顿、CPU/RSS变化和取消/关闭收敛，不能只报告总耗时下降。"
       ],
       "rollback": "回退该计算路径或停用worker，保留输入、数据库与诊断。",
-      "requiredEvidenceTypes": ["deterministic", "performance", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "deterministic",
+        "performance",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "RUNTIME-001",
       "phase": "P1-A",
       "name": "项目运行时与基础入口显式路由",
-      "requirementIds": ["R2", "R4", "R5"],
-      "planSections": ["4.1", "4.2", "4.4", "7.8"],
-      "sourceEvidence": ["E01", "E02", "E03", "E11", "E26", "E31"],
+      "requirementIds": [
+        "R2",
+        "R4",
+        "R5"
+      ],
+      "planSections": [
+        "4.1",
+        "4.2",
+        "4.4",
+        "7.8"
+      ],
+      "sourceEvidence": [
+        "E01",
+        "E02",
+        "E03",
+        "E11",
+        "E26",
+        "E31"
+      ],
       "scope": "DB/owner/KB/身份按ProjectRuntime捕获；打开/关闭/基础编辑/定稿/维护一起封闭路由，视图不再冒充任务所有者。",
       "dependsOn": [],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "A/B异步不借全局currentProject或临时切换身份；旧打开/关库/定稿入口不能破坏后台A。",
         "每类旧入口有迁移/适配/拒绝清单，未迁工作流保留原切换保护，不统一移除取消提示。",
         "长链捕获身份、DB与关闭状态；新增持久字段按7.8可归档且新副本无旧执行权。"
       ],
       "rollback": "停用新runtime入口，安全排空/暂停；保留旧工作流保护，不启双owner或降级schema。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "completed", "passes": true, "evidence": [
-        { "type": "contract_review", "sourceSha": "34b13c33efe8f5bc83b080be068e69d4d2f44b18", "artifactOrReceipt": "stage-3a-evidence.md#feature-acceptance", "environment": "Windows x64; parent plus 79 frozen source/test hashes; accepted ADR-0029 routing contract", "result": "Two independent reviewers accepted all three RUNTIME-001 criteria, package-local contract/no-new-storage gates, explicit routing, compatibility interlocks, native COMMIT/session boundaries and buffer recovery", "limitations": "Routing feature only; no background grant, durable driver, complete workflow migration or platform qualification. This satisfies only the RUNTIME-001 prerequisite of downstream features, not their own gates." },
-        { "type": "deterministic", "sourceSha": "34b13c33efe8f5bc83b080be068e69d4d2f44b18", "artifactOrReceipt": "stage-3a-evidence.md#actual-execution", "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; isolated fictional native SQLite and installed Chromium override", "result": "Final 63-file 1434/1434; latest driver-only 28/28; browser 137/137; typecheck/lint/i18n/build exit 0", "limitations": "Runs overlap; not a full-suite or literary-quality PASS. Browser override is not pinned-browser qualification; earlier failures preserved." },
-        { "type": "electron", "sourceSha": "34b13c33efe8f5bc83b080be068e69d4d2f44b18", "artifactOrReceipt": "stage-3a-evidence.md#actual-execution", "environment": "Windows x64; Electron 44.9.3; runtime-routing-v1; loopback fake; owned fictional A/B; frozen build hashes", "result": "Registered IPC coexistence, one fetch, stale UI refusal, four legacy rejections and receipt replay without redispatch; normal quit and zero external writes/requests/residual processes", "limitations": "Direct IPC scene, not complete UI/background workflow. Two preceding path-length fixture failures preserved; no real model or installed-platform qualification." }
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "completed",
+      "passes": true,
+      "evidence": [
+        {
+          "type": "contract_review",
+          "sourceSha": "34b13c33efe8f5bc83b080be068e69d4d2f44b18",
+          "artifactOrReceipt": "stage-3a-evidence.md#feature-acceptance",
+          "environment": "Windows x64; parent plus 79 frozen source/test hashes; accepted ADR-0029 routing contract",
+          "result": "Two independent reviewers accepted all three RUNTIME-001 criteria, package-local contract/no-new-storage gates, explicit routing, compatibility interlocks, native COMMIT/session boundaries and buffer recovery",
+          "limitations": "Routing feature only; no background grant, durable driver, complete workflow migration or platform qualification. This satisfies only the RUNTIME-001 prerequisite of downstream features, not their own gates."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "34b13c33efe8f5bc83b080be068e69d4d2f44b18",
+          "artifactOrReceipt": "stage-3a-evidence.md#actual-execution",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; isolated fictional native SQLite and installed Chromium override",
+          "result": "Final 63-file 1434/1434; latest driver-only 28/28; browser 137/137; typecheck/lint/i18n/build exit 0",
+          "limitations": "Runs overlap; not a full-suite or literary-quality PASS. Browser override is not pinned-browser qualification; earlier failures preserved."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "34b13c33efe8f5bc83b080be068e69d4d2f44b18",
+          "artifactOrReceipt": "stage-3a-evidence.md#actual-execution",
+          "environment": "Windows x64; Electron 44.9.3; runtime-routing-v1; loopback fake; owned fictional A/B; frozen build hashes",
+          "result": "Registered IPC coexistence, one fetch, stale UI refusal, four legacy rejections and receipt replay without redispatch; normal quit and zero external writes/requests/residual processes",
+          "limitations": "Direct IPC scene, not complete UI/background workflow. Two preceding path-length fixture failures preserved; no real model or installed-platform qualification."
+        }
       ]
     },
     {
       "id": "RUNTIME-002",
       "phase": "P1-A",
       "name": "最小执行能力与撤权线性化",
-      "requirementIds": ["R2", "R4", "R5"],
-      "planSections": ["4.3", "4.5", "5.2", "7.8"],
-      "sourceEvidence": ["E03", "E23", "E27", "E31"],
+      "requirementIds": [
+        "R2",
+        "R4",
+        "R5"
+      ],
+      "planSections": [
+        "4.3",
+        "4.5",
+        "5.2",
+        "7.8"
+      ],
+      "sourceEvidence": [
+        "E03",
+        "E23",
+        "E27",
+        "E31"
+      ],
       "scope": "区分UI租约、执行epoch和grant revision，后台任务能力限定项目/动作/范围/生命周期。",
-      "dependsOn": ["RUNTIME-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "RUNTIME-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "每次dispatch和领域effect提交核验当前授权/epoch/维护状态；撤销与提交在同一项目屏障裁决。",
         "已提交事实不因撤权回滚，撤权先赢禁止新effect；仅授权的有界清理/脱敏收据读取可继续，不借此续权。",
         "重开/接管旧epoch失败关闭；跨书撤权逐项目返回围栏结果，新副本不能承接原grant或批准。"
       ],
       "rollback": "停止新能力签发、撤销新任务并收敛；不删除历史或恢复旧能力。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "completed", "passes": true, "evidence": [
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "completed",
+      "passes": true,
+      "evidence": [
         {
           "type": "contract_review",
           "sourceSha": "173e49914f1081d7063b1e3fa23c67d042f8c33a",
@@ -203,20 +467,47 @@
       "id": "RUNTIME-003",
       "phase": "P1-A",
       "name": "关闭维护屏障与单宿主写所有权",
-      "requirementIds": ["R2", "R5"],
-      "planSections": ["4.3", "4.4", "7.8", "9"],
-      "sourceEvidence": ["E02", "E24", "E26", "E31"],
+      "requirementIds": [
+        "R2",
+        "R5"
+      ],
+      "planSections": [
+        "4.3",
+        "4.4",
+        "7.8",
+        "9"
+      ],
+      "sourceEvidence": [
+        "E02",
+        "E24",
+        "E26",
+        "E31"
+      ],
       "scope": "首期所有UI/CLI共享一个broker；区分查看/关闭/退出/维护，协调DB、KB、owner与outbox生命周期。",
-      "dependsOn": ["RUNTIME-001", "RUNTIME-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "RUNTIME-001",
+        "RUNTIME-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "关闭先阻止新任务并收敛/flush，再释放DB；首期退出后不声称任务继续执行。",
         "删除/恢复/迁移/备份按对应项目建立维护屏障，不在活跃写入时移动目录或只备份DB主文件。",
         "同canonical project及路径别名只能有一个写owner；未交付OS fencing前不开放第二headless写宿主。"
       ],
       "rollback": "拒绝新后台入口，维持关闭保护和维护隔离；保留WAL/SHM/outbox/恢复诊断。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "completed", "passes": true, "evidence": [
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "completed",
+      "passes": true,
+      "evidence": [
         {
           "type": "contract_review",
           "sourceSha": "546486a82832cf1c63d6754b98c9be5ebc28371a",
@@ -247,20 +538,51 @@
       "id": "DRIVER-001",
       "phase": "P1-B",
       "name": "持久步骤驱动与effect恢复对账",
-      "requirementIds": ["R2", "R4", "R5", "R6"],
-      "planSections": ["4.2", "7.5", "7.6", "7.8"],
-      "sourceEvidence": ["E11", "E23", "E30", "E31", "I04"],
+      "requirementIds": [
+        "R2",
+        "R4",
+        "R5",
+        "R6"
+      ],
+      "planSections": [
+        "4.2",
+        "7.5",
+        "7.6",
+        "7.8"
+      ],
+      "sourceEvidence": [
+        "E11",
+        "E23",
+        "E30",
+        "E31",
+        "I04"
+      ],
       "scope": "将步骤执行、等待决定、暂停/取消/恢复移出renderer Promise，复用现有generation与领域收据。",
-      "dependsOn": ["RUNTIME-001", "RUNTIME-002", "RUNTIME-003"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "RUNTIME-001",
+        "RUNTIME-002",
+        "RUNTIME-003"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "执行前持久稳定stepId/commandId；每种effect列owner/key/来源CAS/收据查询，不每次恢复新UUID。",
         "每次领域提交后、ledger更新前崩溃可同事务引用或稳定查询对账；不得重跑猜测是否保存。",
         "至少一次驱动/幂等提交，unknown不重发、等待决定不自动批准；新副本历史不能按原项目步骤续跑。"
       ],
       "rollback": "停止受理，暂停/排空可恢复任务；保留step/effect/receipt，不回滚已提交事实。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "completed", "passes": true, "evidence": [
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "completed",
+      "passes": true,
+      "evidence": [
         {
           "type": "contract_review",
           "sourceSha": "d33a907e50e4ece4bdaa334a40f6627d4a87cc39",
@@ -291,62 +613,170 @@
       "id": "DRIVER-002",
       "phase": "P1-B",
       "name": "已有规划的批量草稿首条生产链",
-      "requirementIds": ["R2", "R5"],
-      "planSections": ["4.2", "7.1", "7.2", "7.6", "9"],
-      "sourceEvidence": ["E11", "E19", "E20", "E21"],
+      "requirementIds": [
+        "R2",
+        "R5"
+      ],
+      "planSections": [
+        "4.2",
+        "7.1",
+        "7.2",
+        "7.6",
+        "9"
+      ],
+      "sourceEvidence": [
+        "E11",
+        "E19",
+        "E20",
+        "E21"
+      ],
       "scope": "已有规划到批量草稿/机器审稿/待作者处理的真实driver；首期保留现有人审等待，不提前交付无人干预机器修订。",
-      "dependsOn": ["DRIVER-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "DRIVER-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "关视图后真实步骤继续，重新订阅可读产物/收据；不是只登记task或搬provider网络调用。",
         "首版遵守现有批次范围与人审合同；需要决定时持久等待，不能伪造human-confirmed-review。",
         "取消/暂停/重启/回包丢失可恢复对账，完成仅指其实际阶段；不冒充完整拆书/仿写或整书自动化。"
       ],
       "rollback": "停新driver，保留候选/收据，人工从已知状态继续；不自动重发。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "completed", "passes": true, "evidence": [
-        { "type": "contract_review", "sourceSha": "61f6d3661b895fc0330c7fcb680aa9b9061e2989", "artifactOrReceipt": "stage-4b2b-evidence.md#feature-acceptance", "environment": "Windows x64; parent plus final 57-file source manifest; accepted ADR-0033; independent requirements and lifecycle/storage reviewers", "result": "All three DRIVER-002 criteria and package-local contract/storage gates accepted; closed production IPC, exact author-child admission, physical lifecycle, receipt reconciliation and nonReplayable portable history reviewed with actual raw evidence", "limitations": "Internal planned-range batch draft/review driver only; future global gates, complete import/imitation, visible author UI and public approval are not accepted." },
-        { "type": "deterministic", "sourceSha": "61f6d3661b895fc0330c7fcb680aa9b9061e2989", "artifactOrReceipt": "stage-4b2b-evidence.md#actual-execution", "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; isolated fictional native SQLite projects", "result": "Final 43-file 1374/1374 impact union, later final two-scene 44/44 supplement, immutable old13 normal/donor two-generation current-verifier conservation, full human-history/fresh-lineage portable regressions; final typecheck/lint/color/i18n/source build exit 0", "limitations": "Counts overlap and are not summed. Original union manifest and two later fixture identities are mapped separately; retained failures are not relabeled. Not a full-repository or literary-quality PASS." },
-        { "type": "electron", "sourceSha": "61f6d3661b895fc0330c7fcb680aa9b9061e2989", "artifactOrReceipt": "stage-4b2b-evidence.md#actual-electron-and-fixture-repairs", "environment": "Windows x64; Electron 44.9.3; three reviewed fake-only registered-IPC scenes; final fixture hashes and unchanged frozen build", "result": "Normal six requests/twelve effects and detached receipt resubscription with B unchanged; unknown one request across pause/resume/cancel; real owned process restart, new PID/epoch, old capability refusal and zero post-restart dispatch; all normal quit with empty external/write/ignored/residual arrays", "limitations": "Network observed before quit. Screenshots are not author-workflow UI acceptance. No real-model quality, installer/other-platform, headless or complete import/imitation qualification." }
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "completed",
+      "passes": true,
+      "evidence": [
+        {
+          "type": "contract_review",
+          "sourceSha": "61f6d3661b895fc0330c7fcb680aa9b9061e2989",
+          "artifactOrReceipt": "stage-4b2b-evidence.md#feature-acceptance",
+          "environment": "Windows x64; parent plus final 57-file source manifest; accepted ADR-0033; independent requirements and lifecycle/storage reviewers",
+          "result": "All three DRIVER-002 criteria and package-local contract/storage gates accepted; closed production IPC, exact author-child admission, physical lifecycle, receipt reconciliation and nonReplayable portable history reviewed with actual raw evidence",
+          "limitations": "Internal planned-range batch draft/review driver only; future global gates, complete import/imitation, visible author UI and public approval are not accepted."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "61f6d3661b895fc0330c7fcb680aa9b9061e2989",
+          "artifactOrReceipt": "stage-4b2b-evidence.md#actual-execution",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; isolated fictional native SQLite projects",
+          "result": "Final 43-file 1374/1374 impact union, later final two-scene 44/44 supplement, immutable old13 normal/donor two-generation current-verifier conservation, full human-history/fresh-lineage portable regressions; final typecheck/lint/color/i18n/source build exit 0",
+          "limitations": "Counts overlap and are not summed. Original union manifest and two later fixture identities are mapped separately; retained failures are not relabeled. Not a full-repository or literary-quality PASS."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "61f6d3661b895fc0330c7fcb680aa9b9061e2989",
+          "artifactOrReceipt": "stage-4b2b-evidence.md#actual-electron-and-fixture-repairs",
+          "environment": "Windows x64; Electron 44.9.3; three reviewed fake-only registered-IPC scenes; final fixture hashes and unchanged frozen build",
+          "result": "Normal six requests/twelve effects and detached receipt resubscription with B unchanged; unknown one request across pause/resume/cancel; real owned process restart, new PID/epoch, old capability refusal and zero post-restart dispatch; all normal quit with empty external/write/ignored/residual arrays",
+          "limitations": "Network observed before quit. Screenshots are not author-workflow UI acceptance. No real-model quality, installer/other-platform, headless or complete import/imitation qualification."
+        }
       ]
     },
     {
       "id": "SCHED-001",
       "phase": "P1-C1",
       "name": "单书独立网络任务有界并发",
-      "requirementIds": ["R1", "R4"],
-      "planSections": ["5.1", "5.2", "5.3", "9", "10"],
-      "sourceEvidence": ["E08", "E09", "E10", "E25", "E27", "E28"],
+      "requirementIds": [
+        "R1",
+        "R4"
+      ],
+      "planSections": [
+        "5.1",
+        "5.2",
+        "5.3",
+        "9",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E08",
+        "E09",
+        "E10",
+        "E25",
+        "E27",
+        "E28"
+      ],
       "scope": "先试点embedding/独立主题查询，继续使用当前单书authority与KB gate，不依赖多书runtime完成。",
-      "dependsOn": ["PERF-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN"],
+      "dependsOn": [
+        "PERF-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN"
+      ],
       "acceptanceCriteria": [
         "并发有界，来源/取消/预算在dispatch及提交边界核验，保留物理请求数与活动时长，不放宽导入stage/slot或validatedPrefix。",
         "embedding按原batch序号首失败裁决，交换普通失败/非法向量及返回顺序，整文档完整向量/允许FTS-only/硬失败与原串行一致。",
         "停止后吸收在途结果，实际请求如实计数，无部分向量投影；逻辑取消不立即释放仍在途的物理槽。"
       ],
       "rollback": "降并发到1，不清预算、不释放unknown、不删向量或收据掩盖失败。",
-      "requiredEvidenceTypes": ["deterministic", "performance"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "deterministic",
+        "performance"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "SCHED-002",
       "phase": "P1-C2",
       "name": "多书公平调度与统一资源准入",
-      "requirementIds": ["R2", "R4", "R5", "R6"],
-      "planSections": ["4.5", "5.1", "5.2", "8", "9", "10"],
-      "sourceEvidence": ["E09", "E11", "E23", "E25", "E27", "I01", "I08"],
+      "requirementIds": [
+        "R2",
+        "R4",
+        "R5",
+        "R6"
+      ],
+      "planSections": [
+        "4.5",
+        "5.1",
+        "5.2",
+        "8",
+        "9",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E09",
+        "E11",
+        "E23",
+        "E25",
+        "E27",
+        "I01",
+        "I08"
+      ],
       "scope": "所有UI/CLI请求共享主进程资源claims与全局/provider/opaque凭据主体/model/project限流，书间公平轮转。",
-      "dependsOn": ["DRIVER-001", "DRIVER-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "DRIVER-001",
+        "DRIVER-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "队列有界/可取消、获取顺序固定、无长DB事务排队；两书真实工作流可并行且交互不被长书饿死。",
         "拿到全部资源后dispatch前原子再准入/reserve；排队中改源/撤权/重开/维护或await返回均不能带旧资格发出请求。",
         "provider忽略abort、迟到结束、反复取消均不无限补槽；区分task/本地transport/远端未知，遗留请求有界隔离并可停发，不声称严格远端并发证明。"
       ],
       "rollback": "降到1并停止新增跨书任务，保留任务/事实/unknown；不恢复旧全局身份切换。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "performance", "electron"],
-      "status": "in_progress", "passes": false,
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "performance",
+        "electron"
+      ],
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "contract_review",
@@ -394,20 +824,50 @@
       "id": "IMPORT-001",
       "phase": "P1-D",
       "name": "单书完整小说拆解工作流迁移",
-      "requirementIds": ["R1", "R2", "R4", "R5"],
-      "planSections": ["3.1", "4.4", "5.1", "7.6", "9", "10"],
-      "sourceEvidence": ["E04", "E07", "E08", "E10"],
+      "requirementIds": [
+        "R1",
+        "R2",
+        "R4",
+        "R5"
+      ],
+      "planSections": [
+        "3.1",
+        "4.4",
+        "5.1",
+        "7.6",
+        "9",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E04",
+        "E07",
+        "E08",
+        "E10"
+      ],
       "scope": "独立迁移现有小说拆解全部生产步骤、等待与恢复；不是首条批量草稿链的附带宣称。",
-      "dependsOn": ["DRIVER-001", "DRIVER-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "DRIVER-001",
+        "DRIVER-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "列全现有拆解入口和步骤并映射到driver/effect owner，保留原文/来源/manifest与global/style/blueprints的stage/slot门禁。",
         "单书拆解运行中可切换查看别书，迟到结果/旧入口不能串书或关错库；不据此宣称多书任务同时执行。",
         "逐阶段取消/unknown/崩溃/部分落库/投影失败可对账，来源改变拒绝续跑；验收不以submit成功代替产物保存。"
       ],
       "rollback": "未迁入口保留切书保护；已迁链停止受理、暂停/排空，保留拆解产物及恢复收据。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "in_progress", "passes": false,
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "contract_review",
@@ -472,6 +932,14 @@
           "environment": "Windows x64; Node24.13.0/Corepack pnpm11.11.0/Vitest4.1.12; serial fictional SQLite/Lance with 31 frozen source/test identities",
           "result": "Current union 38 files 733/733, zero failed/pending; current typecheck/lint/color/i18n/source build exit0; actual native close/reopen, two portable generations and schema14 old-format archive compatibility",
           "limitations": "Earlier failures retained, not summed. Current-tool-constructed old-format archive is not an immutable prior-exporter artifact. No actual Electron, complete-workflow, literary-quality, performance or platform acceptance"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-6e-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Stage 6E driver vertical and project switching protection tests passed (5 files, 147/147 tests passed); typecheck, lint, check:i18n, build exit 0",
+          "limitations": "Multi-book reference mixing belongs to Stage 6F"
         }
       ]
     },
@@ -479,20 +947,51 @@
       "id": "IMPORT-002",
       "phase": "P1-D",
       "name": "单书完整仿写工作流迁移",
-      "requirementIds": ["R1", "R2", "R4", "R5"],
-      "planSections": ["3.1", "4.4", "5.1", "7.6", "9", "10"],
-      "sourceEvidence": ["E04", "E05", "E07", "E08", "E10"],
+      "requirementIds": [
+        "R1",
+        "R2",
+        "R4",
+        "R5"
+      ],
+      "planSections": [
+        "3.1",
+        "4.4",
+        "5.1",
+        "7.6",
+        "9",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E04",
+        "E05",
+        "E07",
+        "E08",
+        "E10"
+      ],
       "scope": "独立核对仿写生产入口、参考材料/风格与目标作品事实的边界，适配runtime/driver。",
-      "dependsOn": ["DRIVER-001", "DRIVER-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "DRIVER-001",
+        "DRIVER-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "完整仿写步骤有入口/来源/领域保存映射；冻结参考与目标范围，不把参考书内容当目标作者事实。",
         "单书仿写运行中切换查看别书不取消该已迁任务；尚未迁移模式明确保留保护，不据此宣称多书或全模式支持。",
         "已知失败/unknown、上游变化、恢复、重复保存和任务结束分别核对实际收据，保留原有提示/产出合同。"
       ],
       "rollback": "暂停新仿写链并保留参考/候选/领域收据，未迁模式维持旧保护；不重放未知请求。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "in_progress", "passes": false,
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "contract_review",
@@ -557,6 +1056,14 @@
           "environment": "Same actual final Stage6D1 fictional native union, static checks and source build; not a separate imitation execution",
           "result": "Shared prerequisite 38 files 733/733, zero failed/pending; native scope/reopen, frozen history/new lineage, exact current15 and historical schema compatibility passed",
           "limitations": "Same overlapping report as IMPORT-001, not a second feature acceptance or actual style-consumption/Electron/quality result. IMPORT-002 stays in_progress/passes=false"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-6e-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Stage 6E driver vertical and project switching protection tests passed (5 files, 147/147 tests passed); typecheck, lint, check:i18n, build exit 0",
+          "limitations": "Multi-book reference mixing belongs to Stage 6F"
         }
       ]
     },
@@ -564,426 +1071,1116 @@
       "id": "IMPORT-003",
       "phase": "P1-D",
       "name": "拆解工作流多书并行资格",
-      "requirementIds": ["R1", "R2", "R4", "R5"],
-      "planSections": ["4.4", "5.1", "5.2", "9", "10"],
-      "sourceEvidence": ["E04", "E07", "E08", "E10", "E27"],
+      "requirementIds": [
+        "R1",
+        "R2",
+        "R4",
+        "R5"
+      ],
+      "planSections": [
+        "4.4",
+        "5.1",
+        "5.2",
+        "9",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E04",
+        "E07",
+        "E08",
+        "E10",
+        "E27"
+      ],
       "scope": "在单书拆解完整迁移后独立核定跨书并行资格，不让多书调度阻塞单书迁移交付。",
-      "dependsOn": ["IMPORT-001", "SCHED-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "IMPORT-001",
+        "SCHED-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "两本虚构书同时拆解并反复切换查看，A/B来源、正文、stage/slot/effect收据与缓冲完全隔离。",
         "全局/服务商/模型/项目槽和公平队列生效；书间可并行，同书阶段/批次依赖不因资格放宽。",
         "一书取消/unknown/重开/维护或崩溃恢复不破坏另一书；旧未迁入口仍按共存矩阵适配或拒绝。"
       ],
       "rollback": "停新增多书拆解并发、降到1，保留已验证的单书迁移与全部收据。",
-      "requiredEvidenceTypes": ["deterministic", "performance", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "deterministic",
+        "performance",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "IMPORT-004",
       "phase": "P1-D",
       "name": "仿写工作流多书并行资格",
-      "requirementIds": ["R1", "R2", "R4", "R5"],
-      "planSections": ["4.4", "5.1", "5.2", "9", "10"],
-      "sourceEvidence": ["E04", "E05", "E08", "E10", "E27"],
+      "requirementIds": [
+        "R1",
+        "R2",
+        "R4",
+        "R5"
+      ],
+      "planSections": [
+        "4.4",
+        "5.1",
+        "5.2",
+        "9",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E04",
+        "E05",
+        "E08",
+        "E10",
+        "E27"
+      ],
       "scope": "独立验收两书仿写并行；拆解/仿写混合用例归入已依赖双方迁移及资格的QUAL-001。",
-      "dependsOn": ["IMPORT-002", "SCHED-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "IMPORT-002",
+        "SCHED-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "两书仿写同时运行且切换查看不取消已迁任务，参考材料与目标作者事实/稿件不串用。",
         "排队期间改源/撤权/模型变化重验，书内依赖/物理请求/时长/unknown与原产出合同保留。",
         "单书失败或暂停不让另一书误报成功或失去owner，取消和恢复分别可查真实领域收据。"
       ],
       "rollback": "停新增多书仿写并发、降到1，保留单书仿写能力及候选/收据。",
-      "requiredEvidenceTypes": ["deterministic", "performance", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "deterministic",
+        "performance",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "FEEDBACK-001",
       "phase": "P2-A",
       "name": "目标限定候选协议与采用历史",
-      "requirementIds": ["R3", "R5", "R6"],
-      "planSections": ["6.1", "6.2", "7.8", "8"],
-      "sourceEvidence": ["E12", "E14", "E16", "E17", "E29", "E31", "I03", "I04"],
+      "requirementIds": [
+        "R3",
+        "R5",
+        "R6"
+      ],
+      "planSections": [
+        "6.1",
+        "6.2",
+        "7.8",
+        "8"
+      ],
+      "sourceEvidence": [
+        "E12",
+        "E14",
+        "E16",
+        "E17",
+        "E29",
+        "E31",
+        "I03",
+        "I04"
+      ],
       "scope": "按字段/节/章范围建立薄候选适配，分离adoptionBase与generationParent，保留采用前快照与来源。",
       "dependsOn": [],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "F0->C1->C2未采用时C2引用C1生成来源、仍对F0采用CAS；候选生成不写正式事实。",
         "最终选择/手改载荷在主进程按目标合同重验，幂等绑定payload/scope/来源/决定；同键异载荷拒绝。",
         "部分/全量采用后旧基线候选和后继只读冲突；底稿变化不静默rebase，重启及新副本旧候选采用均可追溯。"
       ],
       "rollback": "停新候选采用，保留候选/旧快照/收据；不重写原事实，不复用正文revisions表作万能历史。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic"],
-    "status": "completed", "passes": true, "evidence": [
-      { "type": "contract_review", "sourceSha": "b9c3855e87087d3fd0102356ed59e2fba53e7cf3", "artifactOrReceipt": "stage-2a-evidence.md#scope-and-review", "environment": "Windows x64; integrated source hashes in stage evidence", "result": "Stage 2A internal eight-target kernel accepted after independent receipt/source and storage/migration re-review", "limitations": "Partial FEEDBACK-001 only; no chapter-range adapter, UI or public entrypoint acceptance. Parent SHA plus exact implementation hashes identifies the tested version." },
-      { "type": "deterministic", "sourceSha": "b9c3855e87087d3fd0102356ed59e2fba53e7cf3", "artifactOrReceipt": "stage-2a-evidence.md#actual-commands", "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0", "result": "480 owner/source, 262 kernel/portable and 170 compatibility tests passed; typecheck, lint, i18n and source build exit 0", "limitations": "Separate batches include overlapping tests. No full-suite, Electron, browser, real-model or platform qualification in this slice." },
-      { "type": "contract_review", "sourceSha": "1815d16ae12b15c852b34b0cea06d790439ae5a7", "artifactOrReceipt": "stage-2b-evidence.md#scope-and-review", "environment": "Windows x64; frozen 35-file source/test hashes; independent requirements/proof and storage/migration reviewers", "result": "Stage 2A plus 2B satisfies all FEEDBACK-001 criteria; ADR-0026/0027 contract and package-local storage gates accepted after fixes and final independent re-review", "limitations": "Only internal field/section/chapter-range candidate protocol. Future G-CONTRACT/G-STORAGE scope remains pending; no FEEDBACK-002/003, UI, public API, human approval or quality/platform acceptance." },
-      { "type": "deterministic", "sourceSha": "1815d16ae12b15c852b34b0cea06d790439ae5a7", "artifactOrReceipt": "stage-2b-evidence.md#actual-commands", "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0; isolated fictional SQLite projects", "result": "Final 32-file integrated batch 1086/1086; typecheck, lint, i18n and source build exit 0; immutable old schema 9 capture and fixed old-protocol replay covered", "limitations": "Parent plus exact hashes identifies tested source. Earlier failed reports retained. Reconstructed old v1 proof is not old-producer execution. No full-suite, browser/Electron, real-model or platform claim." }
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic"
+      ],
+      "status": "completed",
+      "passes": true,
+      "evidence": [
+        {
+          "type": "contract_review",
+          "sourceSha": "b9c3855e87087d3fd0102356ed59e2fba53e7cf3",
+          "artifactOrReceipt": "stage-2a-evidence.md#scope-and-review",
+          "environment": "Windows x64; integrated source hashes in stage evidence",
+          "result": "Stage 2A internal eight-target kernel accepted after independent receipt/source and storage/migration re-review",
+          "limitations": "Partial FEEDBACK-001 only; no chapter-range adapter, UI or public entrypoint acceptance. Parent SHA plus exact implementation hashes identifies the tested version."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "b9c3855e87087d3fd0102356ed59e2fba53e7cf3",
+          "artifactOrReceipt": "stage-2a-evidence.md#actual-commands",
+          "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0",
+          "result": "480 owner/source, 262 kernel/portable and 170 compatibility tests passed; typecheck, lint, i18n and source build exit 0",
+          "limitations": "Separate batches include overlapping tests. No full-suite, Electron, browser, real-model or platform qualification in this slice."
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "1815d16ae12b15c852b34b0cea06d790439ae5a7",
+          "artifactOrReceipt": "stage-2b-evidence.md#scope-and-review",
+          "environment": "Windows x64; frozen 35-file source/test hashes; independent requirements/proof and storage/migration reviewers",
+          "result": "Stage 2A plus 2B satisfies all FEEDBACK-001 criteria; ADR-0026/0027 contract and package-local storage gates accepted after fixes and final independent re-review",
+          "limitations": "Only internal field/section/chapter-range candidate protocol. Future G-CONTRACT/G-STORAGE scope remains pending; no FEEDBACK-002/003, UI, public API, human approval or quality/platform acceptance."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "1815d16ae12b15c852b34b0cea06d790439ae5a7",
+          "artifactOrReceipt": "stage-2b-evidence.md#actual-commands",
+          "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0; isolated fictional SQLite projects",
+          "result": "Final 32-file integrated batch 1086/1086; typecheck, lint, i18n and source build exit 0; immutable old schema 9 capture and fixed old-protocol replay covered",
+          "limitations": "Parent plus exact hashes identifies tested source. Earlier failed reports retained. Reconstructed old v1 proof is not old-producer execution. No full-suite, browser/Electron, real-model or platform claim."
+        }
       ]
     },
     {
       "id": "FEEDBACK-002",
       "phase": "P2-A",
       "name": "设定与单架构节按意见修订",
-      "requirementIds": ["R3"],
-      "planSections": ["6.1", "6.2", "9"],
-      "sourceEvidence": ["E12", "E13", "E16"],
+      "requirementIds": [
+        "R3"
+      ],
+      "planSections": [
+        "6.1",
+        "6.2",
+        "9"
+      ],
+      "sourceEvidence": [
+        "E12",
+        "E13",
+        "E16"
+      ],
       "scope": "新增独立反馈修订模式，实际底稿与不可改约束进入输入；复用现有生成/领域writer，不强制原句前置。",
-      "dependsOn": ["FEEDBACK-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "FEEDBACK-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "能按明确意见修订设定字段、前提/世界观或单架构节，而非将重新生成误称保守修订。",
         "候选不覆盖正式底稿，选定采用才经对应writer提交；目标外字段逐字不变，过期来源零错误写入。",
         "原补全/扩写/重生与作者编辑仍可用；本功能单书可推进，不依赖多书runtime/driver。"
       ],
       "rollback": "关闭新修订模式，保留旧生成/编辑与已保存历史。",
-      "requiredEvidenceTypes": ["deterministic"],
-      "status": "in_progress", "passes": false, "evidence": [
-        { "type": "deterministic", "sourceSha": "319846b3b182d20371d31ad6df1eba64fe7da48a", "artifactOrReceipt": "stage-2c-evidence.md#actual-commands", "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0; fictional isolated SQLite projects", "result": "Internal eight-target desktop IPC/client slice: 23 files 931/931, typecheck/lint/i18n/source build exit 0; registered production route and original/portable recovery covered", "limitations": "Partial FEEDBACK-002 only. Parent plus 16 frozen hashes identifies tested bytes. No stage-page mode, dirty-buffer author workflow, visible design, browser/Electron, real-model or platform acceptance; portable redacted run inputs are not reconstructed." }
+      "requiredEvidenceTypes": [
+        "deterministic"
+      ],
+      "status": "in_progress",
+      "passes": false,
+      "evidence": [
+        {
+          "type": "deterministic",
+          "sourceSha": "319846b3b182d20371d31ad6df1eba64fe7da48a",
+          "artifactOrReceipt": "stage-2c-evidence.md#actual-commands",
+          "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0; fictional isolated SQLite projects",
+          "result": "Internal eight-target desktop IPC/client slice: 23 files 931/931, typecheck/lint/i18n/source build exit 0; registered production route and original/portable recovery covered",
+          "limitations": "Partial FEEDBACK-002 only. Parent plus 16 frozen hashes identifies tested bytes. No stage-page mode, dirty-buffer author workflow, visible design, browser/Electron, real-model or platform acceptance; portable redacted run inputs are not reconstructed."
+        }
       ]
     },
     {
       "id": "FEEDBACK-003",
       "phase": "P2-B",
       "name": "大纲范围与蓝图字段多轮修订",
-      "requirementIds": ["R3", "R5"],
-      "planSections": ["6.1", "6.2", "9", "10"],
-      "sourceEvidence": ["E14", "E15", "E16", "E29"],
+      "requirementIds": [
+        "R3",
+        "R5"
+      ],
+      "planSections": [
+        "6.1",
+        "6.2",
+        "9",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E14",
+        "E15",
+        "E16",
+        "E29"
+      ],
       "scope": "复用大纲范围CAS和蓝图proposal，增加候选/比较后采用；不借full覆盖实现局部修订。",
-      "dependsOn": ["FEEDBACK-001", "FEEDBACK-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "FEEDBACK-001",
+        "FEEDBACK-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "修订大纲3-4章或单蓝图指定字段只影响授权范围，其他章/字段/稳定身份不变。",
         "手改后章号重复/缺失/越界或身份引用不闭合时零正式写入，不自动补用户未选字段。",
         "二轮未采用、部分采用、底稿冲突与重复采用按共同协议处理，不删除范围外蓝图。"
       ],
       "rollback": "停新范围修订，保留原范围重写与手工编辑，候选历史只读保留。",
-      "requiredEvidenceTypes": ["deterministic"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "deterministic"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "FEEDBACK-004",
       "phase": "P2-B",
       "name": "角色proposal与正文既有审修衔接",
-      "requirementIds": ["R3", "R5"],
-      "planSections": ["6.1", "6.2", "7.2"],
-      "sourceEvidence": ["E16", "E17", "E19", "E20", "E29"],
+      "requirementIds": [
+        "R3",
+        "R5"
+      ],
+      "planSections": [
+        "6.1",
+        "6.2",
+        "7.2"
+      ],
+      "sourceEvidence": [
+        "E16",
+        "E17",
+        "E19",
+        "E20",
+        "E29"
+      ],
       "scope": "角色字段反馈继续走身份proposal；正文复用意见/指导、确认、差异合并与复验，不重建审修内核。",
-      "dependsOn": ["FEEDBACK-001", "FEEDBACK-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "FEEDBACK-001",
+        "FEEDBACK-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "稳定角色ID、作者字段与派生来源保留；已有蓝图的整批角色重生门禁不删除。",
         "正文沿用真实人审来源与合并/复验，不把就地合并描述为每轮自动创建不可变新稿。",
         "定稿修改仍先重开；影响提示不自动改后续，不声称覆盖所有语义矛盾或后续定稿全文。"
       ],
       "rollback": "停新衔接入口，保留旧角色编辑/正文审修/重开定稿流程与原稿。",
-      "requiredEvidenceTypes": ["deterministic"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "deterministic"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "UI-001",
       "phase": "P1-C2",
       "name": "后台作品任务与切换关闭呈现",
-      "requirementIds": ["R2", "R4", "R5"],
-      "planSections": ["4.3", "4.4", "6.3", "10"],
-      "sourceEvidence": ["E01", "E11", "E24", "E26"],
+      "requirementIds": [
+        "R2",
+        "R4",
+        "R5"
+      ],
+      "planSections": [
+        "4.3",
+        "4.4",
+        "6.3",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E01",
+        "E11",
+        "E24",
+        "E26"
+      ],
       "scope": "在纸墨流程与运行侧页呈现任务归属/后台状态，区分查看、关闭和退出；不建立第二套路由。",
-      "dependsOn": ["RUNTIME-003", "DRIVER-002", "SCHED-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-DESIGN"],
+      "dependsOn": [
+        "RUNTIME-003",
+        "DRIVER-002",
+        "SCHED-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-DESIGN"
+      ],
       "acceptanceCriteria": [
         "只有已迁工作流满足后台资格才改变切书保护；未迁模式拒绝/取消等待的真实边界准确呈现。",
         "A运行查看B，B缓冲和保存状态不受A事件影响；同项目再查看不机械重开，关闭/退出沿现有未保存保护。",
         "按确认设计检查中英文、主题、桌面视口与空/忙/失败/冲突态，不以现有ADR替代新状态设计。"
       ],
       "rollback": "关闭新增呈现/后台入口并安全收敛，保留所有作者缓冲和旧导航保护。",
-      "requiredEvidenceTypes": ["design_review", "deterministic", "browser", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "design_review",
+        "deterministic",
+        "browser",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "UI-002",
       "phase": "P2-A",
       "name": "单书反馈试点比较采用呈现",
-      "requirementIds": ["R3"],
-      "planSections": ["6.2", "6.3", "10"],
-      "sourceEvidence": ["E13", "E16", "E17"],
+      "requirementIds": [
+        "R3"
+      ],
+      "planSections": [
+        "6.2",
+        "6.3",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E13",
+        "E16",
+        "E17"
+      ],
       "scope": "先为设定字段/单架构节复用入口、diff与影响预览，呈现反馈/候选/部分采用/过期，不等待多书或其他反馈对象交付。",
-      "dependsOn": ["FEEDBACK-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-DESIGN"],
+      "dependsOn": [
+        "FEEDBACK-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-DESIGN"
+      ],
       "acceptanceCriteria": [
         "各目标入口/空忙失败/手改/部分采用/冲突均有明确设计证据，并按相同状态和视口核对。",
         "未保存缓冲先按既有保护处理，候选生成不让正式编辑内容消失，过期候选只读可取用不直接覆盖。",
         "中英文及导航遵循现有原语；不将内部Agent聊天/提议能力误当当前公开入口已存在。"
       ],
       "rollback": "停新入口，保留原编辑/生成及候选数据，不卸载丢失作者缓冲。",
-      "requiredEvidenceTypes": ["design_review", "deterministic", "browser", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "design_review",
+        "deterministic",
+        "browser",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "UI-003",
       "phase": "P2-B",
       "name": "范围反馈与角色正文衔接呈现",
-      "requirementIds": ["R3"],
-      "planSections": ["6.1", "6.2", "6.3", "10"],
-      "sourceEvidence": ["E14", "E15", "E16", "E17"],
+      "requirementIds": [
+        "R3"
+      ],
+      "planSections": [
+        "6.1",
+        "6.2",
+        "6.3",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E14",
+        "E15",
+        "E16",
+        "E17"
+      ],
       "scope": "将试点呈现扩展到大纲章范围、蓝图字段、角色proposal及正文既有审修衔接，不扩大各writer范围。",
-      "dependsOn": ["UI-002", "FEEDBACK-003", "FEEDBACK-004"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-DESIGN"],
+      "dependsOn": [
+        "UI-002",
+        "FEEDBACK-003",
+        "FEEDBACK-004"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-DESIGN"
+      ],
       "acceptanceCriteria": [
         "每个扩展对象与范围/手改/过期/下游影响状态有独立可见证据，不从试点设计跨范围外推。",
         "合法部分采用按最终选择范围及共同协议提交；最终结构非法时明确反馈且零正式写入，范围外内容与作者缓冲保持。",
         "角色稳定ID、正文真实人审/合并/重开定稿入口保留，中英文/主题/桌面视口按确认设计核对。"
       ],
       "rollback": "停扩展入口，保留试点和既有编辑/审修，不删除候选历史。",
-      "requiredEvidenceTypes": ["design_review", "deterministic", "browser", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "design_review",
+        "deterministic",
+        "browser",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "API-001",
       "phase": "P3-A",
       "name": "本机领域API与入站安全",
-      "requirementIds": ["R5", "R6"],
-      "planSections": ["4.5", "7.1", "7.3", "7.5", "7.6"],
-      "sourceEvidence": ["E18", "E21", "E23", "I02"],
+      "requirementIds": [
+        "R5",
+        "R6"
+      ],
+      "planSections": [
+        "4.5",
+        "7.1",
+        "7.3",
+        "7.5",
+        "7.6"
+      ],
+      "sourceEvidence": [
+        "E18",
+        "E21",
+        "E23",
+        "I02"
+      ],
       "scope": "向获准客户端提供窄领域任务/产物/提议能力，优先本机ACL通道；不暴露全部preload、文件或SQL。",
-      "dependsOn": ["DRIVER-001", "DRIVER-002", "RUNTIME-003"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE"],
+      "dependsOn": [
+        "DRIVER-001",
+        "DRIVER-002",
+        "RUNTIME-003"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE"
+      ],
       "acceptanceCriteria": [
         "真实执行连接driver与共同writer；项目列表/事件/产物读取按grant最小化，运行时白名单/大小/路径/身份校验完整。",
         "幂等绑定项目/调用者/grant/命令/key/规范化payload，拒同键异载荷；事件序号可续读，回包丢失查收据，unknown不重发。",
         "通道认证及令牌生命周期、必要Host/Origin/重放保护经契约验证；task凭据不能获取人审scope，可信渠道完成前approve写入口关闭。"
       ],
       "rollback": "关闭入站、撤销客户端能力并收敛任务；内部UI与已提交事实保留。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "CLI-001",
       "phase": "P3-A",
       "name": "可等待真实完成的CLI与稳定JSON",
-      "requirementIds": ["R5", "R6"],
-      "planSections": ["7.1", "7.3", "7.4", "8"],
-      "sourceEvidence": ["E18", "E21", "I02"],
+      "requirementIds": [
+        "R5",
+        "R6"
+      ],
+      "planSections": [
+        "7.1",
+        "7.3",
+        "7.4",
+        "8"
+      ],
+      "sourceEvidence": [
+        "E18",
+        "E21",
+        "I02"
+      ],
       "scope": "提供submit、run --wait、events/wait、暂停取消恢复、产物及验收适配；CLI不自建写库/工作流实现。",
-      "dependsOn": ["API-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT"],
+      "dependsOn": [
+        "API-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT"
+      ],
       "acceptanceCriteria": [
         "run --wait实际驱动和等待步骤，不把task受理等同创作完成；JSON/退出状态区分失败、取消、unknown、待人工和真实完成。",
         "UI/CLI竞争同章走共同claims与CAS，断线重连按原task/key/收据恢复，秘密不进入argv/stdout/日志。",
         "approve只能消费已确认的单次人审能力；该能力未交付时明确不可用，不降级task token自批。"
       ],
       "rollback": "停CLI入站使用，任务继续按host已知状态收敛，保留内部UI和历史。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "AUTO-001",
       "phase": "P3-B",
       "name": "任务创作策略与独立机器决定",
-      "requirementIds": ["R3", "R5"],
-      "planSections": ["4.5", "7.2", "7.4", "7.6", "7.8"],
-      "sourceEvidence": ["E19", "E20", "E21", "E31"],
+      "requirementIds": [
+        "R3",
+        "R5"
+      ],
+      "planSections": [
+        "4.5",
+        "7.2",
+        "7.4",
+        "7.6",
+        "7.8"
+      ],
+      "sourceEvidence": [
+        "E19",
+        "E20",
+        "E21",
+        "E31"
+      ],
       "scope": "默认candidate-only；显式task-grant才可自动采用获准规划/选择机器意见/执行有限修复，决定来源独立记录。",
-      "dependsOn": ["API-001", "FEEDBACK-001", "FEEDBACK-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE", "G-POLICY"],
+      "dependsOn": [
+        "API-001",
+        "FEEDBACK-001",
+        "FEEDBACK-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE",
+        "G-POLICY"
+      ],
       "acceptanceCriteria": [
         "作者明确可写字段/空位/章范围/模型/已安装Skill/修复次数，超出范围或来源变化转待决策。",
         "机器选择意见/修订按新automation decision合同进入既有内核，不能填confirmed=true或伪造human-confirmed-review。",
         "无自动最终定稿/删除/安装脚本/改凭据权；撤权与提交有序，机器决定和grant在新副本只留允许历史。"
       ],
       "rollback": "停机器决定与中间自动采用，保留候选/报告，回到人工现有流程。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "AUTO-002",
       "phase": "P3-B",
       "name": "长篇跨批候选依赖与恢复",
-      "requirementIds": ["R4", "R5"],
-      "planSections": ["5.1", "7.2", "7.5", "7.6", "10"],
-      "sourceEvidence": ["E20", "E23", "E29", "E30"],
+      "requirementIds": [
+        "R4",
+        "R5"
+      ],
+      "planSections": [
+        "5.1",
+        "7.2",
+        "7.5",
+        "7.6",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E20",
+        "E23",
+        "E29",
+        "E30"
+      ],
       "scope": "在独立合同下扩展跨批前驱候选来源与恢复；不移除现有批次限制或把候选冒充finalized。",
-      "dependsOn": ["AUTO-001", "DRIVER-002", "SCHED-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE", "G-POLICY"],
+      "dependsOn": [
+        "AUTO-001",
+        "DRIVER-002",
+        "SCHED-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE",
+        "G-POLICY"
+      ],
       "acceptanceCriteria": [
         "当前每批最多10章与普通前章定稿依赖的适用边界明确；跨批链只按新声明refs运行，不用auto_finalize绕过作者终验。",
         "前驱改稿/重选/部分采用/替换后后继冲突只读；相同正文候选升定稿也仅经声明并验证的收据映射转换来源。",
         "前章失败、跨批崩溃/恢复、来源变更和unknown均不静默换基线/换模型/重抽，所有步骤有真实收据。"
       ],
       "rollback": "停新跨批扩展，保留已有候选链；只继续原合同支持的范围，不自动定稿补依赖。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "AUTO-003",
       "phase": "P3-B",
       "name": "获准空项目从零规划到待终验",
-      "requirementIds": ["R3", "R5"],
-      "planSections": ["6.1", "7.2", "7.4", "9", "11"],
-      "sourceEvidence": ["E12", "E13", "E14", "E15", "E16", "E19", "E20"],
+      "requirementIds": [
+        "R3",
+        "R5"
+      ],
+      "planSections": [
+        "6.1",
+        "7.2",
+        "7.4",
+        "9",
+        "11"
+      ],
+      "sourceEvidence": [
+        "E12",
+        "E13",
+        "E14",
+        "E15",
+        "E16",
+        "E19",
+        "E20"
+      ],
       "scope": "在已获准空项目内编排中间设定/架构/大纲/角色/蓝图、正文与初验；不自行创建任意目录或扩充作品集合。",
-      "dependsOn": ["AUTO-001", "AUTO-002", "FEEDBACK-003", "FEEDBACK-004", "ACCEPT-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE", "G-POLICY", "G-MODEL"],
+      "dependsOn": [
+        "AUTO-001",
+        "AUTO-002",
+        "FEEDBACK-003",
+        "FEEDBACK-004",
+        "ACCEPT-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE",
+        "G-POLICY",
+        "G-MODEL"
+      ],
       "acceptanceCriteria": [
         "从作者任务到必要规划事实采用有明确授权和收据，不能只支持已有规划就宣称从零创作。",
         "设定/角色/蓝图依赖保留，缺必要材料或超过授权修复次数时待决，不编造作者确认或无限重试。",
         "多书分别完成到可追溯候选和初验报告/待作者终验；文学质量另按协议举证，未批准不最终定稿。"
       ],
       "rollback": "停新从零任务，保留已授权提交的规划与候选；后续由作者明确决定，不批量撤销事实。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron", "model_quality"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron",
+        "model_quality"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "ACCEPT-001",
       "phase": "P3-B",
       "name": "机器初验分层报告与交付准备",
-      "requirementIds": ["R5", "R6"],
-      "planSections": ["5.3", "7.3", "7.4", "8", "10"],
-      "sourceEvidence": ["E17", "E19", "E23", "I07"],
+      "requirementIds": [
+        "R5",
+        "R6"
+      ],
+      "planSections": [
+        "5.3",
+        "7.3",
+        "7.4",
+        "8",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E17",
+        "E19",
+        "E23",
+        "I07"
+      ],
       "scope": "对实际产物输出execution/scope/quality报告和未核实项，绑定精确版本/hash/来源而非模型自行报完成。",
-      "dependsOn": ["DRIVER-002", "API-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE", "G-MODEL"],
+      "dependsOn": [
+        "DRIVER-002",
+        "API-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE",
+        "G-MODEL"
+      ],
       "acceptanceCriteria": [
         "请求/保存/投影错误、越范围变化与AI语义意见分别记录；缺证据为unavailable/待核实，不默认PASS。",
         "报告绑定实际正文/规划、原始意见及决定来源；正文变化后旧报告不得继续批准新版本。",
         "初验能被Agent/CLI读取并交给作者，但不签发人审或定稿；引文可定位和mock通过不替代真实语义/文学评估。"
       ],
       "rollback": "停自动初验，保留报告和产物，回到现有人工审稿/验收入口。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron", "model_quality"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron",
+        "model_quality"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "ACCEPT-002",
       "phase": "P3-B",
       "name": "精确manifest与可信作者批准封存",
-      "requirementIds": ["R5"],
-      "planSections": ["6.3", "7.3", "7.7", "7.8", "10"],
-      "sourceEvidence": ["E19", "E29", "E30", "E31"],
+      "requirementIds": [
+        "R5"
+      ],
+      "planSections": [
+        "6.3",
+        "7.3",
+        "7.7",
+        "7.8",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E19",
+        "E29",
+        "E30",
+        "E31"
+      ],
       "scope": "构建不可变交付manifest，可信作者动作产生限hash/nonce批准能力；目标封存/解封与提交共享屏障。",
-      "dependsOn": ["ACCEPT-001", "API-001", "RUNTIME-002", "DRIVER-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE", "G-DESIGN", "G-HUMAN"],
+      "dependsOn": [
+        "ACCEPT-001",
+        "API-001",
+        "RUNTIME-002",
+        "DRIVER-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE",
+        "G-DESIGN",
+        "G-HUMAN"
+      ],
       "acceptanceCriteria": [
         "manifest含项目/范围、draft/version/hash/状态/重开关系、上游refs/报告与预期转换；普通task/CLI/MCP客户端不能申请或自签人审scope。",
         "批准前所有绑定编辑器revision握手并处理脏缓冲/封存，输入或断连则待决；不在SQL事务中等待编辑器，不丢迟到缓冲。",
         "解封先赢撤销未提交批准，提交先赢按ADR-0024重开；关闭重连核对封存/收据，客户端能力到期不抹批准历史，也不永久续权，新副本旧批准不执行。"
       ],
       "rollback": "关闭批准入口、停止新提交，保留已提交事实和待决清单；安全解封按同一屏障，不清dirty。",
-      "requiredEvidenceTypes": ["contract_review", "design_review", "deterministic", "browser", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "design_review",
+        "deterministic",
+        "browser",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "ACCEPT-003",
       "phase": "P3-B",
       "name": "逐章批准提交与部分成功恢复",
-      "requirementIds": ["R5"],
-      "planSections": ["7.5", "7.6", "7.7", "7.8", "10"],
-      "sourceEvidence": ["E23", "E29", "E30", "E31"],
+      "requirementIds": [
+        "R5"
+      ],
+      "planSections": [
+        "7.5",
+        "7.6",
+        "7.7",
+        "7.8",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E23",
+        "E29",
+        "E30",
+        "E31"
+      ],
       "scope": "批准不是新writer；每章走现有定稿事务/outbox，核对当前批准/封存/来源与effect，分别报告投影和后处理。",
-      "dependsOn": ["ACCEPT-002", "DRIVER-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE", "G-HUMAN"],
+      "dependsOn": [
+        "ACCEPT-002",
+        "DRIVER-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE",
+        "G-HUMAN"
+      ],
       "acceptanceCriteria": [
         "逐章同事务校验grant/批准、目标hash/状态/重开/依赖/唯一effect；同章最多一个当前finalized，重复批准不重复提交。",
         "多章按固定顺序独立收据，部分成功不谎称整批ACID；非预期变化暂停受影响后继，声明的状态/来源映射才可继续。",
         "崩溃、撤权、部分定稿/待投影/后处理失败恢复只推进仍获准未完成项；不回滚已提交事实、不重生成补收据、不自动推进后续连续性。"
       ],
       "rollback": "停后续自动提交，保留已定稿和未提交项/收据，作者按现有重开/恢复流程处理。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "MCP-001",
       "phase": "P3-C",
       "name": "入站窄领域MCP适配",
-      "requirementIds": ["R5", "R6"],
-      "planSections": ["7.1", "7.3", "7.4", "9"],
-      "sourceEvidence": ["E18", "I02", "I06"],
+      "requirementIds": [
+        "R5",
+        "R6"
+      ],
+      "planSections": [
+        "7.1",
+        "7.3",
+        "7.4",
+        "9"
+      ],
+      "sourceEvidence": [
+        "E18",
+        "I02",
+        "I06"
+      ],
       "scope": "在领域API之上暴露获准任务/事件/产物/初验能力，区别现有出站MCP客户端，不新建第二执行内核。",
-      "dependsOn": ["API-001", "AUTO-001", "ACCEPT-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT"],
+      "dependsOn": [
+        "API-001",
+        "AUTO-001",
+        "ACCEPT-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT"
+      ],
       "acceptanceCriteria": [
         "入站工具与API共享grant、幂等、调度及收据，不暴露SQL/任意文件/全部preload或任意外部进程能力。",
         "同一任务经CLI/MCP重连/竞争不重复effect，取消/unknown/待人工真实传播；任务凭据不能自批。",
         "现有出站MCP连接/工具确认边界保留；handler注册、连接可达与实际工具执行分开举证。"
       ],
       "rollback": "关闭入站适配不影响领域API/CLI/内部UI与既有出站确认边界。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "SKILL-001",
       "phase": "P3-C",
       "name": "自动化协作Skill与阶段写作Skill衔接",
-      "requirementIds": ["R5", "R6"],
-      "planSections": ["2", "7.2", "7.4", "8", "9"],
-      "sourceEvidence": ["E19", "E21", "I06"],
+      "requirementIds": [
+        "R5",
+        "R6"
+      ],
+      "planSections": [
+        "2",
+        "7.2",
+        "7.4",
+        "8",
+        "9"
+      ],
+      "sourceEvidence": [
+        "E19",
+        "E21",
+        "I06"
+      ],
       "scope": "提供任务/scope/等待/收据/恢复/初验/停止条件的协作Skill，写作Skill继续按阶段冻结，不引通用插件平台。",
-      "dependsOn": ["CLI-001", "MCP-001", "AUTO-001", "ACCEPT-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT"],
+      "dependsOn": [
+        "CLI-001",
+        "MCP-001",
+        "AUTO-001",
+        "ACCEPT-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT"
+      ],
       "acceptanceCriteria": [
         "Skill只说明已交付API/CLI能力、作用域与停止条件；不持秘密、不写DB、不自带脚本执行/安装或人审授权。",
         "阶段写作Skill内容/来源hash在运行中冻结，不覆盖作者事实、作品语言和结构化/安全合同；不静默换Skill恢复。",
         "以隔离合成任务检查Agent按收据区分受理/创作/初验/终验与unknown，不把规则静态审查当模型行为已通过。"
       ],
       "rollback": "移除新协作Skill入口，保留任务、冻结来源与既有阶段写作Skill。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "agent_workflow"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "agent_workflow"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "QUAL-001",
       "phase": "P3-B",
       "name": "完整链性能与质量不退化评估",
-      "requirementIds": ["R1", "R2", "R3", "R4", "R5"],
-      "planSections": ["3.3", "5.3", "9", "10"],
-      "sourceEvidence": ["E04", "E06", "E08", "E17", "E20", "E23"],
+      "requirementIds": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5"
+      ],
+      "planSections": [
+        "3.3",
+        "5.3",
+        "9",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E04",
+        "E06",
+        "E08",
+        "E17",
+        "E20",
+        "E23"
+      ],
       "scope": "汇合已实现改造做跨书/反馈/自动化整链比较；不以各feature局部检查替代实际工作流证据。",
-      "dependsOn": ["PERF-002", "PERF-003", "PERF-004", "SCHED-001", "SCHED-002", "IMPORT-001", "IMPORT-002", "IMPORT-003", "IMPORT-004", "FEEDBACK-003", "FEEDBACK-004", "AUTO-003", "ACCEPT-003"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-MODEL"],
+      "dependsOn": [
+        "PERF-002",
+        "PERF-003",
+        "PERF-004",
+        "SCHED-001",
+        "SCHED-002",
+        "IMPORT-001",
+        "IMPORT-002",
+        "IMPORT-003",
+        "IMPORT-004",
+        "FEEDBACK-003",
+        "FEEDBACK-004",
+        "AUTO-003",
+        "ACCEPT-003"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-MODEL"
+      ],
       "acceptanceCriteria": [
         "同语料/模型/参数/Skill比较串行与并行的材料、冻结提示、章范围、收据和恢复，覆盖拆解/仿写混合后台运行；报告p50/p95、IPC/内存/请求/429/失败分母。",
         "文风、事实/角色/必要事件、重复/节奏、意见落实及范围外变化按现行质量协议举证，不改写历史资格分母。",
         "本机等待/卡顿、provider延迟、质量和范围问题分开归因；未达到候选性能目标或未执行案例如实保留，不预承诺倍数。"
       ],
       "rollback": "停止放宽并发/自动化资格，按已验证低并发模式运行；保留失败样本与原始评估。",
-      "requiredEvidenceTypes": ["deterministic", "performance", "electron", "model_quality"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "deterministic",
+        "performance",
+        "electron",
+        "model_quality"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "QUAL-002",
       "phase": "P3-C",
       "name": "桌面交互与三目标回归资格",
-      "requirementIds": ["R1", "R2", "R3", "R4", "R5"],
-      "planSections": ["2", "6.3", "7.7", "7.8", "9", "10"],
-      "sourceEvidence": ["E01", "E17", "E20", "E24", "E31"],
+      "requirementIds": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5"
+      ],
+      "planSections": [
+        "2",
+        "6.3",
+        "7.7",
+        "7.8",
+        "9",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E01",
+        "E17",
+        "E20",
+        "E24",
+        "E31"
+      ],
       "scope": "对同一实际改造版本核对缓冲/导航/关闭、备份新副本继续创作及Windows x64/macOS arm64/macOS x64运行，不包含发布。",
-      "dependsOn": ["UI-001", "UI-002", "UI-003", "CLI-001", "MCP-001", "SKILL-001", "ACCEPT-002", "ACCEPT-003", "QUAL-001"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-DESIGN", "G-PLATFORM"],
+      "dependsOn": [
+        "UI-001",
+        "UI-002",
+        "UI-003",
+        "CLI-001",
+        "MCP-001",
+        "SKILL-001",
+        "ACCEPT-002",
+        "ACCEPT-003",
+        "QUAL-001"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-DESIGN",
+        "G-PLATFORM"
+      ],
       "acceptanceCriteria": [
         "按已确认状态/视口核对双语、主题、布局、反馈采用、人审封存/解封与未保存保护；无运行对比不称像素级通过。",
         "三目标实际native/安装启动/关闭/文件路径语义单独取证，来源SHA/产物hash/环境明确；build不等于运行或发布。",
         "新状态归档/跨profile新副本保全作者事实与候选，旧授权/批准/step/outbox不执行；原项目恢复另验，失败/未执行项不隐藏。"
       ],
       "rollback": "不授相应目标/能力资格，保留已验证版本与数据；不自动降级schema、安装或清理profile。",
-      "requiredEvidenceTypes": ["design_review", "browser", "electron", "platform"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "design_review",
+        "browser",
+        "electron",
+        "platform"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     },
     {
       "id": "HEADLESS-001",
       "phase": "P4",
       "name": "生产无窗口宿主与桌面互斥接管",
-      "requirementIds": ["R2", "R5"],
-      "planSections": ["4.3", "7.1", "7.5", "9", "10"],
-      "sourceEvidence": ["E02", "E03", "E11", "E18", "E23", "E24"],
+      "requirementIds": [
+        "R2",
+        "R5"
+      ],
+      "planSections": [
+        "4.3",
+        "7.1",
+        "7.5",
+        "9",
+        "10"
+      ],
+      "sourceEvidence": [
+        "E02",
+        "E03",
+        "E11",
+        "E18",
+        "E23",
+        "E24"
+      ],
       "scope": "在desktop在线broker稳定后交付生产headless生命周期、凭据使用和同书单owner；不借verify harness或隐藏窗口代替。",
-      "dependsOn": ["RUNTIME-003", "DRIVER-001", "SCHED-002", "API-001", "CLI-001", "QUAL-002"],
-      "gateIds": ["G-IMPLEMENT", "G-RUN", "G-CONTRACT", "G-STORAGE", "G-PLATFORM"],
+      "dependsOn": [
+        "RUNTIME-003",
+        "DRIVER-001",
+        "SCHED-002",
+        "API-001",
+        "CLI-001",
+        "QUAL-002"
+      ],
+      "gateIds": [
+        "G-IMPLEMENT",
+        "G-RUN",
+        "G-CONTRACT",
+        "G-STORAGE",
+        "G-PLATFORM"
+      ],
       "acceptanceCriteria": [
         "无window/Zustand/导航依赖地执行真实任务，具有启动/健康/停止/排空与恢复合同，退出桌面后的可运行条件明确。",
         "desktop/headless竞争同书有OS排他和持久fencing；接管、双host、别名路径、崩溃与迟到结果不双写或绕unknown保护。",
         "凭据留宿主，三目标headless/native和桌面接管实测；打包/安装/分发另核授权，不自动发布或升级环境。"
       ],
       "rollback": "停headless接单并安全排空/暂停，desktop继续持唯一合法owner，保留任务和收据。",
-      "requiredEvidenceTypes": ["contract_review", "deterministic", "electron", "platform"],
-      "status": "not_started", "passes": false, "evidence": []
+      "requiredEvidenceTypes": [
+        "contract_review",
+        "deterministic",
+        "electron",
+        "platform"
+      ],
+      "status": "not_started",
+      "passes": false,
+      "evidence": []
     }
   ]
 }

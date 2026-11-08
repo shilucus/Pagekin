@@ -1170,4 +1170,181 @@ describe('导入 slot 的输出没通过校验', () => {
       .execute({ step: {}, context, callbacks })).rejects.toThrow(/DB 写入失败/)
     expect(discarded()).toEqual([])
   })
+
+  it('在冻结的导入上下文下，前台切换作品不会中断推演与原子提交，且不污染新作品 store', async () => {
+    const inference = validInference()
+    const { runtime, context } = mainOwnedImport(JSON.stringify(inference), (channel, ...args) => {
+      if (channel === 'kb:search') return []
+      if (channel === 'db:character-roster-read') return { status: 'ready', revision: 1 }
+      if (channel === 'db:import-global-facts-commit') {
+        const req = args.find(a => a && typeof a === 'object' && 'operationId' in a) as import('../../../../shared/import-global-facts').ImportGlobalFactsRequest
+        const domainRequest = { ...req }
+        delete domainRequest.generationRunHandle
+        return {
+          success: true,
+          receipt: {
+            operationId: domainRequest.operationId,
+            payloadHash: 'f'.repeat(64),
+            idempotent: false,
+            core: structuredClone(domainRequest.core),
+            characterProposal: { proposalBatchId: 'import-proposal', sourceHash: 'a'.repeat(64) },
+            proposalSource: structuredClone(domainRequest),
+          },
+        }
+      }
+      return { success: true }
+    })
+    const slot = { runId: 'run-1', stage: 'global' as const, batchId: 'batch-0' }
+    const frozen = {
+      slot,
+      core: {
+        genre: '现实',
+        targetAudience: '通用',
+        plotStructure: 'three_act',
+        narrativePOV: 'third_limited',
+        totalChapters: 1,
+        wordsPerChapter: 18,
+        writingLanguage: 'zh-CN',
+      },
+      chapters: [{ number: 1, title: '第 1 章', content: '测试内容', wordCount: 18 }],
+      totalWords: 18,
+      prompts: {
+        infer_novel_config: { id: 'infer_novel_config', content: '提示词' },
+        repair_json_syntax: { id: 'repair_json_syntax', content: '修复提示词' },
+      },
+    }
+    context.data.importGenerationSlot = slot
+    context.data.importRunExecution = { ownerId: 'execution-global-1' }
+    context.data.importGenerationContext = frozen
+
+    useProjectStore.setState({
+      currentProject: {
+        id: 'project-2',
+        name: '别书项目',
+        path: 'C:\\tmp\\other-project',
+        sessionLease: 'lease-project-2',
+        novelConfig: {
+          genre: '科幻',
+          subGenre: '太空歌剧',
+          targetAudience: '青年',
+          totalChapters: 10,
+          wordsPerChapter: 2000,
+          plotStructure: 'heros_journey',
+          narrativePOV: 'first_person',
+          coreOutline: '太空探险',
+          worldSetting: '银河纪元',
+          goldenFinger: '量子AI',
+          protagonistProfile: '舰长',
+          globalGuidance: '',
+          writingStyle: '硬核科幻',
+        },
+        characterStates: '',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    })
+
+    const command = new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => runtime } as never)
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(context.data.importGlobalFactsReceipt).toBeDefined()
+    expect(useProjectStore.getState().currentProject?.id).toBe('project-2')
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('科幻')
+    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(
+      expect.stringContaining('当前正在查看其他作品，导入事实已安全保存至目标作品库'),
+    )
+  })
+
+  it('在冻结的导入上下文下，前台切换作品不会中断蓝图推演与范围提交', async () => {
+    const blueprintItem = {
+      chapterNumber: 1,
+      title: '启程',
+      role: '建置',
+      purpose: '引出主角目标',
+      keyEvents: '主角发现异常',
+      characters: ['主角'],
+      relationshipHints: [],
+      suspenseHook: '门外有人',
+    }
+    const { runtime, context } = mainOwnedImport(JSON.stringify({ blueprints: [blueprintItem] }), (channel, ...args) => {
+      if (channel === 'db:blueprint-commit-range') {
+        const req = args.find(a => a && typeof a === 'object' && 'startChapter' in a) as import('../../../../../electron/repositories/blueprint-repository').BlueprintRangeCommitRequest
+        return {
+          success: true,
+          receipt: {
+            operationId: req.operationId,
+            startChapter: req.startChapter,
+            endChapter: req.endChapter,
+            snapshot: [{ chapterNumber: 1, title: '启程' }],
+            characterSyncOperation: { operationId: 'sync-op-1' },
+          },
+        }
+      }
+      if (channel === 'db:blueprint-character-sync-get') {
+        return {
+          status: 'completed',
+          completionReceipt: { operationId: 'sync-op-1', characterCount: 1 },
+        }
+      }
+      return { success: true }
+    })
+    const slot = { runId: 'run-1', stage: 'blueprints' as const, batchId: 'batch-0' }
+    const frozen = {
+      slot,
+      core: {
+        genre: '现实',
+        targetAudience: '通用',
+        plotStructure: 'three_act',
+        narrativePOV: 'third_limited',
+        totalChapters: 1,
+        wordsPerChapter: 18,
+        writingLanguage: 'zh-CN',
+      },
+      chapters: [{ number: 1, title: '第 1 章', content: '测试内容', wordCount: 18 }],
+      totalWords: 18,
+      prompts: {
+        infer_single_chapter_blueprint: { id: 'infer_single_chapter_blueprint', content: '蓝图提示词' },
+        repair_json_syntax: { id: 'repair_json_syntax', content: '修复提示词' },
+      },
+    }
+    context.data.importGenerationSlot = slot
+    context.data.importRunExecution = { ownerId: 'execution-blueprints-1' }
+    context.data.importGenerationContext = frozen
+
+    useProjectStore.setState({
+      currentProject: {
+        id: 'project-2',
+        name: '别书项目',
+        path: 'C:\\tmp\\other-project',
+        sessionLease: 'lease-project-2',
+        novelConfig: {
+          genre: '科幻',
+          subGenre: '太空歌剧',
+          targetAudience: '青年',
+          totalChapters: 10,
+          wordsPerChapter: 2000,
+          plotStructure: 'heros_journey',
+          narrativePOV: 'first_person',
+          coreOutline: '太空探险',
+          worldSetting: '银河纪元',
+          goldenFinger: '量子AI',
+          protagonistProfile: '舰长',
+          globalGuidance: '',
+          writingStyle: '硬核科幻',
+        },
+        characterStates: '',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    })
+
+    const command = new RuntimeInferBlueprintsPerChapterCommand({ createRuntime: async () => runtime } as never)
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(context.data.blueprintCommitReceipt).toBeDefined()
+    expect(useProjectStore.getState().currentProject?.id).toBe('project-2')
+    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(
+      expect.stringContaining('当前正在查看其他作品，蓝图事实已安全保存至目标作品库'),
+    )
+  })
 })

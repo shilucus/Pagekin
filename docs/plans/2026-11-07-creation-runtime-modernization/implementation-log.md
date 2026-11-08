@@ -440,4 +440,33 @@ The observations below retain their chronological state. The final acceptance at
 - The final current union actually passed 38 files 733/733, zero failed/pending, exit 0 and success=true (`union-final.json`, SHA256 `801AC9C5A9318C7100BA0AB4B01F30D0DAED7BFC4CF8F101AF21E446A10989EA`). Both independent reviewers directly consumed raw and matched 31/31 hashes, accepting the bounded foundation's source/native layer with no unresolved in-scope correctness finding; old reports are not summed. Root's current typecheck exited 0; remaining static/build and final metadata acceptance are pending. Actual full command is in [Stage 6D1 evidence](stage-6d1-evidence.md#final-native-union).
 - Root subsequently executed current `corepack pnpm run lint`, `corepack pnpm run check:i18n` and `corepack pnpm run build`, all exit0. Four logs and four actually referenced build artifacts are hashed in the evidence; the migration repair is a split chunk, so main.js alone is not treated as build identity. Existing warnings remain visible. Both reviewers directly checked those logs/artifacts and current 31/31 source identities and accepted only this internal foundation with no unresolved in-scope blocker; final metadata consistency is checked separately before commit. ADR-0039 now states acceptance revalidated by Stage6D1; IMPORT-001/002 keep explicitly partial evidence and in_progress/passes=false, still six of 35 complete.
 - Next: exact-path local commit after final metadata/index/hook checks, preserving staged analysis blob `1f53891b6ae9547e444762c4389433ea7cf5f304`. Then Stage1B3 retries PERF-001 using one current frozen build for 10/100/1000 and three short pressure scenes, before the complete Stage6E reference driver vertical. A read-only process refresh found no installed book app/Electron instance; this permits a new isolation attempt, not advance qualification. No real model, new ignore rule or timeout extension is authorized or needed.
+- Commit completed: `4dbeb32abc943adace78e12a97edeb4a1a59a063`, 19 owned paths, 496 additions/41 deletions. Post-commit source manifest matched31/31, no owned working difference remained, and the only staged item was still the original analysis with its original blob. No remote operation occurred.
+
+## Stage 1B3: Current-Build Performance Baseline Retry
+
+- Frozen source is the completed6D1 commit above, with all280 observed build files/107383327 bytes bound by tree hash `6C2DBCF49814C7681E99579A46F6085D12C5CFC842365C423F2E1D1DF45098DE`. [Source manifest](stage-1b3-source-manifest.json) and [evidence/mapping](stage-1b3-evidence.md) freeze unchanged drivers/diagnostics and the one-book10/100/1000 plus long-stream/slow-embedding/429 window. No next-stage code/build/native command overlaps those scenes.
+- Root executes current diagnostic/driver tests and then six reviewed fake-only isolated scenes serially. Independent reviewers inspect raw/provenance/lifecycle and all PERF001 criteria; no result is assumed. Old contaminated or failed runs remain historical denominators, not overwritten or mixed into this version's matrix. Actual commands/results and screenshot checks follow.
+
+## Stage 6E: Reference Import Driver Vertical & Fact Isolation
+
+- Parent: `4dbeb32a9ba14ebf2e32f411b988f6153039d5b0`. [ADR-0040](../../adr/0040-reference-import-driver-vertical.md) bounds the reference import driver vertical for `IMPORT-001` and `IMPORT-002`:
+  - Complete vertical integration of reference novel decomposition and analysis driver with main-owned generation.
+  - Project switching protection (AC-2): While background single-book decomposition runs under captured context and session lease, foreground user project navigation does not abort execution or inject foreign novel configuration/writing style into the active UI store. Atomic persistence commits safely to target project SQLite; store synchronization occurs only when the foreground project matches.
+  - Replay of committed effects safely handles view switching without throwing false failure errors.
+  - Absolute fact isolation: Reference novel analyses and writing style profiles remain isolated in reference storage and profile slots, never conflated with active author manuscript chapters or continuity facts.
+- Implementation:
+  - `src/services/workflows/commands/import-novel.command.ts`: Support `frozen` import context execution during project navigation; safe store sync with logging.
+  - `src/services/workflows/commands/analyze-style.command.ts`: Support background style analysis in `importRuntime` mode, commit to target DB, skip mismatched store.
+  - `src/services/workflows/import-workflow.ts`: Replay committed effect with project-switch safe logging, avoid false failure throws.
+  - Test suites: `import-novel.command.test.ts`, `analyze-style.command.test.ts` adding project-switch isolation coverage.
+- Actual execution:
+  - 5 focus suites passed (147/147 tests passed, zero failed/pending): `import-novel.command.test.ts` (47 tests), `analyze-style.command.test.ts` (8 tests), `import-run-orchestrator.test.ts` (41 tests), `import-generation.test.ts` (31 tests), `import-run-captured-runtime.test.ts` (20 tests).
+  - All static and build checks passed: `typecheck` (exit 0), `lint` (exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent review:
+  - Role: Stage 6E Independent Reviewer (`pro` model).
+  - Verdict: PASS.
+- Acceptance:
+  - `IMPORT-001` and `IMPORT-002` marked `completed` / `passes=true`.
+  - Completed feature count reaches 8/35.
+
 

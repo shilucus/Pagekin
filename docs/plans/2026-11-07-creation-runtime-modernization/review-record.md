@@ -356,3 +356,24 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
 - Actual failure/fix/retest chain remains recorded: selected red1, nested-matrix default5000ms timeouts, two invalid new fixture inputs, then wide impact495/515 with20 stale expectation failures. Expanded independent matrix cases retain all guards/default timeout; exact current15/M14 expectation changes retain fixed historical targets, signedS01 and immutable fingerprints. Final current union38 files733/733, zero failed/pending, raw `801AC9C5A9318C7100BA0AB4B01F30D0DAED7BFC4CF8F101AF21E446A10989EA`; old overlapping reports are not summed.
 - Both reviewers directly consumed final raw, recomputed31/31 manifest identities, checked four current static/build logs and actual referenced build artifacts, and accepted only the internal foundation/repair with no unresolved in-scope correctness finding. Root typecheck/lint/color/i18n/build all exited0; build warnings remain recorded. Final metadata consistency precedes exact-path local commit. ADR0039 is accepted only as revalidated here; full IMPORT001/002, runner/capability wiring, authoritative refresh, actual Electron, performance, model quality and target-platform qualification remain unaccepted, still6/35 complete.
 
+## 2026-11-08 Implementation: Stage 6E
+
+- Scope: Novel decomposition driver vertical and reference fact isolation for `IMPORT-001` and `IMPORT-002`.
+  - Parent: `4dbeb32a9ba14ebf2e32f411b988f6153039d5b0`.
+  - ADR: [ADR-0040](../../adr/0040-reference-import-driver-vertical.md).
+- Team:
+  - Implementation: Workflow command integration (`import-novel.command.ts`, `analyze-style.command.ts`, `import-workflow.ts`), tests (`import-novel.command.test.ts`, `analyze-style.command.test.ts`).
+  - Independent Review: Stage 6E Independent Reviewer (`pro` model).
+- Key Reviews & Findings:
+  - Project Switching Protection (AC-2): While background single-book decomposition runs under captured context, user switching to view another project does not abort execution or corrupt current foreground store. Atomic persistence commits safely to target project SQLite; UI store synchronization occurs only when the foreground project matches.
+  - Replay of committed effects safely handles view switching without throwing false failure errors.
+  - Absolute Fact Isolation: Reference novel analysis and writing style profiles remain isolated in reference storage, never conflated with active author manuscript chapters or continuity facts.
+- Actual Execution:
+  - 5 focus suites passed (147/147 tests passed, zero failed/pending): `import-novel.command.test.ts` (47 tests), `analyze-style.command.test.ts` (8 tests), `import-run-orchestrator.test.ts` (41 tests), `import-generation.test.ts` (31 tests), `import-run-captured-runtime.test.ts` (20 tests).
+  - All static and build checks passed: `typecheck` (exit 0), `lint` (exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Acceptance:
+  - Verdict: PASS.
+  - `IMPORT-001` and `IMPORT-002` marked `completed` / `passes=true`.
+  - Total completed features: 8/35.
+
+

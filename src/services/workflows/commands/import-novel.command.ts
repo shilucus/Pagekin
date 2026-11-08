@@ -287,15 +287,16 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     const writingLanguage = frozen?.core.writingLanguage ?? workflowWritingLanguage(context)
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const project = useProjectStore.getState().currentProject
-    if (!project || !sameProjectSessionContext(
+    const isCurrentProject = Boolean(project && sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(project),
-    )) throw new Error(text('当前项目已切换，导入推演已停止', 'The project changed, so import inference stopped.'))
-    const projectSnapshot = Object.freeze({ ...project, novelConfig: Object.freeze({ ...project.novelConfig }) })
+    ))
+    if (!isCurrentProject && !frozen) throw new Error(text('当前项目已切换，导入推演已停止', 'The project changed, so import inference stopped.'))
+    const projectSnapshot = project ? Object.freeze({ ...project, novelConfig: Object.freeze({ ...project.novelConfig }) }) : undefined
 
     const baseConfig: NovelConfig = frozen ? {
       writingLanguage: frozen.core.writingLanguage,
-      creativeStrategy: frozen.core.creativeStrategy,
+      creativeStrategy: frozen.core.creativeStrategy as NovelConfig['creativeStrategy'],
       narrativeThreadDormantChapterThreshold: frozen.core.narrativeThreadDormantChapterThreshold,
       genre: frozen.core.genre, subGenre: frozen.core.subGenre, targetAudience: frozen.core.targetAudience,
       totalChapters: frozen.core.totalChapters, wordsPerChapter: frozen.core.wordsPerChapter,
@@ -305,7 +306,12 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       goldenFinger: frozen.core.goldenFinger, protagonistProfile: frozen.core.protagonistProfile,
       globalGuidance: frozen.core.globalGuidance, writingStyle: frozen.core.writingStyle,
       referenceWorks: frozen.core.referenceWorks,
-    } : projectSnapshot.novelConfig
+    } : (projectSnapshot?.novelConfig ?? {
+      writingLanguage: 'zh-CN', creativeStrategy: 'auto', narrativeThreadDormantChapterThreshold: 5,
+      genre: '', subGenre: '', targetAudience: '', totalChapters: 100, wordsPerChapter: 3000,
+      plotStructure: 'three_act', narrativePOV: 'third_limited', coreOutline: '', worldSetting: '',
+      goldenFinger: '', protagonistProfile: '', globalGuidance: '', writingStyle: '', referenceWorks: '',
+    })
     const chapters = frozen?.chapters ?? context.data.chapters as ImportedChapter[]
     if (!chapters || chapters.length === 0) throw new Error(text('无章节数据', 'No chapter data is available.'))
     const importRunTotalChapters = frozen?.totalChapters ?? context.data.importRunTotalChapters
@@ -454,7 +460,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         / totalChapters,
       )),
     }
-    if (!sameProjectSessionContext(
+    if (!frozen && !sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(useProjectStore.getState().currentProject),
     )) throw new Error(text(
@@ -513,7 +519,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     context.data.importGlobalFactsReceipt = commitReceipt
 
     this.assertNotCancelled(context)
-    if (!sameProjectSessionContext(
+    if (!frozen && !sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(useProjectStore.getState().currentProject),
     )) throw new Error(text(
@@ -535,8 +541,16 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       protagonistProfile: commitReceipt.core.protagonistProfile,
     }
     const authoritativeNovelConfig = { ...baseConfig, ...savedFields }
-    // 反推等待期间作者在设定页改过、还没保存的字段保持作者的值。
-    useProjectStore.getState().publishSavedNovelConfig(savedFields, projectSession, 'unsaved-edits')
+    // 反推等待期间作者在设定页改过、还没保存的字段保持作者的值；若已切书查看其他作品，不污染当前前台 store。
+    const matchesActive = sameProjectSessionContext(
+      projectSession,
+      projectSessionContextFromProject(useProjectStore.getState().currentProject),
+    )
+    if (matchesActive) {
+      useProjectStore.getState().publishSavedNovelConfig(savedFields, projectSession, 'unsaved-edits')
+    } else {
+      callbacks.log(text('当前正在查看其他作品，导入事实已安全保存至目标作品库', 'Viewing another project; imported facts saved safely to the target project database.'))
+    }
     const unknown = promptLanguageText(writingLanguage, '未知', 'Unknown')
     const none = promptLanguageText(writingLanguage, '（无）', '(none)')
     context.data.novelConfigSummary = promptLanguageText(
@@ -605,10 +619,11 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     const writingLanguage = frozen?.core.writingLanguage ?? workflowWritingLanguage(context)
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const project = useProjectStore.getState().currentProject
-    if (!project || !sameProjectSessionContext(
+    const isCurrentProject = Boolean(project && sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(project),
-    )) throw new Error(text('当前项目已切换，蓝图推演已停止', 'The project changed, so blueprint inference stopped.'))
+    ))
+    if (!isCurrentProject && !frozen) throw new Error(text('当前项目已切换，蓝图推演已停止', 'The project changed, so blueprint inference stopped.'))
 
     const chapters = frozen?.chapters ?? context.data.chapters as ImportedChapter[]
     const configSummary = (frozen ? JSON.stringify(frozen.core) : context.data.novelConfigSummary as string)
@@ -754,6 +769,9 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
       `Blueprint inference complete: ${committedChapterCount} ${committedChapterCount === 1 ? 'chapter was' : 'chapters were'} committed in one operation`,
     ))
     callbacks.setProgress(100)
+    if (!isCurrentProject) {
+      callbacks.log(text('当前正在查看其他作品，蓝图事实已安全保存至目标作品库', 'Viewing another project; blueprint facts saved safely to the target project database.'))
+    }
     this.notifyRefresh(['fileTree', 'blueprints'], context.projectPath, projectSession)
   }
 }

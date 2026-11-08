@@ -226,19 +226,27 @@ function productionDependencies(
         return
       }
       const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
+      if (!core) {
+        throw new Error(textForLocale(
+          run.locale,
+          '无法读取已保存的导入配置。',
+          'Could not read committed project configuration.',
+        ))
+      }
       const current = useProjectStore.getState().currentProject
-      if (!core || !current || !sameProjectSessionContext(
+      if (current && sameProjectSessionContext(
         session,
         projectSessionContextFromProject(current),
       )) {
-        throw new Error(textForLocale(
+        useProjectStore.getState().publishSavedNovelConfig(configFieldsFromCore(core), session, 'unsaved-edits')
+        context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
+      } else {
+        callbacks.log(textForLocale(
           run.locale,
-          '当前项目已切换，无法恢复已保存的导入结果。',
-          'The project changed before the committed import effect could be restored.',
+          '导入结果已持久化入库；前台正浏览其他作品，跳过前台界面同步。',
+          'Import effect persisted to storage; foreground is viewing another project, skipping UI sync.',
         ))
       }
-      useProjectStore.getState().publishSavedNovelConfig(configFieldsFromCore(core), session, 'unsaved-edits')
-      context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
     },
     listChapters: (runId, after, limit) => ipc.invokeWithProjectSession(
       session, 'db:import-run-list-chapters', runId, after, limit, projectPath,
@@ -297,7 +305,10 @@ function productionDependencies(
       context.data.importGenerationSlot = { runId: run.id, stage: 'blueprints', batchId: checkpoint }
       context.data.importRunPurpose = run.purpose
       context.data.chapters = chapters.map(importedChapter)
-      context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
+      const current = useProjectStore.getState().currentProject
+      if (!context.data.novelConfigSummary && current && sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
+        context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
+      }
       const { InferBlueprintsPerChapterCommand } = await import('./commands/import-novel.command')
       await new InferBlueprintsPerChapterCommand(undefined, async request => (
         await commit(request)

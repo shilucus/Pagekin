@@ -1,5 +1,6 @@
 import { assertImportCompletionNotStopped, frozenImportContext, importGenerationSelection } from './import-novel.command'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
+import type { NovelConfig } from '../../../shared/ipc-channels'
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
 import { resolvePromptTemplate } from '../../prompt-templates'
@@ -49,12 +50,25 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
     const writingLanguage = frozen?.core.writingLanguage ?? workflowWritingLanguage(context)
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const project = useProjectStore.getState().currentProject
-    if (!project || !sameProjectSessionContext(
+    const projectMatches = Boolean(project && sameProjectSessionContext(
       projectSession,
       projectSessionContextFromProject(project),
-    )) throw new Error(text('当前项目已切换，文风分析已停止', 'The project changed, so writing-style analysis stopped.'))
+    ))
+    if (!projectMatches && !importRuntime) throw new Error(text('当前项目已切换，文风分析已停止', 'The project changed, so writing-style analysis stopped.'))
 
-    const expectedConfig = structuredClone(project.novelConfig)
+    const expectedConfig: NovelConfig | undefined = project ? structuredClone(project.novelConfig) : (frozen ? {
+      writingLanguage: frozen.core.writingLanguage,
+      creativeStrategy: frozen.core.creativeStrategy as NovelConfig['creativeStrategy'],
+      narrativeThreadDormantChapterThreshold: frozen.core.narrativeThreadDormantChapterThreshold,
+      genre: frozen.core.genre, subGenre: frozen.core.subGenre, targetAudience: frozen.core.targetAudience,
+      totalChapters: frozen.core.totalChapters, wordsPerChapter: frozen.core.wordsPerChapter,
+      plotStructure: frozen.core.plotStructure as NovelConfig['plotStructure'],
+      narrativePOV: frozen.core.narrativePov as NovelConfig['narrativePOV'],
+      coreOutline: frozen.core.coreOutline, worldSetting: frozen.core.worldSetting,
+      goldenFinger: frozen.core.goldenFinger, protagonistProfile: frozen.core.protagonistProfile,
+      globalGuidance: frozen.core.globalGuidance, writingStyle: frozen.core.writingStyle,
+      referenceWorks: frozen.core.referenceWorks,
+    } : undefined)
     if (importRuntime && (!frozen || frozen.slot.stage !== 'style')) throw new Error('IMPORT_GENERATION_CONTEXT_REQUIRED')
     const sampleTexts = collectImportStyleSamples(frozen ? { chapters: frozen.chapters } : this.options, writingLanguage)
     const selectedFinalizedDraftIds: number[] = []
@@ -141,6 +155,7 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       } else if (mainOwned) {
         const handle = context.mainGenerationRunHandle
         if (!handle) throw new Error('GENERATION_COMMIT_HANDLE_REQUIRED')
+        if (!expectedConfig) throw new Error('EXPECTED_CONFIG_REQUIRED')
         const saved = await useProjectStore.getState().commitGeneratedNovelConfig(
           { writingStyle: cleanResult }, expectedConfig, projectSession, handle,
           this.persistWritingStyle ? async () => {
@@ -154,20 +169,26 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
           { writingStyle: cleanResult }, context.projectPath)
         if (!saveResult.success) throw workflowMainProcessError(context, saveResult.error, '文风特征保存失败', 'Failed to save the writing-style profile.')
       }
-      if (!sameProjectSessionContext(
+      const currentProject = useProjectStore.getState().currentProject
+      const matchesCurrent = Boolean(currentProject && sameProjectSessionContext(
         projectSession,
-        projectSessionContextFromProject(useProjectStore.getState().currentProject),
-      )) {
+        projectSessionContextFromProject(currentProject),
+      ))
+      if (!matchesCurrent && !importRuntime) {
         throw new Error(text(
           '当前项目已切换，文风分析结果未应用到界面',
           'The project changed, so the writing-style result was not applied to the interface.',
         ))
       }
       this.assertNotCancelled(context)
-      const { publishSavedNovelConfig, updateNovelConfig } = useProjectStore.getState()
-      // 只补空白时作者还没保存的文风不动，只把库里的值记为已保存。
-      if (fillEmpty) publishSavedNovelConfig({ writingStyle: savedStyle }, projectSession, 'unsaved-edits')
-      else if (!mainOwned) updateNovelConfig({ writingStyle: savedStyle }, projectSession)
+      if (matchesCurrent) {
+        const { publishSavedNovelConfig, updateNovelConfig } = useProjectStore.getState()
+        // 只补空白时作者还没保存的文风不动，只把库里的值记为已保存。
+        if (fillEmpty) publishSavedNovelConfig({ writingStyle: savedStyle }, projectSession, 'unsaved-edits')
+        else if (!mainOwned) updateNovelConfig({ writingStyle: savedStyle }, projectSession)
+      } else {
+        callbacks.log(text('当前正在查看其他作品，文风特征已安全保存至目标作品库', 'Viewing another project; writing-style profile saved safely to the target project database.'))
+      }
       callbacks.log(text(
         '文风特征已保存到小说配置',
         'Writing-style profile saved to the novel configuration',
