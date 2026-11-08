@@ -812,6 +812,24 @@ The observations below retain their chronological state. The final acceptance at
   - `ACCEPT-002` marked `completed` / `passes=true`.
   - Completed feature count reaches 23/35 (65.7%).
 
+### 2026-11-09 - Stage 22: Finalization Transaction Admission Receipt Chain and Immutable Commit (ACCEPT-003)
+- Feature ID: `ACCEPT-003`
+- Focus: 定稿事务准入收据链与不可变提交。
+- Acceptance Criteria & Gates:
+  - AC-1: 逐章同事务校验 grant/批准、目标 hash/状态/重开/依赖/唯一 effect；同章最多一个当前 finalized，重复批准不重复提交；
+  - AC-2: 多章按固定顺序独立收据，部分成功不谎称整批 ACID；非预期变化暂停受影响后继，声明的状态/来源映射才可继续；
+  - AC-3: 崩溃、撤权、部分定稿/待投影/后处理失败恢复只推进仍获准未完成项；不回滚已提交事实、不重生成补收据、不自动推进后续连续性。
+- Actual Execution:
+  - 8 focus/contract tests passed across 2 test suites (`finalization-admission-contract.test.ts` 4/4, `finalization-admission-executor.test.ts` 4/4).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 22 Independent Reviewer (`pro` model, subagent `36fb2c08-b870-4ff1-881a-a22fe7443356`).
+  - Verdict: PASS (初审提出防假完全成功、断点续跑计数校准、committed 幂等返回及 try-catch 保护，整改后复核通过).
+- Acceptance:
+  - `ACCEPT-003` marked `completed` / `passes=true`.
+  - Completed feature count reaches 24/35 (68.6%).
+
+
 
 
 
