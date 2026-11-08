@@ -32,6 +32,7 @@ export type PortableRuntimeFreezeTable =
   | 'planning_feedback_candidates'
   | 'planning_feedback_adoptions'
   | 'runtime_feedback_grants'
+  | 'reference_import_grants'
   | 'workflow_tasks'
   | 'workflow_steps'
   | 'workflow_effects'

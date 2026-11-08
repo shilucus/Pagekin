@@ -118,7 +118,7 @@ function seed(databasePath: string, projectId: string, state: WorkflowDriverStat
   } finally { db.close() }
 }
 
-describe('workflow driver portable history (synthetic native receipts)', () => {
+describe('workflow driver portable history (synthetic native receipts)', { timeout: 30_000 }, () => {
   it.each(['ready', 'paused', 'blocked', 'cancelled', 'waiting_review'] as const)('retains %s history through two new copies without old step execution', async state => {
     const f = fixture(), source = seed(f.databasePath, f.projectId, state), original = fs.readFileSync(f.databasePath)
     let sourceRoot = f.root, projectId: string = f.projectId

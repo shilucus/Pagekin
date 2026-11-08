@@ -181,6 +181,59 @@ afterEach(() => {
 })
 
 describe('captured reference import runtime', () => {
+  it('reads writer-owned grant scope from A without borrowing colliding B or changing either DB', () => {
+    const beforeA = state(a.context.database), beforeB = state(b.context.database)
+    const expected = a.context.database.prepare('SELECT manifest_fingerprint FROM import_runs WHERE id=?').pluck().get(RUN_ID)
+    expect(ImportRunRepository.captureReferenceGrantScope(RUN_ID, a.context))
+      .toEqual({ runId: RUN_ID, manifestFingerprint: expected, status: 'running', stage: 'knowledge' })
+    expect(ImportRunRepository.captureReferenceGrantScope(RUN_ID, b.context).manifestFingerprint).not.toBe(expected)
+    expect(state(a.context.database)).toEqual(beforeA)
+    expect(state(b.context.database)).toEqual(beforeB)
+    expect(projectRuntimeHost.getActiveView()).toBe(b.runtime)
+  })
+
+  it('keeps grant scope independent of an execution fence and reports the actual failed stage', () => {
+    const scope = ImportRunRepository.captureReferenceGrantScope(RUN_ID, a.context)
+    const beforeB = state(b.context.database)
+    ImportRunRepository.fail(RUN_ID, 'knowledge', 'Fictional interrupted reference import', a.execution, a.context)
+    const beforeA = state(a.context.database)
+    expect(ImportRunRepository.captureReferenceGrantScope(RUN_ID, a.context))
+      .toEqual({ ...scope, status: 'failed' })
+    expect(state(a.context.database)).toEqual(beforeA)
+    expect(state(b.context.database)).toEqual(beforeB)
+  })
+
+  it.each([
+    ["purpose='author-manuscript'", 'IMPORT_RUN_REFERENCE_UNBOUND'],
+    ["stage='parsing'", 'IMPORT_RUN_GRANT_SCOPE_INVALID'],
+    ["manifest_fingerprint='fictional-invalid-manifest'", 'IMPORT_RUN_GRANT_SCOPE_INVALID'],
+    ["stage='completed'", 'IMPORT_RUN_GRANT_SCOPE_INVALID'],
+  ])('refuses invalid captured grant scope %s without granting or changing B', (mutation, code) => {
+    a.context.database.exec(`UPDATE import_runs SET ${mutation} WHERE id='${RUN_ID}'`)
+    const beforeA = state(a.context.database), beforeB = state(b.context.database)
+    expect(() => ImportRunRepository.captureReferenceGrantScope(RUN_ID, a.context)).toThrow(code)
+    expect(state(a.context.database)).toEqual(beforeA)
+    expect(state(b.context.database)).toEqual(beforeB)
+  })
+
+  it('does not turn frozen import history into grant scope or use current B freeze for A', () => {
+    freeze(b)
+    expect(ImportRunRepository.captureReferenceGrantScope(RUN_ID, a.context).runId).toBe(RUN_ID)
+    expect(() => ImportRunRepository.captureReferenceGrantScope(RUN_ID, b.context)).toThrow('PORTABLE_RUNTIME_FROZEN')
+    freeze(a)
+    expect(() => ImportRunRepository.captureReferenceGrantScope(RUN_ID, a.context)).toThrow('PORTABLE_RUNTIME_FROZEN')
+  })
+
+  it('rejects a closed captured DB rather than reading grant scope from current B', () => {
+    const beforeB = state(b.context.database)
+    projectRuntimeHost.releaseIdle(a.runtime)
+    runtimes.splice(runtimes.indexOf(a.runtime), 1)
+    expect(a.context.database.open).toBe(false)
+    expect(() => ImportRunRepository.captureReferenceGrantScope(RUN_ID, a.context)).toThrow('IMPORT_RUN_REFERENCE_UNBOUND')
+    expect(state(b.context.database)).toEqual(beforeB)
+    expect(getProjectDb()).toBe(b.context.database)
+  })
+
   it('reads A snapshots and frozen chapter pages while omitted context still reads B', () => {
     moveToStyle(b)
     ImportRunRepository.prepareEffectReceipt(styleRequest('Fictional B prose'), b.execution)

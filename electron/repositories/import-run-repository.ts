@@ -2326,6 +2326,25 @@ export class ImportRunRepository {
     return rowToSnapshot(row, context)
   }
 
+  /** Reads writer-owned grant scope, not execution authority or current generation-source proof. */
+  static captureReferenceGrantScope(runId: string, context: CapturedImportRunContext): {
+    runId: string; manifestFingerprint: string; status: ImportRunStatus; stage: ImportRunStage
+  } {
+    if (!context?.database.open) throw new Error('IMPORT_RUN_REFERENCE_UNBOUND')
+    if (typeof runId !== 'string' || !runId || runId.length > 160) throw new Error('IMPORT_RUN_ID_INVALID')
+    const row = readRunRow(runId, context.database)
+    if (!row) throw new Error('IMPORT_RUN_NOT_FOUND')
+    assertCapturedReference(row, context)
+    readPortableRuntimeFreeze(context.canonicalRoot).assertMutable('import_runs', row.id)
+    if (!SHA256.test(row.manifest_fingerprint)
+      || (row.stage !== 'prepared' && !importStagesFor(row).includes(row.stage))
+      || !['ready', 'running', 'failed', 'cancelled', 'completed'].includes(row.status)
+      || (row.stage === 'completed') !== (row.status === 'completed')) {
+      throw new Error('IMPORT_RUN_GRANT_SCOPE_INVALID')
+    }
+    return { runId: row.id, manifestFingerprint: row.manifest_fingerprint, status: row.status, stage: row.stage }
+  }
+
   static listResumable(): ImportRunSnapshot[] {
     const freeze = readPortableRuntimeFreeze(getCurrentProjectPath())
     const rows = db().prepare(`

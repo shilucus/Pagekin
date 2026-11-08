@@ -325,3 +325,24 @@ This section records the separately authorized implementation run, not a revisio
 - Independent review found P2: evidence-only vector revision/registry failure could fall through to FTS and acquire replacement evidence. Evidence capture now rejects these failures while ordinary embedding/query fallback remains compatible. Native failures additionally closed a stable-id fixture mistake and two quoted SQL identifiers without weakening expected results. First lint exposed finally masking of primary authority/source errors; cleanup now attempts all real closes, arbitrates outside finally, preserves the original primary object and rejects cleanup-only failure. Two real-handle fault regressions retain all original KB cases. No guard or rule is removed.
 - Final post-cleanup union actually passed 38 files 1004/1004, zero failed/pending, success=true; raw SHA256 `D1C4FC4CD75553C1F9B0534DE2DCE279400FB7D9EA686FF166829F1B3A138262`. Current manifest is `0F1B11014B4035DF7AC7198D536591CBF1948C227D3CC00294770F90C62E740D`, 15/15 matched. Failed and pre-fix reports remain tied to their exact earlier identities, not summed or reused for final acceptance. Root reran typecheck, lint/color, i18n and source build; all exited 0, with existing warnings retained.
 - Both reviewers directly consumed final raw/current source and three current build identities and accepted only the internal slice, no unresolved in-scope correctness blocker. ADR-0038 accepted; IMPORT-001/002 have explicitly partial shared contract/deterministic evidence and remain in_progress/passes=false, still six of 35 complete. Complete main-owned reference workflow/grant/authoritative refresh, separate imitation target-style consumption and actual Electron remain open. No literary-quality, performance, provider-concurrency or target-platform acceptance is inferred. Original staged analysis is excluded from exact-path submission.
+
+## 2026-11-08 Implementation: Stage 6D
+
+- Scope: reference import grant bounded contract, M14 schema migration (`reference_import_grants`), central migration lane integration, transactional grant repository, captured scope getter on import runs, portable field policy classification and two-generation portable freeze/sanitization. Parent `ee03e77cfa4072c08144e16d777b817b6e87b734`; [ADR-0039](../../adr/0039-reference-import-grant-history.md) and [evidence](stage-6d-evidence.md) bound only this internal prerequisite. No public IPC, runner execution capability or UI changes.
+- Team implementation separated shared protocol/M14 DDL/registry/grant repository from portable classification/sanitization/freeze/restore fixtures. Coordinator owned captured scope integration on `ImportRunRepository`, central registry sync, serial execution and Git.
+- Independent Review:
+  - Role: Stage 6D Independent Reviewer (`pro` model).
+  - Scope: ADR-0039 contract compliance, DDL invariants, single active grant per run, CAS optimistic concurrency, portable field coverage, credential scrubbing and two-generation anti-replay.
+  - Review verified:
+    1. Active -> revoked (increment revision) and Active -> completed (verify underlying run completed, retain revision) state machine, DDL compound CHECK invariants and single active partial index.
+    2. Synchronous `assertCurrent()` guard and mandatory in-transaction assertion preventing TOCTOU.
+    3. M14 migration registered as slot 14 in central registry with `LATEST_SCHEMA_VERSION = 15`.
+    4. Two-generation portable export scrubbing of machine credentials (`manifest_fingerprint`, `request_hash`, raw `operation_key`) and freeze projection preventing unverified replay on new projects.
+    5. Complete classification of all 13 table fields in `portable-project-field-policy.json`.
+  - Verdict: PASS with no unresolved in-scope correctness blockers.
+- Actual Execution:
+  - Focused suites: 5 files, 123/123 tests passed (`src/shared/__tests__/reference-import-grant.test.ts`, `electron/migrations/__tests__/m14-reference-import-grants.test.ts`, `electron/repositories/__tests__/reference-import-grant-repository.test.ts`, `electron/repositories/__tests__/import-run-captured-runtime.test.ts`, `electron/services/__tests__/reference-import-grant-portable.test.ts`).
+  - Regressions: updated schema 15 table/field count in `project-archive-service.test.ts` (34/34 passed); adjusted Windows I/O timeout in `workflow-driver-portable.test.ts` (11/11 passed); migration and restore tests passed.
+  - Commands: `typecheck`, `lint`, `check:i18n` and `build` (tsc && vite build) all exited 0.
+- Acceptance: ADR-0039 accepted for this internal prerequisite. IMPORT-001/002 remain in_progress/passes=false (6/35 complete). Original staged repository analysis excluded from commit.
+

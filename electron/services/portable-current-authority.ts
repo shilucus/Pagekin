@@ -4,7 +4,7 @@ import path from 'node:path'
 import type Database from 'better-sqlite3'
 
 import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
-import { parsePortableTransferAuthority, verifyPortableTransferAuthorityHistory } from './portable-transfer-authority'
+import { assertReferenceImportGrantFreezeCoverage, parsePortableTransferAuthority, verifyPortableTransferAuthorityHistory } from './portable-transfer-authority'
 
 const MAX_BYTES = 4 * 1024 * 1024
 const AUTHORITY_FILE = 'portable-transfer-authority.json'
@@ -66,6 +66,7 @@ export function readPortableCurrentAuthority(input: {
   const storageRoot = path.resolve(input.projectStorageRoot)
   let freeze
   try { freeze = readPortableRuntimeFreeze(path.dirname(storageRoot), input.__testHooks) } catch { invalid() }
+  try { assertReferenceImportGrantFreezeCoverage(input.database, freeze) } catch { invalid() }
   if (!freeze.active) return null
   const file = path.join(storageRoot, AUTHORITY_FILE)
   let parsed: unknown

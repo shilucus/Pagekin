@@ -145,6 +145,19 @@ export function parsePortableTransferAuthority(value: unknown): PortableTransfer
 
 function sha256(value: string): string { return createHash('sha256').update(value).digest('hex') }
 
+/** Neutralized grant rows are history only when their grant and import run are frozen. */
+export function assertReferenceImportGrantFreezeCoverage(database: Database.Database, freeze?: PortableRuntimeFreezeGuard): void {
+  if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reference_import_grants'").get()) return
+  const rows = database.prepare(`SELECT grant_id,import_run_id,manifest_fingerprint,request_hash
+    FROM reference_import_grants WHERE manifest_fingerprint IS NULL OR request_hash IS NULL`).all() as Array<{
+      grant_id: string; import_run_id: string; manifest_fingerprint: string | null; request_hash: string | null
+    }>
+  for (const row of rows) {
+    if (row.manifest_fingerprint !== null || row.request_hash !== null || !freeze?.active
+      || !freeze.isFrozen('reference_import_grants', row.grant_id) || !freeze.isFrozen('import_runs', row.import_run_id)) invalid()
+  }
+}
+
 function receiptId(input: Pick<PortableTransferAuthority,
   'originProjectId' | 'snapshotGeneration' | 'portableDatabaseSha256' | 'finalizations' | 'summarySources'>): string {
   return `portable-transfer:${sha256(JSON.stringify({ originProjectId: input.originProjectId,
@@ -261,6 +274,7 @@ export function verifyPortableTransferAuthority(
   authority: PortableTransferAuthority,
   freeze?: PortableRuntimeFreezeGuard,
 ): void {
+  assertReferenceImportGrantFreezeCoverage(database, freeze)
   const facts = currentness(database, false, freeze)
   if (JSON.stringify(facts.finalizations) !== JSON.stringify(authority.finalizations)
     || JSON.stringify(facts.summarySources) !== JSON.stringify(authority.summarySources)) invalid()
@@ -271,6 +285,7 @@ export function verifyPortableTransferAuthorityHistory(
   authority: PortableTransferAuthority,
   freeze?: PortableRuntimeFreezeGuard,
 ): void {
+  assertReferenceImportGrantFreezeCoverage(database, freeze)
   const deleted = new Set<number>()
   for (const item of authority.finalizations) {
     const row = database.prepare(`

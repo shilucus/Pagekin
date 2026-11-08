@@ -124,6 +124,7 @@ const HISTORY_ID_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.f
   planning_feedback_candidates: ['candidate_id'],
   planning_feedback_adoptions: ['adoption_id'],
   runtime_feedback_grants: ['grant_id'],
+  reference_import_grants: ['grant_id'],
   review_cycle_merges: ['cycle_id'],
   review_cycles: ['cycle_id'],
   review_findings: ['cycle_id', 'finding_id'],
@@ -142,6 +143,7 @@ const HISTORY_STATE_COLUMNS = [
 const HISTORY_KEY_COLUMNS: Readonly<Record<string, { column: string; id: string }>> = Object.freeze({
   planning_feedback_adoptions: { column: 'idempotency_key', id: 'adoption_id' },
   runtime_feedback_grants: { column: 'operation_key', id: 'grant_id' },
+  reference_import_grants: { column: 'operation_key', id: 'grant_id' },
   generation_attempts: { column: 'invocation_nonce', id: 'attempt_id' },
   generation_roots: { column: 'idempotency_key', id: 'root_action_id' },
   generation_runs: { column: 'open_key', id: 'run_id' },
@@ -1161,7 +1163,7 @@ export async function exportPortableProject(input: ExportPortableProjectInput): 
     try {
       sourceSchema = assertPortableSourceSchema(sourceSnapshot)
       assertOrdinaryHistoryFreezeCoverage(sourceSnapshot, sourceFreeze)
-      if (sourceFreeze.active) readPortableCurrentAuthority({ database: sourceSnapshot, projectStorageRoot, projectId: canonicalManifest.projectId })
+      readPortableCurrentAuthority({ database: sourceSnapshot, projectStorageRoot, projectId: canonicalManifest.projectId })
       avatarRows = readPortableCharacterAvatarRows(sourceSnapshot)
     } finally { sourceSnapshot.close() }
     recordOwnedFileIfPresent(attempt, `${sourceSnapshotPath}-wal`)
