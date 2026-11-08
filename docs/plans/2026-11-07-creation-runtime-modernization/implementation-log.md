@@ -795,6 +795,24 @@ The observations below retain their chronological state. The final acceptance at
   - `ACCEPT-001` marked `completed` / `passes=true`.
   - Completed feature count reaches 22/35 (62.9%).
 
+### 2026-11-09 - Stage 21: Batch Approval Manifest, Editor Handshake and Safety Freeze (ACCEPT-002)
+- Feature ID: `ACCEPT-002`
+- Focus: 批次批准清单、待决闭环与安全封存/解封。
+- Acceptance Criteria & Gates:
+  - AC-1: manifest 含项目/范围、draft/version/hash/状态/重开关系、上游 refs/报告与预期转换；普通 task/CLI/MCP 客户端不能申请或自签人审 scope；
+  - AC-2: 批准前所有绑定编辑器 revision 握手并处理脏缓冲/封存，输入或断连则待决；不在 SQL 事务中等待编辑器，不丢迟到缓冲；
+  - AC-3: 解封先赢撤销未提交批准，提交先赢按 ADR-0024 重开；关闭重连核对封存/收据，客户端能力到期不抹批准历史，也不永久续权，新副本旧批准不执行。
+- Actual Execution:
+  - 11 focus/contract tests passed across 2 test suites (`approval-manifest-contract.test.ts` 6/6, `approval-manifest-coordinator.test.ts` 5/5).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 21 Independent Reviewer (`pro` model, subagent `93b28ded-fbc6-4b96-a087-5834aceb905a`).
+  - Verdict: PASS.
+- Acceptance:
+  - `ACCEPT-002` marked `completed` / `passes=true`.
+  - Completed feature count reaches 23/35 (65.7%).
+
+
 
 
 
