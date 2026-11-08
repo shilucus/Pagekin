@@ -493,6 +493,25 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `SCHED-002` marked `completed` / `passes=true`.
   - Total completed features: 14/35 (40.0%).
 
+## 2026-11-08 Stage 13 Review (IMPORT-003)
+
+- Scope & Invariants:
+  - Feature: `IMPORT-003` (Multi-book reference import deconstruction concurrency qualification, cross-book storage isolation, fair scheduling, and fault containment).
+  - Reviewer: Stage 13 Independent Reviewer (`pro` model, subagent `a3bca666-fc9c-4d14-b243-e3d03ffaa48b`).
+  - Enforced Invariants:
+    1. AC-1: Complete multi-book storage and receipt physical isolation. Book A and Book B operate in separate SQLite databases and directories. Deconstructed chapters, vector documents, stage receipts, and execution leases bind strictly to target context, with zero cross-talk during UI view switching.
+    2. AC-2: Inter-book concurrency alongside intra-book causal ordering. MainGenerationScheduler permits concurrent execution for independent books (A1 active + B1 active), while intra-book subsequent batches (A2) strictly queue until preceding batches commit, preserving single-book causal stage order.
+    3. AC-3: Fault and cancellation containment. Book A cancellation or quarantine reclaims Book A's scheduler slots and sets status to failed/resumable without aborting Book B; restarting Book A reconstructs state exclusively from Book A's local receipts with incremented epoch, ensuring zero pollution of Book B.
+- Actual Execution:
+  - 3 focus tests passed (`multi-book-import-concurrency.test.ts`, 3/3).
+  - 150/150 tests passed across all 6 import regression suites.
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Acceptance:
+  - Verdict: PASS.
+  - `IMPORT-003` marked `completed` / `passes=true`.
+  - Total completed features: 15/35 (42.9%).
+
+
 
 
 
