@@ -738,6 +738,30 @@ The observations below retain their chronological state. The final acceptance at
   - `CLI-001` marked `completed` / `passes=true`.
   - Completed feature count reaches 19/35 (54.3%).
 
+### Stage 18: AUTO-001 自动化创作与局部修复循环授权门禁、机器决定合同与范围约束
+- Target Feature: `AUTO-001` (自动化创作与局部修复循环授权门禁、机器决定合同与范围约束)
+- ADR Reference: `docs/adr/0052-automation-task-grant-and-decision-contract.md`
+- Evidence Document: `docs/plans/2026-11-07-creation-runtime-modernization/stage-18-evidence.md`
+- Key Modifications:
+  - `src/shared/automation-decision-contract.ts`: 自动化决策共享契约，定义 `AutomationTaskGrant`、`AutomationDecisionRequest`、`AutomationDecisionReceipt`、范围守卫（章节范围、字段白名单、模型白名单、Skill 白名单、修复次数上限、来源事实指纹对齐）以及机器防伪防自审门禁；
+  - `src/shared/__tests__/automation-decision-contract.test.ts`: 契约单元测试套件（11/11 passed）；
+  - `electron/services/automation-decision-authority.ts`: 主进程自动化授权与决策权威服务，管理 Grant 的创建、撤销与范围裁决，持久化机器决定收据并限制修复次数；
+  - `electron/services/__tests__/automation-decision-authority.test.ts`: 自动化权威集成测试套件（5/5 passed）；
+- Acceptance Criteria Verification:
+  - AC-1: 作者明确可写字段/空位/章范围/模型/已安装Skill/修复次数，超出范围或来源变化转待决策；
+  - AC-2: 机器选择意见/修订按新 automation decision 合同进入既有内核，不能填 confirmed=true 或伪造 human-confirmed-review；
+  - AC-3: 无自动最终定稿/删除/安装脚本/改凭据权；撤权与提交有序，机器决定和 grant 在新副本只留允许历史。
+- Actual Execution:
+  - 16 focus/integration tests passed across 2 test suites (`automation-decision-contract.test.ts` 11/11, `automation-decision-authority.test.ts` 5/5).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 18 Independent Reviewer (`pro` model, subagent `4f128991-37cd-4785-9c39-2ce645675788`).
+  - Verdict: PASS.
+- Acceptance:
+  - `AUTO-001` marked `completed` / `passes=true`.
+  - Completed feature count reaches 20/35 (57.1%).
+
+
 
 
 

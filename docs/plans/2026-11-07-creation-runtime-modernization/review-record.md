@@ -596,6 +596,29 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `CLI-001` marked `completed` / `passes=true`.
   - Total completed features: 19/35 (54.3%).
 
+## Stage 18: AUTO-001 自动化创作与局部修复循环授权门禁、机器决定合同与范围约束
+- Target Feature: `AUTO-001` (自动化创作与局部修复循环授权门禁、机器决定合同与范围约束)
+- Review Date: 2026-11-09
+- Reviewer: Stage 18 Independent Reviewer (`pro` model, subagent `4f128991-37cd-4785-9c39-2ce645675788`)
+- Scope & Verification:
+  - ADR Reference: `docs/adr/0052-automation-task-grant-and-decision-contract.md`
+  - Evidence Document: `docs/plans/2026-11-07-creation-runtime-modernization/stage-18-evidence.md`
+  - Code Changes:
+    - `src/shared/automation-decision-contract.ts`
+    - `src/shared/__tests__/automation-decision-contract.test.ts`
+    - `electron/services/automation-decision-authority.ts`
+    - `electron/services/__tests__/automation-decision-authority.test.ts`
+  - Test Suite:
+    - `src/shared/__tests__/automation-decision-contract.test.ts` (11/11 passed)
+    - `electron/services/__tests__/automation-decision-authority.test.ts` (5/5 passed)
+  - Gates:
+    - `typecheck` exit 0, `lint` exit 0, `check:i18n` exit 0, `build` exit 0.
+- Acceptance:
+  - Verdict: PASS.
+  - `AUTO-001` marked `completed` / `passes=true`.
+  - Total completed features: 20/35 (57.1%).
+
+
 
 
 
