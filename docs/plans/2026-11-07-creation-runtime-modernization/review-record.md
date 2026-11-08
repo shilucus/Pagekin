@@ -475,6 +475,25 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `UI-003` marked `completed` / `passes=true`.
   - Total completed features: 13/35 (37.1%).
 
+## 2026-11-08 Stage 12 Review (SCHED-002)
+
+- Scope & Invariants:
+  - Feature: `SCHED-002` (Multi-project session scheduler concurrency isolation, queue boundaries, cancellation drain, and bounded quarantine).
+  - Reviewer: Stage 12 Independent Reviewer (`pro` model, subagent `54c47af1-049c-4727-b850-4331f49a461b`).
+  - Enforced Invariants:
+    1. AC-1: Strict session binding and invalidation interception. `MainProcessScheduler.close()` and `cancelProject` reject queued tasks with `SCHEDULER_CLOSED`, zero dangling entries across session closures or project switches.
+    2. AC-2: Independent per-project concurrency budget (`projectCounts: Map<string, number>`). Capacity exhausted on project A does not delay dispatch for independent project B (A1=active, A2=queued, B1=active concurrently), achieving genuine multi-book isolation.
+    3. AC-3: Cancellation signal (`AbortSignal`) immediately drains queue with `SCHEDULER_CANCELLED`, reclaiming queue and active counts. Remote fatal errors quarantine credentials (`permit.quarantine()`); blind resets are intercepted (`SCHEDULER_CREDENTIAL_BUSY`) until local termination invokes `permit.finish()`.
+- Actual Execution:
+  - 4 focus tests passed (`multi-project-session-scheduler.test.ts`, 4/4).
+  - 60/60 tests passed across all 4 scheduler suites.
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Acceptance:
+  - Verdict: PASS.
+  - `SCHED-002` marked `completed` / `passes=true`.
+  - Total completed features: 14/35 (40.0%).
+
+
 
 
 

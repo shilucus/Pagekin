@@ -775,8 +775,8 @@
         "performance",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "contract_review",
@@ -817,6 +817,14 @@
           "environment": "Windows x64; Electron 44.9.3; unchanged frozen 8CCF14BA main build; four reviewed fake-only registered-IPC scenes and final scene identities",
           "result": "Default production broker accepted two held fake arrivals with C zero attempts/effects before and after cancellation; A/B saved six effects each from six total requests. Normal six-request/twelve-effect, one-request unknown and real process/epoch restart with old-reference refusal/zero post-restart dispatch also passed; all normal quit and clean external/write/ignored/residual arrays",
           "limitations": "Network observed before quit. Two preparation/counter fixture failures retained with exact actual diagnostics and fresh regression. Direct-IPC screenshots are not visible author-workflow acceptance; no remote concurrency, performance, real-model quality or platform qualification."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-12-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Multi-project session scheduler concurrency isolation and queue boundary passed (4/4 tests passed in multi-project-session-scheduler.test.ts, 60/60 all scheduler tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
+          "limitations": "Single desktop node in-process memory scheduler; cross-machine distributed coordination belongs to future cloud extensions"
         }
       ]
     },

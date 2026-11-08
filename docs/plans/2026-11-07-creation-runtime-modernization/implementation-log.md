@@ -605,6 +605,30 @@ The observations below retain their chronological state. The final acceptance at
   - `UI-003` marked `completed` / `passes=true`.
   - Completed feature count reaches 13/35 (37.1%).
 
+## 2026-11-08 Stage 12 (SCHED-002)
+
+- Scope:
+  - `SCHED-002`: Multi-project session scheduler concurrency isolation, queue boundaries, cancellation drain, and bounded quarantine.
+- Contract & ADR:
+  - ADR-0046: `0046-multi-project-session-scheduler-concurrency-isolation.md`
+  - Created `electron/services/__tests__/multi-project-session-scheduler.test.ts`
+  - Created `docs/plans/2026-11-07-creation-runtime-modernization/stage-12-evidence.md`
+- Invariants Enforced:
+  - AC-1: Strict session binding and invalidation interception. When project closes or scheduler is torn down, all queued requests are rejected with `SCHEDULER_CLOSED`, preventing cross-session residual tasks or cross-book dangling state writes.
+  - AC-2: Multi-project independent active concurrency budget (`projectCounts: Map<string, number>`). Single book reaching concurrency cap or queue capacity never blocks independent projects (A1=active, A2=queued, B1=active concurrently), achieving genuine multi-book isolation.
+  - AC-3: Cancellation signal (`AbortSignal`) instantly evicts queued entries and reclaims budgets (`SCHEDULER_CANCELLED`). Remote unknown/fatal failures place credentials into bounded quarantine (`permit.quarantine()`); blind resets are prohibited during quarantine (`SCHEDULER_CREDENTIAL_BUSY`), safely unblocked via `permit.finish()` when local connections terminate.
+- Actual Execution:
+  - 4 focus tests passed (`multi-project-session-scheduler.test.ts`, 4/4).
+  - 60/60 tests passed across all 4 scheduler test suites (`multi-project-session-scheduler.test.ts`, `generation-scheduler.test.ts`, `main-process-scheduler.test.ts`, `scheduler-network-subject.test.ts`).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 12 Independent Reviewer (`pro` model, subagent `54c47af1-049c-4727-b850-4331f49a461b`).
+  - Verdict: PASS.
+- Acceptance:
+  - `SCHED-002` marked `completed` / `passes=true`.
+  - Completed feature count reaches 14/35 (40.0%).
+
+
 
 
 
