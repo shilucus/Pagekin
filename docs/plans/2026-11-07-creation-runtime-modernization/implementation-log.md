@@ -551,6 +551,31 @@ The observations below retain their chronological state. The final acceptance at
   - `FEEDBACK-003` marked `completed` / `passes=true`.
   - Completed feature count reaches 11/35.
 
+## 2026-11-08 Stage 10 (FEEDBACK-004)
+
+- Scope:
+  - `FEEDBACK-004`: Character proposal feedback and manuscript review continuity without rewriting core review/edit machinery.
+- Contract & ADR:
+  - ADR-0044: `0044-character-proposal-feedback-and-manuscript-review-continuity.md`
+  - Created `src/shared/character-feedback-continuity.ts`
+  - Created `src/shared/__tests__/character-feedback-continuity.test.ts`
+  - Created `electron/services/__tests__/character-and-manuscript-feedback-continuity.test.ts`
+  - Updated `electron/repositories/blueprint-repository.ts` (`count(db)` allows test db injection)
+- Invariants Enforced:
+  - AC-1: Character feedback uses identity proposals preserving stable character ID, author fields, and derived sources. Whole-batch character regeneration is strictly blocked when chapter blueprints exist (`assertCharacterRegenerationAllowed`).
+  - AC-2: Manuscript refinement requires human confirmed review snapshot (`HumanConfirmedReviewSnapshot`) with valid source review ID. In-place merge updates the existing draft's contents without minting new immutable draft rows (`verifyInPlaceMergeSemantics`).
+  - AC-3: Finalized chapter replacement strictly requires reopening under ADR-0024. Downstream impact notices are strictly read-only warnings and must never cascade automatic modifications to subsequent chapters.
+- Actual Execution:
+  - 2 focus suites passed (10/10 tests passed): `character-feedback-continuity.test.ts` (7 tests), `character-and-manuscript-feedback-continuity.test.ts` (3 tests).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 10 Independent Reviewer (`pro` model, subagent `2634e2d8-4c85-46f5-bc30-60e905cdb465`).
+  - Verdict: PASS.
+- Acceptance:
+  - `FEEDBACK-004` marked `completed` / `passes=true`.
+  - Completed feature count reaches 12/35 (34.3%).
+
+
 
 
 

@@ -440,6 +440,24 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `FEEDBACK-003` marked `completed` / `passes=true`.
   - Total completed features: 11/35.
 
+## 2026-11-08 Stage 10 Review (FEEDBACK-004)
+
+- Scope & Invariants:
+  - Feature: `FEEDBACK-004` (Character proposal feedback and manuscript review continuity).
+  - Reviewer: Stage 10 Independent Reviewer (`pro` model, subagent `2634e2d8-4c85-46f5-bc30-60e905cdb465`).
+  - Enforced Invariants:
+    1. AC-1: Preserves stable character IDs, author fields (`name`, `role`, `personality`, `background`, `appearance`, `relationships`), and derived summaries with provenance. Full character regeneration blocked when blueprints exist (`guardRegenerateCharacters`).
+    2. AC-2: Manuscript refinement bound to human confirmed review snapshot. `mergeIntoDraft` writes in-place to draft's `contents.body`, marks status as revised without minting unneeded draft rows, maintaining history integrity.
+    3. AC-3: Finalized replacement requires explicit reopening under ADR-0024. Downstream impact notices are strictly read-only warnings and do not rewrite future chapters or falsely claim full semantic contradiction resolution.
+- Actual Execution:
+  - 2 focus suites passed (10/10 tests passed): `character-feedback-continuity.test.ts` (7 tests), `character-and-manuscript-feedback-continuity.test.ts` (3 tests).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Acceptance:
+  - Verdict: PASS.
+  - `FEEDBACK-004` marked `completed` / `passes=true`.
+  - Total completed features: 12/35 (34.3%).
+
+
 
 
 

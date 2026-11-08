@@ -500,9 +500,7 @@ export class BlueprintRepository {
     }
 
     /** 获取蓝图总数 */
-    static count(): number {
-        const db = requireProjectDb()
-
+    static count(db = requireProjectDb()): number {
         const row = db.prepare(
             'SELECT COUNT(*) as cnt FROM blueprints'
         ).get() as { cnt: number }
