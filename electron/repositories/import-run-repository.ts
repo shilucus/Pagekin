@@ -37,6 +37,7 @@ import type {
 import type { AuthorManuscriptImportPreview } from '../../src/shared/author-manuscript-import'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
+import type { ProjectRuntime } from '../services/project-runtime'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from './blueprint-repository'
 import { ImportGlobalFactsRepository } from './import-global-facts-repository'
 import type { ImportGlobalFactsMode, ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
@@ -48,6 +49,9 @@ import {
 } from '../../src/shared/import-limits'
 import { ProjectCoreRepository } from './project-core-repository'
 import { FinalizedDraftImportRepository } from './finalized-draft-import-repository'
+
+/** Captured main-process resources only; this does not grant execution authority. */
+export type CapturedImportRunContext = Pick<ProjectRuntime, 'database' | 'canonicalRoot' | 'projectId'>
 
 interface ImportRunRow {
   id: string
@@ -201,18 +205,22 @@ const IMPORT_RUN_STAGE_VALUES = new Set<ImportRunStage>([
 const AUTHOR_INFERENCE_LEDGER = { stage: 'prepared', batchId: 'author-inference', effectKey: 'option:author-inference' } as const
 
 /** 完成只能走 complete()，所以 refresh 之后没有可推进的阶段。 */
-function nextStageForRun(row: ImportRunRow, stage: ImportRunStage): ImportRunStage | undefined {
-  const plan = importStagesFor({ purpose: row.purpose, authorInference: readAuthorInference(row.id) })
+function nextStageForRun(row: ImportRunRow, stage: ImportRunStage, context?: CapturedImportRunContext): ImportRunStage | undefined {
+  const plan = importStagesFor({ purpose: row.purpose, authorInference: readAuthorInference(row.id, context) })
   const next = plan[plan.indexOf(stage) + 1]
   return plan.includes(stage) && next !== 'completed' ? next : undefined
 }
 
 type ImportRunCheckpointSource = 'direct' | 'receipt'
 
-function db() {
-  const current = getProjectDb()
+function db(context?: CapturedImportRunContext) {
+  const current = context ? context.database : getProjectDb()
   if (!current) throw new Error('PROJECT_NOT_OPEN')
   return current
+}
+
+function assertCapturedReference(row: ImportRunRow, context?: CapturedImportRunContext): void {
+  if (context && row.purpose !== 'reference') throw new Error('IMPORT_RUN_REFERENCE_UNBOUND')
 }
 
 function canonicalManifest(purpose: ImportPurpose, chapters: NormalizedImportRunChapter[]): string {
@@ -524,12 +532,13 @@ function assertCommittedEffectAuthority(
   kind: ImportRunEffectKind,
   payload: unknown,
   effectReceipt: unknown,
+  context?: CapturedImportRunContext,
 ): void {
   if (kind === 'project-writing-style') return
   if (!isRecord(effectReceipt)) throw new Error()
   if (kind === 'author-finalized-batch') {
     if (!isRecord(payload) || typeof payload.operationId !== 'string' || typeof payload.runId !== 'string') throw new Error()
-    const chapters = (db().prepare(`
+    const chapters = (db(context).prepare(`
       SELECT chapter_number, source_id, source_chapter_number,
              title, content_fingerprint, content_size, content_snapshot
       FROM import_run_chapters WHERE run_id = ? ORDER BY chapter_number ASC
@@ -546,8 +555,9 @@ function assertCommittedEffectAuthority(
     return
   }
   const authoritative = kind === 'project-global-facts'
-    ? ImportGlobalFactsRepository.readHistoricalCommittedOperation((payload as ImportGlobalFactsRequest).operationId)
-    : BlueprintRepository.getCommittedRangeOperation((payload as BlueprintRangeCommitRequest).operationId)
+    ? ImportGlobalFactsRepository.readHistoricalCommittedOperation((payload as ImportGlobalFactsRequest).operationId,
+      context ? { database: context.database, projectRoot: context.canonicalRoot, projectId: context.projectId } : undefined)
+    : BlueprintRepository.getCommittedRangeOperation((payload as BlueprintRangeCommitRequest).operationId, context?.database)
   if (!authoritative) throw new Error()
   if (kind === 'chapter-blueprint-range') {
     assertBlueprintEffectAuthority(effectReceipt, authoritative as unknown as Record<string, unknown>)
@@ -562,7 +572,7 @@ function corruptedReceipt(): never {
   throw new Error('IMPORT_RUN_RECEIPT_CORRUPT')
 }
 
-function rowToEffectReceipt(row: ImportRunEffectReceiptRow, run: ImportRunRow): ImportRunEffectReceipt {
+function rowToEffectReceipt(row: ImportRunEffectReceiptRow, run: ImportRunRow, context?: CapturedImportRunContext): ImportRunEffectReceipt {
   try {
     if (row.state !== 'prepared' && row.state !== 'committed') corruptedReceipt()
     const payload = JSON.parse(row.payload_json) as unknown
@@ -577,7 +587,7 @@ function rowToEffectReceipt(row: ImportRunEffectReceiptRow, run: ImportRunRow): 
     }
     if (row.state === 'committed') {
       assertCommittedEffectSchema(row.kind, payload, effectReceipt)
-      assertCommittedEffectAuthority(row.kind, payload, effectReceipt)
+      assertCommittedEffectAuthority(row.kind, payload, effectReceipt, context)
     }
     const receipt: ImportRunEffectReceipt = {
       schemaVersion: row.schema_version as typeof IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
@@ -594,7 +604,7 @@ function rowToEffectReceipt(row: ImportRunEffectReceiptRow, run: ImportRunRow): 
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }
-    assertImportRunEffectReceiptMetadata(receipt, rowToSnapshot(run))
+    assertImportRunEffectReceiptMetadata(receipt, rowToSnapshot(run, context))
     return receipt
   } catch {
     // 载荷、谱系或元数据任何一项校验不过都按收据损坏处理，不重放。
@@ -612,8 +622,8 @@ function validateEffectStage(kind: ImportRunEffectKind, stage: ImportRunStage): 
   if (expected[kind] !== stage) throw new Error('IMPORT_RUN_RECEIPT_STAGE_MISMATCH')
 }
 
-function sourceProgress(runId: string): { completedSources: number; totalSources: number; completedChapters: number } {
-  const progress = db().prepare(`
+function sourceProgress(runId: string, context?: CapturedImportRunContext): { completedSources: number; totalSources: number; completedChapters: number } {
+  const progress = db(context).prepare(`
     SELECT COUNT(*) AS total_sources,
            COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_sources,
            COALESCE(SUM(CASE WHEN status = 'completed' THEN chapter_count ELSE 0 END), 0) AS completed_chapters
@@ -626,8 +636,8 @@ function sourceProgress(runId: string): { completedSources: number; totalSources
   }
 }
 
-function unfinishedSourceDisplay(runId: string): ImportSourceDisplayMetadata[] {
-  const rows = db().prepare(`
+function unfinishedSourceDisplay(runId: string, context?: CapturedImportRunContext): ImportSourceDisplayMetadata[] {
+  const rows = db(context).prepare(`
     SELECT display_json
     FROM import_run_sources
     WHERE run_id = ? AND status <> 'completed'
@@ -640,30 +650,30 @@ function unfinishedSourceDisplay(runId: string): ImportSourceDisplayMetadata[] {
 }
 
 /** 作者原稿只为还没有蓝图的章反推，已有蓝图的章不归本次运行。 */
-function chaptersMissingBlueprint(runId: string): number {
-  return db().prepare(`
+function chaptersMissingBlueprint(runId: string, context?: CapturedImportRunContext): number {
+  return db(context).prepare(`
     SELECT COUNT(*) FROM import_run_chapters AS chapters
     WHERE chapters.run_id = ?
       AND NOT EXISTS (SELECT 1 FROM blueprints WHERE blueprints.chapter_number = chapters.chapter_number)
   `).pluck().get(runId) as number
 }
 
-function completedCheckpointChapters(row: ImportRunRow, stage: 'knowledge' | 'blueprints'): number {
+function completedCheckpointChapters(row: ImportRunRow, stage: 'knowledge' | 'blueprints', context?: CapturedImportRunContext): number {
   const covered = new Set<number>()
-  for (const batchId of completedBatches(row)[stage] ?? []) {
-    for (const chapterNumber of checkpointChapterNumbers(row, stage, batchId)) covered.add(chapterNumber)
+  for (const batchId of completedBatches(row, context)[stage] ?? []) {
+    for (const chapterNumber of checkpointChapterNumbers(row, stage, batchId, context)) covered.add(chapterNumber)
   }
   return covered.size
 }
 
-function persistedProgress(row: ImportRunRow): {
+function persistedProgress(row: ImportRunRow, context?: CapturedImportRunContext): {
   completedSources: number
   totalSources: number
   completedChapters: number
   progressCompleted: number
   progressTotal: number
 } {
-  const sources = sourceProgress(row.id)
+  const sources = sourceProgress(row.id, context)
   if (row.stage === 'parsing') {
     return {
       ...sources,
@@ -674,7 +684,7 @@ function persistedProgress(row: ImportRunRow): {
   const completedChapters = row.stage === 'prepared'
     ? 0
     : row.stage === 'knowledge'
-      ? completedCheckpointChapters(row, 'knowledge')
+      ? completedCheckpointChapters(row, 'knowledge', context)
       : row.total_chapters
   if (row.stage === 'knowledge' || row.stage === 'prepared') {
     return {
@@ -685,13 +695,13 @@ function persistedProgress(row: ImportRunRow): {
     }
   }
   if (row.stage === 'blueprints') {
-    const progressCompleted = completedCheckpointChapters(row, 'blueprints')
+    const progressCompleted = completedCheckpointChapters(row, 'blueprints', context)
     return {
       ...sources,
       completedChapters,
       progressCompleted,
       progressTotal: row.purpose === 'author-manuscript'
-        ? progressCompleted + chaptersMissingBlueprint(row.id)
+        ? progressCompleted + chaptersMissingBlueprint(row.id, context)
         : row.total_chapters,
     }
   }
@@ -699,7 +709,7 @@ function persistedProgress(row: ImportRunRow): {
     return {
       ...sources,
       completedChapters,
-      progressCompleted: completedBatches(row)[row.stage]?.includes('done') ? 1 : 0,
+      progressCompleted: completedBatches(row, context)[row.stage]?.includes('done') ? 1 : 0,
       progressTotal: 1,
     }
   }
@@ -711,8 +721,8 @@ function persistedProgress(row: ImportRunRow): {
   }
 }
 
-function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
-  const progress = persistedProgress(row)
+function rowToSnapshot(row: ImportRunRow, context?: CapturedImportRunContext): ImportRunSnapshot {
+  const progress = persistedProgress(row, context)
   return {
     id: row.id,
     purpose: row.purpose,
@@ -721,14 +731,14 @@ function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
     ...(row.purpose === 'author-manuscript' ? {
       manifestFingerprint: row.manifest_fingerprint,
       ...(row.authority_fingerprint ? { authorityFingerprint: row.authority_fingerprint } : {}),
-      authorInference: readAuthorInference(row.id),
+      authorInference: readAuthorInference(row.id, context),
     } : {}),
     sourceDisplay: parseJson<ImportSourceDisplayMetadata[]>(row.source_display_json, []),
-    unfinishedSourceDisplay: unfinishedSourceDisplay(row.id),
+    unfinishedSourceDisplay: unfinishedSourceDisplay(row.id, context),
     locale: row.locale,
     stage: row.stage,
     status: row.status,
-    completedBatches: completedBatches(row),
+    completedBatches: completedBatches(row, context),
     lastError: row.last_error,
     resumable: row.resumable === 1,
     cancelRequested: row.cancel_requested === 1,
@@ -885,10 +895,10 @@ function assertExecutionAuthority(
   return row
 }
 
-function completedBatches(row: ImportRunRow): Partial<Record<ImportRunStage, string[]>> {
-  if (hasEffectLedger()) {
+function completedBatches(row: ImportRunRow, context?: CapturedImportRunContext): Partial<Record<ImportRunStage, string[]>> {
+  if (hasEffectLedger(context)) {
     const completed: Partial<Record<ImportRunStage, string[]>> = {}
-    const rows = db().prepare(`
+    const rows = db(context).prepare(`
       SELECT stage,batch_id FROM import_effect_ledger
       WHERE run_id=? AND state='complete' AND NOT (stage=? AND batch_id=?) ORDER BY rowid
     `).all(row.id, AUTHOR_INFERENCE_LEDGER.stage, AUTHOR_INFERENCE_LEDGER.batchId) as Array<{ stage: ImportRunStage; batch_id: string }>
@@ -910,26 +920,26 @@ function completedBatches(row: ImportRunRow): Partial<Record<ImportRunStage, str
   return parsed as Partial<Record<ImportRunStage, string[]>>
 }
 
-function readAuthorInference(runId: string): boolean {
-  if (!hasEffectLedger()) return false
-  return Boolean(db().prepare('SELECT 1 FROM import_effect_ledger WHERE run_id=? AND stage=? AND batch_id=?')
+function readAuthorInference(runId: string, context?: CapturedImportRunContext): boolean {
+  if (!hasEffectLedger(context)) return false
+  return Boolean(db(context).prepare('SELECT 1 FROM import_effect_ledger WHERE run_id=? AND stage=? AND batch_id=?')
     .get(runId, AUTHOR_INFERENCE_LEDGER.stage, AUTHOR_INFERENCE_LEDGER.batchId))
 }
 
-function hasEffectLedger(): boolean {
-  return Boolean(db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_effect_ledger'").get())
+function hasEffectLedger(context?: CapturedImportRunContext): boolean {
+  return Boolean(db(context).prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_effect_ledger'").get())
 }
 
-function readEffectLedger(runId: string, stage: ImportRunStage, batchId: string): ImportEffectLedgerRow | undefined {
-  if (!hasEffectLedger()) return undefined
-  return db().prepare(`SELECT effect_namespace,effect_key,state,evidence_kind,diagnostic_code
+function readEffectLedger(runId: string, stage: ImportRunStage, batchId: string, context?: CapturedImportRunContext): ImportEffectLedgerRow | undefined {
+  if (!hasEffectLedger(context)) return undefined
+  return db(context).prepare(`SELECT effect_namespace,effect_key,state,evidence_kind,diagnostic_code
     FROM import_effect_ledger WHERE run_id=? AND stage=? AND batch_id=?`
   ).get(runId, stage, batchId) as ImportEffectLedgerRow | undefined
 }
 
-function assertKnownEffectHistory(row: ImportRunRow, stage: ImportRunStage, batchId: string): void {
-  if (!hasEffectLedger()) return
-  const unknown = db().prepare(`SELECT diagnostic_code FROM import_effect_ledger
+function assertKnownEffectHistory(row: ImportRunRow, stage: ImportRunStage, batchId: string, context?: CapturedImportRunContext): void {
+  if (!hasEffectLedger(context)) return
+  const unknown = db(context).prepare(`SELECT diagnostic_code FROM import_effect_ledger
     WHERE run_id=? AND stage=? AND state='unknown'
       AND (batch_id=? OR batch_id LIKE '__legacy_%') LIMIT 1`
   ).get(row.id, stage, batchId) as { diagnostic_code: string } | undefined
@@ -941,10 +951,10 @@ function assertKnownEffectHistory(row: ImportRunRow, stage: ImportRunStage, batc
 }
 
 function recordPreparedEffect(row: ImportRunRow, receipt: Pick<ImportRunEffectReceiptRow,
-  'effect_namespace' | 'effect_key' | 'stage' | 'batch_id' | 'state'>): void {
-  if (!hasEffectLedger()) return
+  'effect_namespace' | 'effect_key' | 'stage' | 'batch_id' | 'state'>, context?: CapturedImportRunContext): void {
+  if (!hasEffectLedger(context)) return
   const expectedState = receipt.state === 'committed' ? 'complete' : 'partial'
-  const existing = readEffectLedger(row.id, receipt.stage, receipt.batch_id)
+  const existing = readEffectLedger(row.id, receipt.stage, receipt.batch_id, context)
   if (existing) {
     if (existing.effect_namespace !== receipt.effect_namespace || existing.effect_key !== receipt.effect_key
       || existing.state !== expectedState || existing.evidence_kind !== 'receipt') {
@@ -952,7 +962,7 @@ function recordPreparedEffect(row: ImportRunRow, receipt: Pick<ImportRunEffectRe
     }
     return
   }
-  db().prepare(`INSERT INTO import_effect_ledger(
+  db(context).prepare(`INSERT INTO import_effect_ledger(
     run_id,stage,batch_id,effect_namespace,effect_key,state,evidence_kind,diagnostic_code
   ) VALUES(?,?,?,?,?,?,'receipt',?)`).run(row.id, receipt.stage, receipt.batch_id,
     receipt.effect_namespace, receipt.effect_key, expectedState,
@@ -963,8 +973,9 @@ function chapterRowsForRange(
   runId: string,
   startChapter: number,
   endChapter: number,
+  context?: CapturedImportRunContext,
 ): ImportRunCheckpointChapterRow[] {
-  return db().prepare(`
+  return db(context).prepare(`
     SELECT chapter_number, content_fingerprint
     FROM import_run_chapters
     WHERE run_id = ? AND chapter_number BETWEEN ? AND ?
@@ -978,13 +989,13 @@ function checkpointRange(batchId: string): { startChapter: number; endChapter: n
   return parsed
 }
 
-function checkpointChapterNumbers(row: ImportRunRow, stage: 'knowledge' | 'blueprints', batchId: string): number[] {
+function checkpointChapterNumbers(row: ImportRunRow, stage: 'knowledge' | 'blueprints', batchId: string, context?: CapturedImportRunContext): number[] {
   if (stage === 'knowledge') {
     const parsed = parseImportRunChapterBatchCheckpointId(batchId)
     if (!parsed || parsed.contentFingerprintPrefixes.length > IMPORT_RUN_KNOWLEDGE_BATCH_SIZE) {
       throw new Error('IMPORT_RUN_BATCH_ID_INVALID')
     }
-    const chapters = chapterRowsForRange(row.id, parsed.startChapter, parsed.endChapter)
+    const chapters = chapterRowsForRange(row.id, parsed.startChapter, parsed.endChapter, context)
     if (
       chapters.length !== parsed.contentFingerprintPrefixes.length
       || chapters.some((chapter, index) => (
@@ -992,7 +1003,7 @@ function checkpointChapterNumbers(row: ImportRunRow, stage: 'knowledge' | 'bluep
         || !chapter.content_fingerprint.startsWith(parsed.contentFingerprintPrefixes[index]!)
       ))
     ) throw new Error('IMPORT_RUN_BATCH_ID_INVALID')
-    const receipts = db().prepare(`
+    const receipts = db(context).prepare(`
       SELECT chapter_number, purpose, source_id, source_chapter_number,
              content_fingerprint, document_id, state
       FROM import_run_knowledge_receipts
@@ -1007,7 +1018,7 @@ function checkpointChapterNumbers(row: ImportRunRow, stage: 'knowledge' | 'bluep
       document_id: string
       state: string
     }>
-    const affiliations = db().prepare(`
+    const affiliations = db(context).prepare(`
       SELECT chapter_number, source_id, source_chapter_number, content_fingerprint
       FROM import_run_chapters
       WHERE run_id = ? AND chapter_number BETWEEN ? AND ?
@@ -1035,7 +1046,7 @@ function checkpointChapterNumbers(row: ImportRunRow, stage: 'knowledge' | 'bluep
   if (!parsed || parsed.contentFingerprintPrefixes.length > IMPORT_RUN_BLUEPRINT_BATCH_SIZE) {
     throw new Error('IMPORT_RUN_BATCH_ID_INVALID')
   }
-  const chapters = chapterRowsForRange(row.id, parsed.startChapter, parsed.endChapter)
+  const chapters = chapterRowsForRange(row.id, parsed.startChapter, parsed.endChapter, context)
   if (
     chapters.length !== parsed.contentFingerprintPrefixes.length
     || chapters.some((chapter, index) => (
@@ -1046,11 +1057,11 @@ function checkpointChapterNumbers(row: ImportRunRow, stage: 'knowledge' | 'bluep
   return chapters.map(chapter => chapter.chapter_number)
 }
 
-function authorCheckpointChapterNumber(row: ImportRunRow, batchId: string): number {
+function authorCheckpointChapterNumber(row: ImportRunRow, batchId: string, context?: CapturedImportRunContext): number {
   const match = AUTHOR_CHAPTER_CHECKPOINT.exec(batchId)
   const chapterNumber = match ? Number(match[1]) : 0
   if (!Number.isSafeInteger(chapterNumber) || chapterNumber < 1) throw new Error('IMPORT_RUN_BATCH_ID_INVALID')
-  const chapter = db().prepare(`
+  const chapter = db(context).prepare(`
     SELECT chapter_number FROM import_run_chapters WHERE run_id = ? AND chapter_number = ?
   `).get(row.id, chapterNumber) as { chapter_number: number } | undefined
   if (!chapter) throw new Error('IMPORT_RUN_BATCH_ID_INVALID')
@@ -1062,10 +1073,11 @@ function assertCheckpointCanApply(
   stage: ImportRunStage,
   batchId: string,
   source: ImportRunCheckpointSource,
+  context?: CapturedImportRunContext,
 ): void {
   if (row.status !== 'running' || row.stage !== stage) throw new Error('IMPORT_RUN_BATCH_STAGE_MISMATCH')
   if (stage === 'parsing' || stage === 'prepared' || stage === 'completed') throw new Error('IMPORT_RUN_BATCH_ID_INVALID')
-  assertKnownEffectHistory(row, stage, batchId)
+  assertKnownEffectHistory(row, stage, batchId, context)
   const receiptStage = stage === 'global'
     || stage === 'style'
     || stage === 'blueprints'
@@ -1079,18 +1091,18 @@ function assertCheckpointCanApply(
   }
 
   if (stage === 'author-publish' || stage === 'author-postprocess') {
-    const chapterNumber = authorCheckpointChapterNumber(row, batchId)
-    const existing = completedBatches(row)[stage] ?? []
+    const chapterNumber = authorCheckpointChapterNumber(row, batchId, context)
+    const existing = completedBatches(row, context)[stage] ?? []
     if (existing.some(existingBatchId => (
       existingBatchId !== batchId
-      && authorCheckpointChapterNumber(row, existingBatchId) === chapterNumber
+      && authorCheckpointChapterNumber(row, existingBatchId, context) === chapterNumber
     ))) throw new Error('IMPORT_RUN_CHECKPOINT_OVERLAP')
     return
   }
   if (stage !== 'knowledge' && stage !== 'blueprints') throw new Error('IMPORT_RUN_BATCH_ID_INVALID')
-  checkpointChapterNumbers(row, stage, batchId)
+  checkpointChapterNumbers(row, stage, batchId, context)
   const range = checkpointRange(batchId)
-  const existing = completedBatches(row)[stage] ?? []
+  const existing = completedBatches(row, context)[stage] ?? []
   for (const existingBatchId of existing) {
     if (existingBatchId === batchId) continue
     const existingRange = checkpointRange(existingBatchId)
@@ -1100,15 +1112,15 @@ function assertCheckpointCanApply(
   }
 }
 
-function assertStageCheckpointComplete(row: ImportRunRow, stage: ImportRunStage): void {
-  const batches = completedBatches(row)[stage] ?? []
+function assertStageCheckpointComplete(row: ImportRunRow, stage: ImportRunStage, context?: CapturedImportRunContext): void {
+  const batches = completedBatches(row, context)[stage] ?? []
   if (stage === 'global' || stage === 'style' || stage === 'author-commit' || stage === 'refresh') {
     if (batches.length !== 1 || batches[0] !== 'done') throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
     return
   }
   if (stage === 'author-publish' || stage === 'author-postprocess') {
-    const allChapters = chapterRowsForRange(row.id, 1, Number.MAX_SAFE_INTEGER)
-    const covered = new Set(batches.map(batchId => authorCheckpointChapterNumber(row, batchId)))
+    const allChapters = chapterRowsForRange(row.id, 1, Number.MAX_SAFE_INTEGER, context)
+    const covered = new Set(batches.map(batchId => authorCheckpointChapterNumber(row, batchId, context)))
     if (
       covered.size !== allChapters.length
       || allChapters.some(chapter => !covered.has(chapter.chapter_number))
@@ -1116,15 +1128,15 @@ function assertStageCheckpointComplete(row: ImportRunRow, stage: ImportRunStage)
     return
   }
   if (stage === 'blueprints' && row.purpose === 'author-manuscript') {
-    if (chaptersMissingBlueprint(row.id) !== 0) throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
+    if (chaptersMissingBlueprint(row.id, context) !== 0) throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
     return
   }
   if (stage !== 'knowledge' && stage !== 'blueprints') throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
 
-  const allChapters = chapterRowsForRange(row.id, 1, Number.MAX_SAFE_INTEGER)
+  const allChapters = chapterRowsForRange(row.id, 1, Number.MAX_SAFE_INTEGER, context)
   const covered = new Set<number>()
   for (const batchId of batches) {
-    for (const chapterNumber of checkpointChapterNumbers(row, stage, batchId)) {
+    for (const chapterNumber of checkpointChapterNumbers(row, stage, batchId, context)) {
       if (covered.has(chapterNumber)) throw new Error('IMPORT_RUN_CHECKPOINT_OVERLAP')
       covered.add(chapterNumber)
     }
@@ -1135,8 +1147,11 @@ function assertStageCheckpointComplete(row: ImportRunRow, stage: ImportRunStage)
   ) throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
 }
 
-function assertExecution(runId: string, execution: ImportRunExecutionLease, now = Date.now()): ImportRunRow {
-  return assertExecutionAuthority(runId, execution, now)
+function assertExecution(runId: string, execution: ImportRunExecutionLease, now = Date.now(), context?: CapturedImportRunContext): ImportRunRow {
+  const row = assertExecutionAuthority(runId, execution, now, db(context))
+  assertCapturedReference(row, context)
+  if (context) readPortableRuntimeFreeze(context.canonicalRoot).assertMutable('import_runs', runId)
+  return row
 }
 
 function applyBatchCheckpoint(
@@ -1144,15 +1159,16 @@ function applyBatchCheckpoint(
   stage: ImportRunStage,
   batchId: string,
   source: ImportRunCheckpointSource,
+  context?: CapturedImportRunContext,
 ): { newlyCompleted: boolean; cancelApplied: boolean } {
-  assertCheckpointCanApply(row, stage, batchId, source)
-  const existing = readEffectLedger(row.id, stage, batchId)
-  const completed = completedBatches(row)
+  assertCheckpointCanApply(row, stage, batchId, source, context)
+  const existing = readEffectLedger(row.id, stage, batchId, context)
+  const completed = completedBatches(row, context)
   const newlyCompleted = !(completed[stage] ?? []).includes(batchId)
-  if (hasEffectLedger()) {
+  if (hasEffectLedger(context)) {
     if (existing?.state === 'unknown') throw new Error('IMPORT_RUN_EFFECT_HISTORY_UNKNOWN')
     if (source === 'receipt') {
-      const receipt = db().prepare(`SELECT effect_namespace,effect_key,stage,batch_id,state
+      const receipt = db(context).prepare(`SELECT effect_namespace,effect_key,stage,batch_id,state
         FROM import_run_receipts WHERE run_id=? AND stage=? AND batch_id=?`
       ).get(row.id, stage, batchId) as Pick<ImportRunEffectReceiptRow,
         'effect_namespace' | 'effect_key' | 'stage' | 'batch_id' | 'state'> | undefined
@@ -1160,12 +1176,12 @@ function applyBatchCheckpoint(
         || existing.effect_namespace !== receipt.effect_namespace || existing.effect_key !== receipt.effect_key) {
         throw new Error('IMPORT_RUN_EFFECT_LEDGER_MISMATCH')
       }
-      db().prepare(`UPDATE import_effect_ledger
+      db(context).prepare(`UPDATE import_effect_ledger
         SET state='complete',diagnostic_code='',updated_at=datetime('now')
         WHERE run_id=? AND stage=? AND batch_id=? AND state='partial'`
       ).run(row.id, stage, batchId)
     } else if (!existing) {
-      db().prepare(`INSERT INTO import_effect_ledger(
+      db(context).prepare(`INSERT INTO import_effect_ledger(
         run_id,stage,batch_id,effect_namespace,effect_key,state,evidence_kind,diagnostic_code
       ) VALUES(?,?,?,?,?,'complete',?,'')`).run(row.id, stage, batchId, row.effect_namespace,
         `checkpoint:${stage}:${batchId}`, stage === 'knowledge' ? 'knowledge-receipt' : 'legacy-checkpoint')
@@ -1174,7 +1190,7 @@ function applyBatchCheckpoint(
     completed[stage] = [...(completed[stage] ?? []), batchId]
   }
   const cancelApplied = row.cancel_requested === 1
-  db().prepare(`
+  db(context).prepare(`
     UPDATE import_runs
     SET status = CASE WHEN ? = 1 THEN 'cancelled' ELSE status END,
         resumable = 1,
@@ -1190,7 +1206,7 @@ function applyBatchCheckpoint(
     cancelApplied ? 1 : 0,
     row.id,
   )
-  if (!hasEffectLedger()) db().prepare(`UPDATE import_runs SET completed_batches_json=? WHERE id=?`)
+  if (!hasEffectLedger(context)) db(context).prepare(`UPDATE import_runs SET completed_batches_json=? WHERE id=?`)
     .run(JSON.stringify(completed), row.id)
   return { newlyCompleted, cancelApplied }
 }
@@ -2303,9 +2319,11 @@ export class ImportRunRepository {
     })()
   }
 
-  static get(runId: string): ImportRunSnapshot | null {
-    const row = readRunRow(runId)
-    return row ? rowToSnapshot(row) : null
+  static get(runId: string, context?: CapturedImportRunContext): ImportRunSnapshot | null {
+    const row = readRunRow(runId, db(context))
+    if (!row) return null
+    assertCapturedReference(row, context)
+    return rowToSnapshot(row, context)
   }
 
   static listResumable(): ImportRunSnapshot[] {
@@ -2315,15 +2333,20 @@ export class ImportRunRepository {
       WHERE resumable = 1 AND status IN ('ready', 'running', 'failed', 'cancelled')
       ORDER BY updated_at DESC, rowid DESC
     `).all() as ImportRunRow[]
-    return rows.filter(row => !freeze.isFrozen('import_runs', row.id)).map(rowToSnapshot)
+    return rows.filter(row => !freeze.isFrozen('import_runs', row.id)).map(row => rowToSnapshot(row))
   }
 
   static listChapterBatch(
     runId: string,
     options: { afterChapterNumber: number; limit: number },
+    context?: CapturedImportRunContext,
   ): ImportRunChapterSnapshot[] {
+    if (context) {
+      const run = readRunRow(runId, context.database)
+      if (run) assertCapturedReference(run, context)
+    }
     const limit = Math.max(1, Math.min(MAX_PAGE_SIZE, Math.floor(options.limit)))
-    const rows = db().prepare(`
+    const rows = db(context).prepare(`
       SELECT chapter_number, source_id, source_chapter_number,
              title, content_fingerprint, content_size, content_snapshot
       FROM import_run_chapters
@@ -2337,15 +2360,17 @@ export class ImportRunRepository {
     runId: string,
     stage: ImportRunStage,
     batchId: string,
+    context?: CapturedImportRunContext,
   ): ImportRunEffectReceipt | null {
-    const row = db().prepare(`
+    const row = db(context).prepare(`
       SELECT * FROM import_run_receipts
       WHERE run_id = ? AND stage = ? AND batch_id = ?
     `).get(runId, stage, batchId) as ImportRunEffectReceiptRow | undefined
     if (!row) return null
-    const run = readRunRow(runId)
+    const run = readRunRow(runId, db(context))
     if (!run) return corruptedReceipt()
-    return rowToEffectReceipt(row, run)
+    assertCapturedReference(run, context)
+    return rowToEffectReceipt(row, run, context)
   }
 
   static prepareEffectReceipt(
@@ -2353,6 +2378,7 @@ export class ImportRunRepository {
     execution: ImportRunExecutionLease,
     now = Date.now(),
     assertGenerationSources?: (handle: MainGenerationRunHandle, slot: import('../../src/shared/import-generation').ImportGenerationSlot) => void,
+    context?: CapturedImportRunContext,
   ): ImportRunEffectReceipt {
     const effectKey = request.effectKey?.trim()
     const batchId = request.batchId?.trim()
@@ -2361,11 +2387,11 @@ export class ImportRunRepository {
     }
     validateEffectStage(request.kind, request.stage)
     const payload = canonicalPayload(request.payload)
-    return db().transaction(() => {
-      const run = assertExecution(request.runId, execution, now)
+    return db(context).transaction(() => {
+      const run = assertExecution(request.runId, execution, now, context)
       assertAuthorEffectRunBinding(run, request.kind, request.payload)
-      assertCheckpointCanApply(run, request.stage, batchId, 'receipt')
-      const existing = db().prepare(`
+      assertCheckpointCanApply(run, request.stage, batchId, 'receipt', context)
+      const existing = db(context).prepare(`
         SELECT * FROM import_run_receipts
         WHERE run_id = ? AND stage = ? AND batch_id = ?
       `).get(request.runId, request.stage, batchId) as ImportRunEffectReceiptRow | undefined
@@ -2376,18 +2402,18 @@ export class ImportRunRepository {
           || existing.kind !== request.kind
           || existing.payload_hash !== payload.hash
         ) throw new Error('IMPORT_RUN_RECEIPT_CONFLICT')
-        recordPreparedEffect(run, existing)
-        return rowToEffectReceipt(existing, run)
+        recordPreparedEffect(run, existing, context)
+        return rowToEffectReceipt(existing, run, context)
       }
       if (request.stage === 'global' || request.stage === 'style' || request.stage === 'blueprints') {
         const handle = (request.payload as { generationRunHandle?: MainGenerationRunHandle }).generationRunHandle
-        const hasGenerationTable = db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='generation_runs'").pluck().get()
-        const bound = hasGenerationTable && db().prepare("SELECT 1 FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.importSlot.runId')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.stage')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.batchId')=?")
+        const hasGenerationTable = db(context).prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='generation_runs'").pluck().get()
+        const bound = hasGenerationTable && db(context).prepare("SELECT 1 FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.importSlot.runId')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.stage')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.batchId')=?")
           .pluck().get(request.runId, request.stage, batchId)
         if ((assertGenerationSources || bound) && !handle) throw new Error('GENERATION_IMPORT_EFFECT_HANDLE_REQUIRED')
         if (assertGenerationSources && handle) assertGenerationSources(handle, { runId: request.runId, stage: request.stage as 'global' | 'style' | 'blueprints', batchId })
       }
-      db().prepare(`
+      db(context).prepare(`
         INSERT INTO import_run_receipts (
           run_id, schema_version, effect_namespace, effect_key, stage, batch_id, kind, payload_json, payload_hash
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -2408,8 +2434,8 @@ export class ImportRunRepository {
         stage: request.stage,
         batch_id: batchId,
         state: 'prepared',
-      })
-      return this.getEffectReceipt(request.runId, request.stage, batchId)!
+      }, context)
+      return this.getEffectReceipt(request.runId, request.stage, batchId, context)!
     })()
   }
 
@@ -2420,26 +2446,29 @@ export class ImportRunRepository {
     execution: ImportRunExecutionLease,
     now = Date.now(),
     assertGenerationSources?: (handle: MainGenerationRunHandle, slot?: import('../../src/shared/import-generation').ImportGenerationSlot) => void,
+    context?: CapturedImportRunContext,
   ): ImportRunEffectCommitResult {
-    return db().transaction(() => {
-      const run = readRunRow(runId)
+    return db(context).transaction(() => {
+      const run = readRunRow(runId, db(context))
       if (!run) throw new Error('IMPORT_RUN_NOT_FOUND')
-      const row = db().prepare(`
+      assertCapturedReference(run, context)
+      if (context) readPortableRuntimeFreeze(context.canonicalRoot).assertMutable('import_runs', runId)
+      const row = db(context).prepare(`
         SELECT * FROM import_run_receipts
         WHERE run_id = ? AND stage = ? AND batch_id = ?
       `).get(runId, stage, batchId) as ImportRunEffectReceiptRow | undefined
       if (!row) throw new Error('IMPORT_RUN_RECEIPT_NOT_FOUND')
-      const validatedReceipt = rowToEffectReceipt(row, run)
+      const validatedReceipt = rowToEffectReceipt(row, run, context)
       if (row.state === 'committed') {
-        recordPreparedEffect(run, row)
+        recordPreparedEffect(run, row, context)
         return {
           receipt: validatedReceipt,
-          run: this.get(runId)!,
+          run: this.get(runId, context)!,
           cancelApplied: run.cancel_requested === 1,
         }
       }
-      assertExecution(runId, execution, now)
-      assertCheckpointCanApply(run, stage, batchId, 'receipt')
+      assertExecution(runId, execution, now, context)
+      assertCheckpointCanApply(run, stage, batchId, 'receipt', context)
       let effectReceipt: unknown
       // 作者原稿只补空白；模式由运行用途决定，不随载荷传。
       const fillMode: ImportGlobalFactsMode = run.purpose === 'author-manuscript' ? 'fill-empty' : 'replace'
@@ -2453,6 +2482,7 @@ export class ImportRunRepository {
           effectReceipt = ImportGlobalFactsRepository.commit(
             parseJson<ImportGlobalFactsRequest>(row.payload_json, {} as ImportGlobalFactsRequest),
             fillMode,
+            context ? { database: context.database, projectRoot: context.canonicalRoot, projectId: context.projectId } : undefined,
           )
           break
         case 'project-writing-style': {
@@ -2462,15 +2492,15 @@ export class ImportRunRepository {
           }
           const writingStyle = payload.writingStyle.trim()
           if (fillMode === 'replace') {
-            ProjectCoreRepository.update({ writingStyle })
+            ProjectCoreRepository.update({ writingStyle }, db(context))
             effectReceipt = { writingStyle }
             break
           }
-          const fill = planImportFill(['writingStyle'], { writingStyle: ProjectCoreRepository.get()?.writingStyle }, { writingStyle })
-          ProjectCoreRepository.update(fill.patch)
+          const fill = planImportFill(['writingStyle'], { writingStyle: ProjectCoreRepository.get(db(context))?.writingStyle }, { writingStyle })
+          ProjectCoreRepository.update(fill.patch, db(context))
           effectReceipt = {
             mode: 'fill-empty',
-            writingStyle: ProjectCoreRepository.get()?.writingStyle ?? '',
+            writingStyle: ProjectCoreRepository.get(db(context))?.writingStyle ?? '',
             suggestions: fill.suggestions,
           }
           break
@@ -2479,7 +2509,7 @@ export class ImportRunRepository {
           effectReceipt = BlueprintRepository.commitRange(
             parseJson<BlueprintRangeCommitRequest>(row.payload_json, {} as BlueprintRangeCommitRequest),
             undefined,
-            undefined,
+            context?.database,
             fillMode,
           )
           break
@@ -2510,15 +2540,15 @@ export class ImportRunRepository {
         default:
           throw new Error('IMPORT_RUN_RECEIPT_KIND_UNSUPPORTED')
       }
-      const checkpoint = applyBatchCheckpoint(run, stage, batchId, 'receipt')
-      db().prepare(`
+      const checkpoint = applyBatchCheckpoint(run, stage, batchId, 'receipt', context)
+      db(context).prepare(`
         UPDATE import_run_receipts
         SET state = 'committed', effect_receipt_json = ?, updated_at = datetime('now')
         WHERE run_id = ? AND stage = ? AND batch_id = ? AND state = 'prepared'
       `).run(JSON.stringify(effectReceipt), runId, stage, batchId)
       return {
-        receipt: this.getEffectReceipt(runId, stage, batchId)!,
-        run: this.get(runId)!,
+        receipt: this.getEffectReceipt(runId, stage, batchId, context)!,
+        run: this.get(runId, context)!,
         cancelApplied: checkpoint.cancelApplied,
       }
     })()
@@ -2529,21 +2559,23 @@ export class ImportRunRepository {
     owner: string,
     now = Date.now(),
     leaseMs = DEFAULT_EXECUTION_LEASE_MS,
+    context?: CapturedImportRunContext,
   ): ImportRunStartResult {
     const normalizedOwner = owner.trim()
     if (!normalizedOwner || normalizedOwner.length > 160 || leaseMs < 1) throw new Error('IMPORT_RUN_EXECUTOR_INVALID')
-    readPortableRuntimeFreeze(getCurrentProjectPath()).assertMutable('import_runs', runId)
-    return db().transaction(() => {
-      const row = readRunRow(runId)
+    readPortableRuntimeFreeze(context ? context.canonicalRoot : getCurrentProjectPath()).assertMutable('import_runs', runId)
+    return db(context).transaction(() => {
+      const row = readRunRow(runId, db(context))
       if (!row || row.resumable !== 1 || !['ready', 'running', 'failed', 'cancelled'].includes(row.status)) {
         throw new Error(row?.resumable === 0 && row.last_error
           ? row.last_error
           : 'IMPORT_RUN_NOT_STARTABLE')
       }
+      assertCapturedReference(row, context)
       if (row.stage === 'parsing') {
         throw new Error('IMPORT_RUN_PARSING_INCOMPLETE')
       }
-      const activeProjectRun = db().prepare(`
+      const activeProjectRun = db(context).prepare(`
         SELECT id FROM import_runs
         WHERE id <> ? AND status = 'running' AND execution_owner <> '' AND lease_expires_at > ?
         LIMIT 1
@@ -2555,7 +2587,7 @@ export class ImportRunRepository {
       const sameActiveOwner = row.execution_owner === normalizedOwner && row.lease_expires_at > now
       const epoch = sameActiveOwner ? row.execution_epoch : row.execution_epoch + 1
       const expiresAt = now + leaseMs
-      db().prepare(`
+      db(context).prepare(`
         UPDATE import_runs
         SET stage = CASE WHEN stage = 'prepared' THEN 'knowledge' ELSE stage END,
             status = 'running', resumable = 1, cancel_requested = 0,
@@ -2564,16 +2596,16 @@ export class ImportRunRepository {
         WHERE id = ?
       `).run(normalizedOwner, epoch, expiresAt, runId)
       return {
-        run: this.get(runId)!,
+        run: this.get(runId, context)!,
         execution: { owner: normalizedOwner, epoch, expiresAt },
       }
     })()
   }
 
-  static renewExecution(runId: string, execution: ImportRunExecutionLease, now = Date.now(), leaseMs = DEFAULT_EXECUTION_LEASE_MS): ImportRunExecutionLease {
-    assertExecution(runId, execution, now)
+  static renewExecution(runId: string, execution: ImportRunExecutionLease, now = Date.now(), leaseMs = DEFAULT_EXECUTION_LEASE_MS, context?: CapturedImportRunContext): ImportRunExecutionLease {
+    assertExecution(runId, execution, now, context)
     const expiresAt = now + leaseMs
-    db().prepare(`UPDATE import_runs SET lease_expires_at = ?, updated_at = datetime('now') WHERE id = ?`)
+    db(context).prepare(`UPDATE import_runs SET lease_expires_at = ?, updated_at = datetime('now') WHERE id = ?`)
       .run(expiresAt, runId)
     return { ...execution, expiresAt }
   }
@@ -2664,20 +2696,20 @@ export class ImportRunRepository {
     })()
   }
 
-  static requestCancel(runId: string, execution: ImportRunExecutionLease): ImportRunSnapshot {
-    assertExecution(runId, execution)
-    const result = db().prepare(`
+  static requestCancel(runId: string, execution: ImportRunExecutionLease, context?: CapturedImportRunContext): ImportRunSnapshot {
+    assertExecution(runId, execution, undefined, context)
+    const result = db(context).prepare(`
       UPDATE import_runs SET cancel_requested = 1, updated_at = datetime('now')
       WHERE id = ? AND status IN ('ready', 'running')
     `).run(runId)
     if (result.changes === 0) throw new Error('IMPORT_RUN_NOT_CANCELLABLE')
-    return this.get(runId)!
+    return this.get(runId, context)!
   }
 
-  static cancelAtBoundary(runId: string, execution: ImportRunExecutionLease): ImportRunSnapshot {
-    return db().transaction(() => {
-      assertExecution(runId, execution)
-      const result = db().prepare(`
+  static cancelAtBoundary(runId: string, execution: ImportRunExecutionLease, context?: CapturedImportRunContext): ImportRunSnapshot {
+    return db(context).transaction(() => {
+      assertExecution(runId, execution, undefined, context)
+      const result = db(context).prepare(`
         UPDATE import_runs
         SET status = 'cancelled', resumable = 1, cancel_requested = 1,
             execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
@@ -2685,69 +2717,69 @@ export class ImportRunRepository {
         WHERE id = ? AND status IN ('ready', 'running', 'failed')
       `).run(runId)
       if (result.changes === 0) throw new Error('IMPORT_RUN_NOT_CANCELLABLE')
-      return this.get(runId)!
+      return this.get(runId, context)!
     })()
   }
 
-  static completeBatch(runId: string, stage: ImportRunStage, batchId: string, execution: ImportRunExecutionLease): {
+  static completeBatch(runId: string, stage: ImportRunStage, batchId: string, execution: ImportRunExecutionLease, context?: CapturedImportRunContext): {
     newlyCompleted: boolean
     cancelApplied: boolean
     run: ImportRunSnapshot
   } {
     if (!batchId.trim() || batchId.length > 160) throw new Error('IMPORT_RUN_BATCH_ID_INVALID')
-    return db().transaction(() => {
-      const row = assertExecution(runId, execution)
-      const { newlyCompleted, cancelApplied } = applyBatchCheckpoint(row, stage, batchId, 'direct')
-      return { newlyCompleted, cancelApplied, run: this.get(runId)! }
+    return db(context).transaction(() => {
+      const row = assertExecution(runId, execution, undefined, context)
+      const { newlyCompleted, cancelApplied } = applyBatchCheckpoint(row, stage, batchId, 'direct', context)
+      return { newlyCompleted, cancelApplied, run: this.get(runId, context)! }
     })()
   }
 
-  static advanceStage(runId: string, completedStage: ImportRunStage, nextStage: ImportRunStage, execution: ImportRunExecutionLease): ImportRunSnapshot {
-    return db().transaction(() => {
-      const row = assertExecution(runId, execution)
+  static advanceStage(runId: string, completedStage: ImportRunStage, nextStage: ImportRunStage, execution: ImportRunExecutionLease, context?: CapturedImportRunContext): ImportRunSnapshot {
+    return db(context).transaction(() => {
+      const row = assertExecution(runId, execution, undefined, context)
       if (row.status !== 'running' || row.stage !== completedStage) {
         throw new Error('IMPORT_RUN_STAGE_MISMATCH')
       }
-      if (nextStageForRun(row, completedStage) !== nextStage) throw new Error('IMPORT_RUN_STAGE_MISMATCH')
-      assertStageCheckpointComplete(row, completedStage)
+      if (nextStageForRun(row, completedStage, context) !== nextStage) throw new Error('IMPORT_RUN_STAGE_MISMATCH')
+      assertStageCheckpointComplete(row, completedStage, context)
       const completedChapters = completedStage === 'blueprints' || completedStage === 'author-postprocess'
         ? row.total_chapters
         : row.completed_chapters
-      const result = db().prepare(`
+      const result = db(context).prepare(`
         UPDATE import_runs
         SET stage = ?, completed_chapters = ?, status = 'running', last_error = '',
             resumable = 1, updated_at = datetime('now')
         WHERE id = ? AND stage = ? AND status = 'running'
       `).run(nextStage, completedChapters, runId, completedStage)
       if (result.changes !== 1) throw new Error('IMPORT_RUN_STAGE_MISMATCH')
-      return this.get(runId)!
+      return this.get(runId, context)!
     })()
   }
 
-  static fail(runId: string, stage: ImportRunStage, error: string, execution: ImportRunExecutionLease): ImportRunSnapshot {
-    return db().transaction(() => {
-      const row = assertExecution(runId, execution)
+  static fail(runId: string, stage: ImportRunStage, error: string, execution: ImportRunExecutionLease, context?: CapturedImportRunContext): ImportRunSnapshot {
+    return db(context).transaction(() => {
+      const row = assertExecution(runId, execution, undefined, context)
       if (row.status !== 'running' || row.stage !== stage) throw new Error('IMPORT_RUN_STAGE_MISMATCH')
       if (typeof error !== 'string') throw new Error('IMPORT_RUN_FAILURE_REASON_INVALID')
-      const result = db().prepare(`
+      const result = db(context).prepare(`
         UPDATE import_runs
         SET status = 'failed', last_error = ?, resumable = 1,
             execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
             updated_at = datetime('now') WHERE id = ? AND stage = ? AND status = 'running'
       `).run(error.slice(0, 2_000), runId, stage)
       if (result.changes === 0) throw new Error('IMPORT_RUN_STATE_CONFLICT')
-      return this.get(runId)!
+      return this.get(runId, context)!
     })()
   }
 
-  static complete(runId: string, execution: ImportRunExecutionLease): ImportRunSnapshot {
-    return db().transaction(() => {
-      const row = assertExecution(runId, execution)
+  static complete(runId: string, execution: ImportRunExecutionLease, context?: CapturedImportRunContext): ImportRunSnapshot {
+    return db(context).transaction(() => {
+      const row = assertExecution(runId, execution, undefined, context)
       if (row.status !== 'running' || row.stage !== 'refresh') {
         throw new Error('IMPORT_RUN_STAGE_MISMATCH')
       }
-      assertStageCheckpointComplete(row, 'refresh')
-      const result = db().prepare(`
+      assertStageCheckpointComplete(row, 'refresh', context)
+      const result = db(context).prepare(`
         UPDATE import_runs
         SET stage = 'completed', status = 'completed', completed_chapters = total_chapters,
             resumable = 0, cancel_requested = 0, last_error = '',
@@ -2756,7 +2788,7 @@ export class ImportRunRepository {
         WHERE id = ? AND stage = 'refresh' AND status = 'running'
       `).run(runId)
       if (result.changes === 0) throw new Error('IMPORT_RUN_STATE_CONFLICT')
-      return this.get(runId)!
+      return this.get(runId, context)!
     })()
   }
 }

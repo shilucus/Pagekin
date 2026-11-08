@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type Database from 'better-sqlite3'
 
 import type {
   ImportGlobalFactsCore,
@@ -20,6 +21,28 @@ interface OperationRow {
   operation_id: string
   payload_hash: string
   receipt_json: string
+}
+
+export interface ImportGlobalFactsContext {
+  database: Database.Database
+  projectRoot: string
+  projectId: string
+}
+
+function requiredDatabase(context?: ImportGlobalFactsContext): Database.Database {
+  const database = context ? context.database : getProjectDb()
+  if (!database) throw new Error('PROJECT_NOT_OPEN')
+  return database
+}
+
+function projectIdentity(context?: ImportGlobalFactsContext): string {
+  const projectPath = context ? context.projectRoot : getCurrentProjectPath()
+  if (!projectPath) throw new Error('IMPORT_GLOBAL_FACTS_PROJECT_IDENTITY_MISSING')
+  const project = projectAccess.probeExistingProject(projectPath)
+  if (project.kind !== 'manifest' || context && project.projectId !== context.projectId) {
+    throw new Error('IMPORT_GLOBAL_FACTS_PROJECT_IDENTITY_MISSING')
+  }
+  return project.projectId
 }
 
 const CORE_TEXT_FIELDS = [
@@ -73,8 +96,8 @@ function hashRequest(request: ImportGlobalFactsRequest): string {
   return createHash('sha256').update(JSON.stringify(request), 'utf8').digest('hex')
 }
 
-function coreSnapshot(): ImportGlobalFactsCore {
-  const core = ProjectCoreRepository.get()
+function coreSnapshot(db: Database.Database): ImportGlobalFactsCore {
+  const core = ProjectCoreRepository.get(db)
   if (!core) throw new Error('IMPORT_GLOBAL_FACTS_PROJECT_CORE_MISSING')
   return {
     genre: core.genre,
@@ -105,19 +128,19 @@ function parseReceipt(row: OperationRow): ImportGlobalFactsReceipt {
     throw new Error('IMPORT_GLOBAL_FACTS_RECEIPT_CORRUPT')
   }
 }
-function assertCurrentReceipt(stored: ImportGlobalFactsReceipt): void {
-  const db = getProjectDb()!
-  if (JSON.stringify(coreSnapshot()) !== JSON.stringify(stored.core)) throw new Error('IMPORT_GLOBAL_FACTS_SUPERSEDED')
+function assertCurrentReceipt(stored: ImportGlobalFactsReceipt, db: Database.Database, context?: ImportGlobalFactsContext): void {
+  if (JSON.stringify(coreSnapshot(db)) !== JSON.stringify(stored.core)) throw new Error('IMPORT_GLOBAL_FACTS_SUPERSEDED')
   if (stored.characterProposal) {
     const evidence = findCharacterProposalEvidence(db, { kind: 'import', operationId: stored.operationId },
-      (projectId, source) => proveCharacterProposal(db, new GenerationRunRepository(() => db), projectId, source, false, () => {}))
+      (projectId, source) => {
+        if (context && projectId !== context.projectId) throw new Error('IMPORT_GLOBAL_FACTS_SUPERSEDED')
+        return proveCharacterProposal(db, new GenerationRunRepository(() => db), projectId, source, false, () => {})
+      })
     if (JSON.stringify(evidence) !== JSON.stringify(stored.characterProposal)) throw new Error('IMPORT_GLOBAL_FACTS_SUPERSEDED')
-  } else if (CharacterRosterRepository.read().nameOnlyFactHash !== stored.roster.snapshot.factHash) throw new Error('IMPORT_GLOBAL_FACTS_SUPERSEDED')
+  } else if ((context ? CharacterRosterRepository.readCaptured(db) : CharacterRosterRepository.read()).nameOnlyFactHash !== stored.roster.snapshot.factHash) throw new Error('IMPORT_GLOBAL_FACTS_SUPERSEDED')
 }
 
-function ensureLedger(): void {
-  const db = getProjectDb()
-  if (!db) throw new Error('PROJECT_NOT_OPEN')
+function ensureLedger(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS import_global_fact_operations (
       operation_id TEXT PRIMARY KEY,
@@ -131,10 +154,9 @@ function ensureLedger(): void {
 /** Atomic import seam for config, non-character architecture and roster facts. */
 export class ImportGlobalFactsRepository {
   /** Historical ACK only: proves the saved operation, not the current project facts. */
-  static readHistoricalCommittedOperation(operationId: string): ImportGlobalFactsReceipt | null {
+  static readHistoricalCommittedOperation(operationId: string, context?: ImportGlobalFactsContext): ImportGlobalFactsReceipt | null {
     if (!operationId.trim()) throw new Error('IMPORT_GLOBAL_FACTS_OPERATION_INVALID')
-    const db = getProjectDb()
-    if (!db) throw new Error('PROJECT_NOT_OPEN')
+    const db = requiredDatabase(context)
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_global_fact_operations'").get()) return null
     const row = db.prepare(`
       SELECT operation_id, payload_hash, receipt_json
@@ -144,25 +166,25 @@ export class ImportGlobalFactsRepository {
   }
 
   /** Read-only authoritative evidence for a previously committed import operation. */
-  static getCommittedOperation(operationId: string): ImportGlobalFactsReceipt | null {
+  static getCommittedOperation(operationId: string, context?: ImportGlobalFactsContext): ImportGlobalFactsReceipt | null {
     if (!operationId.trim()) throw new Error('IMPORT_GLOBAL_FACTS_OPERATION_INVALID')
-    const db = getProjectDb()
-    if (!db) throw new Error('PROJECT_NOT_OPEN')
-    ensureLedger()
+    const db = requiredDatabase(context)
+    ensureLedger(db)
     const row = db.prepare(`
       SELECT operation_id, payload_hash, receipt_json
       FROM import_global_fact_operations WHERE operation_id = ?
     `).get(operationId) as OperationRow | undefined
     if (!row) return null
     const stored = parseReceipt(row)
-    assertCurrentReceipt(stored)
+    assertCurrentReceipt(stored, db, context)
     return stored
   }
 
-  static commit(candidate: ImportGlobalFactsRequest, mode: ImportGlobalFactsMode = 'replace'): ImportGlobalFactsReceipt {
-    const db = getProjectDb()
-    if (!db) throw new Error('PROJECT_NOT_OPEN')
-    ensureLedger()
+  static commit(candidate: ImportGlobalFactsRequest, mode: ImportGlobalFactsMode = 'replace', context?: ImportGlobalFactsContext): ImportGlobalFactsReceipt {
+    const db = requiredDatabase(context)
+    if (context && !hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_WRITE_REQUIRED')
+    const capturedProjectId = context ? projectIdentity(context) : undefined
+    ensureLedger(db)
     const request = normalizedRequest(candidate)
     const payloadHash = hashRequest(request)
 
@@ -174,9 +196,9 @@ export class ImportGlobalFactsRepository {
       if (existing) {
         if (existing.payload_hash !== payloadHash) throw new Error('IMPORT_GLOBAL_FACTS_OPERATION_CONFLICT')
         const stored = parseReceipt(existing)
-        assertCurrentReceipt(stored)
+        assertCurrentReceipt(stored, db, context)
         if (stored.characterProposal) return { ...stored, idempotent: true }
-        const currentRoster = CharacterRosterRepository.read()
+        const currentRoster = context ? CharacterRosterRepository.readCaptured(db) : CharacterRosterRepository.read()
         return {
           ...stored,
           idempotent: true,
@@ -188,25 +210,22 @@ export class ImportGlobalFactsRepository {
       if (mode === 'fill-empty' || hasCharacterIdentitySchema(db)) {
         const revision = db.prepare("SELECT revision FROM character_roster_meta WHERE id='main'").pluck().get()
         if (revision !== request.expectedRosterRevision) throw new Error('CHARACTER_ROSTER_REVISION_STALE')
-        const projectPath = getCurrentProjectPath()
-        if (!projectPath) throw new Error('IMPORT_GLOBAL_FACTS_PROJECT_IDENTITY_MISSING')
-        const project = projectAccess.probeExistingProject(projectPath)
-        if (project.kind !== 'manifest') throw new Error('IMPORT_GLOBAL_FACTS_PROJECT_IDENTITY_MISSING')
+        const projectId = capturedProjectId ?? projectIdentity()
         const source = { kind: 'import' as const, operationId: request.operationId }
-        const characterProposal = { proposalBatchId: `cpb:${textHash(JSON.stringify([project.projectId, source]))}`,
+        const characterProposal = { proposalBatchId: `cpb:${textHash(JSON.stringify([projectId, source]))}`,
           sourceHash: textHash(JSON.stringify([payloadHash, request.characterEntries])) }
-        const fill = mode === 'fill-empty' ? planImportFill(CORE_FILL_FIELDS, coreSnapshot(), request.core) : null
-        ProjectCoreRepository.update(fill ? fill.patch : request.core)
+        const fill = mode === 'fill-empty' ? planImportFill(CORE_FILL_FIELDS, coreSnapshot(db), request.core) : null
+        ProjectCoreRepository.update(fill ? fill.patch : request.core, db)
         const receipt: ImportGlobalFactsReceipt = { operationId: request.operationId, payloadHash, idempotent: false,
-          core: coreSnapshot(), ...(fill ? { mode: 'fill-empty' as const, suggestions: fill.suggestions } : {}),
+          core: coreSnapshot(db), ...(fill ? { mode: 'fill-empty' as const, suggestions: fill.suggestions } : {}),
           characterProposal, proposalSource: request }
         db.prepare('INSERT INTO import_global_fact_operations(operation_id,payload_hash,receipt_json) VALUES(?,?,?)').run(request.operationId, payloadHash, JSON.stringify(receipt))
-        const service = new CharacterProposalService(db, project.projectId, candidate => proveCharacterProposal(db, new GenerationRunRepository(() => db), project.projectId, candidate, false, () => {}))
+        const service = new CharacterProposalService(db, projectId, candidate => proveCharacterProposal(db, new GenerationRunRepository(() => db), projectId, candidate, false, () => {}))
         service.stage(source)
         if (JSON.stringify(service.evidence(characterProposal.proposalBatchId)) !== JSON.stringify(characterProposal)) throw new Error('IMPORT_GLOBAL_FACTS_READ_BACK_FAILED')
         return receipt
       }
-      ProjectCoreRepository.update(request.core)
+      ProjectCoreRepository.update(request.core, db)
       const roster = CharacterRosterRepository.commit({
         operationId: `${request.operationId}:roster`,
         expectedRevision: request.expectedRosterRevision,
@@ -218,7 +237,7 @@ export class ImportGlobalFactsRepository {
         operationId: request.operationId,
         payloadHash,
         idempotent: false,
-        core: coreSnapshot(),
+        core: coreSnapshot(db),
         roster,
       }
       db.prepare(`

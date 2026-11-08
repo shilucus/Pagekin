@@ -14,7 +14,13 @@ export function importSlotNonce(slotKey: string, retryOf?: DurableGenerationRun)
 
 /** Existing import checkpoints own effects; this class only joins their generation runs. */
 export class ImportGeneration {
-  constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository, private readonly projectId: string) {}
+  constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository, private readonly projectId: string, private readonly canonicalRoot?: string) {}
+  private effectReceipt(slot: ImportGenerationSlot) {
+    const context = this.canonicalRoot !== undefined
+      && this.db.prepare('SELECT purpose FROM import_runs WHERE id=?').pluck().get(slot.runId) !== 'author-manuscript'
+      ? { database: this.db, canonicalRoot: this.canonicalRoot, projectId: this.projectId } : undefined
+    return ImportRunRepository.getEffectReceipt(slot.runId, slot.stage, slot.batchId, context)
+  }
   find(slot: ImportGenerationSlot): DurableGenerationRun | undefined {
     const key = importGenerationSlotKey(slot)
     const rows = this.db.prepare("SELECT run_id,json_extract(json_extract(open_key,'$[0]'),'$[2]') AS ui_action_nonce FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.importSlotKey')=? ORDER BY rowid").all(key) as { run_id: string; ui_action_nonce: string }[]
@@ -57,7 +63,7 @@ export class ImportGeneration {
   }
   retryable(run: DurableGenerationRun): boolean {
     const slot = this.context(run).slot
-    if (ImportRunRepository.getEffectReceipt(slot.runId, slot.stage, slot.batchId)) return false
+    if (this.effectReceipt(slot)) return false
     const budget = this.runs.budget(run.rootActionId)
     if (budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))) return false
     if (this.rejected(run)) return true
@@ -76,7 +82,7 @@ export class ImportGeneration {
   assertMutable(run: DurableGenerationRun): void {
     if (!run.binding.sourceManifest.importSlot) return
     const slot = this.context(run).slot
-    if (ImportRunRepository.getEffectReceipt(slot.runId, slot.stage, slot.batchId)) throw new Error('GENERATION_IMPORT_EFFECT_SEALED')
+    if (this.effectReceipt(slot)) throw new Error('GENERATION_IMPORT_EFFECT_SEALED')
   }
   /** 导入运行要停在这一阶段且仍在进行；作者已请求取消时报取消码，渲染端才能如实显示已取消。 */
   private assertSlotRunning(slot: ImportGenerationSlot): void {
@@ -84,11 +90,12 @@ export class ImportGeneration {
     if (!state || state.stage !== slot.stage || state.status !== 'running') throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
     if (state.cancel_requested) throw new Error('GENERATION_ACTION_CANCELLED')
   }
-  assertExecution(run: DurableGenerationRun, execution?: ImportRunExecutionAuthority): void {
+  assertExecution(run: DurableGenerationRun, execution?: ImportRunExecutionAuthority): ImportRunExecutionAuthority {
     const slot = this.context(run).slot
     if (!execution) throw new Error('GENERATION_IMPORT_EXECUTION_REQUIRED')
-    ImportRunRepository.assertExecutionAuthority(slot.runId, execution)
+    ImportRunRepository.assertExecutionAuthority(slot.runId, execution, undefined, this.db)
     this.assertSlotRunning(slot)
+    return Object.freeze({ owner: execution.owner, epoch: execution.epoch })
   }
   admit(selection: BeginGenerationRequest): { existing?: DurableGenerationRun; retryOf?: DurableGenerationRun; parentRootActionId?: string; modelId?: string; chapterCount?: number } | undefined {
     const slot = selection.importSlot
@@ -103,7 +110,7 @@ export class ImportGeneration {
       || selection.agentWorkflowRegistrationId || selection.continueDirectoryOperationId
       || !isDeepStrictEqual(selection.promptKeys, promptKeys) || !isDeepStrictEqual(selection.skillStages, slot.stage === 'style' ? [] : ['planning'])
       || selection.output !== (slot.stage === 'style' ? 'visible-text' : 'structured-data')) throw new Error('GENERATION_IMPORT_STAGE_INVALID')
-    ImportRunRepository.assertExecutionAuthority(slot.runId, selection.importExecution)
+    ImportRunRepository.assertExecutionAuthority(slot.runId, selection.importExecution, undefined, this.db)
     const modelOf = (run: DurableGenerationRun) => (run.binding.sourceManifest.modelReceipt as { modelId: string }).modelId
     if (existing && !this.retryable(existing)) {
       if (selection.modelId !== modelOf(existing)) throw new Error('GENERATION_IMPORT_MODEL_CHANGED')
@@ -117,7 +124,7 @@ export class ImportGeneration {
     for (const run of records) {
       const prior = this.context(run).slot
       if (importGenerationSlotKey(prior) === key) continue
-      const receipt = ImportRunRepository.getEffectReceipt(prior.runId, prior.stage, prior.batchId)
+      const receipt = this.effectReceipt(prior)
       if (receipt?.state !== 'committed') throw new Error('GENERATION_IMPORT_PREVIOUS_EFFECT_REQUIRED')
     }
     const latest = records.at(-1)

@@ -47,6 +47,7 @@ import { ImportRunRepository } from './repositories/import-run-repository'
 import { assertRequiredExpectedProjectPath } from './utils/project-context'
 import { getProjectDataRoot } from './services/project-data-locator'
 import { withKnowledgeSourceGate } from './services/knowledge-source-gate'
+import { projectRuntimeHost, type ProjectRuntime } from './services/project-runtime'
 
 // ===== 迁移状态跟踪 =====
 
@@ -363,12 +364,43 @@ type ReferenceImportResult = {
   errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED
 }
 
+export interface ReferenceImportResources {
+  readonly database: ProjectRuntime['database']
+  readonly canonicalRoot: string
+  readonly databaseIdentity: object
+  readonly executionEpoch: string
+  readonly assertResources: () => void
+  readonly acquireWork: () => () => void
+}
+
+/** Main-only resource capture, not an import grant; persisted authority is checked separately. */
+export function captureReferenceImportResources(runtime: ProjectRuntime): ReferenceImportResources {
+  projectRuntimeHost.assertWorkAvailable(runtime)
+  const { database, canonicalRoot, databaseIdentity, executionEpoch } = runtime
+  const assertResources = () => {
+    projectRuntimeHost.assertOpen(runtime)
+    if (runtime.database !== database || runtime.databaseIdentity !== databaseIdentity
+      || runtime.executionEpoch !== executionEpoch || runtime.canonicalRoot !== canonicalRoot) {
+      throw new Error('KNOWLEDGE_BASE_REFERENCE_RESOURCES_CHANGED')
+    }
+  }
+  return Object.freeze({
+    database, canonicalRoot, databaseIdentity, executionEpoch, assertResources,
+    acquireWork: () => {
+      assertResources()
+      return projectRuntimeHost.acquireWork(runtime)
+    },
+  })
+}
+
 interface ReferenceImportAuthorityRequest {
   runId: string
   executionAuthority: ImportRunExecutionAuthority
   chapterNumber: number
   stableKey: string
   content: string
+  projectPath: string
+  resources?: ReferenceImportResources
 }
 
 interface ReferenceImportFlight {
@@ -385,14 +417,18 @@ function referenceImportProjectIdentity(projectPath: string): string {
 }
 
 function assertReferenceImportAuthority(request: ReferenceImportAuthorityRequest): void {
+  request.resources?.assertResources()
   const binding = ImportRunRepository.resolveReferenceImportAuthority(
     request.runId,
     request.executionAuthority,
     request.chapterNumber,
+    undefined,
+    request.resources?.database,
   )
   if (binding.stableKey !== request.stableKey || binding.content !== request.content) {
     throw new Error('KNOWLEDGE_BASE_REFERENCE_AUTHORITY_MISMATCH')
   }
+  if (!request.resources) assertRequiredExpectedProjectPath(getCurrentProjectPath(), request.projectPath)
 }
 
 function currentFlightAuthority(flight: ReferenceImportFlight): void {
@@ -428,6 +464,7 @@ async function runReferenceImportSingleFlight(
         candidate.runId === authority.runId
         && candidate.executionAuthority.owner === authority.executionAuthority.owner
         && candidate.executionAuthority.epoch === authority.executionAuthority.epoch
+        && Boolean(candidate.resources) === Boolean(authority.resources)
       ))) active.authorities.push(authority)
       return active.promise
     }
@@ -455,14 +492,20 @@ async function performReferenceTextImport(
   protocol: 'openai' | 'gemini',
   model: EmbeddingModel,
   assertAuthority: () => void,
+  resources?: ReferenceImportResources,
 ): Promise<ReferenceImportResult> {
+  const removeReferenceDocument = () => {
+    // Cancellation revokes import authority, not the admitted cleanup's captured resources.
+    resources?.assertResources()
+    return removeDocFromStore(projectPath, documentId)
+  }
   try {
     if (!text.trim()) return { success: false, error: 'KNOWLEDGE_BASE_TEXT_EMPTY' }
     assertAuthority()
     await ensureMigration(projectPath)
     if (!knowledgeStoreSupportsCommits(projectPath)) return { success: false, error: 'KNOWLEDGE_BASE_VOLUME_UNSUPPORTED' }
     assertAuthority()
-    const projectDb = getProjectDb()
+    const projectDb = resources ? resources.database : getProjectDb()
     if (!projectDb) return { success: false, error: 'PROJECT_NOT_OPEN' }
     const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
     const chunks = chunkText(text, embeddingOptions.chunkSize, embeddingOptions.chunkOverlap)
@@ -518,7 +561,7 @@ async function performReferenceTextImport(
       `).run(documentId)
       return { success: true, docId: documentId, chunkCount: chunks.length, idempotent: true }
     }
-    if (existingIntegrity && !await removeDocFromStore(projectPath, documentId)) {
+    if (existingIntegrity && !await removeReferenceDocument()) {
       return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_CLEANUP_FAILED' }
     }
     assertAuthority()
@@ -563,14 +606,14 @@ async function performReferenceTextImport(
     try {
       assertAuthority()
     } catch (error) {
-      await removeDocFromStore(projectPath, documentId)
+      await removeReferenceDocument()
       throw error
     }
     const committedIntegrity = await getDocumentIntegrity(projectPath, documentId)
     try {
       assertAuthority()
     } catch (error) {
-      await removeDocFromStore(projectPath, documentId)
+      await removeReferenceDocument()
       throw error
     }
     if (
@@ -579,7 +622,7 @@ async function performReferenceTextImport(
       || committedIntegrity.chunkCount !== chunks.length
       || committedIntegrity.chunkSetHash !== chunkSetHash
     ) {
-      await removeDocFromStore(projectPath, documentId)
+      await removeReferenceDocument()
       return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_VERIFY_FAILED' }
     }
     assertAuthority()
@@ -605,14 +648,22 @@ export async function importReferenceText(
   projectPath: string,
   protocol: 'openai' | 'gemini',
   model: EmbeddingModel,
+  resources?: ReferenceImportResources,
 ): Promise<ReferenceImportResult> {
   const stableKey = stableImportKey.trim()
   if (!stableKey || stableKey.length > 512 || !/^[\w:.-]+$/u.test(stableKey)) {
     return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_KEY_INVALID' }
   }
   const documentId = createHash('sha256').update(`reference-import:${stableKey}`, 'utf8').digest('hex')
-  const authority = { runId, executionAuthority, chapterNumber, stableKey, content: text }
+  const authority = { runId, executionAuthority, chapterNumber, stableKey, content: text, projectPath, resources }
+  let releaseWork: (() => void) | undefined
   try {
+    if (resources) {
+      resources.assertResources()
+      assertRequiredExpectedProjectPath(resources.canonicalRoot, fs.realpathSync.native(projectPath))
+      releaseWork = resources.acquireWork()
+    }
+    const importProjectPath = resources?.canonicalRoot ?? projectPath
     const embeddingOptions = normalizeEmbeddingOptions(model.embeddingOptions)
     const bindingHash = createHash('sha256').update(JSON.stringify({
       contentHash: createHash('sha256').update(text, 'utf8').digest('hex'),
@@ -621,14 +672,16 @@ export async function importReferenceText(
       modelName: model.modelName ?? '',
       embeddingOptions,
     })).digest('hex')
-    const flightKey = `${referenceImportProjectIdentity(projectPath)}\0${documentId}`
+    // Legacy and captured calls share native work; this identity does not grant legacy background access.
+    const flightEpoch = resources?.executionEpoch ?? projectRuntimeHost.getActiveView()?.executionEpoch
+    const flightKey = `${referenceImportProjectIdentity(importProjectPath)}\0${documentId}\0${flightEpoch ?? ''}`
     return await runReferenceImportSingleFlight(
       flightKey,
       bindingHash,
       authority,
       assertAuthority => {
         const assertCurrentAuthority = () => {
-          assertRequiredExpectedProjectPath(getCurrentProjectPath(), projectPath)
+          if (!resources) assertRequiredExpectedProjectPath(getCurrentProjectPath(), projectPath)
           assertAuthority()
         }
         return performReferenceTextImport(
@@ -636,15 +689,19 @@ export async function importReferenceText(
           fileName,
           stableKey,
           documentId,
-          projectPath,
+          importProjectPath,
           protocol,
           model,
           assertCurrentAuthority,
+          resources,
         )
       },
     )
   } catch (error) {
     return { success: false, ...knowledgeFailureDetails(error) }
+  } finally {
+    // The lease covers shared-flight waiting and real local cleanup, not just logical authority.
+    releaseWork?.()
   }
 }
 

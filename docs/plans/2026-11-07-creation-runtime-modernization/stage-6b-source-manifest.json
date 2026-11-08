@@ -1,0 +1,46 @@
+{
+  "parent": "6d208dfbd92c69f6d90f2df0d5346ce991aaf926",
+  "stage": "6B",
+  "files": [
+    {
+      "path": "electron/repositories/import-run-repository.ts",
+      "sha256": "C461783F7FCFABB2D2A1F9572347522C3116E3A5E26F3557E0358795534F81CF"
+    },
+    {
+      "path": "electron/repositories/__tests__/import-run-captured-runtime.test.ts",
+      "sha256": "33BC2820085C697180841D404F06A5F63979E1E69D1E079044158DEC9C6B3D55"
+    },
+    {
+      "path": "electron/knowledge-base.ts",
+      "sha256": "8A64207A5DD7723EB3676BCDDD3EC19229FC36D4BE37DEE3D1E2A84810AAEC93"
+    },
+    {
+      "path": "electron/__tests__/knowledge-base-captured-runtime.test.ts",
+      "sha256": "2397CB630E9A604F74087442AFB4F725CE8B91D25E6F1884994E9540810AE446"
+    },
+    {
+      "path": "electron/repositories/import-global-facts-repository.ts",
+      "sha256": "2721260BFA8136CF6CB3DD35D6787CAA052C4F879CDABC06078F01BB42816948"
+    },
+    {
+      "path": "electron/repositories/blueprint-repository.ts",
+      "sha256": "3E0A7BE898671AACF5A0A1A0307338CE869D2C15D60A0E920FA3B1BB15A476D6"
+    },
+    {
+      "path": "electron/repositories/__tests__/import-captured-domain.test.ts",
+      "sha256": "C49E4B9D677685A17B086C9B08BB723C9BD1459AB1F5F347C4DF53ED28A9B43F"
+    },
+    {
+      "path": "electron/services/import-generation.ts",
+      "sha256": "F35B20DF519E39D2152197E16FC81EA91F2078DE1C23144435783C74685369FA"
+    },
+    {
+      "path": "electron/services/main-generation-owner.ts",
+      "sha256": "047D89E941C47610BB47CAEA3803E48A7AF35E80CDBD22C2AFF8873450C40D7F"
+    },
+    {
+      "path": "electron/services/__tests__/import-generation-captured-admission.test.ts",
+      "sha256": "68528049288F86EAE78506E6020863652D3876AE48C6FE9618A1E21B54124640"
+    }
+  ]
+}

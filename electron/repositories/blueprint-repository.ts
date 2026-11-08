@@ -366,13 +366,14 @@ function readCharacterSyncOperation(
 function authoritativeCharacterSyncCompletionReceipt(
     db: NonNullable<ReturnType<typeof getProjectDb>>,
     operation: BlueprintCharacterSyncOperation,
+    captured = false,
 ): BlueprintCharacterSyncCompletionReceipt {
     if (hasCharacterIdentitySchema(db)) {
         const proposalReceipt = findCharacterProposalEvidence(db, { kind: 'directory', operationId: operation.operationId },
           (projectId, source) => proveCharacterProposal(db, new GenerationRunRepository(() => db), projectId, source, false, () => {}))
         return { blueprintCommitOperationId: operation.blueprintCommitOperationId, operationId: operation.operationId, status: 'proposal-staged', proposalReceipt }
     }
-    const roster = CharacterRosterRepository.read()
+    const roster = captured ? CharacterRosterRepository.readCaptured(db) : CharacterRosterRepository.read()
     if (roster.status !== 'ready' && roster.status !== 'empty') {
         throw new Error('BLUEPRINT_CHARACTER_SYNC_ROSTER_NOT_READY')
     }
@@ -420,9 +421,10 @@ function authoritativeCharacterSyncCompletionReceipt(
 function assertAuthoritativeCharacterSyncCompletion(
     db: NonNullable<ReturnType<typeof getProjectDb>>,
     operation: BlueprintCharacterSyncOperation,
+    captured = false,
 ): void {
     if (operation.status !== 'completed' || !operation.completionReceipt) return
-    const authoritative = authoritativeCharacterSyncCompletionReceipt(db, operation)
+    const authoritative = authoritativeCharacterSyncCompletionReceipt(db, operation, captured)
     if (
         JSON.stringify(canonicalize(operation.completionReceipt))
         !== JSON.stringify(canonicalize(authoritative))
@@ -556,7 +558,8 @@ export class BlueprintRepository {
     }
 
     /** Pure read-back of the operation ledger and its currently bound range/sync evidence. */
-    static getCommittedRangeOperation(operationId: string, db = requireProjectDb()): BlueprintRangeCommitReceipt | null {
+    static getCommittedRangeOperation(operationId: string, database?: NonNullable<ReturnType<typeof getProjectDb>>): BlueprintRangeCommitReceipt | null {
+        const db = database === undefined ? requireProjectDb() : database
         if (!operationId.trim()) throw new Error('BLUEPRINT_OPERATION_ID_REQUIRED')
         ensureBlueprintCommitSchema(db)
         const operation = db.prepare(`
@@ -578,7 +581,7 @@ export class BlueprintRepository {
             characterSyncOperationId(operation.operation_id),
         )
         if (!characterSyncOperation) throw new Error('BLUEPRINT_CHARACTER_SYNC_OPERATION_MISSING')
-        assertAuthoritativeCharacterSyncCompletion(db, characterSyncOperation)
+        assertAuthoritativeCharacterSyncCompletion(db, characterSyncOperation, database !== undefined)
         return {
             mode: operation.mode,
             operationId: operation.operation_id,
@@ -600,9 +603,10 @@ export class BlueprintRepository {
     static commitRange(
         request: BlueprintRangeCommitRequest,
         assertGenerationSources?: () => void,
-        db = requireProjectDb(),
+        database?: NonNullable<ReturnType<typeof getProjectDb>>,
         fill: 'replace' | 'fill-empty' = 'replace',
     ): BlueprintRangeCommitReceipt {
+        const db = database === undefined ? requireProjectDb() : database
         assertExactRange(request)
         ensureBlueprintCommitSchema(db)
         const payloadHash = commitPayloadHash(request)
@@ -629,7 +633,7 @@ export class BlueprintRepository {
                     characterSyncOperationId(existingOperation.operation_id),
                 )
                 if (!characterSyncOperation) throw new Error('BLUEPRINT_CHARACTER_SYNC_OPERATION_MISSING')
-                assertAuthoritativeCharacterSyncCompletion(db, characterSyncOperation)
+                assertAuthoritativeCharacterSyncCompletion(db, characterSyncOperation, database !== undefined)
                 return {
                     mode: existingOperation.mode,
                     operationId: existingOperation.operation_id,
@@ -729,8 +733,8 @@ export class BlueprintRepository {
     }
 
     /** Lists durable post-commit work that can be resumed after an app restart. */
-    static listPendingCharacterSyncOperations(): BlueprintCharacterSyncOperation[] {
-        const db = requireProjectDb()
+    static listPendingCharacterSyncOperations(database?: NonNullable<ReturnType<typeof getProjectDb>>): BlueprintCharacterSyncOperation[] {
+        const db = database === undefined ? requireProjectDb() : database
         ensureBlueprintCommitSchema(db)
         const rows = db.prepare(`
           SELECT
@@ -752,29 +756,30 @@ export class BlueprintRepository {
         return rows.map(rowToCharacterSyncOperation)
     }
 
-    static getCharacterSyncOperation(operationId: string): BlueprintCharacterSyncOperation | null {
+    static getCharacterSyncOperation(operationId: string, database?: NonNullable<ReturnType<typeof getProjectDb>>): BlueprintCharacterSyncOperation | null {
         if (!operationId.trim()) throw new Error('BLUEPRINT_CHARACTER_SYNC_OPERATION_ID_REQUIRED')
-        const db = requireProjectDb()
+        const db = database === undefined ? requireProjectDb() : database
         ensureBlueprintCommitSchema(db)
         const operation = readCharacterSyncOperation(db, operationId)
-        if (operation) assertAuthoritativeCharacterSyncCompletion(db, operation)
+        if (operation) assertAuthoritativeCharacterSyncCompletion(db, operation, database !== undefined)
         return operation
     }
 
     static completeCharacterSyncOperation(
         operationId: string,
+        database?: NonNullable<ReturnType<typeof getProjectDb>>,
     ): BlueprintCharacterSyncOperation {
         if (!operationId.trim()) throw new Error('BLUEPRINT_CHARACTER_SYNC_OPERATION_ID_REQUIRED')
-        const db = requireProjectDb()
+        const db = database === undefined ? requireProjectDb() : database
         ensureBlueprintCommitSchema(db)
         const tx = db.transaction(() => {
             const operation = readCharacterSyncOperation(db, operationId)
             if (!operation) throw new Error('BLUEPRINT_CHARACTER_SYNC_OPERATION_MISSING')
             if (operation.status === 'completed') {
-                assertAuthoritativeCharacterSyncCompletion(db, operation)
+                assertAuthoritativeCharacterSyncCompletion(db, operation, database !== undefined)
                 return operation
             }
-            const completionReceipt = authoritativeCharacterSyncCompletionReceipt(db, operation)
+            const completionReceipt = authoritativeCharacterSyncCompletionReceipt(db, operation, database !== undefined)
             const result = db.prepare(`
               UPDATE blueprint_character_sync_operations
               SET
@@ -789,7 +794,7 @@ export class BlueprintRepository {
             if (!completed || completed.status !== 'completed' || !completed.completionReceipt) {
                 throw new Error('BLUEPRINT_CHARACTER_SYNC_READ_BACK_FAILED')
             }
-            assertAuthoritativeCharacterSyncCompletion(db, completed)
+            assertAuthoritativeCharacterSyncCompletion(db, completed, database !== undefined)
             return completed
         })
         return tx()

@@ -7,6 +7,7 @@ import { generationOutputContract, type GenerationAuthorInput } from '../../src/
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunSummary, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import type { CreativeStrategy } from '../../src/shared/reasoning-types'
+import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { TERMINAL_PROVIDER_FAILURE_CODES, rootBudgetExhausted, tokenLiability } from '../../src/shared/generation-contract'
 import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock, withoutDraftReconciliationArtifacts } from '../../src/shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
@@ -724,7 +725,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return { outcome: finishReason === 'stop' ? { status: 'completed', content, finishReason, receipt: details }
       : { status: 'incomplete', content, finishReason, receipt: details }, run: viewOf(repository.get(receipt.run.runId)) }
   }
-  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false, graphExecution = false, legacyExecution = false, shortOutlineRetryAttemptId?: string, planningExecution = false, driverExecution = false): Promise<MainGenerationExecuteReceipt> => {
+  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution: false | ImportRunExecutionAuthority = false, editorExecution = false, finalizationExecution = false, graphExecution = false, legacyExecution = false, shortOutlineRetryAttemptId?: string, planningExecution = false, driverExecution = false): Promise<MainGenerationExecuteReceipt> => {
     assertAdmission()
     const run = requireRun(request.handle, true)
     if (isDriverRun(run.runId) && !driverExecution && !authorFollowupRuns.has(run.runId)) throw new Error('GENERATION_WORKFLOW_DRIVER_ADMISSION_REQUIRED')
@@ -840,6 +841,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (!isDeepStrictEqual(latest.binding, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
       reviewRevisions.assertMutable(latest.runId)
       imports.assertMutable(latest)
+      if (importExecution) imports.assertExecution(latest, importExecution)
       finalizations.assertMutable(latest)
       graphs.assertMutable(latest)
       legacyRosters.assertMutable(latest)
@@ -888,7 +890,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       ...(plan.budgetDecision ? { budgetDecision: plan.budgetDecision } : {}),
       ...(run.binding.sourceManifest.importSlot || run.binding.sourceManifest.operation === 'planning-feedback' || materialDecision?.shortOutlinePromptHash || repository.readPlotOutline(run.runId) ? { replayTask: task } : {}),
       ...(reconciliationInjected ? { reconciliationInjected } : {}),
-      ...(scheduled ? { dispatchAdmission } : {}),
+      ...(scheduled || importExecution ? { dispatchAdmission } : {}),
       ...(deps.mode === 'runtime-feedback' && planningExecution ? { runtimeFeedbackAdmission: () => {
         assertAdmission()
         assertSourcesCurrent(handleOf(run))
@@ -1283,7 +1285,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (!matches) throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
     }, version)
   })
-  const imports = new ImportGeneration(deps.database, repository, deps.projectId)
+  const imports = new ImportGeneration(deps.database, repository, deps.projectId, capturedProjectPath)
   const legacyRosters = new LegacyRosterGeneration(deps.database, repository, deps.projectId, characters)
   const graphs = new GraphGeneration(deps.database, repository, deps.projectId)
   const finalizations = new FinalizationGeneration(deps.database, repository, deps.projectId, characters, deps.transferOrigin)
@@ -2101,12 +2103,12 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const count = deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) as number
       if (count !== request.ordinal) throw new Error('GENERATION_IMPORT_ORDINAL_GAP')
       imports.assertMutable(run)
-      imports.assertExecution(run, request.execution)
+      const execution = imports.assertExecution(run, request.execution)
       const previous = repository.budget(run.rootActionId).attempts.map(attempt => repository.receipt(attempt.attemptId)).filter(receipt => receipt.run.runId === run.runId)
       if (previous.some(receipt => receipt.result?.finishReason !== 'stop')) throw new Error('GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
       imports.abandonIfRootStopped(run)
       const current = viewOf(run).nonReplayable ? await resume(request.handle) : viewOf(run)
-      return execute({ handle: current.handle, invocationNonce, task: request.task }, false, true)
+      return execute({ handle: current.handle, invocationNonce, task: request.task }, false, execution)
     },
     characterProposals: guardWork(characters, name => /^(read|list|identitySnapshot)/u.test(name)),
     approveCharacterProposal: (request: ApproveCharacterProposalRequest) => {
