@@ -74,6 +74,8 @@ export interface ImportRunOrchestratorDependencies {
     afterChapterNumber: number,
     limit: number,
   ) => Promise<ImportRunChapterSnapshot[]>
+  /** PERF-002: Optional targeted retrieval of first 3 and last 2 representative chapters without paging all chapters. */
+  listRepresentativeChapters?: (runId: string) => Promise<ImportRunChapterSnapshot[]>
   importReference: (
     chapter: ImportRunChapterSnapshot,
     run: ImportRunSnapshot,
@@ -402,6 +404,9 @@ export class ImportRunOrchestrator {
   }
 
   private async representativeChapters(runId: string): Promise<ImportRunChapterSnapshot[]> {
+    if (this.dependencies.listRepresentativeChapters) {
+      return await this.dependencies.listRepresentativeChapters(runId)
+    }
     const first: ImportRunChapterSnapshot[] = []
     const last: ImportRunChapterSnapshot[] = []
     let after = 0

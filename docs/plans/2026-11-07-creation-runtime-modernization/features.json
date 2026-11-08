@@ -245,9 +245,18 @@
         "deterministic",
         "performance"
       ],
-      "status": "not_started",
-      "passes": false,
-      "evidence": []
+      "status": "completed",
+      "passes": true,
+      "evidence": [
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-27-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Targeted chapter sampling and range reading passed (3 suites, 37/37 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
+          "limitations": "Stream delta notification deduplication belongs to PERF-003"
+        }
+      ]
     },
     {
       "id": "PERF-003",

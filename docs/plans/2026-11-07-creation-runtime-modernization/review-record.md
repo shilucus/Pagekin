@@ -788,3 +788,26 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - Verdict: PASS (审核确认 AC-1 虚构采样与分母记录、AC-2 成本五维细分与网络等待/UI卡死区分、AC-3 候选观察目标评估与零敏感隐私安全红线全部符合设计契约).
   - PERF-001 marked completed / passes=true.
   - Total completed features: 28/35 (80.0%).
+
+### Stage 27 Review (2026-11-09): PERF-002 (拆书精确取样与范围读取)
+
+- Reviewer: Stage 27 Independent Reviewer (pro model, subagent d5c88fd3-6e8c-49f8-8b6b-18157ec6d7b9)
+- Target Feature: PERF-002
+- Evidence Inspected:
+  - ADR-0061: docs/adr/0061-import-generation-targeted-selection-and-range-reading.md
+  - Evidence Report: docs/plans/2026-11-07-creation-runtime-modernization/stage-27-evidence.md
+  - Source Files:
+    - lectron/services/import-generation-source.ts
+    - src/services/workflows/import-run-orchestrator.ts
+    - lectron/services/__tests__/import-generation-targeted-selection.test.ts
+    - lectron/services/__tests__/performance-diagnostics.test.ts
+  - Test Suite:
+    - lectron/services/__tests__/import-generation-targeted-selection.test.ts (4/4 passed)
+    - lectron/services/__tests__/performance-diagnostics.test.ts (11/11 passed)
+    - lectron/services/__tests__/import-generation.test.ts (22/22 passed)
+  - Gates:
+    - 	ypecheck exit 0, lint exit 0, check:i18n exit 0, uild exit 0.
+- Acceptance:
+  - Verdict: PASS (审核确认 AC-1 短书/首尾/缺口精确取样一致性、AC-2 小批次读取随范围增长且不信任客户端自报正文/哈希、AC-3 权威指纹校验与拦截拒绝语义完全符合契约，测试覆盖 100%).
+  - PERF-002 marked completed / passes=true.
+  - Total completed features: 29/35 (82.9%).

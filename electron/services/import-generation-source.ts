@@ -17,6 +17,81 @@ export function importGenerationSlotKey(slot: ImportGenerationSlot): string {
   validateImportGenerationSlot(slot)
   return textHash(JSON.stringify([slot.runId, slot.stage, slot.batchId]))
 }
+
+export interface TargetedImportChapterRow {
+  chapter_number: number
+  title: string
+  content_snapshot: string
+  content_fingerprint: string
+}
+
+/**
+ * PERF-002: Query only the targeted chapters from SQLite, eliminating full-book scans.
+ * Preserves exact chapter ordering, gaps, short books (<=5 chapters) and single-chapter boundaries.
+ */
+export function queryTargetedImportChapters(
+  db: Database.Database,
+  runId: string,
+  slot: ImportGenerationSlot,
+): TargetedImportChapterRow[] {
+  if (slot.stage === 'blueprints') {
+    const range = parseImportRunChapterBatchCheckpointId(slot.batchId)
+    if (!range) throw new Error('GENERATION_IMPORT_SLOT_INVALID')
+    return db.prepare(
+      'SELECT chapter_number,title,content_snapshot,content_fingerprint FROM import_run_chapters WHERE run_id=? AND chapter_number>=? AND chapter_number<=? ORDER BY chapter_number ASC',
+    ).all(runId, range.startChapter, range.endChapter) as TargetedImportChapterRow[]
+  }
+
+  const countRow = db.prepare('SELECT COUNT(*) as count FROM import_run_chapters WHERE run_id=?').get(runId) as { count: number } | undefined
+  const totalCount = countRow?.count ?? 0
+  if (totalCount === 0) return []
+
+  if (slot.stage === 'global') {
+    if (totalCount === 1) {
+      return db.prepare(
+        'SELECT chapter_number,title,content_snapshot,content_fingerprint FROM import_run_chapters WHERE run_id=? ORDER BY chapter_number ASC LIMIT 1',
+      ).all(runId) as TargetedImportChapterRow[]
+    }
+
+    const first = db.prepare(
+      'SELECT chapter_number,title,content_snapshot,content_fingerprint FROM import_run_chapters WHERE run_id=? ORDER BY chapter_number ASC LIMIT 1',
+    ).get(runId) as TargetedImportChapterRow | undefined
+
+    const last = db.prepare(
+      'SELECT chapter_number,title,content_snapshot,content_fingerprint FROM import_run_chapters WHERE run_id=? ORDER BY chapter_number DESC LIMIT 1',
+    ).get(runId) as TargetedImportChapterRow | undefined
+
+    if (!first || !last) return []
+    if (first.chapter_number === last.chapter_number) return [first]
+    return [first, last]
+  }
+
+  if (slot.stage === 'style') {
+    if (totalCount <= 5) {
+      return db.prepare(
+        'SELECT chapter_number,title,content_snapshot,content_fingerprint FROM import_run_chapters WHERE run_id=? ORDER BY chapter_number ASC',
+      ).all(runId) as TargetedImportChapterRow[]
+    }
+
+    const firstThree = db.prepare(
+      'SELECT chapter_number,title,content_snapshot,content_fingerprint FROM import_run_chapters WHERE run_id=? ORDER BY chapter_number ASC LIMIT 3',
+    ).all(runId) as TargetedImportChapterRow[]
+
+    const lastTwo = db.prepare(
+      'SELECT chapter_number,title,content_snapshot,content_fingerprint FROM import_run_chapters WHERE run_id=? ORDER BY chapter_number DESC LIMIT 2',
+    ).all(runId) as TargetedImportChapterRow[]
+
+    lastTwo.reverse()
+    const map = new Map<number, TargetedImportChapterRow>()
+    for (const row of [...firstThree, ...lastTwo]) {
+      map.set(row.chapter_number, row)
+    }
+    return [...map.values()].sort((a, b) => a.chapter_number - b.chapter_number)
+  }
+
+  return []
+}
+
 /** Read immutable import material from the captured database, not renderer samples. */
 export function captureImportGenerationContext(db: Database.Database, slot: ImportGenerationSlot): ImportGenerationContext {
   recordPerformanceCount('source.capture.calls')
@@ -33,16 +108,13 @@ function captureImportGenerationContextAuthority(db: Database.Database, slot: Im
   } | undefined
   if (!run || !/^[a-f0-9]{64}$/.test(run.manifest_fingerprint)) throw new Error('GENERATION_IMPORT_MANIFEST_REQUIRED')
   const range = slot.stage === 'blueprints' ? parseImportRunChapterBatchCheckpointId(slot.batchId) : null
-  const rows = measurePerformanceOperation('source.read.ms', () => db.prepare('SELECT chapter_number,title,content_snapshot,content_fingerprint FROM import_run_chapters WHERE run_id=? ORDER BY chapter_number').all(slot.runId)) as {
-    chapter_number: number; title: string; content_snapshot: string; content_fingerprint: string
-  }[]
-  recordPerformanceCount('source.read.chapters', rows.length)
-  recordPerformanceComputedMetric('source.read.utf8_bytes', () => rows.reduce((sum, row) => sum + Buffer.byteLength(row.content_snapshot, 'utf8'), 0))
-  const selected = measurePerformanceOperation('source.select.ms', () => range ? rows.filter(row => row.chapter_number >= range.startChapter && row.chapter_number <= range.endChapter)
-    : slot.stage === 'global' ? rows.filter((_, index) => index === 0 || index === rows.length - 1)
-      : rows.filter((_, index) => rows.length <= 5 || index < 3 || index >= rows.length - 2))
-  recordPerformanceCount(`source.selected.${slot.stage}.chapters`, selected.length)
-  recordPerformanceComputedMetric('source.selected.utf8_bytes', () => selected.reduce((sum, row) => sum + Buffer.byteLength(row.content_snapshot, 'utf8'), 0))
+  const selected = measurePerformanceOperation('source.read.ms', () => queryTargetedImportChapters(db, slot.runId, slot))
+  recordPerformanceCount('source.read.chapters', selected.length)
+  recordPerformanceComputedMetric('source.read.utf8_bytes', () => selected.reduce((sum, row) => sum + Buffer.byteLength(row.content_snapshot, 'utf8'), 0))
+  measurePerformanceOperation('source.select.ms', () => {
+    recordPerformanceCount(`source.selected.${slot.stage}.chapters`, selected.length)
+    recordPerformanceComputedMetric('source.selected.utf8_bytes', () => selected.reduce((sum, row) => sum + Buffer.byteLength(row.content_snapshot, 'utf8'), 0))
+  })
   measurePerformanceOperation('source.validate.ms', () => {
     if (!selected.length || selected.some(row => textHash(row.content_snapshot) !== row.content_fingerprint)) throw new Error('GENERATION_IMPORT_CONTENT_CHANGED')
   })

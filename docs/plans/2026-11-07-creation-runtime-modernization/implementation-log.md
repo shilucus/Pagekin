@@ -911,3 +911,28 @@ The observations below retain their chronological state. The final acceptance at
 - Acceptance:
   - PERF-001 marked completed / passes=true.
   - Completed feature count reaches 28/35 (80.0%).
+
+### Stage 27 (2026-11-09): PERF-002 - 拆书精确取样与范围读取
+
+- Target Feature: PERF-002 (拆书精确取样与范围读取)
+- Implementation Artifacts:
+  - ADR: docs/adr/0061-import-generation-targeted-selection-and-range-reading.md
+  - Source Service: lectron/services/import-generation-source.ts
+  - Workflow Orchestrator: src/services/workflows/import-run-orchestrator.ts
+  - Unit Tests: lectron/services/__tests__/import-generation-targeted-selection.test.ts
+  - Regression Tests: lectron/services/__tests__/performance-diagnostics.test.ts
+  - Stage Evidence: docs/plans/2026-11-07-creation-runtime-modernization/stage-27-evidence.md
+- Key Design & Invariants:
+  - AC-1: 短书边界（1章、2章、3章、5章、6章）取样完全正确且无重复行；章号缺口（如 2, 5, 8, 10..12, 50, 99, 100）由 SQLite ORDER BY + LIMIT 游标精确下推，绝无假定连续编号的算术错误；
+  - AC-2: 小批次正文读取量随选定范围而非全书增长；1000 章大书蓝图读取正文降幅达 99% 以上；主进程直连 SQLite 获取权威正文并校验 content_fingerprint，绝不信任 renderer 客户端自报正文或哈希；
+  - AC-3: 来源变动抛出 GENERATION_IMPORT_CONTENT_CHANGED，非法 checkpoint 抛出 GENERATION_IMPORT_CHECKPOINT_CHANGED，非法 slot 抛出 GENERATION_IMPORT_SLOT_INVALID，失败分母与拒绝语义完全保持；
+  - 向后兼容: import-run-orchestrator 对 listRepresentativeChapters 采用可选委托与平滑回退，既有工作流调用方不受破坏。
+- Actual Execution:
+  - 37 focus/contract tests passed across 3 test suites (import-generation-targeted-selection.test.ts 4/4, performance-diagnostics.test.ts 11/11, import-generation.test.ts 22/22).
+  - All quality gates passed: 	ypecheck (exit 0), lint (exit 0, ESLint 0 warnings, check-color-literals exit 0), check:i18n (exit 0), uild (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 27 Independent Reviewer (pro model, subagent d5c88fd3-6e8c-49f8-8b6b-18157ec6d7b9).
+  - Verdict: PASS (全票通过，确认 AC-1, AC-2, AC-3 均具备完备代码、单测和向后兼容保障).
+- Acceptance:
+  - PERF-002 marked completed / passes=true.
+  - Completed feature count reaches 29/35 (82.9%).

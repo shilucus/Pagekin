@@ -158,7 +158,10 @@ it.each([10, 100, 1000])('PERF-001 samples %i fixed fictional chapters through a
       expect(global.chapters.map(chapter => chapter.number)).toEqual([1, chapterCount])
       expect(style.chapters.map(chapter => chapter.number)).toEqual([1, 2, 3, chapterCount - 1, chapterCount])
       expect(blueprints.chapters.map(chapter => chapter.number)).toEqual([1, 2, 3])
-      expect(delta(reportBefore, 'source.read.utf8_bytes')).toBe(fixture.corpusBytes * 3)
+      expect(delta(reportBefore, 'source.read.utf8_bytes')).toBe(delta(reportBefore, 'source.selected.utf8_bytes'))
+      if (chapterCount > 10) {
+        expect(delta(reportBefore, 'source.read.utf8_bytes')).toBeLessThan(fixture.corpusBytes)
+      }
       console.info('PERF-001', JSON.stringify({ schemaVersion: 1, kind: 'authoritative-source-microbenchmark', chapterCount, books: 1,
         temperature, corpusHash: fixture.corpusHash, platform: process.platform, arch: process.arch, node: process.version,
         attempted: 3, failed: 0, readUtf8Bytes: delta(reportBefore, 'source.read.utf8_bytes'),
@@ -170,7 +173,11 @@ it.each([10, 100, 1000])('PERF-001 samples %i fixed fictional chapters through a
     expect(() => capture({ runId: 'synthetic-run', stage: 'global', batchId: 'done' })).toThrow('GENERATION_IMPORT_CONTENT_CHANGED')
     expect(delta(before, 'source.capture.calls')).toBe(7)
     expect(delta(before, 'source.capture.failed')).toBe(1)
-    expect(delta(before, 'source.read.chapters')).toBe(chapterCount * 7)
+    // PERF-002: Targeted selection reads only the sampled chapters (22 total across 7 calls), not 7*N whole-book chapters
+    expect(delta(before, 'source.read.chapters')).toBe(22)
+    if (chapterCount > 10) {
+      expect(delta(before, 'source.read.chapters')).toBeLessThan(chapterCount * 7)
+    }
     expect(JSON.stringify(readPerformanceDiagnostics())).not.toMatch(/Synthetic harbor|Synthetic chapter|synthetic-run/)
   } finally {
     console.info('PERF-001', JSON.stringify({ schemaVersion: 1, kind: 'authoritative-source-denominator', chapterCount,
