@@ -1283,8 +1283,8 @@
       "requiredEvidenceTypes": [
         "deterministic"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -1293,6 +1293,14 @@
           "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0; fictional isolated SQLite projects",
           "result": "Internal eight-target desktop IPC/client slice: 23 files 931/931, typecheck/lint/i18n/source build exit 0; registered production route and original/portable recovery covered",
           "limitations": "Partial FEEDBACK-002 only. Parent plus 16 frozen hashes identifies tested bytes. No stage-page mode, dirty-buffer author workflow, visible design, browser/Electron, real-model or platform acceptance; portable redacted run inputs are not reconstructed."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-7-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Planning feedback UI candidate diff adoption passed (2 suites, 25/25 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
+          "limitations": "Single-book planning targets only; batch and plot outline range feedback belong to subsequent features"
         }
       ]
     },

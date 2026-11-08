@@ -1,0 +1,129 @@
+.pf-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  max-height: 75vh;
+  overflow-y: auto;
+  padding: var(--s-1);
+}
+
+.pf-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.pf-label {
+  font-size: var(--fs-13);
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.pf-textarea {
+  width: 100%;
+  min-height: 80px;
+  resize: vertical;
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-13);
+  line-height: 1.6;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  color: var(--ink);
+  box-sizing: border-box;
+}
+
+.pf-textarea:focus {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 1px;
+}
+
+.pf-candidates-tabs {
+  display: flex;
+  gap: var(--s-2);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: var(--s-2);
+  overflow-x: auto;
+}
+
+.pf-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-1) var(--s-2);
+  font-size: var(--fs-12);
+  border-radius: var(--radius);
+  border: 1px solid var(--rule);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.pf-tab-btn[data-active='true'] {
+  background: var(--accent-soft);
+  color: var(--ink);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.pf-diff-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--s-3);
+  background: var(--surface-2);
+}
+
+.pf-diff-stats {
+  display: flex;
+  gap: var(--s-3);
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.pf-diff-stats span[data-kind='added'] {
+  color: var(--ok);
+  font-weight: 500;
+}
+
+.pf-diff-stats span[data-kind='removed'] {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.pf-diff-content {
+  font-size: var(--fs-13);
+  line-height: 1.7;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pf-diff-content ins {
+  background: var(--ok-soft);
+  box-shadow: inset 0 -1.5px 0 var(--ok);
+  color: var(--ink);
+  text-decoration: none;
+  padding: 1px 3px;
+  border-radius: var(--radius-sm);
+}
+
+.pf-diff-content del {
+  background: var(--danger-soft);
+  color: var(--ink-2);
+  text-decoration: line-through;
+  text-decoration-color: var(--danger);
+  padding: 1px 3px;
+  border-radius: var(--radius-sm);
+}
+
+.pf-actions-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}

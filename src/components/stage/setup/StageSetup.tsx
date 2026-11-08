@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
-import { ArrowRight, ChevronUp, LoaderCircle, RotateCcw, Sparkles } from 'lucide-react'
+import { ArrowRight, ChevronUp, LoaderCircle, MessageSquareQuote, RotateCcw, Sparkles } from 'lucide-react'
 import type { NovelConfig } from '../../../shared/ipc-channels'
+import type { PlanningFeedbackCoreTarget } from '../../../shared/planning-feedback'
 import { countDraftUnits } from '../../../shared/draft-units'
 import {
   DEFAULT_NARRATIVE_THREAD_DORMANT_THRESHOLD,
@@ -25,6 +26,7 @@ import { NOVEL_GENRES, novelConfigSessionKey, useNovelConfigForm } from '../../e
 import { captureProjectSession } from '../../project-session-gate'
 import { Button } from '../../ui/Button'
 import { InkDialog } from '../InkDialog'
+import { PlanningFeedbackDialog } from '../feedback/PlanningFeedbackDialog'
 import ModelMissingNotice from '../ModelMissingNotice'
 import { commandLabel } from '../shortcut-keys'
 import { useModelMissing } from '../use-model-missing'
@@ -114,6 +116,40 @@ function GenerateError({ field, label, form }: { field: GeneratableField; label:
   )
 }
 
+function FeedbackReviseButton({ target, label, currentText, onAdopt }: {
+  target: PlanningFeedbackCoreTarget
+  label: string
+  currentText: string
+  onAdopt: (text: string) => void
+}) {
+  const text = useLocaleStore(s => s.text)
+  const [open, setOpen] = useState(false)
+  if (!currentText.trim()) return null
+
+  return (
+    <>
+      <Button
+        variant="text"
+        size="sm"
+        className="stage-setup-ai"
+        aria-label={text(`针对「${label}」提修改意见`, `Revise “${label}” with feedback`)}
+        onClick={() => setOpen(true)}
+      >
+        <MessageSquareQuote size={13} aria-hidden="true" />
+        {text('意见修订', 'Revise')}
+      </Button>
+      <PlanningFeedbackDialog
+        isOpen={open}
+        target={target}
+        label={label}
+        baseText={currentText}
+        onClose={() => setOpen(false)}
+        onAdopted={onAdopt}
+      />
+    </>
+  )
+}
+
 /** 还空着的必填项写「必填」；alert 时（作者离开了空着的这一项，或只差这一项）转成危险色。 */
 function RequiredLabel({ htmlFor, id, name, missing, alert }: { htmlFor?: string; id?: string; name: string; missing: boolean; alert: boolean }) {
   const text = useLocaleStore(s => s.text)
@@ -199,7 +235,17 @@ function MorePanel({ field, config, form, aiReason, onCollapse }: {
           <label className="stage-setup-panel-title" htmlFor={controlId}>{name}</label>
           {field.kind === 'text' && <p className="stage-setup-panel-desc">{text(...field.desc)}</p>}
         </div>
-        {field.kind === 'text' && field.aiField && <AiButton field={field.aiField} label={name} form={form} disabledReason={aiReason} />}
+        {field.kind === 'text' && field.aiField && (
+          <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+            <FeedbackReviseButton
+              target={field.aiField as PlanningFeedbackCoreTarget}
+              label={name}
+              currentText={config[field.id] ?? ''}
+              onAdopt={next => form.update(field.id, next)}
+            />
+            <AiButton field={field.aiField} label={name} form={form} disabledReason={aiReason} />
+          </div>
+        )}
         <Button variant="icon" size="sm" aria-label={text(`收起「${name}」`, `Collapse “${name}”`)} onClick={onCollapse}>
           <ChevronUp size={15} aria-hidden="true" />
         </Button>
@@ -340,7 +386,15 @@ function SetupSession({ projectKey }: { projectKey: string }) {
           <section className="stage-setup-outline" data-missing={isMissing('coreOutline') || undefined}>
             <div className="stage-setup-outline-head">
               <RequiredLabel htmlFor={outlineId} name={text('核心大纲', 'Core outline')} missing={isMissing('coreOutline')} alert={alert('coreOutline')} />
-              <AiButton field="coreOutline" label={text('核心大纲', 'Core outline')} form={form} disabledReason={aiReason} />
+              <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                <FeedbackReviseButton
+                  target="coreOutline"
+                  label={text('核心大纲', 'Core outline')}
+                  currentText={config.coreOutline}
+                  onAdopt={next => form.update('coreOutline', next)}
+                />
+                <AiButton field="coreOutline" label={text('核心大纲', 'Core outline')} form={form} disabledReason={aiReason} />
+              </div>
             </div>
             <textarea
               id={outlineId}

@@ -469,4 +469,31 @@ The observations below retain their chronological state. The final acceptance at
   - `IMPORT-001` and `IMPORT-002` marked `completed` / `passes=true`.
   - Completed feature count reaches 8/35.
 
+## Stage 7: Planning Feedback Candidate Diff & Adoption UI
+
+- Parent: `f9811d75 feat(import): add novel decomposition driver vertical and fact isolation`. [ADR-0041](../../adr/0041-planning-feedback-candidate-diff-adoption-ui.md) bounds the planning feedback candidate diff and adoption UI for `FEEDBACK-002`:
+  - Single-book planning targets (`coreOutline`, `worldSetting`, `goldenFinger`, `protagonistProfile`, `globalGuidance`, `writingStyle`) provide feedback revision entrypoints in `StageSetup.tsx`.
+  - In-memory dirty buffers and unsaved form edits are preserved; unopened or unconfirmed revisions never write to formal facts.
+  - Multi-round candidate generation (`begin` -> `execute` -> `stage`) saves independent candidates to `planning_feedback_candidates` stage.
+  - Word-level Prose Diff rendered via `diffProse` with `<ins>` and `<del>` plus added/removed statistics. Lineage tabs support round switching and iterating from candidate (F0 -> C1 -> C2).
+  - Adoption strictly requires explicit author action with idempotency key, calling `client.adopt`; dismiss/close aborts cleanly with zero dirty state.
+  - Dual lease guard: `isProjectSessionCurrent` and pre/post IPC `assertSessionCurrent` prevent cross-project pollution on book switching.
+  - Strict Paper-Ink CSS tokens (`var(--rule)`, `var(--surface-*)`, `var(--ok-*)`, `var(--danger-*)`, `var(--accent-*)`) with zero raw color literals. Localized copy and error handling via `text` and `displayedErrorMessage`.
+- Implementation:
+  - `src/components/stage/feedback/PlanningFeedbackDialog.tsx`: Dialog with baseline capture, feedback input, candidate tabs, diff inspection, and atomic adoption.
+  - `src/components/stage/feedback/planning-feedback.css`: Paper-Ink styled layout and diff highlights.
+  - `src/components/stage/setup/StageSetup.tsx`: Integrated `FeedbackReviseButton` across 6 single-book planning targets.
+  - `src/services/planning-feedback-client.ts`: Exported `PlanningFeedbackClient` type.
+  - `src/components/stage/feedback/__tests__/planning-feedback-dialog.test.tsx`: Unit tests for dialog rendering, target routing, diff display, adoption isolation, and English locale.
+- Actual execution:
+  - 2 focus suites passed (25/25 tests passed): `planning-feedback-dialog.test.tsx` (5 tests), `planning-feedback-client.test.ts` (20 tests).
+  - All static and build checks passed: `typecheck` (exit 0), `lint` (exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent review:
+  - Role: Stage 7 Independent Reviewer (`pro` model).
+  - Verdict: PASS.
+- Acceptance:
+  - `FEEDBACK-002` marked `completed` / `passes=true`.
+  - Completed feature count reaches 9/35.
+
+
 

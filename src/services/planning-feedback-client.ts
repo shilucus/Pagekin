@@ -87,3 +87,5 @@ export function createPlanningFeedbackClient(sessionInput: ProjectSessionContext
   }
   return client
 }
+
+export type PlanningFeedbackClient = ReturnType<typeof createPlanningFeedbackClient>

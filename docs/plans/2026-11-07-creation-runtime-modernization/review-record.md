@@ -376,4 +376,27 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `IMPORT-001` and `IMPORT-002` marked `completed` / `passes=true`.
   - Total completed features: 8/35.
 
+## 2026-11-08 Implementation: Stage 7
+
+- Scope: Single-book planning feedback multi-round candidates and diff adoption UI for `FEEDBACK-002`.
+  - Parent: `f9811d75 feat(import): add novel decomposition driver vertical and fact isolation`.
+  - ADR: [ADR-0041](../../adr/0041-planning-feedback-candidate-diff-adoption-ui.md).
+- Team:
+  - Implementation: Planning feedback dialog component ([`PlanningFeedbackDialog.tsx`](../../../src/components/stage/feedback/PlanningFeedbackDialog.tsx)), styles ([`planning-feedback.css`](../../../src/components/stage/feedback/planning-feedback.css)), setup page integration ([`StageSetup.tsx`](../../../src/components/stage/setup/StageSetup.tsx)), client type enhancement ([`planning-feedback-client.ts`](../../../src/services/planning-feedback-client.ts)), tests ([`planning-feedback-dialog.test.tsx`](../../../src/components/stage/feedback/__tests__/planning-feedback-dialog.test.tsx)).
+  - Independent Review: Stage 7 Independent Reviewer (`pro` model).
+- Key Reviews & Findings:
+  - AC-1: All 6 single-book planning targets (`coreOutline`, `worldSetting`, `goldenFinger`, `protagonistProfile`, `globalGuidance`, `writingStyle`) have entrypoints when text is present. Form edits in memory buffers are fully preserved; unopened/unconfirmed feedback never writes to formal SQLite facts.
+  - AC-2: Candidates generated via IPC pipeline and isolated in `planning_feedback_candidates` stage. Word-level Prose Diff rendered with `<ins>` and `<del>` plus added/removed statistics. Full lineage tabs support round switching and iterating from candidate (F0 -> C1 -> C2).
+  - AC-3: Adoption strictly requires author explicit action with idempotency key; dismiss/close aborts cleanly with zero dirty state.
+  - AC-4: Dual lease check: UI gate `isProjectSessionCurrent` and client pre/post IPC `assertSessionCurrent` prevent cross-project pollution if active book switches.
+  - AC-5: Zero raw color literals; strict Paper-Ink variable tokens (`--rule`, `--surface-*`, `--ok-*`, `--danger-*`, `--accent-*`). All human-facing copy and error notices localized via `text` and `displayedErrorMessage`.
+- Actual Execution:
+  - 2 focus suites passed (25/25 tests passed): `planning-feedback-dialog.test.tsx` (5 tests), `planning-feedback-client.test.ts` (20 tests).
+  - All static checks passed: `typecheck` (exit 0), `lint` (exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Acceptance:
+  - Verdict: PASS.
+  - `FEEDBACK-002` marked `completed` / `passes=true`.
+  - Total completed features: 9/35.
+
+
 
