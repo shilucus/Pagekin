@@ -651,6 +651,29 @@ The observations below retain their chronological state. The final acceptance at
   - `IMPORT-003` marked `completed` / `passes=true`.
   - Completed feature count reaches 15/35 (42.9%).
 
+## 2026-11-08 Stage 14 (IMPORT-004)
+
+- Scope:
+  - `IMPORT-004`: Two-book imitation concurrency qualification, queue revalidation, grant revocation/conflict interception, and fault isolation.
+- Contract & ADR:
+  - ADR-0048: `0048-two-book-imitation-concurrency-qualification.md`
+  - Created `electron/services/__tests__/two-book-imitation-concurrency.test.ts`
+  - Created `docs/plans/2026-11-07-creation-runtime-modernization/stage-14-evidence.md`
+- Invariants Enforced:
+  - AC-1: Independent execution bindings for concurrent imitation tasks. Book A and Book B each bind independent projectKey, ProjectSessionContext, separate SQLite database file, distinct ImportRun and Grant instances. Switching UI view between books does not cancel or detach running imitation tasks. Reference materials, extracted styles (`writing_style`), and generated manuscript contents remain strictly isolated with zero cross-talk.
+  - AC-2: Queue revalidation and atomic conflict/revocation interception. Tasks queued behind project-level capacity limits perform atomic `assertActive` verification within SQLite immediate transactions immediately upon dequeuing. Revoked grants or revision conflicts trigger `REFERENCE_IMPORT_GRANT_INACTIVE` or `REVISION_CONFLICT`, with explicit permit reclamation (`permit.finish()`) to prevent scheduler slot leaks. Zero network dispatch or dirty database state is produced.
+  - AC-3: Fault isolation and verifiable domain receipts. Failure or quarantine of Book A imitation does not cascade to Book B or cause Book B to lose its owner or misreport success. Cancellation and recovery operations produce strictly auditable local domain receipts with incremented epoch without polluting other projects.
+- Actual Execution:
+  - 3 focus tests passed (`two-book-imitation-concurrency.test.ts`, 3/3 in 2.19s).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 14 Independent Reviewer (`pro` model, subagent `43f60a19-3fc5-4025-b8da-e16c0e6fe9ac`).
+  - Verdict: PASS.
+- Acceptance:
+  - `IMPORT-004` marked `completed` / `passes=true`.
+  - Completed feature count reaches 16/35 (45.7%).
+
+
 
 
 
