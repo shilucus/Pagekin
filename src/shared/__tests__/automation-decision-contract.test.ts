@@ -80,7 +80,7 @@ describe('automation-decision-contract', () => {
     })
 
     it('rejects invalid fields or target kinds', () => {
-      const invalidField = { ...baseRequest, targetField: 'dangerous_system_config' as any }
+      const invalidField = { ...baseRequest, targetField: 'dangerous_system_config' as unknown as 'plot_outline' }
       expect(() => validateAutomationDecisionRequest(invalidField)).toThrowError(
         AutomationDecisionError,
       )

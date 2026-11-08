@@ -29,7 +29,7 @@ describe('autonomous-creation-executor', () => {
     }
 
     const generator: ChapterGenerator = {
-      generateChapter: vi.fn(async (ch: number, _predHash?: string) => {
+      generateChapter: vi.fn(async (ch: number) => {
         return { content: `Draft prose for chapter ${ch}`, status: 'succeeded' as const }
       }),
     }

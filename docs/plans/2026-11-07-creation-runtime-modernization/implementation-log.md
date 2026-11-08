@@ -778,6 +778,24 @@ The observations below retain their chronological state. The final acceptance at
   - `AUTO-002` marked `completed` / `passes=true`.
   - Completed feature count reaches 21/35 (60.0%).
 
+### 2026-11-09 - Stage 20: Structured Preliminary Acceptance and Human Review Gate (ACCEPT-001)
+- Feature ID: `ACCEPT-001`
+- Focus: 结构化自动化初验与人审准入（execution/scope/quality）。
+- Acceptance Criteria & Gates:
+  - AC-1: 请求/保存/投影错误、越范围变化与 AI 语义意见分别记录；缺证据为 unavailable/待核实，绝不默认 PASS；
+  - AC-2: 报告绑定实际正文/规划、原始意见及决定来源；正文变化后旧报告不得继续批准新版本；
+  - AC-3: 初验能被 Agent/CLI 读取并交给作者，但不签发人审或定稿；引文可定位和 mock 通过不替代真实语义/文学评估。
+- Actual Execution:
+  - 12 focus/contract tests passed across 2 test suites (`preliminary-acceptance-contract.test.ts` 11/11, `preliminary-acceptance-service.test.ts` 1/1).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 20 Independent Reviewer (`pro` model, subagent `ad6bb07a-2dcf-445d-b76a-3e179b61c61f`).
+  - Verdict: PASS (经初审 4 项整改强化：缺证据严格 reject、medium 一致性告警纳入 needs_review、pending 投影拦截、越界字段拦截，复审一致通过)。
+- Acceptance:
+  - `ACCEPT-001` marked `completed` / `passes=true`.
+  - Completed feature count reaches 22/35 (62.9%).
+
+
 
 
 
