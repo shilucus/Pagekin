@@ -863,22 +863,26 @@ The observations below retain their chronological state. The final acceptance at
   - `MCP-001` marked `completed` / `passes=true`.
   - Completed feature count reaches 26/35 (74.3%).
 
+### Stage 25 (2026-11-09): SKILL-001 - 自动化协作 Skill 与阶段写作 Skill 衔接
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+- Target Feature: SKILL-001 (自动化协作 Skill 与阶段写作 Skill 衔接)
+- Implementation Artifacts:
+  - ADR: docs/adr/0059-automation-collaboration-skill-and-stage-writing-skill-bridge.md
+  - Shared Contract: src/shared/collaboration-skill-contract.ts
+  - Contract Unit Tests: src/shared/__tests__/collaboration-skill-contract.test.ts
+  - Electron Service: lectron/services/collaboration-skill-bridge.ts
+  - Service Unit Tests: lectron/services/__tests__/collaboration-skill-bridge.test.ts
+  - Stage Evidence: docs/plans/2026-11-07-creation-runtime-modernization/stage-25-evidence.md
+- Key Design & Invariants:
+  - AC-1: Collaboration Skill 仅暴露已交付的窄领域 API/CLI/MCP 能力、作用域与严格停止条件（STOP_PRELIMINARY_VERIFIED / STOP_SUSPENDED_NEEDS_AUTHOR / STOP_NON_RETRYABLE_UNKNOWN / STOP_FINAL_ACCEPTED）；不持秘密、不直接写 DB、不自带外部脚本执行/安装或人审越权；
+  - AC-2: 阶段写作 Skill 在首次执行时冻结其内容与 sourceHash (::)，跨轮恢复时严格比对 sourceHash，严禁静默换源与提示词漂移，作者事实与安全契约始终优先；
+  - AC-3: 收据驱动与状态机断点恢复完整衔接，以收据真实终态为凭据，严禁把静态审查误作模型行为通过。
+- Actual Execution:
+  - 9 focus/contract tests passed across 2 test suites (collaboration-skill-contract.test.ts 5/5, collaboration-skill-bridge.test.ts 4/4).
+  - All quality gates passed: 	ypecheck (exit 0), lint (exit 0, ESLint 0 warnings, check-color-literals exit 0), check:i18n (exit 0), uild (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 25 Independent Reviewer (pro model, subagent 03f481f-426a-40be-96bd-d6ef36ab97e3).
+  - Verdict: PASS (审核确认 AC-1, AC-2, AC-3 均具备完备代码、单测和静态审查门禁支持，双重事实核验完全一致).
+- Acceptance:
+  - SKILL-001 marked completed / passes=true.
+  - Completed feature count reaches 27/35 (77.1%).

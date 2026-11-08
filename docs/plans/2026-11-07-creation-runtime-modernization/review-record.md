@@ -745,21 +745,24 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `MCP-001` marked `completed` / `passes=true`.
   - Total completed features: 26/35 (74.3%).
 
+### Stage 25 Review (2026-11-09): SKILL-001 (自动化协作 Skill 与阶段写作 Skill 衔接)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+- Reviewer: Stage 25 Independent Reviewer (pro model, subagent 03f481f-426a-40be-96bd-d6ef36ab97e3)
+- Target Feature: SKILL-001
+- Evidence Inspected:
+  - ADR-0059: docs/adr/0059-automation-collaboration-skill-and-stage-writing-skill-bridge.md
+  - Evidence Report: docs/plans/2026-11-07-creation-runtime-modernization/stage-25-evidence.md
+  - Source Files:
+    - src/shared/collaboration-skill-contract.ts
+    - lectron/services/collaboration-skill-bridge.ts
+    - src/shared/__tests__/collaboration-skill-contract.test.ts
+    - lectron/services/__tests__/collaboration-skill-bridge.test.ts
+  - Test Suite:
+    - src/shared/__tests__/collaboration-skill-contract.test.ts (5/5 passed)
+    - lectron/services/__tests__/collaboration-skill-bridge.test.ts (4/4 passed)
+  - Gates:
+    - 	ypecheck exit 0, lint exit 0, check:i18n exit 0, uild exit 0.
+- Acceptance:
+  - Verdict: PASS (审核确认 AC-1 协作 Skill 窄领域暴露与明确停止条件、AC-2 阶段写作 Skill sourceHash 首次运行冻结与防静默换源、AC-3 真实收据状态机恢复对接均有严格单测与契约保障，双重事实核验完全一致).
+  - SKILL-001 marked completed / passes=true.
+  - Total completed features: 27/35 (77.1%).
