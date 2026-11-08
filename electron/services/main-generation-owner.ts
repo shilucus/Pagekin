@@ -33,6 +33,7 @@ import { GenerationDraftEffects, assertGenerationBatchIntent } from './generatio
 import { CharacterProposalService } from './character-proposal-service'
 import { proveCharacterProposal } from './generation-character-proposal-proof'
 import { compareGenerationSourceBindings, recordedModelName } from './generation-source-binding'
+import { createStreamSnapshotGuard } from './stream-snapshot-guard'
 import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
 import type { PrepareDraftContextRequest, PreparedDraftContext } from '../../src/shared/generation-owner-contract'
 import { FinalizedCharacterGeneration } from './finalized-character-generation'
@@ -425,6 +426,22 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (!flight) finishPhysical()
     }
   }
+  const streamSnapshotGuard = createStreamSnapshotGuard({
+    onPublish: snapshot => {
+      deps.onSnapshot?.(snapshot)
+    },
+    readReceipt: attemptId => {
+      return measurePerformanceOperation('generation.receipt.ms', () => repository.receipt(attemptId))
+    },
+    snapshotOf: (receipt, visiblePurpose) => snapshotOf(receipt, visiblePurpose),
+    recordReceiptCall: () => {
+      recordPerformanceCount('generation.receipt.calls')
+    },
+    recordPublish: text => {
+      recordPerformanceCount('generation.publish.calls')
+      recordPerformanceTextBytes('generation.publish.utf8_bytes', text)
+    },
+  })
   const service = createGenerationRunService({ repository, recoveryTails, dispatch: recordedDispatch,
     assertAdmission,
     onStopRoot: abortQueuedRoot,
@@ -436,14 +453,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return isDeepStrictEqual(current, next)
     },
     onSnapshot: event => {
-      if (closed || event.storageFailed) return
-      recordPerformanceCount('generation.receipt.calls')
-      const snapshot = snapshotOf(measurePerformanceOperation('generation.receipt.ms', () => repository.receipt(event.attemptId)))
-      if (snapshot) {
-        recordPerformanceCount('generation.publish.calls')
-        recordPerformanceTextBytes('generation.publish.utf8_bytes', snapshot.text)
-        deps.onSnapshot?.({ ...snapshot, ...(event.diagnostics ? { diagnostics: event.diagnostics } : {}) })
-      }
+      if (closed) return
+      streamSnapshotGuard.handleStreamEvent(event)
     },
   })
   const recoverInterrupted = !['runtime-feedback', 'workflow-driver', 'workflow-batch'].includes(deps.mode ?? 'legacy') && deps.recoverInterrupted !== false
@@ -916,7 +927,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)
     assertCurrent()
     const snapshot = snapshotOf(receipt)
-    if (snapshot) deps.onSnapshot?.(snapshot)
+    if (snapshot) {
+      const merged = streamSnapshotGuard.mergeTerminalDiagnostics(snapshot)
+      deps.onSnapshot?.(merged)
+    }
     return outcomeOf(receipt, task)
     } finally {
       queuedExecutions.delete(key)

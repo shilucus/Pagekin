@@ -936,3 +936,22 @@ The observations below retain their chronological state. The final acceptance at
 - Acceptance:
   - PERF-002 marked completed / passes=true.
   - Completed feature count reaches 29/35 (82.9%).
+
+## 2026-11-09 - Stage 28: PERF-003 流式快照与通知去重 (Stream Snapshot Deduplication and Publish Guard)
+- Implementation Scope:
+  - ADR: docs/adr/0062-stream-snapshot-deduplication-and-publish-guard.md;
+  - Guard: electron/services/stream-snapshot-guard.ts 实现了 createStreamSnapshotGuard 状态化快照发布保护；
+  - Main Owner Integration: 在 electron/services/main-generation-owner.ts 的 onSnapshot 与 settle 链路接入去重门禁；
+  - 同 Revision 抑制: 在 durableRevision 保持不变的流式 token delta 期间，抑制重复的 SQLite repository.receipt 查询与 IPC 全文重复发送；
+  - 诊断累积合并: 在流式 delta 期间将到来的网络/首字诊断累积缓冲至 pending/cumulative 并在下一次快照或终态时合并交付；
+  - 异常防御: 严格加固回读单调性 (<= lastPublishedRevision 丢弃)，实现同 revision 不同正文的一致性分歧防御 (divergentCount++)。
+- Actual Execution:
+  - 7 focus tests passed in stream-snapshot-deduplication.test.ts; 4 suites / 115 tests regression passed;
+  - All quality gates passed: typecheck (exit 0), lint (exit 0), check:i18n (exit 0), build (exit 0).
+- Independent Review:
+  - Role: Stage 28 Independent Reviewer (pro model, subagent 0a8737a1-6cdc-4e9b-ac76-cf9815b310c2);
+  - Round 1: REJECT (提出 4 项针对性修正项：短路修复、分歧防御、单调性边界加固、单测补全);
+  - Round 2: PASS (全部 4 项完成闭环加固，单测 7/7 通过，全票通过签发 PASS).
+- Acceptance:
+  - PERF-003 marked completed / passes=true;
+  - Completed feature count reaches 30/35 (85.7%).

@@ -811,3 +811,26 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - Verdict: PASS (审核确认 AC-1 短书/首尾/缺口精确取样一致性、AC-2 小批次读取随范围增长且不信任客户端自报正文/哈希、AC-3 权威指纹校验与拦截拒绝语义完全符合契约，测试覆盖 100%).
   - PERF-002 marked completed / passes=true.
   - Total completed features: 29/35 (82.9%).
+
+## Review Record: Stage 28 - PERF-003 流式快照与通知去重 (Stream Snapshot Deduplication and Publish Guard)
+- Review Date: 2026-11-09
+- Reviewer: Stage 28 Independent Architecture & Quality Reviewer (pro model, subagent 0a8737a1-6cdc-4e9b-ac76-cf9815b310c2)
+- Scope & Evidence:
+  - ADR: docs/adr/0062-stream-snapshot-deduplication-and-publish-guard.md
+  - Evidence: docs/plans/2026-11-07-creation-runtime-modernization/stage-28-evidence.md
+  - Source Files:
+    - electron/services/stream-snapshot-guard.ts
+    - electron/services/main-generation-owner.ts
+    - electron/services/__tests__/stream-snapshot-deduplication.test.ts
+  - Test Suite:
+    - electron/services/__tests__/stream-snapshot-deduplication.test.ts (7/7 passed)
+    - electron/services/__tests__/main-generation-plan.test.ts
+    - electron/services/__tests__/main-generation-model-change.test.ts
+    - electron/services/__tests__/performance-diagnostics.test.ts (4 suites, 115/115 passed)
+  - Gates:
+    - typecheck exit 0, lint exit 0, check:i18n exit 0, build exit 0.
+- Acceptance:
+  - Round 1 Verdict: REJECT (发现 storageFailed 集成短路、正文分歧防御未启用、回读单调性判定偏宽三项防御缺口，要求针对性加固并补全单测);
+  - Round 2 Verdict: PASS (复核确认全部 4 项完成闭环加固，单测 7/7 通过，全票通过签发 PASS);
+  - PERF-003 marked completed / passes=true;
+  - Total completed features: 30/35 (85.7%).
