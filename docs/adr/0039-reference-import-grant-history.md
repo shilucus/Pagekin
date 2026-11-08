@@ -1,6 +1,8 @@
 # Reference Import Grant And Portable History Foundation
 
-Date: 2026-11-08. Status: proposed for Stage 6D. Parent: `ee03e77cfa4072c08144e16d777b817b6e87b734`.
+Date: 2026-11-08. Status: accepted only for the internal grant/history foundation, revalidated by Stage 6D1. Original parent: `ee03e77cfa4072c08144e16d777b817b6e87b734`; fresh validation parent: `413a21e4479b642e22730aa16c614c34bc9d4233`.
+
+Acceptance evidence: [Stage 6D1](../plans/2026-11-07-creation-runtime-modernization/stage-6d1-evidence.md). The prior Stage 6D record is retained with a recovery qualification and is not used as fresh acceptance. This status grants no execution capability, runner, public IPC, complete IMPORT-001/002 or future global-gate acceptance.
 
 Sources: [F2 sections 4.3-4.5 and 7.8](../plans/2026-11-07-creation-runtime-modernization/README.md), IMPORT-001/002, [ADR-0030](0030-runtime-feedback-grants.md), [ADR-0033](0033-persistent-planned-batch-review-driver.md) and [ADR-0038](0038-reference-import-stage-materials.md).
 

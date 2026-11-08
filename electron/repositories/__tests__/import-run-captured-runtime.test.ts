@@ -5,6 +5,8 @@ import type Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { getProjectDb, initProjectDatabase } from '../../database'
 import { projectRuntimeHost, type ProjectRuntime } from '../../services/project-runtime'
+import { captureReferenceImportResources } from '../../knowledge-base'
+import { readPortableRuntimeFreeze } from '../../services/portable-runtime-freeze'
 import { CharacterProposalService } from '../../services/character-proposal-service'
 import { proveCharacterProposal } from '../../services/generation-character-proposal-proof'
 import { openCanonicalProjectFixture } from '../../../test/helpers/canonical-project-fixture'
@@ -14,6 +16,7 @@ import { BlueprintRepository, type BlueprintRangeCommitReceipt } from '../bluepr
 import { GenerationRunRepository } from '../generation-run-repository'
 import { ProjectCoreRepository } from '../project-core-repository'
 import { FinalizedDraftImportRepository } from '../finalized-draft-import-repository'
+import { ReferenceImportGrantRepository } from '../reference-import-grant-repository'
 import { countDraftUnits } from '../../../src/shared/draft-units'
 import { createImportRunChapterBatchCheckpointId } from '../../../src/shared/import-run'
 import type {
@@ -360,6 +363,48 @@ describe('captured reference import runtime', () => {
     expect(ProjectCoreRepository.get(reopened.database)?.writingStyle).toBe('Fictional precise prose')
     expect(state(b.context.database)).toEqual(beforeB)
     expect(projectRuntimeHost.getActiveView()).toBe(b.runtime)
+  })
+
+  it('reads the original grant after true native reopen without reconstructing execution authority or effects', () => {
+    const repository = (runtime: ProjectRuntime) => {
+      const resources = captureReferenceImportResources(runtime)
+      return { resources, grants: new ReferenceImportGrantRepository(runtime.database, {
+        projectId: runtime.projectId, context: runtime, assertCurrent: resources.assertResources,
+        isFrozen: id => readPortableRuntimeFreeze(runtime.canonicalRoot).isFrozen('reference_import_grants', id),
+        now: () => now,
+      }) }
+    }
+    const original = repository(a.runtime)
+    const grant = original.grants.issue({ grantId: '11111111-1111-4111-8111-111111111111',
+      operationKey: '22222222-2222-4222-8222-222222222222', runId: RUN_ID,
+      manifestFingerprint: ImportRunRepository.captureReferenceGrantScope(RUN_ID, a.context).manifestFingerprint,
+      requestHash: hash('fictional-explicit-reference-authorization') })
+    const beforeA = state(a.context.database), beforeB = state(b.context.database)
+    const runBefore = a.context.database.prepare('SELECT * FROM import_runs WHERE id=?').get(RUN_ID) as Record<string, unknown>
+    projectRuntimeHost.releaseIdle(a.runtime)
+    runtimes.splice(runtimes.indexOf(a.runtime), 1)
+    expect(a.runtime.phase).toBe('closed')
+    expect(a.runtime.database.open).toBe(false)
+    expect(() => original.resources.assertResources()).toThrow('PROJECT_RUNTIME_HANDLE_INVALID')
+    expect(() => original.grants.get(grant.grantId)).toThrow('REFERENCE_IMPORT_GRANT_DATABASE_NOT_READY')
+
+    initProjectDatabase(a.runtime.canonicalRoot)
+    const reopened = projectRuntimeHost.getActiveView()!
+    runtimes.push(reopened)
+    projectRuntimeHost.activateView(b.runtime)
+    expect(reopened.database).not.toBe(a.runtime.database)
+    expect(reopened.databaseIdentity).not.toBe(a.runtime.databaseIdentity)
+    expect(reopened.executionEpoch).not.toBe(a.runtime.executionEpoch)
+    expect(reopened.projectId).toBe(a.runtime.projectId)
+    expect(() => original.resources.assertResources()).toThrow('PROJECT_RUNTIME_HANDLE_INVALID')
+    expect(repository(reopened).grants.get(grant.grantId)).toEqual(grant)
+    const runAfter = reopened.database.prepare('SELECT * FROM import_runs WHERE id=?').get(RUN_ID) as Record<string, unknown>
+    expect(runAfter.execution_epoch).toBeGreaterThan(runBefore.execution_epoch as number)
+    expect(runAfter).toEqual({ ...runBefore, execution_owner: '', execution_epoch: runAfter.execution_epoch,
+      lease_expires_at: 0, updated_at: runAfter.updated_at })
+    expect({ ...state(reopened.database), import_runs: [] }).toEqual({ ...beforeA, import_runs: [] })
+    expect(state(b.context.database)).toEqual(beforeB)
+    expect(getProjectDb()).toBe(b.context.database)
   })
 
   it('applies a requested cancel at A checkpoint without cancelling B and keeps safe resume', () => {

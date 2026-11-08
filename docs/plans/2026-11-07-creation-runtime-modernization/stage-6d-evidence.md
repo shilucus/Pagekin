@@ -2,6 +2,10 @@
 
 Date: 2026-11-08. Parent: `ee03e77cfa4072c08144e16d777b817b6e87b734`.
 
+## Recovery Qualification
+
+The sections below retain the report committed in `413a21e4479b642e22730aa16c614c34bc9d4233`. On recovery, its raw paths, frozen source manifest, build identities and stated `pro` reviewer configuration were not available for independent audit; this does not establish that the commands were never executed. Independent Stage 6D1 review found a missing schema 14 cutover projection guard and missing lifecycle/compatibility coverage. Do not use the historical PASS alone as current acceptance. [Stage 6D1 evidence](stage-6d1-evidence.md) records the repair, fresh native execution, current identities and independent re-review. The historical assertion that every fixture had realpath/link-aware cleanup was inaccurate for the two newly added fixtures; Stage 6D1 adds and executes those checks.
+
 ## Scope And Identity
 
 [ADR-0039](../../adr/0039-reference-import-grant-history.md) bounds this internal prerequisite: closed reference import grant contract, M14 schema migration, transactional repository with CAS and single-active grant rules, captured scope getter on import runs, portable project field policy classification, and two-generation portable freeze/sanitization. No new runner/capability/public IPC/UI or old v1/v2 broadening is introduced. IMPORT-001/002 remain incomplete.

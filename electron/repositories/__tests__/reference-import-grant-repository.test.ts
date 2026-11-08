@@ -9,19 +9,63 @@ import { applyM14ReferenceImportGrants } from '../../migrations/m14-reference-im
 import { readPortableRuntimeFreeze } from '../../services/portable-runtime-freeze'
 import { ReferenceImportGrantRepository, type IssueReferenceImportGrant, type ReferenceImportGrant,
   type ReferenceImportGrantRef } from '../reference-import-grant-repository'
+// @ts-expect-error The shared JavaScript fixture cleanup helper has no TypeScript declaration.
+import { removeTemporaryTree } from '../../../test/helpers/remove-temporary-tree.mjs'
 
 const handles: Database.Database[] = [], roots: string[] = []
+const temporaryParent = fs.realpathSync.native(os.tmpdir())
+const temporaryPrefix = 'pagekin-reference-grant-'
 const manifest = 'a'.repeat(64), requestHash = 'b'.repeat(64)
+
+function verifiedCleanupRoots(targets: readonly string[]): string[] {
+  const normalized = (value: string) => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value)
+  const assertChild = (parent: string, child: string) => {
+    const relative = path.relative(parent, child)
+    if (!relative || path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) {
+      throw new Error('FICTIONAL_GRANT_CLEANUP_OUTSIDE_PARENT')
+    }
+  }
+  const resolved = targets.map(target => path.resolve(target))
+  for (const root of resolved) {
+    assertChild(temporaryParent, root)
+    if (normalized(path.dirname(root)) !== normalized(temporaryParent) || !path.basename(root).startsWith(temporaryPrefix)) {
+      throw new Error('FICTIONAL_GRANT_CLEANUP_OUTSIDE_PARENT')
+    }
+    for (const directory of [temporaryParent, root]) {
+      const info = fs.lstatSync(directory)
+      if (!info.isDirectory() || info.isSymbolicLink() || normalized(fs.realpathSync.native(directory)) !== normalized(directory)) {
+        throw new Error('FICTIONAL_GRANT_CLEANUP_LINK')
+      }
+    }
+    const pending = [root]
+    while (pending.length) {
+      const directory = pending.pop()!
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const target = path.join(directory, entry.name)
+        const info = fs.lstatSync(target)
+        if (info.isSymbolicLink()) throw new Error('FICTIONAL_GRANT_CLEANUP_LINK')
+        const realTarget = fs.realpathSync.native(target)
+        if (normalized(realTarget) !== normalized(target)) throw new Error('FICTIONAL_GRANT_CLEANUP_LINK')
+        assertChild(root, realTarget)
+        if (info.isDirectory()) pending.push(target)
+      }
+    }
+  }
+  return resolved
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
   for (const db of handles.splice(0)) if (db.open) db.close()
-  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
+  const targets = verifiedCleanupRoots(roots)
+  for (const root of targets) removeTemporaryTree(root, temporaryParent)
+  roots.length = 0
 })
 
 function fixture(projectId = 'project-A') {
   const db = new Database(':memory:')
   handles.push(db)
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pagekin-reference-grant-'))
+  const root = fs.mkdtempSync(path.join(temporaryParent, temporaryPrefix))
   roots.push(root)
   fs.mkdirSync(path.join(root, '.ai-novel'))
   db.pragma('foreign_keys=ON')
@@ -62,6 +106,27 @@ function freeze(f: ReturnType<typeof fixture>, grant: ReferenceImportGrant, incl
 }
 
 describe('reference import grant captured repository', () => {
+  it('rejects cleanup targets outside the captured temporary parent or without the fixture prefix', () => {
+    expect(() => verifiedCleanupRoots([temporaryParent])).toThrow('CLEANUP_OUTSIDE_PARENT')
+    expect(() => verifiedCleanupRoots([path.resolve(temporaryParent, '..', 'not-a-grant-fixture')])).toThrow('CLEANUP_OUTSIDE_PARENT')
+    expect(() => verifiedCleanupRoots([path.join(temporaryParent, 'unrelated-fixture')])).toThrow('CLEANUP_OUTSIDE_PARENT')
+  })
+
+  it('preflights the whole cleanup set and refuses a nested symlink or junction without touching its target', () => {
+    const first = fixture(), second = fixture(), outside = fixture()
+    const link = path.join(second.root, '.ai-novel', 'linked-outside')
+    const kept = path.join(outside.root, 'kept.txt')
+    fs.writeFileSync(kept, 'fictional cleanup boundary')
+    fs.symlinkSync(outside.root, link, process.platform === 'win32' ? 'junction' : 'dir')
+    try {
+      expect(() => verifiedCleanupRoots([first.root, second.root])).toThrow('CLEANUP_LINK')
+      expect(fs.existsSync(first.root)).toBe(true)
+      expect(fs.readFileSync(kept, 'utf8')).toBe('fictional cleanup boundary')
+    } finally {
+      if (fs.lstatSync(link).isSymbolicLink()) fs.unlinkSync(link)
+    }
+  })
+
   it('issues and reads exact explicit authorization without changing import, author facts or receipts', () => {
     const f = fixture(), request = issueRequest(), before = f.db.prepare('SELECT * FROM import_runs').all()
     const grant = f.grants.issue(request)
@@ -244,13 +309,13 @@ describe('reference import grant captured repository', () => {
     expect(() => f.grants.get(grant.grantId)).toThrow('HISTORY_FROZEN')
   })
 
-  it('original-project repository reopen reads existing grant without issuing a capability or changing import execution', () => {
+  it('repository reconstruction reads existing grant without issuing a capability or changing import execution', () => {
     const f = fixture(), grant = f.grants.issue(issueRequest()), before = f.db.prepare('SELECT * FROM import_runs').all()
-    const reopened = new ReferenceImportGrantRepository(f.db, f.options)
-    expect(reopened.get(grant.grantId)).toEqual(grant)
+    const reconstructed = new ReferenceImportGrantRepository(f.db, f.options)
+    expect(reconstructed.get(grant.grantId)).toEqual(grant)
     expect(f.db.prepare('SELECT * FROM import_runs').all()).toEqual(before)
     expect(f.db.prepare('SELECT * FROM fictional_effects').all()).toEqual([])
-    expect(() => reopened.assertActive(ref(grant))).toThrow('TRANSACTION_REQUIRED')
+    expect(() => reconstructed.assertActive(ref(grant))).toThrow('TRANSACTION_REQUIRED')
   })
 
   it('rejects Promise-returning guards and closed native databases', () => {

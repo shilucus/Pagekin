@@ -394,12 +394,16 @@ it('rejects M13-only target contamination after asset migration and preserves th
   expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
 })
 
-it.each([8, 9, 10, 11, 12, 13])('checks old feedback-domain cutover from schema %s', async sourceVersion => {
- for (const mode of ['valid', 'missing', 'tampered', 'grant-pollution', 'tail-pollution', 'workflow-pollution'] as const) {
+it.each([8, 9, 10, 11, 12, 13, 14].flatMap(sourceVersion =>
+  (['valid', 'missing', 'tampered', 'grant-pollution', 'tail-pollution', 'workflow-pollution',
+    ...(sourceVersion === 14 ? ['reference-grant-pollution' as const] : [])] as const)
+    .map(mode => ({ sourceVersion, mode })),
+))('checks old feedback-domain cutover from schema $sourceVersion ($mode)', async ({ sourceVersion, mode }) => {
   const options = fixture()
   const projectionKey = sourceVersion === 8 ? 'preFeedbackDomain'
     : sourceVersion === 9 ? 'preFeedbackRangesDomain' : sourceVersion === 10 ? 'preGrantsDomain'
-      : sourceVersion === 11 ? 'preRecoveryTailsDomain' : sourceVersion === 12 ? 'preWorkflowDriverDomain' : 'preWorkflowBatchDomain'
+      : sourceVersion === 11 ? 'preRecoveryTailsDomain' : sourceVersion === 12 ? 'preWorkflowDriverDomain'
+        : sourceVersion === 13 ? 'preWorkflowBatchDomain' : 'preReferenceImportGrantsDomain'
   let tailInput: PreserveGenerationTailInput | undefined
   let workflowRunId: string | undefined
   const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -518,6 +522,27 @@ it.each([8, 9, 10, 11, 12, 13])('checks old feedback-domain cutover from schema 
       return receipt
     }
   }
+  if (mode === 'reference-grant-pollution') {
+    const migrateAssets = options.dependencies.characterAssets.migrate
+    options.dependencies.characterAssets.migrate = async input => {
+      const receipt = await migrateAssets(input), target = new Database(input.stagingDatabasePath)
+      try {
+        target.pragma('foreign_keys = ON')
+        const runId = randomUUID(), proof = 'a'.repeat(64)
+        target.prepare(`INSERT INTO import_runs
+          (id,purpose,root_run_id,effect_namespace,source_fingerprint,manifest_fingerprint,locale,total_chapters,manifest_chapter_count)
+          VALUES(?,'reference',?,'fictional-staging-reference',?,?,'en-US',1,1)`).run(runId, runId, proof, proof)
+        target.prepare(`INSERT INTO reference_import_grants
+          (grant_id,operation_key,project_id,import_run_id,revision,action,manifest_fingerprint,request_hash,
+           state,decision_source,created_at,completed_at,revoked_at)
+          VALUES(?,?,?,?,1,'reference-import-v1',?,?,'active','author-action',100,NULL,NULL)`)
+          .run(randomUUID(), randomUUID(), options.projectId, runId, proof, proof)
+      } finally { target.close() }
+      const injected = verifyProjectSqlite({ databasePath: input.stagingDatabasePath })
+      expect(injected.assetMigrationDomain?.tableCounts.reference_import_grants).toBe(1)
+      return receipt
+    }
+  }
   const checkpoints: string[] = []
   const result = await migrateProjectFormat({ ...options, checkpoint: stage => { checkpoints.push(stage) } })
   expect(captured.upgraded?.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
@@ -526,13 +551,13 @@ it.each([8, 9, 10, 11, 12, 13])('checks old feedback-domain cutover from schema 
   else expect(captured.upgraded?.domain).toEqual(before.domain)
   expect(captured.upgraded?.domain.tableCounts.planning_feedback_core_revision).toBe(1)
   if (mode !== 'valid') {
-    expect(result, JSON.stringify({ sourceVersion, mode, result, checkpoints })).toMatchObject({ state: 'blocked', code: mode === 'grant-pollution' || mode === 'tail-pollution' || mode === 'workflow-pollution'
+    expect(result, JSON.stringify({ sourceVersion, mode, result, checkpoints })).toMatchObject({ state: 'blocked', code: mode === 'grant-pollution' || mode === 'tail-pollution' || mode === 'workflow-pollution' || mode === 'reference-grant-pollution'
       ? 'PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED' : 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' })
     expect(checkpoints).not.toContain('legacy-renamed')
     expect(checkpoints).not.toContain('target-renamed')
     expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
     expect(fs.readFileSync(sourcePath)).toEqual(original)
-    continue
+    return
   }
   expect(result).toMatchObject({ state: 'ready' })
   if (result.state !== 'ready') throw new Error('old feedback fixture failed to migrate')
@@ -548,5 +573,4 @@ it.each([8, 9, 10, 11, 12, 13])('checks old feedback-domain cutover from schema 
     if (sourceVersion === 9) expect(target.prepare('SELECT base_id,scope_json FROM planning_feedback_bases').all())
       .toEqual([{ base_id: 'old-base', scope_json: null }])
   } finally { target.close() }
- }
 })

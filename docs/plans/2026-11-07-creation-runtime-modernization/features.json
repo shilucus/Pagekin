@@ -456,6 +456,22 @@
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; serial fictional canonical SQLite/Lance, no real model or network",
           "result": "Final current-byte union 38 files 1004/1004, zero failed/pending, including twenty native KB proof cases and twenty-one captured adaptor cases; current typecheck/lint/color/i18n/source build exit 0",
           "limitations": "Older failures and pre-cleanup-fix 266/736 reports retained, not summed or substituted for current bytes. No complete import, production Electron, literary quality, performance or platform qualification; IMPORT-001 remains incomplete"
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "413a21e4479b642e22730aa16c614c34bc9d4233",
+          "artifactOrReceipt": "stage-6d1-evidence.md#acceptance-and-limits",
+          "environment": "ADR-0039 internal grant/history foundation; current 31-file manifest and two independent requirements/storage and authority/lifecycle reviewers",
+          "result": "Revalidated bounded grant scope, transaction/revision/revoke ordering, portable nonreplayable history and native cutover; schema14 missing-projection guard, real reopen evidence and cleanup gaps closed",
+          "limitations": "Partial prerequisite only, not complete IMPORT-001. No private execution capability, public runner, authoritative refresh or Electron qualification; historical Stage6D untraceable pro/PASS is not reused"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "413a21e4479b642e22730aa16c614c34bc9d4233",
+          "artifactOrReceipt": "stage-6d1-evidence.md#final-native-union",
+          "environment": "Windows x64; Node24.13.0/Corepack pnpm11.11.0/Vitest4.1.12; serial fictional SQLite/Lance with 31 frozen source/test identities",
+          "result": "Current union 38 files 733/733, zero failed/pending; current typecheck/lint/color/i18n/source build exit0; actual native close/reopen, two portable generations and schema14 old-format archive compatibility",
+          "limitations": "Earlier failures retained, not summed. Current-tool-constructed old-format archive is not an immutable prior-exporter artifact. No actual Electron, complete-workflow, literary-quality, performance or platform acceptance"
         }
       ]
     },
@@ -525,6 +541,22 @@
           "environment": "Same actual final Stage 6C 38-file fictional native/deterministic union and current static/source build; not a separate imitation run",
           "result": "Shared prerequisite 1004/1004, zero failed/pending, including both-language original style materials, old style/CAS/repair/recovery and captured A/current B source isolation; current static/source build exit 0",
           "limitations": "Same overlapping evidence as IMPORT-001, not independent complete imitation/style-consumption/Electron/quality acceptance. IMPORT-002 remains in_progress/passes=false"
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "413a21e4479b642e22730aa16c614c34bc9d4233",
+          "artifactOrReceipt": "stage-6d1-evidence.md#acceptance-and-limits",
+          "environment": "Same shared reference/style grant-history prerequisite, 31-file manifest and independent reviewers as IMPORT-001",
+          "result": "Accepted ADR-0039 internal scope/history foundation with fresh Stage6D1 evidence and unchanged style/reference authority separation",
+          "limitations": "Not complete imitation or saved-style consumption in target drafting; no new mode, production capability/runner, authoritative refresh, Electron or global-gate acceptance"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "413a21e4479b642e22730aa16c614c34bc9d4233",
+          "artifactOrReceipt": "stage-6d1-evidence.md#final-native-union",
+          "environment": "Same actual final Stage6D1 fictional native union, static checks and source build; not a separate imitation execution",
+          "result": "Shared prerequisite 38 files 733/733, zero failed/pending; native scope/reopen, frozen history/new lineage, exact current15 and historical schema compatibility passed",
+          "limitations": "Same overlapping report as IMPORT-001, not a second feature acceptance or actual style-consumption/Electron/quality result. IMPORT-002 stays in_progress/passes=false"
         }
       ]
     },

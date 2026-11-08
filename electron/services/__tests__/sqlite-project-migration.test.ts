@@ -508,6 +508,20 @@ it('preserves the exact schema 13 pre-batch domain and retains a failed M13 copy
  for (const table of ['workflow_batch_tasks','workflow_batch_steps','workflow_batch_effects']) expect(upgraded.domain.tableCounts[table]).toBeUndefined()
  expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
 })
+it('preserves the exact schema 14 domain and retains a failed M14 copy for retry', async () => {
+ const f=fixture()
+ const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:14})
+ const original=fs.readFileSync(f.target), registry=getDesktopMigrationRegistry()
+ const failing={...registry,implementations:registry.implementations.map(step=>step.id==='M14'
+  ? {...step,migrate:(reader: Parameters<typeof step.migrate>[0])=>{step.migrate(reader);throw new Error('reference-grant-migration-interruption')}} : step)}
+ expect(()=>upgradeProjectSqlite({databasePath:f.target,registry:failing})).toThrow('reference-grant-migration-interruption')
+ expect(probeProjectSqlite({databasePath:f.target})).toEqual(before)
+ expect(fs.readFileSync(f.target)).toEqual(original)
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.preReferenceImportGrantsDomain).toEqual(before.domain)
+ expect(upgraded.domain.tableCounts.reference_import_grants).toBeUndefined()
+ expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
 it('rolls back a failed grants migration and retains the schema 10 author copy for retry', async () => {
  const f=fixture()
  const before=await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:10})
