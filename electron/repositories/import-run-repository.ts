@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type Database from 'better-sqlite3'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import { countDraftUnits } from '../../src/shared/draft-units'
 
@@ -860,16 +861,17 @@ function normalizeChapters(
   return normalized
 }
 
-function readRunRow(runId: string): ImportRunRow | undefined {
-  return db().prepare('SELECT * FROM import_runs WHERE id = ?').get(runId) as ImportRunRow | undefined
+function readRunRow(runId: string, database: Database.Database = db()): ImportRunRow | undefined {
+  return database.prepare('SELECT * FROM import_runs WHERE id = ?').get(runId) as ImportRunRow | undefined
 }
 
 function assertExecutionAuthority(
   runId: string,
   authority: ImportRunExecutionAuthority,
   now = Date.now(),
+  database: Database.Database = db(),
 ): ImportRunRow {
-  const row = readRunRow(runId)
+  const row = readRunRow(runId, database)
   if (
     !row
     || row.status !== 'running'
@@ -1447,8 +1449,9 @@ export class ImportRunRepository {
     runId: string,
     authority: ImportRunExecutionAuthority,
     now = Date.now(),
+    database: Database.Database = db(),
   ): void {
-    assertExecutionAuthority(runId, authority, now)
+    assertExecutionAuthority(runId, authority, now, database)
   }
 
   static resolveReferenceImportAuthority(
@@ -1456,6 +1459,7 @@ export class ImportRunRepository {
     authority: ImportRunExecutionAuthority,
     chapterNumber: number,
     now = Date.now(),
+    database: Database.Database = db(),
   ): {
     chapterNumber: number
     title: string
@@ -1463,7 +1467,7 @@ export class ImportRunRepository {
     contentFingerprint: string
     stableKey: string
   } {
-    const run = assertExecutionAuthority(runId, authority, now)
+    const run = assertExecutionAuthority(runId, authority, now, database)
     if (
       run.purpose !== 'reference'
       || run.stage !== 'knowledge'
@@ -1473,7 +1477,7 @@ export class ImportRunRepository {
       throw new Error('IMPORT_RUN_REFERENCE_UNBOUND')
     }
     if (run.cancel_requested === 1) throw new Error('IMPORT_RUN_CANCELLED')
-    const chapter = db().prepare(`
+    const chapter = database.prepare(`
       SELECT source_id, source_chapter_number, title, content_fingerprint, content_size, content_snapshot
       FROM import_run_chapters
       WHERE run_id = ? AND chapter_number = ?
@@ -1507,14 +1511,16 @@ export class ImportRunRepository {
     authority: ImportRunExecutionAuthority,
     chapterNumber: number,
     documentId: string,
+    database?: Database.Database,
   ): void {
     if (!SHA256.test(documentId)) throw new Error('IMPORT_RUN_REFERENCE_DOCUMENT_INVALID')
-    db().transaction(() => {
-      const binding = this.resolveReferenceImportAuthority(runId, authority, chapterNumber)
+    const capturedDatabase = database ?? db()
+    capturedDatabase.transaction(() => {
+      const binding = this.resolveReferenceImportAuthority(runId, authority, chapterNumber, undefined, capturedDatabase)
       const expectedDocumentId = createHash('sha256')
         .update(`reference-import:${binding.stableKey}`, 'utf8')
         .digest('hex')
-      const committedDocument = db().prepare(`
+      const committedDocument = capturedDatabase.prepare(`
         SELECT document_id, content_hash, state
         FROM import_reference_documents WHERE document_id = ?
       `).get(expectedDocumentId) as {
@@ -1528,11 +1534,11 @@ export class ImportRunRepository {
         || committedDocument.content_hash !== binding.contentFingerprint
         || committedDocument.state !== 'committed'
       ) throw new Error('IMPORT_RUN_REFERENCE_DOCUMENT_INCOMPLETE')
-      const row = db().prepare(`
+      const row = capturedDatabase.prepare(`
         SELECT source_id, source_chapter_number
         FROM import_run_chapters WHERE run_id = ? AND chapter_number = ?
       `).get(runId, chapterNumber) as { source_id: string; source_chapter_number: number }
-      const existing = db().prepare(`
+      const existing = capturedDatabase.prepare(`
         SELECT document_id, purpose, source_id, source_chapter_number, content_fingerprint, state
         FROM import_run_knowledge_receipts WHERE run_id = ? AND chapter_number = ?
       `).get(runId, chapterNumber) as {
@@ -1551,7 +1557,7 @@ export class ImportRunRepository {
         || existing.content_fingerprint !== binding.contentFingerprint
         || existing.state !== 'committed'
       )) throw new Error('IMPORT_RUN_REFERENCE_RECEIPT_CONFLICT')
-      if (!existing) db().prepare(`
+      if (!existing) capturedDatabase.prepare(`
         INSERT INTO import_run_knowledge_receipts (
           run_id, chapter_number, purpose, source_id, source_chapter_number,
           content_fingerprint, document_id, state

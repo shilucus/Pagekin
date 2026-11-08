@@ -1,0 +1,26 @@
+{
+  "parent": "590a6ba6c9f5f607cde0224b7402940d279ddf08",
+  "stage": "6A",
+  "files": [
+    {
+      "path": "electron/repositories/import-run-repository.ts",
+      "sha256": "6FBBB891462A5AC2856BF703ECA948F7AA6DB38B02E792EFE8ADDD0AC02A73BE"
+    },
+    {
+      "path": "electron/repositories/__tests__/import-run-captured-reference.test.ts",
+      "sha256": "53D67325141633E15F06704A8B0314D99F8D66E472D553B195C9053BF4F6559B"
+    },
+    {
+      "path": "electron/controllers/kb-controller.ts",
+      "sha256": "53F73674F9F10F64F4BA0FD8C184F8F1569CB419F14A77C4999C79D2D302EE82"
+    },
+    {
+      "path": "electron/controllers/__tests__/kb-controller-project-context.test.ts",
+      "sha256": "E3E7D8EBFBB40678FCA78421166CF5BCB2DFC44F4E4AC6C45397C99065009FAC"
+    },
+    {
+      "path": "electron/controllers/__tests__/kb-controller-reference-receipt-integration.test.ts",
+      "sha256": "9C8E34C3B45FBC637C6AD5F849DA1F5A4F995170E92058228260DAE5DBCA4048"
+    }
+  ]
+}

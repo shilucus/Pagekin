@@ -10,7 +10,7 @@ import type { EmbeddingModel } from '../../src/shared/embedding-options'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { mainText } from '../i18n'
-import { getCurrentProjectPath } from '../database'
+import { getCurrentProjectPath, getProjectDb } from '../database'
 import { withLegacyProjectOperation } from '../services/project-runtime-compatibility'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
@@ -370,7 +370,12 @@ export function registerKBController(
     const projectPath = getCurrentProjectPath()
     if (!projectPath) throw new Error(text('项目数据库未打开', 'The project database is not open.'))
     try {
-      const binding = ImportRunRepository.resolveReferenceImportAuthority(runId, executionAuthority, chapterNumber)
+      // Keep authority checks and the post-await receipt on the same main-process database.
+      const database = getProjectDb()
+      if (!database) throw new Error('PROJECT_NOT_OPEN')
+      const binding = ImportRunRepository.resolveReferenceImportAuthority(
+        runId, executionAuthority, chapterNumber, undefined, database,
+      )
       const fileName = referenceImportDisplayName(binding)
       const embConfig = getEmbeddingConfig()
       const protocol = embConfig?.protocol ?? 'openai'
@@ -389,7 +394,7 @@ export function registerKBController(
         )
         if (result.success && result.docId) {
           ImportRunRepository.commitReferenceImportReceipt(
-            runId, executionAuthority, chapterNumber, result.docId,
+            runId, executionAuthority, chapterNumber, result.docId, database,
           )
         }
         return explainReferenceImportFailure(result, runId)

@@ -407,7 +407,25 @@
       ],
       "rollback": "未迁入口保留切书保护；已迁链停止受理、暂停/排空，保留拆解产物及恢复收据。",
       "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "status": "in_progress", "passes": false,
+      "evidence": [
+        {
+          "type": "contract_review",
+          "sourceSha": "590a6ba6c9f5f607cde0224b7402940d279ddf08",
+          "artifactOrReceipt": "../../adr/0036-captured-reference-import-receipts.md",
+          "environment": "F2/ADR-0029/0031; five-file Stage 6A manifest; independent requirements and authority/persistence review",
+          "result": "Accepted only the trusted-main captured SQLite reference authority/receipt seam and unchanged legacy admission; not complete import workflow or global gate acceptance",
+          "limitations": "All other production stages, captured KB/vector lifetime, view switching and complete recovery/Electron qualification remain open; no new schema or persistent authority"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "590a6ba6c9f5f607cde0224b7402940d279ddf08",
+          "artifactOrReceipt": "stage-6a-evidence.md#actual-execution",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; serial fictional native SQLite and real registered handler",
+          "result": "28 files 420/420, zero failed/pending; captured A/current B authority and receipt isolation, native transaction/idempotency and actual legacy refusal; current typecheck/lint/color/i18n/source build exit 0",
+          "limitations": "Earlier 37/37 and 88/88 overlap and are not summed. Controlled heavy KB loader does not establish actual vector import, background execution or required Electron feature evidence; IMPORT-001 stays incomplete"
+        }
+      ]
     },
     {
       "id": "IMPORT-002",
@@ -426,7 +444,25 @@
       ],
       "rollback": "暂停新仿写链并保留参考/候选/领域收据，未迁模式维持旧保护；不重放未知请求。",
       "requiredEvidenceTypes": ["contract_review", "deterministic", "electron"],
-      "status": "not_started", "passes": false, "evidence": []
+      "status": "in_progress", "passes": false,
+      "evidence": [
+        {
+          "type": "contract_review",
+          "sourceSha": "590a6ba6c9f5f607cde0224b7402940d279ddf08",
+          "artifactOrReceipt": "../../adr/0036-captured-reference-import-receipts.md",
+          "environment": "Shared reference-import prerequisite only; current five-file manifest and independent requirements/authority review",
+          "result": "Accepted the same captured SQLite reference receipt seam used by the existing reference/style preparation chain; no new imitation mode or author-fact capability",
+          "limitations": "This shared prerequisite does not accept complete imitation, its actual style consumption, target-fact separation, background execution, Electron workflow or global storage/contract gates"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "590a6ba6c9f5f607cde0224b7402940d279ddf08",
+          "artifactOrReceipt": "stage-6a-evidence.md#actual-execution",
+          "environment": "Same actual Stage 6A fictional native reports; no independent imitation execution is inferred",
+          "result": "Shared prerequisite passed 28 files 420/420 with preserved reference purpose, frozen content and author-manuscript refusal; current static/source build exit 0",
+          "limitations": "This is the same overlapping shared-seam report as IMPORT-001, not a second feature acceptance or actual imitation/Electron/quality result; IMPORT-002 stays incomplete"
+        }
+      ]
     },
     {
       "id": "IMPORT-003",

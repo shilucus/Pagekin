@@ -8,6 +8,8 @@ vi.mock('../../services/project-runtime-compatibility', () => ({
 
 const mocks = vi.hoisted(() => ({
   currentProjectPath: 'C:/projects/A',
+  database: { name: 'fictional-project-A' },
+  getProjectDb: vi.fn(),
   handlers: new Map<string, IpcHandler>(),
   run: vi.fn(),
   assertCurrentProjectContext: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock('electron', () => ({
 
 vi.mock('../../database', () => ({
   getCurrentProjectPath: () => mocks.currentProjectPath,
+  getProjectDb: mocks.getProjectDb,
 }))
 
 vi.mock('../../services/project-access', () => ({
@@ -102,6 +105,7 @@ beforeAll(() => {
 beforeEach(() => {
   mocks.currentProjectPath = 'C:/projects/A'
   vi.clearAllMocks()
+  mocks.getProjectDb.mockReturnValue(mocks.database)
   mocks.readJsonFile.mockImplementation((_path: string, fallback: unknown) => fallback)
   mocks.resolveReferenceImportAuthority.mockReturnValue({
     chapterNumber: 1,
@@ -161,15 +165,16 @@ describe('knowledge-base controller project context guard', () => {
     )).resolves.toEqual({ success: true, docId: 'reference-doc' })
 
     expect(mocks.resolveReferenceImportAuthority).toHaveBeenCalledWith(
-      'run-1', authority, 1,
+      'run-1', authority, 1, undefined, mocks.database,
     )
     expect(importReferenceText).toHaveBeenCalledWith(
       'frozen text', '第1章 Chapter 1.txt', 'reference:key:1:fingerprint',
       1, 'run-1', authority, 'C:/projects/A', 'openai', expect.any(Object),
     )
     expect(mocks.commitReferenceImportReceipt).toHaveBeenCalledWith(
-      'run-1', authority, 1, 'reference-doc',
+      'run-1', authority, 1, 'reference-doc', mocks.database,
     )
+    expect(mocks.getProjectDb).toHaveBeenCalledOnce()
   })
 
   it('derives a stable, control-free bounded KB label from a long main-owned title', async () => {
