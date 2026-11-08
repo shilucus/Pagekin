@@ -54,6 +54,8 @@ export interface ExecuteGenerationRequest {
     /** Main-only admission checked inside the same immediate transaction as reserve and dispatch marking. */
     runtimeFeedbackAdmission?: () => void;
     workflowDriverAdmission?: () => void;
+    /** Scheduled requests recheck all captured execution eligibility in the reservation transaction. */
+    dispatchAdmission?: () => void;
 }
 class RuntimeFeedbackAdmissionError extends Error {
     constructor(readonly original: unknown) { super('GENERATION_RUNTIME_FEEDBACK_ADMISSION_REJECTED'); }
@@ -65,6 +67,8 @@ export interface GenerationRunServiceDependencies {
     recoveryTails?: GenerationRecoveryTailRepository;
     assertAdmission?: () => void;
     admitReservation?: <T>(operation: () => T) => T;
+    /** Main-owner queued requests have no attempt/controller yet. */
+    onStopRoot?: (rootId: string) => void;
     dispatch: (request: unknown, options: {
         signal: AbortSignal;
         onVisible: (event: VisibleGenerationEvent) => void;
@@ -147,17 +151,20 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                     ? deps.repository.reserveWorkflowDriver({ runId: request.runId, nonce: request.invocationNonce, requestHash,
                         reservedTokens: request.reservedTokens, requestedOutputTokens: request.requestedOutputTokens,
                         usagePolicy: policy, purpose: request.purpose, replayTask: request.replayTask, budgetDecision: request.budgetDecision }, () => {
-                        try { request.workflowDriverAdmission!(); } catch (error) { throw new RuntimeFeedbackAdmissionError(error); }
+                        try { request.dispatchAdmission?.(); request.workflowDriverAdmission!(); } catch (error) { throw new RuntimeFeedbackAdmissionError(error); }
                     })
                     : request.runtimeFeedbackAdmission
                     ? deps.repository.reserveRuntimeFeedback({ runId: request.runId, nonce: request.invocationNonce, requestHash,
                         reservedTokens: request.reservedTokens, requestedOutputTokens: request.requestedOutputTokens,
                         usagePolicy: policy, purpose: request.purpose, replayTask: request.replayTask, budgetDecision: request.budgetDecision }, () => {
-                        try { request.runtimeFeedbackAdmission!(); } catch (error) { throw new RuntimeFeedbackAdmissionError(error); }
+                        try { request.dispatchAdmission?.(); request.runtimeFeedbackAdmission!(); } catch (error) { throw new RuntimeFeedbackAdmissionError(error); }
                     })
                     : (deps.admitReservation ?? (operation => operation()))(() => {
-                        try { deps.assertAdmission?.(); } catch (error) { throw new RuntimeFeedbackAdmissionError(error); }
-                        return deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask, request.budgetDecision, request.reconciliationInjected);
+                        try { deps.assertAdmission?.(); request.dispatchAdmission?.(); } catch (error) { throw new RuntimeFeedbackAdmissionError(error); }
+                        const reserved = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask, request.budgetDecision, request.reconciliationInjected);
+                        if (!request.dispatchAdmission || reserved.attempt.status !== 'reserved') return reserved;
+                        deps.repository.markDispatched(reserved.attempt.attemptId);
+                        return deps.repository.receipt(reserved.attempt.attemptId);
                     });
             }
             catch (error) {
@@ -171,7 +178,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 }
                 throw error;
             }
-            if (receipt.attempt.status !== (request.runtimeFeedbackAdmission || request.workflowDriverAdmission ? 'dispatch-marked' : 'reserved'))
+            if (receipt.attempt.status !== (request.dispatchAdmission || request.runtimeFeedbackAdmission || request.workflowDriverAdmission ? 'dispatch-marked' : 'reserved'))
                 return receipt;
             const attemptId = receipt.attempt.attemptId, controller = new AbortController();
             let text = receipt.artifact!.text, durable = text, revision = receipt.artifact!.revision, storageFailed = false, streamFailed = false, terminal = false, suspended = false;
@@ -223,7 +230,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             let timedOut = false;
             try {
                 try {
-                    if (!request.runtimeFeedbackAdmission && !request.workflowDriverAdmission) deps.repository.markDispatched(attemptId);
+                    if (!request.dispatchAdmission && !request.runtimeFeedbackAdmission && !request.workflowDriverAdmission) deps.repository.markDispatched(attemptId);
                 }
                 catch (error) {
                     storageFailed = true;
@@ -384,7 +391,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
         try { return await executeOperation(request); }
         finally { recordPerformanceDuration('generation.execute.ms', started); }
     };
-    const stopRoot = (rootId: string) => { for (const item of controllers.values())
+    const stopRoot = (rootId: string) => { deps.onStopRoot?.(rootId); for (const item of controllers.values())
         if (item.rootId === rootId)
             item.controller.abort(GENERATION_STOPPED); };
     return {
@@ -454,19 +461,19 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 tailPrefixHashes.delete(attemptId);
             }
         },
-        pause: (rootId: string) => { deps.repository.pause(rootId); stopRoot(rootId); },
+        pause: (rootId: string) => { try { deps.repository.pause(rootId); } finally { stopRoot(rootId); } },
         pauseWorkflowDriver: (rootId: string) => {
             try { deps.repository.pause(rootId); }
             finally { stopRoot(rootId); }
         },
-        cancel: (rootId: string) => { deps.repository.pause(rootId, true); stopRoot(rootId); },
+        cancel: (rootId: string) => { try { deps.repository.pause(rootId, true); } finally { stopRoot(rootId); } },
         cancelRuntimeFeedback: (rootId: string) => {
             try { deps.repository.pause(rootId, true); }
             finally { stopRoot(rootId); }
         },
         resume: async (runId: string, next: RunBinding, admit?: () => void) => { const old = deps.repository.get(runId); if (!isDeepStrictEqual(old.binding.fingerprint, next.fingerprint) || old.binding.contextSnapshotId !== next.contextSnapshotId || !isDeepStrictEqual(old.binding.sourceManifest, next.sourceManifest) || !deps.validateRecovery || !await deps.validateRecovery(old.binding, next))
             throw new Error('GENERATION_RECOVERY_UNAUTHORIZED'); deps.assertAdmission?.(); deps.repository.resume(runId, next, admit); return deps.repository.get(runId); },
-        restart: (oldRootId: string, request: OpenGenerationRunRequest) => { deps.repository.pause(oldRootId, true); stopRoot(oldRootId); return deps.repository.open(request); },
+        restart: (oldRootId: string, request: OpenGenerationRunRequest) => { try { deps.repository.pause(oldRootId, true); } finally { stopRoot(oldRootId); } return deps.repository.open(request); },
         recoverInterrupted: () => deps.repository.recoverInterrupted(),
     };
 }

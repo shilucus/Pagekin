@@ -27,12 +27,69 @@ function fixture() {
     return { db, repository, open, policy, request, setNow: (value: number) => { now = value; } };
 }
 const usage: GenerationProviderUsage = { promptTokens: 50, completionTokens: 50, totalTokens: 100, reasoningTokens: 20, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true };
+describe('scheduled dispatch admission', () => {
+    it.each(['ordinary', 'runtime-feedback', 'workflow-driver'] as const)('rechecks %s eligibility and marks dispatch in one native transaction', async mode => {
+        const f = fixture(), run = f.repository.open(f.open);
+        const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ usage, finishReason: 'stop' }));
+        const admission = vi.fn(() => { expect(f.db.inTransaction).toBe(true); });
+        const modeAdmission = vi.fn(() => { expect(f.db.inTransaction).toBe(true); });
+        const markDispatched = f.repository.markDispatched.bind(f.repository);
+        const mark = vi.spyOn(f.repository, 'markDispatched').mockImplementation(attemptId => {
+            expect(f.db.inTransaction).toBe(true);
+            markDispatched(attemptId);
+        });
+        const service = createGenerationRunService({ repository: f.repository, dispatch,
+            admitReservation: operation => f.db.transaction(operation).immediate() });
+        const request = { ...f.request(run.runId), dispatchAdmission: admission,
+            ...(mode === 'runtime-feedback' ? { runtimeFeedbackAdmission: modeAdmission } : {}),
+            ...(mode === 'workflow-driver' ? { workflowDriverAdmission: modeAdmission } : {}) };
+        const result = await service.execute(request);
+        expect(result.result?.finishReason).toBe('stop');
+        expect(admission).toHaveBeenCalledTimes(1);
+        expect(modeAdmission).toHaveBeenCalledTimes(mode === 'ordinary' ? 0 : 1);
+        expect(mark).toHaveBeenCalledTimes(1);
+        await service.execute(request);
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(admission).toHaveBeenCalledTimes(1);
+    });
+    it.each(['ordinary', 'runtime-feedback', 'workflow-driver'] as const)('denies %s before reserve without poisoning the storage failure fence', async mode => {
+        const f = fixture(), run = f.repository.open(f.open), dispatch = vi.fn();
+        const service = createGenerationRunService({ repository: f.repository, dispatch,
+            admitReservation: operation => f.db.transaction(operation).immediate() });
+        await expect(service.execute({ ...f.request(run.runId), dispatchAdmission: () => {
+            expect(f.db.inTransaction).toBe(true); throw new Error('FICTIONAL_SOURCE_CHANGED');
+        }, ...(mode === 'runtime-feedback' ? { runtimeFeedbackAdmission: () => {} } : {}),
+        ...(mode === 'workflow-driver' ? { workflowDriverAdmission: () => {} } : {}) })).rejects.toThrow('FICTIONAL_SOURCE_CHANGED');
+        expect(f.repository.budget(run.rootActionId).attempts).toHaveLength(0);
+        expect(f.repository.budget(run.rootActionId).blockedCode).toBeNull();
+        expect(dispatch).not.toHaveBeenCalled();
+    });
+    it('notifies queued-root cancellation even if pause persistence throws', () => {
+        const f = fixture(), run = f.repository.open(f.open), onStopRoot = vi.fn();
+        const service = createGenerationRunService({ repository: f.repository, dispatch: vi.fn(), onStopRoot });
+        vi.spyOn(f.repository, 'pause').mockImplementation(() => { throw new Error('fictional disk failure'); });
+        expect(() => service.cancel(run.rootActionId)).toThrow('fictional disk failure');
+        expect(onStopRoot).toHaveBeenCalledExactlyOnceWith(run.rootActionId);
+    });
+    it('rolls back the reservation when the scheduled dispatch mark cannot be persisted', async () => {
+        const f = fixture(), run = f.repository.open(f.open), dispatch = vi.fn();
+        const service = createGenerationRunService({ repository: f.repository, dispatch,
+            admitReservation: operation => f.db.transaction(operation).immediate() });
+        vi.spyOn(f.repository, 'markDispatched').mockImplementation(() => {
+            expect(f.db.inTransaction).toBe(true); throw new Error('fictional mark disk failure');
+        });
+        await expect(service.execute({ ...f.request(run.runId), dispatchAdmission: () => {} })).rejects.toThrow('fictional mark disk failure');
+        expect(f.repository.budget(run.rootActionId).attempts).toHaveLength(0);
+        expect(f.repository.budget(run.rootActionId).blockedCode).toBe('GENERATION_STORAGE_FAILED');
+        expect(dispatch).not.toHaveBeenCalled();
+    });
+});
 describe('workflow driver admission', () => {
     it('keeps driver runs out of global recovery and recovers only the selected original run', () => {
         const f = fixture();
-        f.db.exec('CREATE TABLE workflow_tasks (run_id TEXT NOT NULL)');
+        f.db.exec('CREATE TABLE workflow_tasks (task_id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL UNIQUE, request_hash TEXT)');
         const run = f.repository.open(f.open), other = f.repository.open({ ...f.open, uiActionNonce: 'other' });
-        f.db.prepare('INSERT INTO workflow_tasks VALUES(?)').run(run.runId);
+        f.db.prepare('INSERT INTO workflow_tasks(task_id,run_id,request_hash) VALUES(?,?,?)').run('fictional-task', run.runId, textHash('fictional-driver-request'));
         const held = f.repository.reserve(run.runId, 'held', textHash('held'), 200, 100);
         f.repository.markDispatched(held.attempt.attemptId);
         f.repository.recoverInterrupted();

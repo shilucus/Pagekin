@@ -169,6 +169,8 @@ export class GeminiProvider implements ILLMProvider {
     const reasoning = (chunk: string) => { transport.output('reasoningEvents'); opts.onReasoning?.(chunk) }
     const inBandReasoning = new InBandReasoningStream(reasoning)
     let visibleUsage: TokenUsage | undefined
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    let failedBody: ReadableStream<Uint8Array> | null = null
     try {
       const baseUrl = model.baseUrl.replace(/\/$/, '')
       const url = `${baseUrl}/v1beta/models/${model.modelName}:streamGenerateContent?alt=sse`
@@ -206,11 +208,12 @@ export class GeminiProvider implements ILLMProvider {
 
       if (!res.ok) {
         transport.fail('HTTP_ERROR')
+        if (res.status !== 400) failedBody = res.body
         opts.onError(await providerFailureCode(res, opts.signal))
         return
       }
 
-      const reader = res.body?.getReader()
+      reader = res.body?.getReader()
       if (!reader) {
         transport.fail('RESPONSE_BODY_MISSING')
         opts.onError('LLM_STREAM_UNREADABLE')
@@ -303,6 +306,13 @@ export class GeminiProvider implements ILLMProvider {
       } else {
         opts.onError(transport.networkFailure ? 'LLM_STREAM_NETWORK_FAILED' : String(error), opts.visibleOnly ? visible.text : undefined, visibleUsage)
       }
+    } finally {
+      // Notify the outcome first; physical ownership still covers local cleanup, not remote completion.
+      try {
+        if (reader) await reader.cancel?.()
+        else await failedBody?.cancel?.()
+      } catch { /* Preserve the notified outcome if local cancellation fails. */ }
+      finally { reader?.releaseLock?.() }
     }
   }
 }

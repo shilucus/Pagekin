@@ -13,7 +13,6 @@ const CONTEXT_LENGTH_MESSAGES = [
 
 export async function providerFailureCode(response: Response, signal: AbortSignal): Promise<'LLM_CONTEXT_LENGTH_EXCEEDED' | 'LLM_REQUEST_FAILED'> {
   if (response.status !== 400) {
-    void response.body?.cancel().catch(() => {})
     return 'LLM_REQUEST_FAILED'
   }
   let body = ''

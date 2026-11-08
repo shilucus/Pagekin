@@ -61,11 +61,8 @@ export async function runWorkflowDriver(options: WorkflowDriverEngineOptions): P
       const requestHash = textHash(JSON.stringify([input.task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
       const prior = runs.findInvocation(ref.runId, bound.invocationNonce, requestHash)
       if (prior) throw new Error('WORKFLOW_DRIVER_ATTEMPT_UNRESOLVED')
-      const started = await options.withKnowledge(handle, () => {
-        current()
-        return { promise: owner.executeWorkflowDriver({ handle, invocationNonce: bound.invocationNonce!, task: input.task }) }
-      })
-      await started.promise
+      current()
+      await owner.executeWorkflowDriver({ handle, invocationNonce: bound.invocationNonce!, task: input.task })
       if (owner.read(handle).unsavedTails?.length) throw new Error('WORKFLOW_DRIVER_TAIL_UNSAVED')
       current()
       if (!repository.acknowledgeFromReceipt(ref, step.stepId)) throw new Error('WORKFLOW_DRIVER_RECEIPT_MISSING')

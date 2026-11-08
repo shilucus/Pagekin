@@ -29,6 +29,7 @@ import { projectRuntimeHost, type ProjectRuntime } from '../services/project-run
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from '../services/model-execution-lease'
 import { createMainGenerationOwner, safeGenerationModelReceipt } from '../services/main-generation-owner'
 import type { MainGenerationOwnerDependencies } from '../services/main-generation-owner'
+import { MainGenerationScheduler, type GenerationSchedulingAdmission } from '../services/generation-scheduler'
 import { RuntimeFeedbackAuthority, readRuntimeFeedbackReceipt } from '../services/runtime-feedback-authority'
 import { WorkflowDriverAuthority, readWorkflowDriverReceipt } from '../services/workflow-driver-authority'
 import { WorkflowBatchAuthority, readWorkflowBatchReceipt } from '../services/workflow-batch-authority'
@@ -60,6 +61,15 @@ const driverReceiptAuthorities = new Map<Database.Database, Set<WorkflowDriverAu
 const batchReceiptAuthorities = new Map<Database.Database, Set<WorkflowBatchAuthority>>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 const ownerRuntimes = new WeakMap<Owner, ProjectRuntime>()
+// F2 starts cross-book pressure testing at two; keep each book sequential and
+// bound waiting/stranded work independently. These are not provider quotas.
+const INITIAL_GENERATION_SCHEDULING = Object.freeze({
+  global: 2, provider: 2, credential: 2, model: 2, project: 1,
+  maxQueued: 32, maxQuarantined: 2, interactiveBurst: 1,
+})
+// Match the existing runtime's bounded local close-wait scale, not a provider
+// deadline. Keep the permit held throughout cooperative cancellation cleanup.
+const GENERATION_TRANSPORT_CLEANUP_GRACE_MS = 5_000
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
 export function assertGenerationSourcesCurrent(handle: MainGenerationRunHandle, blueprintRange?: { startChapter: number; endChapter: number }): void {
   const database = getProjectDb()
@@ -134,7 +144,11 @@ export function registerGenerationController(options: {
   modelExecutionLeases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
   applyProxyConfig: () => void
+  /** Trusted main-process composition only, never an IPC request field. */
+  scheduler?: GenerationSchedulingAdmission
 }) {
+  const scheduler = options.scheduler ?? new MainGenerationScheduler(INITIAL_GENERATION_SCHEDULING,
+    3 * (INITIAL_GENERATION_SCHEDULING.global + INITIAL_GENERATION_SCHEDULING.maxQueued + INITIAL_GENERATION_SCHEDULING.maxQuarantined))
   const activeHandlers = new Map<ProjectRuntime, number>()
   const hasPhysical = (entry: OwnerEntry | undefined) => entry?.mode === 'legacy'
     ? entry.owner.hasPhysicalInFlight() : entry?.authority.hasPhysicalInFlight() ?? false
@@ -216,6 +230,8 @@ export function registerGenerationController(options: {
       } }
     return createMainGenerationOwner({ database: runtime.database, projectId: runtime.projectId,
       projectPath: runtime.canonicalRoot, epoch, assertCurrent, assertRetirementResources: capturedResources(runtime),
+      scheduling: { admission: scheduler, projectKey: runtime.executionEpoch, quarantineAfterMs: GENERATION_TRANSPORT_CLEANUP_GRACE_MS },
+      withDispatchKnowledge: (snapshot, operation) => guardRuntimeKnowledge(runtime, snapshot, operation),
       assertAdmission: () => projectRuntimeHost.assertWorkAvailable(runtime),
       leases: options.modelExecutionLeases, loadModel: options.loadModel, beforeDispatch: options.applyProxyConfig,
       transferOrigin: () => readPortableCurrentAuthority({ database: runtime.database,
@@ -740,16 +756,13 @@ export function registerGenerationController(options: {
   })
   register('agent-generation:register-workflow', 1, (owner, request) => owner.agents.registerWorkflow(request.ref))
   register('agent-generation:commit-domain-tool', 1, (owner, request) => owner.agents.commitDomainTool(request.ref))
-  register('generation:execute', 1, async (owner, request) => {
-    const context = readActionContext(owner, request.handle)
-    // Release the short KB guard after dispatch starts; author edits during generation remain possible.
-    const started = await guardKnowledge(owner, context.knowledgeSnapshot, () => ({ result: owner.execute(request) }))
-    return started.result
+  register('generation:execute', 1, (owner, request) => {
+    readActionContext(owner, request.handle)
+    return owner.execute(request)
   })
-  register('generation:retry-draft-short-outline', 1, async (owner, request) => {
-    const context = readActionContext(owner, request.handle)
-    const started = await guardKnowledge(owner, context.knowledgeSnapshot, () => ({ result: owner.retryDraftShortOutline(request) }))
-    return started.result
+  register('generation:retry-draft-short-outline', 1, (owner, request) => {
+    readActionContext(owner, request.handle)
+    return owner.retryDraftShortOutline(request)
   })
   register('generation:read', 1, (owner, handle) => owner.read(handle))
   register('generation:compose-visible', 4, (owner, handle, ids, hash, algorithm) => owner.composeVisible(handle, ids, hash, algorithm))

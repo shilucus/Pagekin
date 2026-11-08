@@ -363,6 +363,30 @@
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; pure fictional fixtures with no provider or user data",
           "result": "Final five-file 69/69, zero failed/pending; cross-protocol model alias red/green, all network dimensions, queue/FIFO/fairness, external claim-release wakeup, cancel/grant races, independently retained quarantine/reset/close and secret-free diagnostics; typecheck/lint/color/i18n/source build exit 0",
           "limitations": "Earlier 4/5 and 65/69 failures retained with minimal fixes and fresh review. Counts overlap, not summed. Production authority/source revalidation, real two-book performance and Electron remain unexecuted for this slice."
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "4b43f3efdbd50fc085f76c68e0c84b5c29181c4b",
+          "artifactOrReceipt": "stage-5b1-evidence.md#team-and-review",
+          "environment": "Windows x64; parent plus final 19-file manifest 6C4612859CA0931CC3B3A05B3A100EDD705DEC87BD8B8685CE3BC52E927D8B66; accepted ADR-0035 slice; three independent reviewers",
+          "result": "Durable main-owner generation scheduling slice accepted: post-queue source/authority/native reserve admission, physical-finally ownership and finite cleanup quarantine, canonical cancellation, original error classification and receipt/unknown preservation; no unresolved in-scope blocker",
+          "limitations": "Not full SCHED-002. Direct LLM, embeddings, probe/discovery, other domain writers and serial/two-way performance remain open; no new public IPC, schema, visible output or persistent authority."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "4b43f3efdbd50fc085f76c68e0c84b5c29181c4b",
+          "artifactOrReceipt": "stage-5b1-evidence.md#actual-execution",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; isolated fictional SQLite/Lance and provider fixtures; serial native execution",
+          "result": "34-file 1012/1012 full impact on final production bytes; later two scene-only repairs covered by fresh three-file 56/56, lint/color and actual Electron. Typecheck, lint/color, i18n and source build exit 0. Independent reviewers matched exact old/new manifest mapping and raw reports",
+          "limitations": "Reports overlap and are not summed. The old full run did not execute later scene-test bytes. Earlier failures and minimal fixes remain recorded. No browser author-workflow, real-model quality, performance or installer qualification."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "4b43f3efdbd50fc085f76c68e0c84b5c29181c4b",
+          "artifactOrReceipt": "stage-5b1-evidence.md#actual-electron-and-fixture-repairs",
+          "environment": "Windows x64; Electron 44.9.3; unchanged frozen 8CCF14BA main build; four reviewed fake-only registered-IPC scenes and final scene identities",
+          "result": "Default production broker accepted two held fake arrivals with C zero attempts/effects before and after cancellation; A/B saved six effects each from six total requests. Normal six-request/twelve-effect, one-request unknown and real process/epoch restart with old-reference refusal/zero post-restart dispatch also passed; all normal quit and clean external/write/ignored/residual arrays",
+          "limitations": "Network observed before quit. Two preparation/counter fixture failures retained with exact actual diagnostics and fresh regression. Direct-IPC screenshots are not visible author-workflow acceptance; no remote concurrency, performance, real-model quality or platform qualification."
         }
       ]
     },

@@ -178,6 +178,7 @@ export class OpenAIProvider implements ILLMProvider {
     const inBandReasoning = new InBandReasoningStream(reasoning)
     let usage: TokenUsage | undefined
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    let failedBody: ReadableStream<Uint8Array> | null = null
     let protocolError: string | undefined
     const fail = (error: string) => {
       const visibleCandidate = opts.visibleOnly ? visible.text : this.stripThinking(fullText)
@@ -197,6 +198,7 @@ export class OpenAIProvider implements ILLMProvider {
 
       if (!res.ok) {
         transport.fail('HTTP_ERROR')
+        if (res.status !== 400) failedBody = res.body
         fail(await providerFailureCode(res, opts.signal))
         return
       }
@@ -417,9 +419,12 @@ export class OpenAIProvider implements ILLMProvider {
         fail(protocolError ?? (transport.networkFailure ? 'LLM_STREAM_NETWORK_FAILED' : 'LLM_STREAM_FAILED'))
       }
     } finally {
-      // Do not wait for a remote stream to settle before releasing the local task.
-      void reader?.cancel?.().catch(() => {})
-      reader?.releaseLock?.()
+      // Notify the outcome first; physical ownership still covers local cleanup, not remote completion.
+      try {
+        if (reader) await reader.cancel?.()
+        else await failedBody?.cancel?.()
+      } catch { /* Preserve the notified outcome if local cancellation fails. */ }
+      finally { reader?.releaseLock?.() }
     }
   }
 }

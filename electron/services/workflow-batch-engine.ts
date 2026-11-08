@@ -52,14 +52,11 @@ export async function runWorkflowBatch(options: WorkflowBatchEngineOptions): Pro
       const run = runs.get(handle.runId)
       const hash = textHash(JSON.stringify([step.input.task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
       if (runs.findInvocation(handle.runId, step.invocationNonce, hash)) throw new Error('WORKFLOW_BATCH_ATTEMPT_UNRESOLVED')
-      const started = await options.withKnowledge(handle, () => {
-        active()
-        const promise = step.kind === 'outline' && step.slot === 1
-          ? owner.retryWorkflowBatchShortOutline({ handle, failedAttemptId: step.invocationNonce!.slice('draft-short-outline-retry:'.length) })
-          : owner.executeWorkflowDriver({ handle, invocationNonce: step.invocationNonce!, task: step.input.kind === 'model' ? step.input.task : neverTask() })
-        return { promise }
-      })
-      try { await started.promise } finally { await owner.whenPhysicalIdle() }
+      active()
+      const promise = step.kind === 'outline' && step.slot === 1
+        ? owner.retryWorkflowBatchShortOutline({ handle, failedAttemptId: step.invocationNonce!.slice('draft-short-outline-retry:'.length) })
+        : owner.executeWorkflowDriver({ handle, invocationNonce: step.invocationNonce!, task: step.input.kind === 'model' ? step.input.task : neverTask() })
+      try { await promise } finally { await owner.whenPhysicalIdle() }
       if (owner.read(handle).unsavedTails?.length) throw new Error('WORKFLOW_BATCH_TAIL_UNSAVED')
       active()
       effect = repository.acknowledgeFromReceipt(ref, step.stepId)

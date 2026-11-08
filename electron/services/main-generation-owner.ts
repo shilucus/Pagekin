@@ -19,6 +19,8 @@ import type { PlanningFeedbackCoreTarget } from '../../src/shared/planning-feedb
 import type { PlanningFeedbackRunRecovery } from '../../src/shared/planning-feedback-ipc'
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
 import { createGenerationRunService, GENERATION_STOPPED, type GenerationRunServiceDependencies } from './generation-run-service'
+import type { GenerationSchedulingAdmission } from './generation-scheduler'
+import { SchedulerAdmissionError, type MainProcessSchedulerPermit, type SchedulerLane } from './main-process-scheduler'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
 import { assertSemanticGenerationTask, buildMainGenerationPlan, MAIN_GENERATION_POLICY, newMainGenerationPolicy, planningGenerationScope, readMainGenerationPolicy, type MainGenerationPlan, type MainGenerationPolicy } from './main-generation-plan'
 import { LLMFactory } from '../llm/llm-factory'
@@ -78,6 +80,10 @@ export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt):
     modelRevision: receipt.modelRevision, endpointFingerprint: receipt.endpointFingerprint, capabilityEvidence: structuredClone(receipt.capabilityEvidence) }
 }
 export interface MainGenerationOwnerDependencies {
+  /** Main-only captured runtime identity; renderer project identifiers never select scheduler groups. */
+  scheduling?: { admission: GenerationSchedulingAdmission; projectKey: string; quarantineAfterMs: number }
+  /** Verifies the original KB snapshot after queueing; the synchronous start never awaits provider cleanup. */
+  withDispatchKnowledge?: <T>(snapshot: GenerationKnowledgeSnapshot | undefined, operation: () => T) => Promise<T>
   mode?: 'legacy' | 'runtime-feedback' | 'workflow-driver' | 'workflow-batch'
   /** Disable database-wide recovery during an idle owner handoff on the same native DB. */
   recoverInterrupted?: boolean
@@ -112,7 +118,10 @@ export interface MainGenerationOwnerDependencies {
   transferOrigin?: () => string | undefined
 }
 
-interface ProviderRequest { conversationId: string; model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
+interface ScheduledDispatch { permit: MainProcessSchedulerPermit; started: boolean; finished: boolean; quarantineTimer?: ReturnType<typeof setTimeout> }
+interface ProviderRequest { conversationId: string; model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan; scheduling?: ScheduledDispatch }
+type ProviderDispatchResult = Awaited<ReturnType<GenerationRunServiceDependencies['dispatch']>>
+interface ProviderFlight { result: Promise<ProviderDispatchResult>; physical: Promise<void> }
 
 /** 回执里交给渲染端的失败码：供应商与网络失败、上下文超长，以及阻断根的活动时长用完、写入失败。 */
 const RENDERER_SAFE_FAILURE_CODES = ['GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR', ...TERMINAL_PROVIDER_FAILURE_CODES,
@@ -125,29 +134,41 @@ export function providerStreamFailureCode(error: string): 'NETWORK_ERROR' | 'GEN
     || /fetch failed|failed to fetch|network|ECONNRESET|ETIMEDOUT/iu.test(error)
     ? 'NETWORK_ERROR' : 'GENERATION_PROVIDER_FAILED'
 }
-async function dispatchProvider(value: unknown, options: Parameters<GenerationRunServiceDependencies['dispatch']>[1]) {
+function dispatchProvider(value: unknown, options: Parameters<GenerationRunServiceDependencies['dispatch']>[1]): ProviderFlight {
   const { model, task, plan, conversationId } = value as ProviderRequest
   let evidence: ProviderUsageEvidence | null = null
-  let finishReason: LLMFinishReason | null = null
-  let failureCode: string | null = null
-  await LLMFactory.getProvider(model).generateStream(model, task.messages.map(message => ({ ...message })), {
+  let settled = false
+  let resolve!: (result: ProviderDispatchResult) => void, reject!: (error: unknown) => void
+  const result = new Promise<ProviderDispatchResult>((yes, no) => { resolve = yes; reject = no })
+  const fail = (error: unknown) => { if (!settled) { settled = true; reject(error) } }
+  let transport: Promise<void>
+  try {
+  transport = LLMFactory.getProvider(model).generateStream(model, task.messages.map(message => ({ ...message })), {
     ...plan.options, conversationId, signal: options.signal, visibleOnly: true,
-    onChunk: text => options.onVisible({ kind: 'delta', text }),
-    onReasoning: options.onReasoning,
-    onDiagnostics: options.onDiagnostics,
-    onUsageEvidence: value => { evidence = value },
-    onDone: (text, _usage, reason) => { options.onVisible({ kind: 'cumulative', text }); finishReason = reason },
-    onError: error => { failureCode = providerStreamFailureCode(error) },
+    onChunk: text => { if (!settled) options.onVisible({ kind: 'delta', text }) },
+    onReasoning: text => { if (!settled) options.onReasoning?.(text) },
+    onDiagnostics: value => { if (!settled) options.onDiagnostics?.(value) },
+    onUsageEvidence: value => { if (!settled) evidence = value },
+    onDone: (text, _usage, finishReason) => {
+      if (settled) return
+      options.onVisible({ kind: 'cumulative', text })
+      settled = true
+      resolve({ finishReason, usage: evidence ? { ...evidence.usage, reasoningTokens: evidence.reasoningTokens,
+        accounting: evidence.accounting, totalIncludesReasoning: evidence.totalIncludesReasoning,
+        trusted: plan.trustedUsage && evidence.protocol === model.protocol } : null })
+    },
+    onError: error => { fail(new Error(providerStreamFailureCode(error))) },
   })
-  if (failureCode || finishReason === null) throw new Error(failureCode ?? 'GENERATION_PROVIDER_FAILED')
-  const usageEvidence = evidence as ProviderUsageEvidence | null
-  return { finishReason, usage: usageEvidence ? { ...usageEvidence.usage, reasoningTokens: usageEvidence.reasoningTokens,
-    accounting: usageEvidence.accounting, totalIncludesReasoning: usageEvidence.totalIncludesReasoning,
-    trusted: plan.trustedUsage && usageEvidence.protocol === model.protocol } : null }
+  } catch (error) { transport = Promise.reject(error) }
+  // A callback settles only the logical outcome; the actual adapter promise owns cleanup.
+  const physical = transport.then(() => { fail(new Error('GENERATION_PROVIDER_FAILED')) }, fail)
+  return { result, physical }
 }
 
 /** One owner per captured database/session. No renderer budget, lease or hash is authoritative. */
 export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies) {
+  if (deps.scheduling && (!Number.isSafeInteger(deps.scheduling.quarantineAfterMs) || deps.scheduling.quarantineAfterMs <= 0))
+    throw new Error('GENERATION_SCHEDULING_GRACE_INVALID')
   if (deps.mode === 'runtime-feedback' && !deps.runtimeFeedback) throw new Error('GENERATION_RUNTIME_FEEDBACK_ADMISSION_REQUIRED')
   const isDriverMode = deps.mode === 'workflow-driver' || deps.mode === 'workflow-batch'
   const isAuthorViewOwner = deps.mode === undefined || deps.mode === 'legacy'
@@ -193,6 +214,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const driverPreparations = new Map<string, MainGenerationRunHandle>()
   const volatileReceipts = new Map<string, GenerationExecutionReceipt>()
   const pending = new Map<string, { hash: string; promise: Promise<MainGenerationExecuteReceipt> }>()
+  const queuedExecutions = new Map<string, { rootId: string; controller: AbortController }>()
+  const abortQueuedRoot = (rootId: string) => {
+    for (const item of queuedExecutions.values()) if (item.rootId === rootId) item.controller.abort(GENERATION_STOPPED)
+  }
+  const abortAllQueued = () => { for (const item of queuedExecutions.values()) item.controller.abort(GENERATION_STOPPED) }
   const preparations = new Map<string, { binding: RunBinding; knowledgeSnapshot: GenerationKnowledgeSnapshot }>()
   let closed = false, closing = false
   const assertCurrent = () => {
@@ -342,15 +368,15 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       ...(receipt.diagnostics ? { diagnostics: receipt.diagnostics } : {}),
       revision: artifact.revision, durableRevision: artifact.revision, text: artifact.text, textHash: artifact.textHash, status, compositionEligible }
   }
-  const providerDispatch = deps.dispatch ?? dispatchProvider
   /** 还没结束的请求；关闭作品时在关库前把它们记成已取消。 */
   const unrecordedCalls = new Set<() => void>()
   let physicalDispatches = 0
   const physicalIdleWaiters = new Set<() => void>()
   /** 每次真正发出的模型请求都记入运行侧页的 AI 调用记录，每次只记一行；记录只作诊断，写不进去也不改变生成结果。 */
   const recordedDispatch: GenerationRunServiceDependencies['dispatch'] = async (request, options) => {
-    const { model, task } = request as ProviderRequest, startedAt = Date.now()
-    const record = (success: boolean, usage: Awaited<ReturnType<typeof providerDispatch>>['usage'], errorMessage?: string) => {
+    const { model, task, scheduling } = request as ProviderRequest, startedAt = Date.now()
+    if (scheduling) scheduling.started = true
+    const record = (success: boolean, usage: ProviderDispatchResult['usage'], errorMessage?: string) => {
       if (!unrecordedCalls.delete(recordCancelled)) return
       // 调用记录的「输出」与 OpenAI 一致含思考消耗；思考分开计费的协议（Gemini）在这里加回来。
       // 证据字段是供应商原样报的，不是非负整数就记为未知。
@@ -367,8 +393,27 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const recordCancelled = () => record(false, null, 'cancelled')
     unrecordedCalls.add(recordCancelled)
     physicalDispatches++
+    const finishPhysical = () => {
+      physicalDispatches--
+      if (scheduling) {
+        scheduling.finished = true
+        if (scheduling.quarantineTimer) clearTimeout(scheduling.quarantineTimer)
+        scheduling.permit.finish()
+      }
+      if (!physicalDispatches) {
+        for (const resolve of physicalIdleWaiters) resolve()
+        physicalIdleWaiters.clear()
+      }
+    }
+    let flight: ProviderFlight | undefined
     try {
-      const result = await providerDispatch(request, options)
+      let result: ProviderDispatchResult
+      if (deps.dispatch) result = await deps.dispatch(request, options)
+      else {
+        flight = dispatchProvider(request, options)
+        void flight.physical.then(finishPhysical)
+        result = await flight.result
+      }
       record(result.finishReason === 'stop', result.usage, result.finishReason === 'stop' ? undefined : `finish:${result.finishReason ?? 'unknown'}`)
       return result
     } catch (error) {
@@ -376,15 +421,12 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       else record(false, null, error instanceof Error ? error.message : String(error))
       throw error
     } finally {
-      physicalDispatches--
-      if (!physicalDispatches) {
-        for (const resolve of physicalIdleWaiters) resolve()
-        physicalIdleWaiters.clear()
-      }
+      if (!flight) finishPhysical()
     }
   }
   const service = createGenerationRunService({ repository, recoveryTails, dispatch: recordedDispatch,
     assertAdmission,
+    onStopRoot: abortQueuedRoot,
     admitReservation: operation => deps.database.transaction(operation).immediate(),
     onReasoning: event => deps.onReasoning?.({ projectId: deps.projectId, epoch: deps.epoch, ...event }),
     validateRecovery: async (previous, next) => {
@@ -778,25 +820,75 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     graphs.assertMutable(run)
     legacyRosters.assertMutable(run)
     const operation = (async () => {
-    const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
-    // 途中在设置里保存了模型是作者最常见的来源变化，单列一个码，界面才能说清是模型变了。
-    // 用冻结的模型凭据再重建一次：仍与原绑定一致才是只有模型变了；作品设定等也变了时报通用码。
-    if (!isDeepStrictEqual(current, run.binding)) throw new Error(isDeepStrictEqual(deps.rebuildBinding(run.binding, modelReceipt(run.binding)), run.binding)
-      ? 'GENERATION_SOURCE_CHANGED_MODEL' : 'GENERATION_SOURCE_CHANGED')
+    let scheduled: ScheduledDispatch | undefined
+    let queuedController: AbortController | undefined
+    try {
+    const assertFrozenSources = () => {
+      const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
+      // 途中在设置里保存了模型是作者最常见的来源变化，单列一个码，界面才能说清是模型变了。
+      // 用冻结的模型凭据再重建一次：仍与原绑定一致才是只有模型变了；作品设定等也变了时报通用码。
+      if (!isDeepStrictEqual(current, run.binding)) throw new Error(isDeepStrictEqual(deps.rebuildBinding(run.binding, modelReceipt(run.binding)), run.binding)
+        ? 'GENERATION_SOURCE_CHANGED_MODEL' : 'GENERATION_SOURCE_CHANGED')
+    }
+    assertFrozenSources()
     const leaseId = runLeases.get(run.runId)
     if (!leaseId) throw new Error('GENERATION_RESUME_REQUIRED')
     const model = deps.leases.resolve(leaseId)
+    const dispatchAdmission = () => {
+      assertAdmission()
+      const latest = requireRun(request.handle, true)
+      if (!isDeepStrictEqual(latest.binding, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
+      reviewRevisions.assertMutable(latest.runId)
+      imports.assertMutable(latest)
+      finalizations.assertMutable(latest)
+      graphs.assertMutable(latest)
+      legacyRosters.assertMutable(latest)
+      if (authorFollowupRuns.has(latest.runId) && reviewRevisions.hasUnknownDelivery(latest.runId))
+        throw new Error('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+      repository.assertPlotOutlineRequest(latest.runId, task.purpose, task)
+      if (task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE && runAttempts(latest.runId).length) {
+        if (!shortOutlineRetryAttemptId) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_ALREADY_ATTEMPTED')
+        if (!isDeepStrictEqual(task, assertShortOutlineRetryAvailable(latest, shortOutlineRetryAttemptId)))
+          throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_TASK_INVALID')
+      }
+      assertFrozenSources()
+      if (runLeases.get(latest.runId) !== leaseId) throw new Error('GENERATION_RESUME_REQUIRED')
+      const frozenModel = deps.leases.resolve(leaseId)
+      const receipt = safeGenerationModelReceipt(createModelExecutionLeaseReceipt(frozenModel, { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
+      if (!isDeepStrictEqual(receipt, modelReceipt(run.binding))) throw new Error('GENERATION_MODEL_CHANGED')
+      const budget = repository.budget(latest.rootActionId)
+      if (latest.status === 'cancelled' || budget.root.status === 'cancelled') throw new Error('GENERATION_ACTION_CANCELLED')
+      if (latest.status !== 'running' || budget.root.status !== 'active' || budget.blockedCode) throw new Error('GENERATION_DISPATCH_BLOCKED')
+      if (rootBudgetExhausted(budget.policy, budget.attempts, budget.activeElapsedMs)) throw new Error('ROOT_BUDGET_EXHAUSTED')
+      if (queuedController?.signal.aborted) throw new Error('GENERATION_CANCELLED')
+    }
+    if (deps.scheduling) {
+      queuedController = new AbortController()
+      queuedExecutions.set(key, { rootId: run.rootActionId, controller: queuedController })
+      const lane: SchedulerLane = !authorFollowupRuns.has(run.runId) && (driverExecution || isDriverRun(run.runId) || run.binding.sourceManifest.batchId
+        || run.binding.sourceManifest.batchIntent || importExecution || agentExecution || finalizationExecution) ? 'background' : 'interactive'
+      try {
+        const permit = await deps.scheduling.admission.acquire({ projectKey: deps.scheduling.projectKey, model, lane, signal: queuedController.signal })
+        scheduled = { permit, started: false, finished: false }
+      } catch (error) {
+        if (queuedController.signal.aborted && error instanceof SchedulerAdmissionError && error.code === 'SCHEDULER_CANCELLED') dispatchAdmission()
+        throw error
+      }
+    }
+    const startDispatch = () => {
+    if (scheduled) dispatchAdmission()
     const creativeStrategy = deps.database.prepare("SELECT creative_strategy FROM project_core WHERE id='main'").pluck().get() as CreativeStrategy | undefined
     const plan = buildMainGenerationPlan(model, modelReceipt(run.binding), task, repository.budget(run.rootActionId), creativeStrategy)
     deps.beforeDispatch?.()
     assertAdmission()
-    const receipt = await service.execute({ runId: run.runId, invocationNonce: request.invocationNonce, requestHash,
-      providerRequest: { model, task, plan, conversationId: run.rootActionId } satisfies ProviderRequest, reservedTokens: plan.reservedTokens,
+    return { promise: service.execute({ runId: run.runId, invocationNonce: request.invocationNonce, requestHash,
+      providerRequest: { model, task, plan, conversationId: run.rootActionId, ...(scheduled ? { scheduling: scheduled } : {}) } satisfies ProviderRequest, reservedTokens: plan.reservedTokens,
       requestedOutputTokens: plan.requestedOutputTokens, inputUpperBoundTokens: plan.inputUpperBoundTokens,
       reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy, purpose: task.purpose,
       ...(plan.budgetDecision ? { budgetDecision: plan.budgetDecision } : {}),
       ...(run.binding.sourceManifest.importSlot || run.binding.sourceManifest.operation === 'planning-feedback' || materialDecision?.shortOutlinePromptHash || repository.readPlotOutline(run.runId) ? { replayTask: task } : {}),
       ...(reconciliationInjected ? { reconciliationInjected } : {}),
+      ...(scheduled ? { dispatchAdmission } : {}),
       ...(deps.mode === 'runtime-feedback' && planningExecution ? { runtimeFeedbackAdmission: () => {
         assertAdmission()
         assertSourcesCurrent(handleOf(run))
@@ -813,12 +905,29 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         const receipt = safeGenerationModelReceipt(createModelExecutionLeaseReceipt(frozenModel, { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
         if (!isDeepStrictEqual(receipt, modelReceipt(run.binding))) throw new Error('GENERATION_MODEL_CHANGED')
       } } : {}),
-      ...(agentExecution ? { agentToolNames: (run.binding.sourceManifest.agentContext as AgentGenerationContext).input.tools.map(tool => tool.name) } : {}) })
+      ...(agentExecution ? { agentToolNames: (run.binding.sourceManifest.agentContext as AgentGenerationContext).input.tools.map(tool => tool.name) } : {}) }) }
+    }
+    const started = deps.withDispatchKnowledge
+      ? await deps.withDispatchKnowledge(run.binding.sourceManifest.knowledgeSnapshot as GenerationKnowledgeSnapshot | undefined, startDispatch)
+      : startDispatch()
+    const receipt = await started.promise
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)
     assertCurrent()
     const snapshot = snapshotOf(receipt)
     if (snapshot) deps.onSnapshot?.(snapshot)
     return outcomeOf(receipt, task)
+    } finally {
+      queuedExecutions.delete(key)
+      if (scheduled && !scheduled.started) scheduled.permit.finish()
+      else if (scheduled && !scheduled.finished) {
+        const flight = scheduled
+        // Logical cancellation can win before cooperative local cleanup finishes.
+        // Hold the permit throughout grace; only a genuinely late cleanup is parked.
+        flight.quarantineTimer = setTimeout(() => {
+          if (!flight.finished) flight.permit.quarantine()
+        }, deps.scheduling!.quarantineAfterMs)
+      }
+    }
     })()
     pending.set(key, { hash: requestHash, promise: operation })
     try { return await operation } finally { pending.delete(key) }
@@ -2153,6 +2262,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     requestProjectClose: () => {
       if (closed) return
       closing = true
+      abortAllQueued()
       const failures: unknown[] = []
       try { service.requestProjectClose() } catch (error) { failures.push(error) }
       try { agents.requestProjectClose() } catch (error) { failures.push(error) }
@@ -2179,6 +2289,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       authorFollowupRuns.clear()
       executableAuthorFollowups.clear()
       if (closed) return
+      abortAllQueued()
       for (const recordCancelled of [...unrecordedCalls]) recordCancelled()
       service.suspendForProjectClose(deps.mode === 'runtime-feedback')
       closed = true

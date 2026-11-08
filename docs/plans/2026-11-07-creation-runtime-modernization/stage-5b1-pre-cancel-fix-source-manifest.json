@@ -1,0 +1,82 @@
+{
+  "parent": "4b43f3efdbd50fc085f76c68e0c84b5c29181c4b",
+  "stage": "5B1",
+  "files": [
+    {
+      "path": "electron/controllers/generation-controller.ts",
+      "sha256": "CF1C380D14C9BA6065113354FB2AFFC28FDFF3BB6F5A3BC1DE2EE402A0F207DB"
+    },
+    {
+      "path": "electron/controllers/__tests__/generation-scheduling-controller.test.ts",
+      "sha256": "2FB5889E2641649737C6CF274FA4F8FE7A5D9DF3767BC7C417FB7E097E602B09"
+    },
+    {
+      "path": "electron/llm/openai-provider.ts",
+      "sha256": "FDAB7727EA00B2E8800C0962898C09EE97BC1AAAB5478F8B277260A106B39CCA"
+    },
+    {
+      "path": "electron/llm/anthropic-provider.ts",
+      "sha256": "1AB4B536712B892CC9E725CA960957B4CCED6B5E99815A338C4CE4DC8E77E72B"
+    },
+    {
+      "path": "electron/llm/gemini-provider.ts",
+      "sha256": "CEAA15D611691A7CE9AE3BE18E31E270BE02056224F57112788F876F26439BB9"
+    },
+    {
+      "path": "electron/llm/provider-context-length.ts",
+      "sha256": "A10303DA5BCCDD3BD9C6638DB0D425E3DC55773FAF45BBC0E7B9D4652732B823"
+    },
+    {
+      "path": "electron/llm/__tests__/provider-physical-close.test.ts",
+      "sha256": "D3F43CF3B2D1D60A4FDAE79A4703421E8CE898F91ADD5F10EC3EA98B934975EE"
+    },
+    {
+      "path": "electron/services/generation-scheduler.ts",
+      "sha256": "FA39A1714DD08928785939A5B06998D907E0A417C13E05ED1582FBB170A40636"
+    },
+    {
+      "path": "electron/services/main-generation-owner.ts",
+      "sha256": "E5A22E44EEB3A405E47FE209DAAB6B82C469A035088479D6A8AC4327EEA10756"
+    },
+    {
+      "path": "electron/services/generation-run-service.ts",
+      "sha256": "F2DBE948F1FB27C1CA786CACB0D8C0A9B326DD202CFB622F24FB31C3B298F4D9"
+    },
+    {
+      "path": "electron/services/workflow-driver-engine.ts",
+      "sha256": "EB9596FC588FD2C3C9F7EE27106F0A02499B15D74804393010464F313AE55447"
+    },
+    {
+      "path": "electron/services/workflow-batch-engine.ts",
+      "sha256": "4DDF2A084A6CAA008342ABF878E7BFB63CC3296CC9EDC616F5BD2F79A3F0F759"
+    },
+    {
+      "path": "electron/services/__tests__/generation-scheduler.test.ts",
+      "sha256": "DB95940488DDCBC19D970FFA26DD06622BFE2794ADB200A767A74021DE4DE3CF"
+    },
+    {
+      "path": "electron/services/__tests__/main-generation-owner.scheduling.test.ts",
+      "sha256": "555FBC227D393F1837617EF85835F1F7497470259CE7F0E9C3F29C5509F74B20"
+    },
+    {
+      "path": "electron/services/__tests__/generation-run-service.test.ts",
+      "sha256": "4E96186161409C27496B9CF33DA4D10F744DEAD4E0C7FA6DFC89B553D099F9E1"
+    },
+    {
+      "path": "scripts/redesign/scheduled-generation-scenario.mjs",
+      "sha256": "7FEF10C677271C5E16A6E1508A1264A440934CB2035297FF5419116BD3381F5A"
+    },
+    {
+      "path": "scripts/redesign/__tests__/scheduled-generation-scenario.test.mjs",
+      "sha256": "5CCAC0BDAE05F9872D42E206792889B1EEE1177B867CB3E6EDD8655D525D3C3C"
+    },
+    {
+      "path": "scripts/redesign/workflow-batch-scenario.mjs",
+      "sha256": "8E9A96AFD9FDD17087D7914CD59923B1068A4FEEBFE3CD916B986316E1FAE1F1"
+    },
+    {
+      "path": "scripts/redesign/__tests__/workflow-batch-scenario.test.mjs",
+      "sha256": "49CC1D1565648582ADD108DE25D11C22C31F43959BCA9643D9D6D15F8CC0D9B4"
+    }
+  ]
+}
