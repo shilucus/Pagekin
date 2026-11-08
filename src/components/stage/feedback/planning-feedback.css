@@ -139,3 +139,315 @@
   gap: var(--s-2);
   margin-top: var(--s-2);
 }
+
+/* UI-003 Extended Feedback Panels Styling */
+
+.extended-feedback-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: var(--s-2);
+}
+
+.pf-range-panel,
+.pf-blueprint-panel,
+.pf-character-panel,
+.pf-manuscript-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.pf-range-header,
+.pf-blueprint-header,
+.pf-character-header,
+.pf-manuscript-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: var(--s-2);
+}
+
+.pf-range-title {
+  margin: 0;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pf-badge-safe {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border: 1px solid var(--ok);
+}
+
+.pf-badge-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border: 1px solid var(--warn);
+}
+
+.pf-range-selectors {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+}
+
+.pf-range-label {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.pf-range-input {
+  width: 70px;
+  padding: var(--s-1) var(--s-2);
+  font-size: var(--fs-13);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--ink);
+}
+
+.pf-range-sep {
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.pf-range-items,
+.pf-blueprint-fields-list,
+.pf-character-cards-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-height: 380px;
+  overflow-y: auto;
+  padding: var(--s-1);
+}
+
+.pf-range-chapter-card,
+.pf-blueprint-field-card,
+.pf-character-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+}
+
+.pf-blueprint-field-card.is-unselected,
+.pf-character-card.is-unselected {
+  opacity: 0.6;
+  background: var(--surface-2);
+}
+
+.pf-chapter-card-header,
+.pf-blueprint-field-header,
+.pf-character-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.pf-chapter-num {
+  font-weight: 600;
+  font-size: var(--fs-13);
+  color: var(--ink);
+}
+
+.pf-chapter-title-diff {
+  font-size: var(--fs-13);
+}
+
+.pf-chapter-synopsis-diff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  font-size: var(--fs-12);
+}
+
+.pf-synopsis-label {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.pf-synopsis-content,
+.pf-diff-view,
+.pf-manuscript-diff-content {
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pf-diff-ins {
+  background: var(--ok-soft);
+  color: var(--ok);
+  text-decoration: none;
+  padding: 1px 2px;
+  border-radius: var(--radius-sm);
+}
+
+.pf-diff-del {
+  background: var(--danger-soft);
+  color: var(--danger);
+  text-decoration: line-through;
+  padding: 1px 2px;
+  border-radius: var(--radius-sm);
+}
+
+.pf-diff-eq {
+  color: var(--ink);
+}
+
+.pf-blueprint-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  cursor: pointer;
+}
+
+.pf-blueprint-field-name {
+  font-weight: 600;
+  font-size: var(--fs-13);
+  color: var(--ink);
+}
+
+.pf-blueprint-select-hint {
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.pf-character-name {
+  font-weight: 600;
+  font-size: var(--fs-13);
+  color: var(--ink);
+}
+
+.pf-character-action-badge {
+  font-size: var(--fs-11);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+
+.badge-map {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.badge-create {
+  background: var(--ok);
+  color: var(--ok-ink);
+}
+
+.pf-character-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  font-size: var(--fs-12);
+}
+
+.pf-char-attr-row {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.pf-char-attr-key {
+  color: var(--ink-2);
+  min-width: 65px;
+}
+
+.pf-warning-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  color: var(--ink);
+  font-size: var(--fs-12);
+}
+
+.pf-finalized-notice-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--danger);
+  background: var(--danger-soft);
+  border-radius: var(--radius);
+}
+
+.pf-notice-title {
+  margin: 0;
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.pf-notice-desc {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--ink);
+}
+
+.pf-read-only-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.pf-draft-merge-notice-box {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--rule);
+  background: var(--surface-1);
+  border-radius: var(--radius);
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.pf-review-snapshot-box {
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+}
+
+.pf-snapshot-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--fs-12);
+}
+
+.pf-snapshot-id {
+  color: var(--ink-2);
+}
+
+.pf-snapshot-comments {
+  font-size: var(--fs-13);
+  margin-top: var(--s-1);
+}
+
+.pf-snapshot-suggestions {
+  margin: var(--s-1) 0 0 var(--s-4);
+  padding: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+

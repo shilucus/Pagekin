@@ -457,6 +457,25 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `FEEDBACK-004` marked `completed` / `passes=true`.
   - Total completed features: 12/35 (34.3%).
 
+## 2026-11-08 Stage 11 Review (UI-003)
+
+- Scope & Invariants:
+  - Feature: `UI-003` (Extended planning feedback presentation: outline range, blueprint fields, character proposal, and manuscript review continuity).
+  - Reviewer: Stage 11 Independent Reviewer (`pro` model, subagent `c4d063b7-f5f7-46a6-bbe9-cdfe90903f3c`).
+  - Enforced Invariants:
+    1. AC-1: Independent visible evidence. Untouched badges for outside outline chapters; single-chapter isolation badges for blueprint fields; stable character ID preservation with blueprint lock protection; human review snapshot and read-only downstream impact warnings on finalized chapter reopening.
+    2. AC-2: Legal partial adoption and zero-write on illegal structures. Immediate UI validation errors and disabled adoption buttons for invalid range, unclosed character identity, or empty selection; 100% preservation of unselected content and author buffer.
+    3. AC-3: Identity and review entries preserved, full bilingual and paper-ink compliance. Separated `diff-prose-render.tsx` resolves Fast Refresh warning; synchronized validation resolves React 19 Compiler memoization conflict; 0 color literal violations in `planning-feedback.css`.
+- Actual Execution:
+  - 12/12 focus unit tests passed (`extended-planning-feedback-dialog.test.tsx`).
+  - 68/68 tests passed across 8 feedback related suites.
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Acceptance:
+  - Verdict: PASS.
+  - `UI-003` marked `completed` / `passes=true`.
+  - Total completed features: 13/35 (37.1%).
+
+
 
 
 

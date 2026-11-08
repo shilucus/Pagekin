@@ -575,6 +575,37 @@ The observations below retain their chronological state. The final acceptance at
   - `FEEDBACK-004` marked `completed` / `passes=true`.
   - Completed feature count reaches 12/35 (34.3%).
 
+## 2026-11-08 Stage 11 (UI-003)
+
+- Scope:
+  - `UI-003`: Extended planning feedback presentation to outline chapter range, blueprint fields, character proposals, and manuscript review continuity without expanding writers' authority.
+- Contract & ADR:
+  - ADR-0045: `0045-extended-feedback-ui-outline-blueprint-character-manuscript.md`
+  - Created `src/components/stage/feedback/OutlineRangeFeedbackPanel.tsx`
+  - Created `src/components/stage/feedback/BlueprintFieldFeedbackPanel.tsx`
+  - Created `src/components/stage/feedback/CharacterProposalFeedbackPanel.tsx`
+  - Created `src/components/stage/feedback/ManuscriptReviewFeedbackPanel.tsx`
+  - Created `src/components/stage/feedback/ExtendedPlanningFeedbackDialog.tsx`
+  - Created `src/components/stage/feedback/diff-prose-render.tsx`
+  - Created `src/components/stage/feedback/__tests__/extended-planning-feedback-dialog.test.tsx`
+  - Updated `src/components/stage/feedback/planning-feedback.css` (clean paper-ink tokens, 0 color literals)
+- Invariants Enforced:
+  - AC-1: Independent visible evidence. Outline range shows explicit untouched badges for outside chapters; blueprint fields show single-chapter isolation badges; character proposals show stable ID and author field preservation; manuscript review shows review snapshot and finalized reopening warning notices.
+  - AC-2: Legal partial adoption and zero write on illegal structures. Range inversions, unselected blueprint fields, or unclosed character identity closure trigger immediate UI errors and hard disable adoption buttons, ensuring zero invalid database writes.
+  - AC-3: Identity and review entry preservation with full bilingual and paper-ink design compliance. Fast refresh compliant via separate `diff-prose-render.tsx`, React 19 compiler memoization safe, and 0 color literals in CSS.
+- Actual Execution:
+  - 12/12 focus tests passed (`extended-planning-feedback-dialog.test.tsx`).
+  - 68/68 tests passed across 8 feedback related suites.
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 11 Independent Reviewer (`pro` model, subagent `c4d063b7-f5f7-46a6-bbe9-cdfe90903f3c`).
+  - Round 1: Identified Fast Refresh warning, React Compiler manual memoization conflict, and CSS color literals.
+  - Round 2 (Post-Fix): All blocking issues verified resolved. Final Verdict: PASS.
+- Acceptance:
+  - `UI-003` marked `completed` / `passes=true`.
+  - Completed feature count reaches 13/35 (37.1%).
+
+
 
 
 
