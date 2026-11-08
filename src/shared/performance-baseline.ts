@@ -92,3 +92,237 @@ export function createPerformanceBaseline() {
     },
   }
 }
+
+export interface PerformanceProvenanceMetadata {
+  corpusHash?: string
+  sampleChapters?: number
+  sampleBooks?: number
+  sourceSha?: string
+  environment?: string
+  multiBookStatus?: Array<{ books: number; status: 'executed' | 'not_executed' }>
+  attempted?: number
+  failed?: number
+}
+
+export interface CreationCostAttribution {
+  schemaVersion: 1
+  localPreparation: {
+    elapsedMs: number
+    readUtf8Bytes: number
+    readArchiveBytes: number
+    inspectCalls: number
+    inspectFailed: number
+    inspectCancelled: number
+  }
+  queueWait: {
+    queueMs: number
+    pendingCount: number
+    snapshotQueueCalls: number
+  }
+  modelExecution: {
+    providerMs: number
+    firstResponseMs: number | null
+    firstVisibleMs: number | null
+    firstReasoningMs: number | null
+    visibleEvents: number
+    reasoningEvents: number
+    physicalRequests: number
+    http429Count: number
+    inputTokens: number
+    completionTokens: number
+    reasoningTokens: number
+    totalTokens: number
+    isNetworkWaiting: boolean
+  }
+  parsingComputation: {
+    parseMs: number
+    hashMs: number
+    processingMs: number
+  }
+  persistenceSave: {
+    saveMs: number
+    snapshotMs: number
+    receiptMs: number
+    snapshotUtf8Bytes: number
+    publishUtf8Bytes: number
+    snapshotCalls: number
+    snapshotFailed: number
+  }
+  provenance: PerformanceProvenanceMetadata
+}
+
+export function computeCreationCostAttribution(
+  snapshot: PerformanceBaselineSnapshot,
+  provenance?: Partial<PerformanceProvenanceMetadata>
+): CreationCostAttribution {
+  const getSum = (name: PerformanceMetric) => snapshot.metrics[name]?.sum ?? 0
+  const getMin = (name: PerformanceMetric) => snapshot.metrics[name]?.min ?? null
+  const getCount = (name: PerformanceMetric) => snapshot.metrics[name]?.count ?? 0
+
+  const inspectMs = getSum('import.inspect.ms')
+  const readMs = getSum('import.read.ms')
+  const captureMs = getSum('source.capture.ms')
+  const sourceReadMs = getSum('source.read.ms')
+  const selectMs = getSum('source.select.ms')
+  const validateMs = getSum('source.validate.ms')
+  const localPrepMs = inspectMs + readMs + captureMs + sourceReadMs + selectMs + validateMs
+
+  const queueMs = getSum('renderer.snapshot.queue_ms')
+  const pendingCount = getSum('generation.pending')
+  const snapshotQueueCalls = getCount('renderer.snapshot.queue')
+
+  const providerMs = getSum('generation.provider.ms')
+  const firstResponseMs = getMin('transport.first_response.ms')
+  const firstVisibleMs = getMin('transport.first_visible.ms')
+  const firstReasoningMs = getMin('transport.first_reasoning.ms')
+  const visibleEvents = getSum('transport.visible.events') + getSum('generation.visible.events')
+  const reasoningEvents = getSum('transport.reasoning.events') + getSum('generation.reasoning.events')
+  const physicalRequests = getSum('transport.requests')
+  const http429Count = getSum('transport.http_429')
+
+  const inputTokens = getSum('generation.usage.input_tokens')
+  const completionTokens = getSum('generation.usage.completion_tokens')
+  const reasoningTokens = getSum('generation.usage.reasoning_tokens')
+  const totalTokens = getSum('generation.usage.total_tokens')
+
+  const isNetworkWaiting = physicalRequests > 0 && (firstVisibleMs === null || visibleEvents === 0)
+
+  const parseMs = getSum('import.parse.ms')
+  const hashMs = getSum('import.hash.ms') + getSum('renderer.snapshot.hash_ms')
+  const processingMs = getSum('renderer.snapshot.processing_ms')
+
+  const saveMs = getSum('import.save.ms')
+  const snapshotMs = getSum('generation.snapshot.ms')
+  const receiptMs = getSum('generation.receipt.ms')
+  const snapshotUtf8Bytes = getSum('generation.snapshot.utf8_bytes')
+  const publishUtf8Bytes = getSum('generation.publish.utf8_bytes')
+  const snapshotCalls = getCount('generation.snapshot.calls')
+  const snapshotFailed = getSum('generation.snapshot.failed')
+
+  return Object.freeze({
+    schemaVersion: 1,
+    localPreparation: Object.freeze({
+      elapsedMs: localPrepMs,
+      readUtf8Bytes: getSum('import.read.utf8_bytes') + getSum('source.read.utf8_bytes'),
+      readArchiveBytes: getSum('import.read.archive_bytes'),
+      inspectCalls: getCount('import.inspect.calls'),
+      inspectFailed: getSum('import.inspect.failed'),
+      inspectCancelled: getSum('import.inspect.cancelled'),
+    }),
+    queueWait: Object.freeze({
+      queueMs,
+      pendingCount,
+      snapshotQueueCalls,
+    }),
+    modelExecution: Object.freeze({
+      providerMs,
+      firstResponseMs,
+      firstVisibleMs,
+      firstReasoningMs,
+      visibleEvents,
+      reasoningEvents,
+      physicalRequests,
+      http429Count,
+      inputTokens,
+      completionTokens,
+      reasoningTokens,
+      totalTokens,
+      isNetworkWaiting,
+    }),
+    parsingComputation: Object.freeze({
+      parseMs,
+      hashMs,
+      processingMs,
+    }),
+    persistenceSave: Object.freeze({
+      saveMs,
+      snapshotMs,
+      receiptMs,
+      snapshotUtf8Bytes,
+      publishUtf8Bytes,
+      snapshotCalls,
+      snapshotFailed,
+    }),
+    provenance: Object.freeze({
+      corpusHash: provenance?.corpusHash,
+      sampleChapters: provenance?.sampleChapters,
+      sampleBooks: provenance?.sampleBooks ?? 1,
+      sourceSha: provenance?.sourceSha,
+      environment: provenance?.environment,
+      multiBookStatus: provenance?.multiBookStatus ?? [
+        { books: 2, status: 'not_executed' as const },
+        { books: 4, status: 'not_executed' as const },
+      ],
+      attempted: provenance?.attempted,
+      failed: provenance?.failed ?? 0,
+    }),
+  })
+}
+
+export function isNetworkWaitingVsUiFreeze(attribution: CreationCostAttribution): {
+  isNetworkWaiting: boolean
+  isUiFrozen: boolean
+  explanation: string
+} {
+  const { modelExecution, queueWait } = attribution
+  if (modelExecution.isNetworkWaiting || (modelExecution.physicalRequests > 0 && modelExecution.visibleEvents === 0)) {
+    return {
+      isNetworkWaiting: true,
+      isUiFrozen: false,
+      explanation: 'Network transport/model reasoning is in flight; client event loop is waiting on remote response, not frozen.',
+    }
+  }
+
+  if (queueWait.queueMs > 500 && modelExecution.physicalRequests === 0) {
+    return {
+      isNetworkWaiting: false,
+      isUiFrozen: true,
+      explanation: 'Main thread/queue processing delay exceeded 500ms candidate threshold without active remote network request.',
+    }
+  }
+
+  return {
+    isNetworkWaiting: false,
+    isUiFrozen: false,
+    explanation: 'Normal execution cadence within candidate latency targets.',
+  }
+}
+
+export interface CandidateTargetsEvaluation {
+  p95CandidateTargetMs: 100
+  mainThreadCandidateTargetMs: 500
+  isCandidateTargetMet: boolean
+  isHardThreshold: false
+  observations: {
+    rendererSnapshotProcessingP95: number | null
+    rendererSnapshotQueueP95: number | null
+    exceededTargets: readonly string[]
+  }
+  notice: string
+}
+
+export function evaluateCandidateTargets(snapshot: PerformanceBaselineSnapshot): CandidateTargetsEvaluation {
+  const processingP95 = snapshot.metrics['renderer.snapshot.processing_ms']?.p95UpperBound ?? null
+  const queueP95 = snapshot.metrics['renderer.snapshot.queue_ms']?.p95UpperBound ?? null
+
+  const exceeded: string[] = []
+  if (processingP95 !== null && processingP95 > 100) {
+    exceeded.push(`renderer.snapshot.processing_ms p95 (${processingP95}ms > 100ms)`)
+  }
+  if (queueP95 !== null && queueP95 > 500) {
+    exceeded.push(`renderer.snapshot.queue_ms p95 (${queueP95}ms > 500ms)`)
+  }
+
+  return Object.freeze({
+    p95CandidateTargetMs: 100,
+    mainThreadCandidateTargetMs: 500,
+    isCandidateTargetMet: exceeded.length === 0,
+    isHardThreshold: false,
+    observations: Object.freeze({
+      rendererSnapshotProcessingP95: processingP95,
+      rendererSnapshotQueueP95: queueP95,
+      exceededTargets: Object.freeze(exceeded),
+    }),
+    notice: 'p95 100ms and main-thread 500ms are candidate optimization goals, not hard gates or permanent prerequisites.',
+  })
+}

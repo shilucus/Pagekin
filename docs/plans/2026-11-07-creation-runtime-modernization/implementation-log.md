@@ -886,3 +886,28 @@ The observations below retain their chronological state. The final acceptance at
 - Acceptance:
   - SKILL-001 marked completed / passes=true.
   - Completed feature count reaches 27/35 (77.1%).
+
+### Stage 26 (2026-11-09): PERF-001 - 创作运行时性能诊断基线与成本归因
+
+- Target Feature: PERF-001 (创作运行时性能诊断基线与成本归因)
+- Implementation Artifacts:
+  - ADR: docs/adr/0060-creation-runtime-performance-diagnostics-and-cost-attribution.md
+  - Shared Contract: src/shared/performance-baseline.ts
+  - Contract Unit Tests: src/shared/__tests__/performance-baseline.test.ts
+  - Diagnostics Service: lectron/services/performance-diagnostics.ts
+  - Service Unit Tests: lectron/services/__tests__/performance-diagnostics.test.ts
+  - Stage Evidence: docs/plans/2026-11-07-creation-runtime-modernization/stage-26-evidence.md
+- Key Design & Invariants:
+  - AC-1: 固定虚构语料按 10/100/1000 章与 1/2/4 书采样，记录未支持规模、SHA/环境/语料 Hash 与完整失败分母；多书状态明确标记 not_executed；
+  - AC-2: 细分 localPreparation, queueWait, modelExecution, parsingComputation, persistenceSave 5 大成本维度；通过 isNetworkWaitingVsUiFreeze 明确区分远端网络/思考在途与客户端 UI 卡死；
+  - AC-3: 来源/选择诊断解释材料来源而不减少作者事实；evaluateCandidateTargets 将 p95 100ms 及主线程 500ms 约束为候选观察目标，标记 isHardThreshold: false；
+  - 零敏感/隐私保护: 纯统计数字与脱敏字段，绝不记录正文、提示词或秘密。
+- Actual Execution:
+  - 19 focus/contract tests passed across 2 test suites (performance-baseline.test.ts 8/8, performance-diagnostics.test.ts 11/11).
+  - All quality gates passed: 	ypecheck (exit 0), lint (exit 0, ESLint 0 warnings, check-color-literals exit 0), check:i18n (exit 0), uild (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 26 Independent Reviewer (pro model, subagent def6568-ec71-497e-8486-9898b1ddfc91).
+  - Verdict: PASS (全票通过，确认 AC-1, AC-2, AC-3 与零敏感约束完备).
+- Acceptance:
+  - PERF-001 marked completed / passes=true.
+  - Completed feature count reaches 28/35 (80.0%).

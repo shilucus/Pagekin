@@ -157,8 +157,8 @@
         "deterministic",
         "performance"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -199,6 +199,14 @@
           "environment": "Windows x64; Electron 44.9.3; loopback fake; 1440x900 light; uncontrolled cache; strict profile/business monitoring",
           "result": "Attributed 10/100 import rows and long-stream/slow-embedding/429 paths have qualified clean samples. Four final-version pressure attempts include one preserved isolation failure and three qualified runs.",
           "limitations": "1000-chapter attempt is failed/unqualified; B2 and full feature acceptance remain pending. One book only, 2/4 unsupported; pre-quit network cutoff, no independent Skill digest, no real-model quality or platform claim. No dependent feature unlocked."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-26-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Creation runtime performance baseline and cost attribution passed (2 suites, 19/19 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
+          "limitations": "Segmented text selection and stream delta optimizations belong to subsequent features (PERF-002, PERF-003)"
         }
       ]
     },

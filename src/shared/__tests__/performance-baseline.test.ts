@@ -1,5 +1,12 @@
 import { expect, it } from 'vitest'
-import { createPerformanceBaseline, PERFORMANCE_METRICS, type PerformanceMetric } from '../performance-baseline'
+import {
+  createPerformanceBaseline,
+  computeCreationCostAttribution,
+  evaluateCandidateTargets,
+  isNetworkWaitingVsUiFreeze,
+  PERFORMANCE_METRICS,
+  type PerformanceMetric,
+} from '../performance-baseline'
 
 it('retains cancellation counts and compressed archive bytes as distinct import metrics', () => {
   const baseline = createPerformanceBaseline()
@@ -47,4 +54,97 @@ it('returns detached immutable snapshots and preserves zero observations', () =>
   expect(first.metrics['source.read.ms']?.count).toBe(1)
   expect(Object.isFrozen(first.metrics['source.read.ms'])).toBe(true)
   expect(baseline.snapshot().metrics['source.read.ms']).toEqual({ count: 2, sum: 2, min: 0, max: 2, p50UpperBound: 0, p95UpperBound: 2 })
+})
+
+it('computes categorized creation cost attribution and attaches provenance metadata', () => {
+  const baseline = createPerformanceBaseline()
+  baseline.record('import.inspect.ms', 10)
+  baseline.record('import.read.ms', 20)
+  baseline.record('import.read.utf8_bytes', 5000)
+  baseline.record('source.capture.ms', 15)
+  baseline.record('renderer.snapshot.queue_ms', 5)
+  baseline.record('generation.provider.ms', 1200)
+  baseline.record('transport.first_response.ms', 400)
+  baseline.record('transport.first_visible.ms', 650)
+  baseline.record('transport.requests', 1)
+  baseline.record('transport.visible.events', 12)
+  baseline.record('generation.usage.total_tokens', 450)
+  baseline.record('import.parse.ms', 30)
+  baseline.record('import.save.ms', 45)
+  baseline.record('generation.snapshot.ms', 8)
+
+  const snapshot = baseline.snapshot()
+  const attribution = computeCreationCostAttribution(snapshot, {
+    corpusHash: 'abc123corpus',
+    sampleChapters: 100,
+    sampleBooks: 1,
+    sourceSha: 'deadbeef',
+    environment: 'Windows x64 test',
+    attempted: 1,
+    failed: 0,
+  })
+
+  expect(attribution.schemaVersion).toBe(1)
+  expect(attribution.localPreparation.elapsedMs).toBe(45) // 10 + 20 + 15
+  expect(attribution.localPreparation.readUtf8Bytes).toBe(5000)
+  expect(attribution.queueWait.queueMs).toBe(5)
+  expect(attribution.modelExecution.providerMs).toBe(1200)
+  expect(attribution.modelExecution.firstResponseMs).toBe(400)
+  expect(attribution.modelExecution.firstVisibleMs).toBe(650)
+  expect(attribution.modelExecution.totalTokens).toBe(450)
+  expect(attribution.modelExecution.isNetworkWaiting).toBe(false)
+  expect(attribution.parsingComputation.parseMs).toBe(30)
+  expect(attribution.persistenceSave.saveMs).toBe(45)
+  expect(attribution.persistenceSave.snapshotMs).toBe(8)
+  expect(attribution.provenance.corpusHash).toBe('abc123corpus')
+  expect(attribution.provenance.sampleChapters).toBe(100)
+  expect(attribution.provenance.multiBookStatus).toEqual([
+    { books: 2, status: 'not_executed' },
+    { books: 4, status: 'not_executed' },
+  ])
+  expect(Object.isFrozen(attribution)).toBe(true)
+})
+
+it('distinguishes remote network/reasoning waiting from UI freezing', () => {
+  const baseline = createPerformanceBaseline()
+  baseline.record('transport.requests', 1)
+  baseline.record('generation.provider.ms', 2000)
+  // No visible events emitted yet -> waiting for remote response
+  const inFlightSnapshot = baseline.snapshot()
+  const inFlightAttribution = computeCreationCostAttribution(inFlightSnapshot)
+
+  const inFlightDiag = isNetworkWaitingVsUiFreeze(inFlightAttribution)
+  expect(inFlightDiag.isNetworkWaiting).toBe(true)
+  expect(inFlightDiag.isUiFrozen).toBe(false)
+  expect(inFlightDiag.explanation).toContain('Network transport/model reasoning is in flight')
+
+  // UI stall without in-flight network request
+  const stalledBaseline = createPerformanceBaseline()
+  stalledBaseline.record('renderer.snapshot.queue_ms', 850)
+  const stalledAttribution = computeCreationCostAttribution(stalledBaseline.snapshot())
+  const stallDiag = isNetworkWaitingVsUiFreeze(stalledAttribution)
+  expect(stallDiag.isNetworkWaiting).toBe(false)
+  expect(stallDiag.isUiFrozen).toBe(true)
+  expect(stallDiag.explanation).toContain('Main thread/queue processing delay exceeded 500ms')
+})
+
+it('evaluates p95 100ms and main thread 500ms as candidate targets without hard rejection', () => {
+  const baseline = createPerformanceBaseline()
+  baseline.record('renderer.snapshot.processing_ms', 40)
+  baseline.record('renderer.snapshot.queue_ms', 120)
+
+  const evaluation = evaluateCandidateTargets(baseline.snapshot())
+  expect(evaluation.p95CandidateTargetMs).toBe(100)
+  expect(evaluation.mainThreadCandidateTargetMs).toBe(500)
+  expect(evaluation.isHardThreshold).toBe(false)
+  expect(evaluation.isCandidateTargetMet).toBe(true)
+  expect(evaluation.notice).toContain('candidate optimization goals, not hard gates')
+
+  // When latency exceeds candidate goals, it reports them without throwing or marking failure
+  const slowerBaseline = createPerformanceBaseline()
+  for (let i = 0; i < 100; i++) slowerBaseline.record('renderer.snapshot.processing_ms', 150)
+  const slowerEval = evaluateCandidateTargets(slowerBaseline.snapshot())
+  expect(slowerEval.isCandidateTargetMet).toBe(false)
+  expect(slowerEval.isHardThreshold).toBe(false)
+  expect(slowerEval.observations.exceededTargets.length).toBeGreaterThan(0)
 })
