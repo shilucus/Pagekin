@@ -48,6 +48,7 @@ import { assertRequiredExpectedProjectPath } from './utils/project-context'
 import { getProjectDataRoot } from './services/project-data-locator'
 import { withKnowledgeSourceGate } from './services/knowledge-source-gate'
 import { projectRuntimeHost, type ProjectRuntime } from './services/project-runtime'
+import type { ReferenceImportKnowledgeSnapshot } from './services/reference-import-knowledge-source'
 
 // ===== 迁移状态跟踪 =====
 
@@ -391,6 +392,61 @@ export function captureReferenceImportResources(runtime: ProjectRuntime): Refere
       return projectRuntimeHost.acquireWork(runtime)
     },
   })
+}
+
+/** One original reference-inclusive search; later verification never repeats embeddings or ranking. */
+export async function captureReferenceImportKnowledgeSnapshot(input: {
+  query: string
+  resources: ReferenceImportResources
+  configuration: { protocol: 'openai' | 'gemini'; model: EmbeddingModel } | null
+  topK?: number
+  assertAuthority: () => void
+}): Promise<ReferenceImportKnowledgeSnapshot> {
+  const assertActive = () => { input.resources.assertResources(); input.assertAuthority() }
+  assertActive()
+  const release = input.resources.acquireWork()
+  try {
+    await ensureMigration(input.resources.canonicalRoot)
+    assertActive()
+    let queryVector: number[] | undefined
+    if (input.configuration && hasRequiredApiKey(input.configuration.model) && input.query.trim()) {
+      try {
+        const [vector] = await generateEmbeddings([input.query], input.configuration.protocol,
+          input.configuration.model, input.configuration.model.embeddingOptions?.batchSize)
+        if (vector?.length) queryVector = vector
+      } catch { /* Ordinary query-embedding errors keep the existing FTS fallback. */ }
+      // Resource and grant failures are outside the embedding fallback's catch.
+      assertActive()
+    }
+    const { captureReferenceImportKnowledge } = await import('./services/reference-import-knowledge-source')
+    assertActive()
+    const snapshot = await captureReferenceImportKnowledge({
+      projectPath: input.resources.canonicalRoot, runtimeEpoch: input.resources.executionEpoch,
+      query: input.query, topK: input.topK, queryVector, assertActive,
+      ...(queryVector && input.configuration ? { embeddingSpace: embeddingSpaceFor(input.configuration.protocol, input.configuration.model) } : {}),
+    })
+    assertActive()
+    return snapshot
+  } finally { release() }
+}
+
+export async function verifyReferenceImportKnowledgeSnapshot(input: {
+  snapshot: ReferenceImportKnowledgeSnapshot
+  resources: ReferenceImportResources
+  assertAuthority: () => void
+}): Promise<void> {
+  const assertActive = () => { input.resources.assertResources(); input.assertAuthority() }
+  assertActive()
+  const release = input.resources.acquireWork()
+  try {
+    await ensureMigration(input.resources.canonicalRoot)
+    assertActive()
+    const { verifyReferenceImportKnowledge } = await import('./services/reference-import-knowledge-source')
+    assertActive()
+    await verifyReferenceImportKnowledge({ projectPath: input.resources.canonicalRoot,
+      runtimeEpoch: input.resources.executionEpoch, snapshot: input.snapshot, assertActive })
+    assertActive()
+  } finally { release() }
 }
 
 interface ReferenceImportAuthorityRequest {

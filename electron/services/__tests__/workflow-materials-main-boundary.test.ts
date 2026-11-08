@@ -14,7 +14,7 @@ afterEach(() => {
 })
 
 describe('captured workflow materials main-process dependency boundary', () => {
-  it('loads both adapters without renderer IPC, stores or the active-session prompt catalog', async () => {
+  it('loads the captured adapters without renderer IPC, stores or the active-session prompt catalog', async () => {
     vi.resetModules()
     for (const module of rendererModules) {
       vi.doMock(module, () => { throw new Error(`RENDERER_DEPENDENCY_IMPORTED:${module}`) })
@@ -22,8 +22,10 @@ describe('captured workflow materials main-process dependency boundary', () => {
     expect(typeof window).toBe('undefined')
     const draft = await import('../workflow-batch-materials')
     const review = await import('../workflow-review-materials')
+    const referenceImport = await import('../reference-import-materials')
     expect(typeof draft.readWorkflowBatchChapter).toBe('function')
     expect(typeof draft.prepareWorkflowBatchMaterials).toBe('function')
     expect(typeof review.prepareWorkflowReviewMaterials).toBe('function')
+    expect(typeof referenceImport.prepareReferenceImportMaterials).toBe('function')
   })
 })

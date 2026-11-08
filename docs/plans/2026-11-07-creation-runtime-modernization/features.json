@@ -440,6 +440,22 @@
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; serial fictional canonical SQLite and actual Lance with injected providers",
           "result": "Current focus 8 files 86/86 and impact 42 files 1114/1114, zero failed/pending; captured A/current B effects, native rollback/proposals, mixed legacy/captured takeover, real close/reopen, physical cleanup and queued/native generation requalification; current typecheck/lint/color/i18n/source build exit 0",
           "limitations": "Reports overlap, not summed. Initial 33/34 failed KB report retained; current byte retest closes stale-lease fixture without weakening fencing. No complete IMPORT, actual Electron, literary quality, performance or platform qualification"
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "7966007dfc0175cd9ed7b4e96779774b93d24492",
+          "artifactOrReceipt": "stage-6c-evidence.md#team-and-review",
+          "environment": "F2/ADR-0035/0037/0038; fifteen-file manifest 0F1B11014B4035DF7AC7198D536591CBF1948C227D3CC00294770F90C62E740D; independent requirements/parity and authority/source/lifecycle review",
+          "result": "Accepted internal shared original global/style/blueprint materials, reference-inclusive original-hit proof and captured main preparation; evidence-failure fallback and cleanup error-precedence fixes closed without weakening legacy protection",
+          "limitations": "No public import grant/driver, owner mode, schema or visible change. Complete all-stage main ownership, authoritative refresh, switch-view Electron and feature/global gates remain open"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "7966007dfc0175cd9ed7b4e96779774b93d24492",
+          "artifactOrReceipt": "stage-6c-evidence.md#actual-execution",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; serial fictional canonical SQLite/Lance, no real model or network",
+          "result": "Final current-byte union 38 files 1004/1004, zero failed/pending, including twenty native KB proof cases and twenty-one captured adaptor cases; current typecheck/lint/color/i18n/source build exit 0",
+          "limitations": "Older failures and pre-cleanup-fix 266/736 reports retained, not summed or substituted for current bytes. No complete import, production Electron, literary quality, performance or platform qualification; IMPORT-001 remains incomplete"
         }
       ]
     },
@@ -493,6 +509,22 @@
           "environment": "Same actual Stage 6B fictional native reports and static/source build; no separate imitation execution inferred",
           "result": "Shared dependency chain passed 42 files 1114/1114, zero failed/pending, including captured style receipt, reference purpose, source/fencing and author compatibility; current static/source build exit 0",
           "limitations": "Same overlapping shared report as IMPORT-001, not a second feature completion or actual imitation/Electron/quality evidence; IMPORT-002 stays incomplete"
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "7966007dfc0175cd9ed7b4e96779774b93d24492",
+          "artifactOrReceipt": "../../adr/0038-reference-import-stage-materials.md",
+          "environment": "Shared reference/style material prerequisite; same fifteen-file manifest and two independent reviewers as IMPORT-001",
+          "result": "Accepted preserved style sample ordering, language/template/system-role and raw material contracts, with captured reference source verification; empty imported samples explicitly require a separately captured finalized fallback",
+          "limitations": "Not a new imitation or style-only mode, complete main driver, saved style consumption into target drafting, authoritative refresh, Electron or global gate acceptance"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "7966007dfc0175cd9ed7b4e96779774b93d24492",
+          "artifactOrReceipt": "stage-6c-evidence.md#actual-execution",
+          "environment": "Same actual final Stage 6C 38-file fictional native/deterministic union and current static/source build; not a separate imitation run",
+          "result": "Shared prerequisite 1004/1004, zero failed/pending, including both-language original style materials, old style/CAS/repair/recovery and captured A/current B source isolation; current static/source build exit 0",
+          "limitations": "Same overlapping evidence as IMPORT-001, not independent complete imitation/style-consumption/Electron/quality acceptance. IMPORT-002 remains in_progress/passes=false"
         }
       ]
     },

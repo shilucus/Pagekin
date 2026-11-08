@@ -67,6 +67,14 @@ export interface SearchResult {
   fileName: string
 }
 
+export interface OriginalSearchSelection {
+  hits: Array<{ row: Record<string, unknown>; result: SearchResult }>
+  tableNames: string[]
+  tableRevisions: Array<{ tableName: string; revision: number }>
+  registryHash: string | null
+  failed: boolean
+}
+
 /** 知识库统计 */
 export interface KBStats {
   documentCount: number
@@ -1399,6 +1407,21 @@ export async function search(
   return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => searchInternal(projectPath, queryText, queryVector, topK, embeddingSpace, excludedCorpusKinds))
 }
 
+/** Main-only evidence seam: select with the normal algorithm and retain its actual rows. */
+export async function searchWithOriginalHits(
+  projectPath: string,
+  queryText: string,
+  queryVector?: number[],
+  topK = 5,
+  embeddingSpace?: EmbeddingSpaceIdentity,
+): Promise<OriginalSearchSelection & { results: SearchResult[] }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), async () => {
+    const selection: OriginalSearchSelection = { hits: [], tableNames: [], tableRevisions: [], registryHash: null, failed: false }
+    const results = await searchInternal(projectPath, queryText, queryVector, topK, embeddingSpace, [], selection)
+    return { ...selection, results }
+  })
+}
+
 async function searchInternal(
   projectPath: string,
   queryText: string,
@@ -1406,13 +1429,25 @@ async function searchInternal(
   topK: number = 5,
   embeddingSpace?: EmbeddingSpaceIdentity,
   excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
+  selection?: OriginalSearchSelection,
 ): Promise<SearchResult[]> {
   let documentsTable: lancedb.Table | undefined
   try {
     const db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
+    if (selection) {
+      selection.tableNames = [...tableNames].sort()
+      const file = registryPath(projectPath)
+      selection.registryHash = fs.existsSync(file) ? contentHash(fs.readFileSync(file, 'utf8')) : null
+    }
     if (!tableNames.includes(TABLE_NAME)) return []
     documentsTable = tableNames.includes(DOCS_TABLE_NAME) ? await db.openTable(DOCS_TABLE_NAME) : undefined
+    if (selection) {
+      const canonical = await db.openTable(TABLE_NAME)
+      try { selection.tableRevisions.push({ tableName: TABLE_NAME, revision: await canonical.version() }) }
+      finally { canonical.close() }
+      if (documentsTable) selection.tableRevisions.push({ tableName: DOCS_TABLE_NAME, revision: await documentsTable.version() })
+    }
     const staleDocIds = documentsTable
       ? (await documentsTable.query().toArray())
           .filter(row => !isDocumentCopyIndexCurrent(getProjectDataRoot(projectPath), String(row.id), row.filePath))
@@ -1425,10 +1460,21 @@ async function searchInternal(
     if (queryVector && vectorIsUsable(queryVector)) {
       try {
         const registry = await loadOrRegisterLegacyRegistry(projectPath, db, tableNames)
+        if (selection) {
+          try {
+            const file = registryPath(projectPath)
+            selection.registryHash = fs.existsSync(file) ? contentHash(fs.readFileSync(file, 'utf8')) : null
+          } catch (error) { selection.failed = true; throw error }
+        }
         const active = activeSpace(registry)
         if (active && tableNames.includes(active.tableName) && requestMatchesActiveSpace(active, queryVector, embeddingSpace)) {
           const vectorTable = await db.openTable(active.tableName)
           try {
+          if (selection && active.tableName !== TABLE_NAME) {
+            try {
+              selection.tableRevisions.push({ tableName: active.tableName, revision: await vectorTable.version() })
+            } catch (error) { selection.failed = true; throw error }
+          }
           let query = vectorTable.search(queryVector).limit(topK)
           const vectorFilters: string[] = []
           const corpusFilter = excludedCorpusFilter(excludedCorpusKinds)
@@ -1439,15 +1485,18 @@ async function searchInternal(
           if (vectorFilters.length > 0) query = query.where(vectorFilters.join(' AND '))
           const results = await query.toArray()
           if (results.length > 0) {
-            return results.map((row: { text: string; _distance?: number; fileName: string }) => ({
+            const mapped = results.map((row: { text: string; _distance?: number; fileName: string }) => ({
               text: row.text,
               score: row._distance != null ? 1 / (1 + row._distance) : 0.5,
               fileName: row.fileName,
             }))
+            if (selection) selection.hits = results.map((row, index) => ({ row, result: mapped[index] }))
+            return mapped
           }
           } finally { vectorTable.close() }
         }
       } catch (error) {
+        if (selection?.failed) throw error
         console.warn('[AI Novel VectorStore] 向量检索降级为全文检索:', error)
       }
     }
@@ -1477,6 +1526,7 @@ async function searchInternal(
       const normalizedTerms = searchTerms.map(term => term.toLocaleLowerCase())
       const ftsResults = results
         .map((row: { text: string; fileName: string }) => ({
+          row,
           result: { text: row.text, score: 0.5, fileName: row.fileName },
           relevance: normalizedTerms.reduce((score, term, index) => (
             row.text.toLocaleLowerCase().includes(term)
@@ -1485,20 +1535,24 @@ async function searchInternal(
           ), 0),
         }))
         .sort((left, right) => right.relevance - left.relevance)
-        .map(candidate => candidate.result)
-      const uniqueResults = new Map<string, SearchResult>()
-      for (const result of ftsResults) {
+      const uniqueResults = new Map<string, typeof ftsResults[number]>()
+      for (const candidate of ftsResults) {
+        const result = candidate.result
         const key = JSON.stringify([result.fileName, result.text])
-        if (!uniqueResults.has(key)) uniqueResults.set(key, result)
+        if (!uniqueResults.has(key)) uniqueResults.set(key, candidate)
       }
-      return [...uniqueResults.values()].slice(0, topK)
+      const selected = [...uniqueResults.values()].slice(0, topK)
+      if (selection) selection.hits = selected.map(candidate => ({ row: candidate.row, result: candidate.result }))
+      return selected.map(candidate => candidate.result)
     } catch (error) {
+      if (selection) selection.failed = true
       console.warn('[AI Novel VectorStore] 纯文本检索失败:', error)
       return []
     } finally {
       canonicalTable?.close()
     }
   } catch (error) {
+    if (selection) selection.failed = true
     console.error('[AI Novel VectorStore] 检索失败:', error)
     return []
   } finally { documentsTable?.close() }

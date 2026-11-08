@@ -19,8 +19,15 @@ import {
   type WorkflowGenerationRuntimeDependencies,
 } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import { composePromptSystemRole, resolvePromptTemplate } from '../../prompt-templates'
-import { ImportPromptBuilder } from '../../prompts/prompt-builder'
+import { resolvePromptTemplate } from '../../prompt-templates'
+import {
+  buildImportEndpointCardTask,
+  buildImportInferenceTask,
+  formatImportInferenceSample,
+  getImportInferenceTopics,
+  type ImportInferenceTopicKey,
+} from '../../../shared/import-inference-materials'
+import { buildImportBlueprintTask } from '../../../shared/import-blueprint-materials'
 import { ipc } from '../../ipc-client'
 import { unwrapKnowledgeValue } from '../../knowledge-service'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
@@ -39,7 +46,6 @@ import type {
   BlueprintRangeCommitRequest,
 } from '../../../../electron/repositories/blueprint-repository'
 import {
-  blueprintSemanticGenerationContract,
   parseBlueprintSemanticResponseText,
   validateBlueprintSemanticItem,
 } from '../../../shared/blueprint-semantic-contract'
@@ -257,42 +263,10 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       `导入推演关系端点缺少 ${unresolvedTargets.length} 张角色卡，正在执行一次受限补卡校正`,
       `${unresolvedTargets.length} relationship ${unresolvedTargets.length === 1 ? 'endpoint is' : 'endpoints are'} missing a character card; running one bounded correction`,
     ))
+    const correctionTask = buildImportEndpointCardTask({ writingLanguage, originalRoot, unresolvedTargets })
     const correction = await this.callLLMResult(
-      promptLanguageText(
-        writingLanguage,
-        [
-          '【导入推演受限补卡校正】',
-          '上一轮完整 JSON 已可解析，但 characterCards.relationships.target 引用了 characterCards 中不存在的角色名。',
-          '只输出一个完整 JSON 对象，不要 Markdown、解释或思考过程。',
-          '只允许输出严格 delta，顶层必须且只能包含 characterCards。',
-          `characterCards 必须新增且只新增这些缺失角色 name：${JSON.stringify(unresolvedTargets)}`,
-          '不得回传 novelConfig、architectureFiles 或任何原有角色卡；不得删除、重排、改名或改写任何原角色。',
-          '不得新增任意其他角色；delta 角色卡、currentState 与 relationships 内部不得包含合同外字段。',
-          '应用端会把 delta 追加到上一轮本地原始 characterCards，再执行完整导入推演 JSON 合同校验和关系闭合校验。',
-          '【delta JSON 合同】',
-          '{"characterCards":[{"name":"缺失关系端点精确 name","role":"protagonist | antagonist | supporting | minor","gender":"非空文本","age":"非空文本或有限数字","appearance":"非空文本","personality":"非空文本","background":"非空文本","abilities":"非空文本","motivation":"非空文本","relationships":[{"target":"最终 characterCards 中另一角色的精确 name","relation":"非空关系文本"}],"arc":"非空文本","notes":"非空文本","currentState":{"location":"非空文本","powerLevel":"非空文本","physicalState":"非空文本","mentalState":"非空文本","keyItems":"非空文本","recentEvents":"非空文本","updatedAtChapter":0}}]}',
-          '【上一轮完整 JSON（只用于识别已存在角色，不得回传旧内容）】',
-          JSON.stringify(originalRoot),
-        ].join('\n'),
-        [
-          '[Bounded import-inference endpoint-card correction]',
-          'The previous complete JSON is parseable, but characterCards.relationships.target references names absent from characterCards.',
-          'Output one complete JSON object only, with no Markdown, explanation, or reasoning.',
-          'Return a strict delta whose only top-level field is characterCards.',
-          `Add exactly these missing character names and no others: ${JSON.stringify(unresolvedTargets)}`,
-          'Do not return novelConfig, architectureFiles, or any existing card. Do not remove, reorder, rename, or rewrite existing characters.',
-          'Every delta card, currentState, and relationship must contain only contract fields.',
-          '[Delta JSON contract]',
-          '{"characterCards":[{"name":"exact missing endpoint name","role":"protagonist | antagonist | supporting | minor","gender":"non-empty text","age":"non-empty text or finite number","appearance":"non-empty text","personality":"non-empty text","background":"non-empty text","abilities":"non-empty text","motivation":"non-empty text","relationships":[{"target":"exact name of another final character","relation":"non-empty relationship text"}],"arc":"non-empty text","notes":"non-empty text","currentState":{"location":"non-empty text","powerLevel":"non-empty text","physicalState":"non-empty text","mentalState":"non-empty text","keyItems":"non-empty text","recentEvents":"non-empty text","updatedAtChapter":0}}]}',
-          '[Previous complete JSON — identify existing characters only; do not echo it]',
-          JSON.stringify(originalRoot),
-        ].join('\n'),
-      ),
-      promptLanguageText(
-        writingLanguage,
-        '你是导入推演 JSON 受限补卡 delta 生成器。只输出缺失关系端点对应的新增角色卡。',
-        'You generate a bounded JSON delta containing only cards for missing relationship endpoints.',
-      ),
+      correctionTask.messages[1].content,
+      correctionTask.messages[0].content,
       callbacks,
       {
         responseFormat: { type: 'json_object' },
@@ -348,46 +322,31 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     callbacks.setProgress(5)
 
     // ===== 向量检索采样 =====
-    const searchTopics = [
-      { key: 'worldview', query: promptLanguageText(writingLanguage, '世界观 力量体系 修炼等级 境界', 'world rules power system ranks institutions'), label: text('世界观与力量体系', 'world and power system') },
-      { key: 'protagonist', query: promptLanguageText(writingLanguage, '主角 金手指 核心能力 天赋 系统', 'protagonist central advantage core ability talent system'), label: text('主角设定与金手指', 'protagonist and central advantage') },
-      { key: 'conflict', query: promptLanguageText(writingLanguage, '敌人 反派 阴谋 危机 矛盾 对手', 'enemy antagonist conspiracy crisis conflict opponent'), label: text('核心矛盾与敌对势力', 'central conflict and opposing forces') },
-      { key: 'style', query: promptLanguageText(writingLanguage, '视角 叙述 描写 风格 节奏', 'point of view narration description style pacing'), label: text('写作风格与叙事视角', 'writing style and narrative viewpoint') },
-    ]
+    const searchTopics = getImportInferenceTopics(writingLanguage)
 
-    const sampledContent: Record<string, string> = {}
+    const sampledContent: Partial<Record<ImportInferenceTopicKey, string>> = {}
     for (const topic of searchTopics) {
       this.assertNotCancelled(context)
+      const label = text(topic.label.zhCN, topic.label.enUS)
       try {
         const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
           projectSession,
           this.excludeReferenceCorpus ? 'kb:search-writing-context' : 'kb:search',
           topic.query,
-          5,
+          topic.topK,
           context.projectPath,
         ))
         this.assertNotCancelled(context)
-        if (results.length > 0) {
-          sampledContent[topic.key] = results
-            .map((r: { text: string; score: number; fileName: string }, i: number) =>
-              promptLanguageText(
-                writingLanguage,
-                `[${i + 1}] (${r.fileName}, 相关度 ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
-                `[${i + 1}] (${r.fileName}, relevance ${(r.score * 100).toFixed(0)}%)\n${r.text}`,
-              )
-            ).join('\n\n')
-        } else {
-          sampledContent[topic.key] = promptLanguageText(writingLanguage, '（未检索到相关内容）', '(no relevant content found)')
-        }
+        sampledContent[topic.key] = formatImportInferenceSample(results, writingLanguage)
         callbacks.log(text(
-          `  已检索「${topic.label}」— ${results.length} 条结果`,
-          `  Retrieved ${results.length} ${results.length === 1 ? 'result' : 'results'} for "${topic.label}"`,
+          `  已检索「${label}」— ${results.length} 条结果`,
+          `  Retrieved ${results.length} ${results.length === 1 ? 'result' : 'results'} for "${label}"`,
         ))
       } catch {
-        sampledContent[topic.key] = promptLanguageText(writingLanguage, '（向量检索不可用）', '(vector search unavailable)')
+        sampledContent[topic.key] = formatImportInferenceSample('unavailable', writingLanguage)
         callbacks.log(text(
-          `  「${topic.label}」检索失败，将使用降级策略`,
-          `  Retrieval failed for "${topic.label}"; using the fallback strategy`,
+          `  「${label}」检索失败，将使用降级策略`,
+          `  Retrieval failed for "${label}"; using the fallback strategy`,
         ))
       }
     }
@@ -400,28 +359,8 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         || await resolvePromptTemplate('infer_novel_config', projectSession, writingLanguage)
     if (!template) throw new Error(text('未找到推演 Prompt 模板', 'The import-inference prompt template was not found.'))
 
-    const firstChapter = chapters[0]?.content?.slice(0, 3000)
-      || promptLanguageText(writingLanguage, '（第一章内容不可用）', '(opening chapter unavailable)')
-    const latestChapter = chapters[chapters.length - 1]?.content?.slice(0, 3000)
-      || promptLanguageText(writingLanguage, '（最新章节不可用）', '(latest chapter unavailable)')
     const inferenceContract = importInferenceJsonContract(writingLanguage)
-
-    const prompt = new ImportPromptBuilder(template, writingLanguage)
-      .withSampledWorldview(sampledContent.worldview || '')
-      .withSampledProtagonist(sampledContent.protagonist || '')
-      .withSampledConflict(sampledContent.conflict || '')
-      .withSampledStyle(sampledContent.style || '')
-      .withFirstChapter(firstChapter)
-      .withLatestChapter(latestChapter)
-      .withTotalChapters(totalChapters)
-      // 兼容旧版 Prompt 的 sample_content 变量
-      .withSampleContent(promptLanguageText(
-        writingLanguage,
-        `【第1章片段】\n${firstChapter}\n\n【最新章节片段】\n${latestChapter}`,
-        `[Opening chapter sample]\n${firstChapter}\n\n[Latest chapter sample]\n${latestChapter}`,
-      ))
-      .build()
-      + `\n\n${inferenceContract}`
+    const initialTask = buildImportInferenceTask({ template, writingLanguage, chapters, totalChapters, sampledContent })
 
     callbacks.log(text(
       '正在调用 AI 推演全局小说配置...',
@@ -430,10 +369,8 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     callbacks.setProgress(25)
 
     const initial = await this.callLLMResult(
-      prompt,
-      composePromptSystemRole({
-        systemRole: template.systemRole || promptLanguageText(writingLanguage, '你是一位资深小说编辑和阅读分析师。', 'You are a senior fiction editor and reading analyst.'),
-      }, writingLanguage),
+      initialTask.messages[1].content,
+      initialTask.messages[0].content,
       callbacks,
       {
         responseFormat: { type: 'json_object' },
@@ -718,57 +655,13 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     const contract: StructuredBatchContract<ImportedChapter, ChapterBlueprint> = {
       buildTask: ({ items, validatedPrefix }) => {
         activeChapterNumbers = items.map(item => item.number)
-        const source = items.map(chapter => promptLanguageText(
-          writingLanguage,
-          `【第${chapter.number}章 ${chapter.title || '无标题'}】\n${chapter.content.slice(0, 6000)}`,
-          `[Chapter ${chapter.number}: ${chapter.title || 'Untitled'}]\n${chapter.content.slice(0, 6000)}`,
-        )).join('\n\n')
-        const prior = validatedPrefix.slice(-10)
-          .map(item => promptLanguageText(
-            writingLanguage,
-            `第${item.chapterNumber}章 ${item.title}：${item.keyEvents}`,
-            `Chapter ${item.chapterNumber}: ${item.title} — ${item.keyEvents}`,
-          ))
-          .join('\n') || promptLanguageText(writingLanguage, '（无）', '(none)')
-        const prompt = new ImportPromptBuilder(template, writingLanguage)
-          .withChapterContent(source)
-          .withChapterNumber(items[0]?.number ?? 1)
-          .withChapterTitle(items.map(item => item.title).filter(Boolean).join(', '))
-          .withNovelConfigSummary(promptLanguageText(
-            writingLanguage,
-            `${configSummary}\n\n【已验证前缀】\n${prior}`,
-            `${configSummary}\n\n[Previously validated prefix]\n${prior}`,
-          ))
-          .build()
-          + promptLanguageText(
-            writingLanguage,
-            '\n\n【最终不可变输出合同】\n本合同取代上述模板中的任何旧 JSON 示例或字段名，不得沿用缺少字段的旧示例。\n',
-            '\n\n[Final immutable output contract]\nThis contract replaces every older JSON example or field name in the template.\n',
-          )
-          + `${blueprintSemanticGenerationContract(writingLanguage)}\n`
-          + promptLanguageText(
-            writingLanguage,
-            `本批必须且只能完整返回以下 chapterNumber：${activeChapterNumbers.join('、')}。`,
-            `Return complete items for exactly these chapterNumber values: ${activeChapterNumbers.join(', ')}.`,
-          )
+        const task = buildImportBlueprintTask({ template, writingLanguage, items, validatedPrefix, configSummary })
         callbacks.log(text(
           `  正在推演第 ${activeChapterNumbers[0]}–${activeChapterNumbers.at(-1)} 章...`,
           `  Inferring Chapters ${activeChapterNumbers[0]}–${activeChapterNumbers.at(-1)}...`,
         ))
         callbacks.setProgress(5 + Math.round((validatedPrefix.length / orderedChapters.length) * 80))
-        return {
-          purpose: 'import-chapter-blueprints',
-          output: 'structured-data',
-          messages: [
-            {
-              role: 'system',
-              content: composePromptSystemRole({
-                systemRole: template.systemRole || promptLanguageText(writingLanguage, '你是一位专业的小说结构分析师。', 'You are a professional fiction-structure analyst.'),
-              }, writingLanguage),
-            },
-            { role: 'user', content: prompt },
-          ],
-        }
+        return task
       },
       inputKey: chapter => chapter.number,
       outputKey: blueprint => blueprint.chapterNumber,

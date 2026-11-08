@@ -1,0 +1,21 @@
+{
+  "parent": "7966007dfc0175cd9ed7b4e96779774b93d24492",
+  "stage": "6C",
+  "files": [
+    { "path": "src/shared/import-inference-materials.ts", "sha256": "73DBC3857C2AB28F6319A5AEA601C7FC46DD61334685D8D53A6074F4747706DE" },
+    { "path": "src/shared/import-blueprint-materials.ts", "sha256": "888BE04024BA2A0C0F92AC72525A5223CC4D0FDA267ADDDCF4CDB4B44085F39A" },
+    { "path": "src/shared/import-style-materials.ts", "sha256": "930241A487A6DFF587DC7470A84FF91A2FEC0EFEA9A339B0125B62B821FCF327" },
+    { "path": "src/shared/__tests__/import-inference-materials.test.ts", "sha256": "499C09C8AFB571D1CAC4C1A66B9B624C0CD59DD0C7022A37D36338C4683D330E" },
+    { "path": "src/shared/__tests__/import-blueprint-materials.test.ts", "sha256": "3433B4521CA578D4099D9B7356F1E7F72D1C5956694BAF9042D63F5B7B4B8977" },
+    { "path": "src/shared/__tests__/import-style-materials.test.ts", "sha256": "B36FB8D073D866AE6AA89A2436E2DC935559A3F9164B34EEF842F524DDDC6011" },
+    { "path": "src/services/workflows/commands/import-novel.command.ts", "sha256": "2770DD88AC38204E1F16F2EC14DC0A17927FB87302771E9C13DAAE10CAF99B80" },
+    { "path": "src/services/workflows/commands/analyze-style.command.ts", "sha256": "A908FA3AE174602319B53B597ADF444DCE88E4EB306E3C07BD579520A021A2ED" },
+    { "path": "electron/knowledge-base.ts", "sha256": "73230ACBA781CAE2A5989E152C65F64E820F654FC091D9F091B07402015E939D" },
+    { "path": "electron/vector-store.ts", "sha256": "9DBD4EC4B56EFC8101F8309EAF0E206BA57200C5CE4FD370E5BD6C17866320AA" },
+    { "path": "electron/services/reference-import-knowledge-source.ts", "sha256": "5EAAFAA426D0A1CE757E95A7D5C01B145E652601F08B6B51BB8CCB8923202EB9" },
+    { "path": "electron/services/__tests__/reference-import-knowledge-source.test.ts", "sha256": "46767CB14A4637515223AF8CD0608B663271852992F27DB735285A53F3BF4559" },
+    { "path": "electron/services/reference-import-materials.ts", "sha256": "7A10550B27F1E853D1900C2C458A8EE1CE6411B832EAA1ECE2641BD3F31ECC99" },
+    { "path": "electron/services/__tests__/reference-import-materials.test.ts", "sha256": "EB5375581A3F811AFB9BB4E8ACE1D86CD64805DA0690FD25F54E848351AFBE16" },
+    { "path": "electron/services/__tests__/workflow-materials-main-boundary.test.ts", "sha256": "F7A8D1C45CEBFFCCFFCB9063B08C61DD17020DD43B3F71214244CCA83668013B" }
+  ]
+}

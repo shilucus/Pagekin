@@ -2,8 +2,8 @@ import { assertImportCompletionNotStopped, frozenImportContext, importGeneration
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
-import { composePromptSystemRole, resolvePromptTemplate } from '../../prompt-templates'
-import { BasePromptBuilder } from '../../prompts/prompt-builder'
+import { resolvePromptTemplate } from '../../prompt-templates'
+import { buildImportStyleMaterial, collectImportStyleAuthorInputs, collectImportStyleSamples } from '../../../shared/import-style-materials'
 import { ipc } from '../../ipc-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import {
@@ -13,8 +13,6 @@ import {
   workflowMainProcessError,
 } from '../workflow-project-session'
 import type { ImportedChapter } from './import-novel.command'
-import { promptLanguageText } from '../../prompt-language'
-import type { WritingLanguage } from '../../../shared/writing-language'
 
 export interface AnalyzeWritingStyleOptions {
   sampleText?: string
@@ -58,9 +56,9 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
 
     const expectedConfig = structuredClone(project.novelConfig)
     if (importRuntime && (!frozen || frozen.slot.stage !== 'style')) throw new Error('IMPORT_GENERATION_CONTEXT_REQUIRED')
-    const sampleTexts = frozen ? this.collectProvidedSamples(writingLanguage, { chapters: frozen.chapters }) : this.collectProvidedSamples(writingLanguage)
+    const sampleTexts = collectImportStyleSamples(frozen ? { chapters: frozen.chapters } : this.options, writingLanguage)
     const selectedFinalizedDraftIds: number[] = []
-    const authorInputs = this.collectAuthorInputs()
+    const authorInputs = collectImportStyleAuthorInputs(this.options)
 
     if (sampleTexts.length > 0) {
       callbacks.log(text(
@@ -108,17 +106,13 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       : await resolvePromptTemplate('analyze_writing_style', projectSession, writingLanguage)
     if (!template) throw new Error(text('未找到文风分析模板', 'The writing-style analysis prompt template was not found.'))
 
-    const sampleText = sampleTexts.join('\n\n---\n\n')
-    const prompt = new BasePromptBuilder(template, writingLanguage)
-      // 使用 protected variables 需要通过子类或反射，这里使用 build 前手动设置
-      ; (prompt as unknown as { variables: { sample_text: string } }).variables = { sample_text: sampleText }
-    const finalPrompt = prompt.build()
+    const material = buildImportStyleMaterial(template, sampleTexts, writingLanguage)
 
     callbacks.log(text('调用 AI 分析文风特征...', 'Running AI writing-style analysis...'))
     const generate = async () => {
       const completion = await this.callLLMResult(
-        finalPrompt,
-        composePromptSystemRole(template, writingLanguage),
+        material.prompt,
+        material.systemRole,
         callbacks,
         { purpose: 'analyze-writing-style', reasoningStage: 'review' },
         context,
@@ -185,48 +179,4 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
     return this.executeWithGenerationRuntime('text', { context, callbacks, step }, generate, { operation: 'analyze-writing-style', promptKeys: ['analyze_writing_style'], skillStages: [], output: 'visible-text', selectedFinalizedDraftIds, authorInputs })
   }
 
-  private collectAuthorInputs(): { id: string; text: string }[] {
-    const inputs: { id: string; text: string }[] = []
-    if (this.options.sampleText?.trim()) inputs.push({ id: 'style:sample', text: this.options.sampleText })
-    this.options.sampleTexts?.forEach((text, index) => {
-      if (text.trim()) inputs.push({ id: `style:sample:${index}`, text })
-    })
-    this.pickRepresentativeChapters(this.options.chapters ?? []).forEach((chapter, index) => {
-      if (chapter.content.trim()) inputs.push({ id: `style:imported-chapter:${index}:${chapter.number}`, text: chapter.content })
-    })
-    return inputs
-  }
-
-  private collectProvidedSamples(writingLanguage: WritingLanguage, options = this.options): string[] {
-    const samples: string[] = []
-    if (options.sampleText?.trim()) {
-      samples.push(options.sampleText.trim().slice(0, 4000))
-    }
-    if (options.sampleTexts) {
-      for (const sample of options.sampleTexts) {
-        if (sample.trim()) samples.push(sample.trim().slice(0, 4000))
-      }
-    }
-    if (options.chapters) {
-      const selected = this.pickRepresentativeChapters(options.chapters)
-      for (const chapter of selected) {
-        if (chapter.content.trim()) {
-          samples.push(promptLanguageText(
-            writingLanguage,
-            `第${chapter.number}章 ${chapter.title}\n${chapter.content.trim().slice(0, 2000)}`,
-            `Chapter ${chapter.number}: ${chapter.title}\n${chapter.content.trim().slice(0, 2000)}`,
-          ))
-        }
-      }
-    }
-    return samples
-  }
-
-  private pickRepresentativeChapters(chapters: ImportedChapter[]): ImportedChapter[] {
-    if (chapters.length <= 5) return chapters
-    const picked = new Map<number, ImportedChapter>()
-    for (const chapter of chapters.slice(0, 3)) picked.set(chapter.number, chapter)
-    for (const chapter of chapters.slice(-2)) picked.set(chapter.number, chapter)
-    return Array.from(picked.values()).sort((a, b) => a.number - b.number)
-  }
 }
