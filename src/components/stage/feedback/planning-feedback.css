@@ -76,6 +76,18 @@
   background: var(--surface-2);
 }
 
+.pf-stale-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
 .pf-diff-stats {
   display: flex;
   gap: var(--s-3);

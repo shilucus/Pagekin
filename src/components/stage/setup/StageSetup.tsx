@@ -139,6 +139,7 @@ function FeedbackReviseButton({ target, label, currentText, onAdopt }: {
         {text('意见修订', 'Revise')}
       </Button>
       <PlanningFeedbackDialog
+        key={target}
         isOpen={open}
         target={target}
         label={label}

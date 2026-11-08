@@ -2,12 +2,15 @@ import { useState } from 'react'
 import { ArrowRight, Ellipsis, Sparkles } from 'lucide-react'
 import { ARCH_STEP_NAMES, type ArchStepKey } from '../../../services/architecture-step-selection'
 import { useCharacterStore } from '../../../stores/character-store'
+import { useEditorStore } from '../../../stores/editor-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { navigate } from '../../../stores/navigation/navigation-intents'
 import { openBuiltinEditor } from '../../../stores/open-builtin-editor'
 import { useProjectStore } from '../../../stores/project-store'
 import { clearArchSection } from '../../editor/clear-arch-section'
+import { createProjectArchTabId } from '../../editor/arch-file-refresh-policy'
 import { ARCH_FILES, useArchitectureOverview } from '../../editor/use-architecture-overview'
+import { writeCoreContent } from '../../../services/resource-protocol'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../../project-session-gate'
 import { Button } from '../../ui/Button'
@@ -18,6 +21,7 @@ import { refreshStageWork } from '../use-stage-work'
 import ArchitectureGenerateDialog from './ArchitectureGenerateDialog'
 import ArchitectureSection from './ArchitectureSection'
 import { excerpt, mainAction, sectionBadge, SECTION_ORDER } from './architecture-sections'
+import { PlanningFeedbackDialog } from '../feedback/PlanningFeedbackDialog'
 
 /** 角色名单一节的摘要。角色卡在打开作品后单独载入（角色多时要几百毫秒），载完之前只这一节写「正在读取」，其余三节照常可用。 */
 function useCastSummary(projectKey: string): { summary: string; loading: boolean } {
@@ -48,6 +52,8 @@ export default function StageArchitecture({ projectKey }: { projectKey: string }
   const cast = useCastSummary(projectKey)
   /** 清空确认打开时冻结的会话：确认时作品已换就什么也不写。 */
   const [clearing, setClearing] = useState<{ key: ArchStepKey; session: ProjectSessionContext } | null>(null)
+  /** 意见修订弹窗当前打开的架构节：仅前提与世界观支持规划反馈。 */
+  const [feedbackKey, setFeedbackKey] = useState<'premise' | 'worldbuilding' | null>(null)
 
   const total = SECTION_ORDER.length
   const action = mainAction(filled ?? 0, total)
@@ -76,6 +82,21 @@ export default function StageArchitecture({ projectKey }: { projectKey: string }
     }
     reload()
     toast.success(text(`已清空「${name}」`, `Cleared ${name}`))
+  }
+
+  const handleAdoptFeedback = async (adoptedText: string) => {
+    if (!feedbackKey) return
+    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!session || !isProjectSessionPath(session, projectKey) || !isProjectSessionCurrent(session)) return
+    const uri = `ai-novel://core/${feedbackKey}`
+    const success = await writeCoreContent(uri, adoptedText, session)
+    if (success && isProjectSessionCurrent(session)) {
+      const store = useEditorStore.getState()
+      const tabId = createProjectArchTabId(session.projectPath, uri)
+      store.syncTabContent(tabId, adoptedText)
+      store.markTabSaved(tabId, adoptedText)
+      reload()
+    }
   }
 
   const summary = (key: ArchStepKey) => {
@@ -141,6 +162,7 @@ export default function StageArchitecture({ projectKey }: { projectKey: string }
                 const session = captureProjectSession(useProjectStore.getState().currentProject)
                 if (session && isProjectSessionPath(session, projectKey)) setClearing({ key, session })
               }}
+              onFeedback={targetKey => setFeedbackKey(targetKey)}
               onOpenCast={() => openCast(text)}
               onReload={reload}
             />
@@ -158,6 +180,15 @@ export default function StageArchitecture({ projectKey }: { projectKey: string }
         confirmLabel={text('清空此节', 'Clear section')}
         cancelLabel={text('取消', 'Cancel')}
         onConfirm={() => { void confirmClear() }}
+      />
+      <PlanningFeedbackDialog
+        key={feedbackKey ?? 'none'}
+        isOpen={feedbackKey !== null}
+        target={feedbackKey ?? 'premise'}
+        label={feedbackKey ? text(...ARCH_STEP_NAMES[feedbackKey]) : ''}
+        baseText={feedbackKey ? (overview.contents[feedbackKey] ?? '') : ''}
+        onClose={() => setFeedbackKey(null)}
+        onAdopted={adopted => { void handleAdoptFeedback(adopted) }}
       />
     </div>
   )

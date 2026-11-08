@@ -1,4 +1,4 @@
-import { Copy, Ellipsis, Eye, EyeOff, PenLine, RotateCw, Sparkles, Users } from 'lucide-react'
+import { Copy, Ellipsis, Eye, EyeOff, MessageSquareQuote, PenLine, RotateCw, Sparkles, Users } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { ARCH_STEP_NAMES, type ArchStepKey } from '../../../services/architecture-step-selection'
 import { outlineSourceChangedNote } from '../../run/run-recovery'
@@ -20,6 +20,7 @@ interface SectionProps {
   onClear: () => void
   onOpenCast: () => void
   onReload: () => void
+  onFeedback?: (key: 'premise' | 'worldbuilding') => void
 }
 
 /** 候选与续写的提示条：世界观或大纲生成到一半停下时，未完成的候选不写入正式内容，作者可以看、复制或接着写。 */
@@ -145,15 +146,17 @@ function RosterNotice({ overview }: { overview: ArchitectureOverview }) {
   )
 }
 
-export default function ArchitectureSection({ sectionKey, overview, badge, summary, onEdit, onGenerate, onClear, onOpenCast, onReload }: SectionProps) {
+export default function ArchitectureSection({ sectionKey, overview, badge, summary, onEdit, onGenerate, onClear, onOpenCast, onReload, onFeedback }: SectionProps) {
   const text = useLocaleStore(s => s.text)
   const filled = Boolean(overview.archStatus[sectionKey])
   const cast = sectionKey === 'characters'
+  const canFeedback = (sectionKey === 'premise' || sectionKey === 'worldbuilding') && filled && Boolean(onFeedback)
   const name = text(...ARCH_STEP_NAMES[sectionKey])
 
   const groups: MenuGroupSpec[] = [
     { id: 'section', items: [
       { id: 'reload', label: text('重新读取', 'Reload'), onSelect: onReload },
+      ...(canFeedback ? [{ id: 'feedback', label: text('AI 意见修订…', 'Revise with AI…'), onSelect: () => onFeedback!(sectionKey as 'premise' | 'worldbuilding') }] : []),
       { id: 'generate', label: filled ? text('AI 重新生成此节…', 'Regenerate with AI…') : text('AI 生成此节…', 'Generate with AI…'), onSelect: onGenerate },
       ...(cast ? [{ id: 'projection', label: text('查看角色名单全文', 'View cast as text'), onSelect: onEdit }] : []),
     ] },
@@ -166,7 +169,16 @@ export default function ArchitectureSection({ sectionKey, overview, badge, summa
   if (cast) {
     actions = <Button variant="text" size="sm" onClick={onOpenCast}><Users size={14} aria-hidden />{text('打开角色名单', 'Open cast')}</Button>
   } else if (filled) {
-    actions = <Button variant="text" size="sm" onClick={onEdit}><PenLine size={14} aria-hidden />{text('编辑', 'Edit')}</Button>
+    actions = (
+      <>
+        {canFeedback && (
+          <Button variant="text" size="sm" onClick={() => onFeedback!(sectionKey as 'premise' | 'worldbuilding')}>
+            <MessageSquareQuote size={14} aria-hidden />{text('意见修订', 'Revise')}
+          </Button>
+        )}
+        <Button variant="text" size="sm" onClick={onEdit}><PenLine size={14} aria-hidden />{text('编辑', 'Edit')}</Button>
+      </>
+    )
   } else {
     actions = (
       <>

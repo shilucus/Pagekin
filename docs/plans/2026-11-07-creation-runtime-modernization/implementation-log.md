@@ -495,5 +495,34 @@ The observations below retain their chronological state. The final acceptance at
   - `FEEDBACK-002` marked `completed` / `passes=true`.
   - Completed feature count reaches 9/35.
 
+## Stage 8: Planning Feedback Architecture Entry, Partial Adoption & Stale Protection UI
+
+- Parent: `30f50340 feat(feedback): add single-book planning feedback multi-round candidate diff adoption UI`. [ADR-0042](../../adr/0042-planning-feedback-ui-partial-adoption-and-architecture-entry.md) bounds the planning feedback architecture section entry, fine-tuning partial adoption, and stale protection for `UI-002`:
+  - Entrypoints reused for single-book architecture sections (`premise` and `worldbuilding`) in `StageArchitecture.tsx` and `ArchitectureSection.tsx`.
+  - Stale protection: captures baseline upon dialog open; when external base facts differ (`capturedBaseText !== baseText`), triggers `isStale` state to display `.pf-stale-alert` warning, disabling direct adoption to prevent overwriting fresh external edits.
+  - Fine-tune editing: author can click "微调编辑此候选" to edit candidate text in a dedicated textarea before committing with `decision: 'edited'`.
+  - Copy candidate: provides one-click clipboard copy of candidate text for safe manual extraction.
+  - Strict lease barrier and instance isolation: `PlanningFeedbackDialogInner` captures an immutable mount-time `frozenSession`, and `PlanningFeedbackDialog` keys instances on `${target}-${isOpen}`, eliminating cross-target candidate contamination and cross-project lease bypass.
+  - React 19 / hooks conformance: eliminates cascading renders and synchronous `setState` in effects.
+  - Strict Paper-Ink CSS tokens (`var(--warn)`, `var(--warn-soft)`, `var(--rule)`, etc.) with zero color literals. Full dual-language localization.
+- Implementation:
+  - `src/components/stage/feedback/PlanningFeedbackDialog.tsx`: Inner component with frozen session, stale alert, fine-tune editing, clipboard copy, and candidate diff tabs.
+  - `src/components/stage/feedback/planning-feedback.css`: Added `.pf-stale-alert` styling with semantic tokens.
+  - `src/components/stage/architecture/ArchitectureSection.tsx` & `StageArchitecture.tsx`: Integrated `FeedbackReviseButton` on premise and worldbuilding sections with `writeCoreContent` and `syncTabContent` sync.
+  - `src/components/stage/setup/StageSetup.tsx`: Added target keying to ensure fresh instances per target.
+  - `src/components/stage/feedback/__tests__/planning-feedback-dialog.test.tsx`: Expanded with tests for multi-round candidate tabs, word-level prose diff, stale alert & adoption blocking, and fine-tuning edit mode.
+  - `src/components/stage/architecture/__tests__/stage-architecture-feedback.test.tsx`: Tests for architecture section entry rendering and adoption callbacks.
+- Actual execution:
+  - 3 focus suites passed (33/33 tests passed): `planning-feedback-dialog.test.tsx` (9 tests), `stage-architecture-feedback.test.tsx` (4 tests), `planning-feedback-client.test.ts` (20 tests).
+  - All static and build checks passed: `typecheck` (exit 0), `lint` (exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent review:
+  - Role: Stage 8 Independent Reviewer (`pro` model).
+  - First round: REJECT (identified lease guard bypass on global project changes, cross-target candidate pollution, and missing interaction tests).
+  - Second round: PASS (verified `PlanningFeedbackDialogInner` with immutable frozen session, fresh key mounting, zero cascading renders, and 33/33 test coverage).
+- Acceptance:
+  - `UI-002` marked `completed` / `passes=true`.
+  - Completed feature count reaches 10/35.
+
+
 
 

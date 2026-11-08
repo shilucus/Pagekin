@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, Check, History, LoaderCircle, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Check, Copy, Edit3, History, LoaderCircle, Sparkles, X } from 'lucide-react'
 import type { PlanningFeedbackCandidate, PlanningFeedbackCoreTarget } from '../../../shared/planning-feedback'
 import type { PlanningFeedbackFieldBase, PlanningFeedbackHistory } from '../../../shared/planning-feedback-ipc'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
@@ -24,9 +24,14 @@ export interface PlanningFeedbackDialogProps {
   onAdopted: (adoptedText: string) => void
   projectSession?: ProjectSessionContext | null
   client?: PlanningFeedbackClient
+  initialBaseId?: string
+  initialCapturedBaseText?: string
+  initialCandidates?: PlanningFeedbackCandidate[]
+  initialSelectedCandidateId?: string
+  initialIsEditing?: boolean
 }
 
-export function PlanningFeedbackDialog({
+function PlanningFeedbackDialogInner({
   target,
   label,
   baseText,
@@ -35,47 +40,77 @@ export function PlanningFeedbackDialog({
   onAdopted,
   projectSession,
   client: externalClient,
+  initialBaseId,
+  initialCapturedBaseText,
+  initialCandidates,
+  initialSelectedCandidateId,
+  initialIsEditing,
 }: PlanningFeedbackDialogProps) {
   const text = useLocaleStore(s => s.text)
-  const [baseId, setBaseId] = useState<string | null>(null)
+  const [baseId, setBaseId] = useState<string | null>(initialBaseId ?? null)
+  const [capturedBaseText, setCapturedBaseText] = useState<string | null>(initialCapturedBaseText ?? null)
   const [captureError, setCaptureError] = useState<string | null>(null)
-  const [candidates, setCandidates] = useState<PlanningFeedbackCandidate[]>([])
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
+  const [candidates, setCandidates] = useState<PlanningFeedbackCandidate[]>(initialCandidates ?? [])
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
+    initialSelectedCandidateId ?? (initialCandidates?.[0]?.candidateId ?? null),
+  )
   const [feedback, setFeedback] = useState('')
   const [constraintsText, setConstraintsText] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
   const [isAdopting, setIsAdopting] = useState(false)
   const [parentCandidateId, setParentCandidateId] = useState<string | null>(null)
+  const [isEditing, setIsEditing] = useState(initialIsEditing ?? false)
+  const [userEditedText, setUserEditedText] = useState<string | null>(null)
+
+  // 弹窗打开实例建立时，冻结当刻的项目会话，生命周期内保持不可变，防止跨书/换租约穿透
+  const [frozenSession] = useState<ProjectSessionContext | null>(() => {
+    if (projectSession) return projectSession
+    const curr = useProjectStore.getState().currentProject
+    return curr ? captureProjectSession(curr) : null
+  })
+
+  const sessionToCheck = frozenSession ?? projectSession
 
   const isCapturing = isOpen && !baseId && !captureError
-
-  const currentProject = useProjectStore(s => s.currentProject)
-  const activeSession = projectSession ?? captureProjectSession(currentProject)
+  const isStale = capturedBaseText !== null && baseText !== capturedBaseText
 
   const resolvedClient = useMemo(() => {
     if (externalClient) return externalClient
-    if (activeSession) return createPlanningFeedbackClient(activeSession)
+    if (sessionToCheck) return createPlanningFeedbackClient(sessionToCheck)
     return null
-  }, [externalClient, activeSession])
+  }, [externalClient, sessionToCheck])
 
   // 初始化捕获基线
   useEffect(() => {
     if (!isOpen || !resolvedClient) return
+    if (initialBaseId && initialCandidates && initialCandidates.length > 0) return
     let active = true
+
+    if (sessionToCheck && !isProjectSessionCurrent(sessionToCheck)) {
+      return
+    }
 
     void resolvedClient.capture({ target })
       .then(async (base: PlanningFeedbackFieldBase) => {
         if (!active) return
         setBaseId(base.baseId)
+        setCapturedBaseText(base.value)
         try {
           const history: PlanningFeedbackHistory = await resolvedClient.readHistory({ baseId: base.baseId })
-          if (active && history.candidates.length > 0) {
+          if (!active) return
+          if (history.candidates.length > 0) {
             const list = history.candidates.map((c: PlanningFeedbackHistory['candidates'][number]) => c.candidate)
             setCandidates(list)
             setSelectedCandidateId(list[list.length - 1]?.candidateId ?? null)
+          } else {
+            setCandidates([])
+            setSelectedCandidateId(null)
           }
         } catch {
-          // 初始无历史属正常场景
+          if (active) {
+            setCandidates([])
+            setSelectedCandidateId(null)
+          }
         }
       })
       .catch((err: unknown) => {
@@ -88,11 +123,13 @@ export function PlanningFeedbackDialog({
     return () => {
       active = false
     }
-  }, [isOpen, target, resolvedClient, text])
+  }, [isOpen, target, resolvedClient, sessionToCheck, initialBaseId, initialCandidates, text])
 
   const selectedCandidate = useMemo(() => {
     return candidates.find(c => c.candidateId === selectedCandidateId) ?? null
   }, [candidates, selectedCandidateId])
+
+  const editedText = userEditedText ?? selectedCandidate?.text ?? ''
 
   // 差异对比
   const diff = useMemo(() => {
@@ -102,7 +139,7 @@ export function PlanningFeedbackDialog({
 
   const handleGenerate = async () => {
     if (!baseId || !resolvedClient || !feedback.trim()) return
-    if (activeSession && !isProjectSessionCurrent(activeSession)) {
+    if (sessionToCheck && !isProjectSessionCurrent(sessionToCheck)) {
       toast.error(text('当前项目已切换，已取消生成', 'Project changed, generation cancelled.'))
       return
     }
@@ -131,6 +168,8 @@ export function PlanningFeedbackDialog({
 
       setCandidates(prev => [...prev, newCandidate])
       setSelectedCandidateId(newCandidate.candidateId)
+      setUserEditedText(null)
+      setIsEditing(false)
       setFeedback('')
       setConstraintsText('')
       setParentCandidateId(null)
@@ -143,26 +182,43 @@ export function PlanningFeedbackDialog({
     }
   }
 
+  const handleCopyCandidate = async () => {
+    if (!selectedCandidate) return
+    const content = isEditing ? editedText : selectedCandidate.text
+    try {
+      await navigator.clipboard.writeText(content)
+      toast.success(text('已复制候选内容到剪贴板', 'Candidate copied to clipboard.'))
+    } catch {
+      toast.error(text('复制失败', 'Failed to copy.'))
+    }
+  }
+
   const handleAdopt = async () => {
     if (!selectedCandidate || !resolvedClient) return
-    if (activeSession && !isProjectSessionCurrent(activeSession)) {
+    if (sessionToCheck && !isProjectSessionCurrent(sessionToCheck)) {
       toast.error(text('当前项目已切换，无法采用', 'Project changed, adoption aborted.'))
+      return
+    }
+    if (isStale) {
+      toast.error(text('底稿已发生变动，直接采用已禁用', 'Base facts have changed, direct adoption is disabled.'))
       return
     }
 
     setIsAdopting(true)
     const idempotencyKey = `adopt-${selectedCandidate.candidateId}-${Date.now()}`
+    const adoptedContent = isEditing ? editedText : selectedCandidate.text
+    const decision = isEditing ? 'edited' : 'full'
 
     try {
       await resolvedClient.adopt({
         candidateId: selectedCandidate.candidateId,
         idempotencyKey,
-        decision: 'full',
-        text: selectedCandidate.text,
+        decision,
+        text: adoptedContent,
       })
 
       toast.success(text(`已采用候选至「${label}」`, `Adopted candidate for ${label}.`))
-      onAdopted(selectedCandidate.text)
+      onAdopted(adoptedContent)
       onClose()
     } catch (err: unknown) {
       const reason = displayedErrorMessage(useLocaleStore.getState().locale, err)
@@ -197,10 +253,15 @@ export function PlanningFeedbackDialog({
             <Button
               variant="primary"
               onClick={() => { void handleAdopt() }}
-              disabled={isGenerating || isAdopting || isCapturing}
+              disabled={isGenerating || isAdopting || isCapturing || isStale}
+              title={isStale ? text('底稿已发生变动，直接采用已禁用', 'Base facts have changed, direct adoption is disabled') : undefined}
             >
               {isAdopting ? <LoaderCircle size={14} className="stage-update-spin" aria-hidden /> : <Check size={14} aria-hidden />}
-              {isAdopting ? text('正在采用…', 'Adopting…') : text('采用此候选', 'Adopt this candidate')}
+              {isAdopting
+                ? text('正在采用…', 'Adopting…')
+                : isEditing
+                  ? text('采用微调版本', 'Adopt edited version')
+                  : text('采用此候选', 'Adopt this candidate')}
             </Button>
           )}
         </>
@@ -264,7 +325,10 @@ export function PlanningFeedbackDialog({
                   role="tab"
                   className="pf-tab-btn"
                   data-active={c.candidateId === selectedCandidateId}
-                  onClick={() => setSelectedCandidateId(c.candidateId)}
+                  onClick={() => {
+                    setSelectedCandidateId(c.candidateId)
+                    setUserEditedText(null)
+                  }}
                 >
                   <History size={12} aria-hidden />
                   {text(`第 ${idx + 1} 轮 (C${idx + 1})`, `Round ${idx + 1} (C${idx + 1})`)}
@@ -274,9 +338,20 @@ export function PlanningFeedbackDialog({
           </div>
         )}
 
-        {/* 结构化差异展示 */}
+        {/* 结构化差异展示与微调编辑 */}
         {selectedCandidate && diff && (
           <div className="pf-diff-box">
+            {isStale && (
+              <div className="pf-stale-alert" role="alert">
+                <AlertTriangle size={14} aria-hidden />
+                <span>
+                  {text(
+                    '当前正式底稿已被外部修改，此候选版本基于旧底稿生成。为防止覆盖最新编辑，直接采用已禁用。您可以复制候选内容或重新生成。',
+                    'The formal base has been updated elsewhere. Adoption is disabled to protect fresh edits. You may copy the text or regenerate.',
+                  )}
+                </span>
+              </div>
+            )}
             <div className="pf-diff-stats">
               <span>{text('与当前正式底稿对比：', 'Comparing with formal base:')}</span>
               {diff.added + diff.removed === 0 ? (
@@ -288,18 +363,43 @@ export function PlanningFeedbackDialog({
                 </>
               )}
             </div>
-            <div className="pf-diff-content">
-              {diff.paragraphs.map((p, pIdx) => (
-                <p key={pIdx}>
-                  {p.map((seg, sIdx) => {
-                    if (seg.kind === 'added') return <ins key={sIdx}>{seg.text}</ins>
-                    if (seg.kind === 'removed') return <del key={sIdx}>{seg.text}</del>
-                    return <span key={sIdx}>{seg.text}</span>
-                  })}
-                </p>
-              ))}
-            </div>
+
+            {isEditing ? (
+              <div className="pf-section">
+                <label className="pf-label">{text('在采用前微调内容：', 'Fine-tune before adoption:')}</label>
+                <textarea
+                  className="pf-textarea"
+                  style={{ minHeight: '140px' }}
+                  value={editedText}
+                  onChange={e => setUserEditedText(e.target.value)}
+                  disabled={isGenerating || isAdopting}
+                />
+              </div>
+            ) : (
+              <div className="pf-diff-content">
+                {diff.paragraphs.map((p, pIdx) => (
+                  <p key={pIdx}>
+                    {p.map((seg, sIdx) => {
+                      if (seg.kind === 'added') return <ins key={sIdx}>{seg.text}</ins>
+                      if (seg.kind === 'removed') return <del key={sIdx}>{seg.text}</del>
+                      return <span key={sIdx}>{seg.text}</span>
+                    })}
+                  </p>
+                ))}
+              </div>
+            )}
+
             <div className="pf-actions-bar">
+              <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
+                <Button variant="text" size="sm" onClick={() => void handleCopyCandidate()}>
+                  <Copy size={13} aria-hidden />
+                  {text('复制候选', 'Copy candidate')}
+                </Button>
+                <Button variant="text" size="sm" onClick={() => setIsEditing(v => !v)}>
+                  <Edit3 size={13} aria-hidden />
+                  {isEditing ? text('查看逐字对比', 'View diff') : text('微调编辑此候选', 'Edit candidate')}
+                </Button>
+              </div>
               <Button variant="text" size="sm" onClick={handleIterateFromCurrent} disabled={isGenerating}>
                 <ArrowRight size={13} aria-hidden />
                 {text('基于此候选继续提意见 (开启新一轮)', 'Iterate from this candidate (Next round)')}
@@ -310,4 +410,9 @@ export function PlanningFeedbackDialog({
       </div>
     </InkDialog>
   )
+}
+
+export function PlanningFeedbackDialog(props: PlanningFeedbackDialogProps) {
+  if (!props.isOpen) return null
+  return <PlanningFeedbackDialogInner key={`${props.target}-${props.isOpen}`} {...props} />
 }

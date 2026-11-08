@@ -1478,9 +1478,18 @@
         "browser",
         "electron"
       ],
-      "status": "not_started",
-      "passes": false,
-      "evidence": []
+      "status": "completed",
+      "passes": true,
+      "evidence": [
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-8-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Planning feedback UI architecture entry, candidate diff, fine-tune editing, stale protection and lease guard passed (3 suites, 33/33 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
+          "limitations": "Single-book planning and single architecture section targets; multi-book and range outline feedback belong to subsequent features"
+        }
+      ]
     },
     {
       "id": "UI-003",

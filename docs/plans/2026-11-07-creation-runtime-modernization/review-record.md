@@ -398,5 +398,27 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `FEEDBACK-002` marked `completed` / `passes=true`.
   - Total completed features: 9/35.
 
+## 2026-11-08 Implementation: Stage 8
+
+- Scope: Planning feedback Prose Diff visual interaction, partial adoption fine-tuning, stale protection, and architecture section reuse for `UI-002`.
+  - Parent: `30f50340 feat(feedback): add single-book planning feedback multi-round candidate diff adoption UI`.
+  - ADR: [ADR-0042](../../adr/0042-planning-feedback-ui-partial-adoption-and-architecture-entry.md).
+- Team:
+  - Implementation: Planning feedback dialog inner isolation ([`PlanningFeedbackDialog.tsx`](../../../src/components/stage/feedback/PlanningFeedbackDialog.tsx)), stale alert styles ([`planning-feedback.css`](../../../src/components/stage/feedback/planning-feedback.css)), architecture page section integration ([`ArchitectureSection.tsx`](../../../src/components/stage/architecture/ArchitectureSection.tsx), [`StageArchitecture.tsx`](../../../src/components/stage/architecture/StageArchitecture.tsx)), setup keying ([`StageSetup.tsx`](../../../src/components/stage/setup/StageSetup.tsx)), tests ([`planning-feedback-dialog.test.tsx`](../../../src/components/stage/feedback/__tests__/planning-feedback-dialog.test.tsx), [`stage-architecture-feedback.test.tsx`](../../../src/components/stage/architecture/__tests__/stage-architecture-feedback.test.tsx)).
+  - Independent Review: Stage 8 Independent Reviewer (`pro` model) — initial round REJECT (uncovered lease guard bypass on global project changes and cross-target candidate contamination); second round PASS after extracting `PlanningFeedbackDialogInner` with immutable mount-time frozen session, clean instance unmount/remount on open/target changes, zero cascading renders, and full Prose Diff / stale alert / fine-tune edit assertions.
+- Key Reviews & Findings:
+  - AC-1: All targets (setup fields and architecture `premise`/`worldbuilding` sections) have explicit entries with empty/busy/error handling, word-level Prose Diff, added/deleted counters, fine-tune editing mode (`decision: 'edited'`), and copy candidate to clipboard.
+  - AC-2: Stale protection active: `isStale` triggers whenever current base facts differ from captured baseline, rendering `.pf-stale-alert` warning and disabling direct adoption button with tooltip explanation, while preserving safe read-only copy.
+  - AC-3: Strict lease barrier: mount-time `frozenSession` combined with `isProjectSessionCurrent` prevents cross-project pollution or lease bypass on book switching.
+  - Design & Rules: 100% Paper-Ink tokens, zero cascading renders / React 19 hook violations, 100% i18n coverage.
+- Actual Execution:
+  - 3 focus suites passed (33/33 tests passed): `planning-feedback-dialog.test.tsx` (9 tests), `stage-architecture-feedback.test.tsx` (4 tests), `planning-feedback-client.test.ts` (20 tests).
+  - All static checks passed: `typecheck` (exit 0), `lint` (exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Acceptance:
+  - Verdict: PASS.
+  - `UI-002` marked `completed` / `passes=true`.
+  - Total completed features: 10/35.
+
+
 
 
