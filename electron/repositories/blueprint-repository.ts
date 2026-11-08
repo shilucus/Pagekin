@@ -491,9 +491,7 @@ export class BlueprintRepository {
     }
 
     /** 获取单个蓝图 */
-    static getByChapter(chapterNumber: number): BlueprintData | null {
-        const db = requireProjectDb()
-
+    static getByChapter(chapterNumber: number, db = requireProjectDb()): BlueprintData | null {
         const row = db.prepare(
             'SELECT * FROM blueprints WHERE chapter_number = ?'
         ).get(chapterNumber) as BlueprintRow | undefined

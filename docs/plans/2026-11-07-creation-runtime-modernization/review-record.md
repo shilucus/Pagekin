@@ -419,6 +419,27 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `UI-002` marked `completed` / `passes=true`.
   - Total completed features: 10/35.
 
+## 2026-11-08 Implementation: Stage 9
+
+- Scope: Outline range and blueprint field multi-round feedback revision for `FEEDBACK-003`.
+  - Parent: `61eb92af feat(ui): add planning feedback architecture entry and partial adoption workflow`.
+  - ADR: [ADR-0043](../../adr/0043-outline-range-and-blueprint-field-feedback-revision.md).
+- Team:
+  - Implementation: Shared blueprint feedback contract ([`blueprint-feedback-contract.ts`](../../../src/shared/blueprint-feedback-contract.ts)), blueprint feedback adapter ([`blueprint-feedback-adapter.ts`](../../../electron/repositories/blueprint-feedback-adapter.ts)), blueprint repository db extension ([`blueprint-repository.ts`](../../../electron/repositories/blueprint-repository.ts)), tests ([`blueprint-feedback-contract.test.ts`](../../../src/shared/__tests__/blueprint-feedback-contract.test.ts), [`blueprint-feedback-adapter.test.ts`](../../../electron/repositories/__tests__/blueprint-feedback-adapter.test.ts), [`feedback-outline-range.test.ts`](../../../electron/repositories/__tests__/feedback-outline-range.test.ts)).
+  - Independent Review: Stage 9 Independent Reviewer (`pro` model) — verdict PASS.
+- Key Reviews & Findings:
+  - AC-1 (Scope Isolation): Outline range revision (e.g. chapters 3-4) strictly limits edits to target chapters; preamble and chapters 1-2, 5-6 retain 100% exact bytes; `charactersArch` unchanged. Single blueprint field revision modifies only explicit fields on target chapter; chapters 1, 2, 4, 5 and unselected fields on chapter 3 remain untouched; total blueprint count preserved.
+  - AC-2 (Identity Closure & Zero Write Gate): Hand-edited outline entry numbers missing, duplicated, or out-of-range throw `PLANNING_FEEDBACK_TEXT_INVALID` with zero writes to SQLite. Blueprint revisions enforce strict Identity Closure (`from`/`to` in `relationshipHints` and candidate names must be closed in `characters`); unclosed relations hard-fail with zero database writes. User unselected fields are never automatically populated or guessed.
+  - AC-3 (Multi-Round, Partial Adoption, CAS & Anti-Full Overwrite): Round 2 unadopted candidate abandonment leaves formal baseline at `ready` with zero pollution. Concurrent external baseline edits trigger CAS conflict refusal (`PLANNING_FEEDBACK_SOURCE_CONFLICT` and `BLUEPRINT_SOURCE_CONFLICT`). Single blueprint commits hard-code `mode: 'replace-range'` pinned to `[chapterNumber, chapterNumber]`, completely eliminating the catastrophic whole-book blueprint wipe vulnerability of `mode: 'full'`. Idempotent replay supported for identical `operationId`.
+- Actual Execution:
+  - 3 focus suites passed (17/17 tests passed): `blueprint-feedback-contract.test.ts` (8 tests), `blueprint-feedback-adapter.test.ts` (5 tests), `feedback-outline-range.test.ts` (4 tests).
+  - 6 planning feedback suites passed (155/155 tests passed).
+  - All static checks passed: `typecheck` (exit 0), `lint` (exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Acceptance:
+  - Verdict: PASS.
+  - `FEEDBACK-003` marked `completed` / `passes=true`.
+  - Total completed features: 11/35.
+
 
 
 

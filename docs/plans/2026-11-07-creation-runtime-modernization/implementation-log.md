@@ -523,6 +523,35 @@ The observations below retain their chronological state. The final acceptance at
   - `UI-002` marked `completed` / `passes=true`.
   - Completed feature count reaches 10/35.
 
+## Stage 9: Outline Range & Blueprint Field Multi-Round Feedback Revision
+
+- Parent: `61eb92af feat(ui): add planning feedback architecture entry and partial adoption workflow`. [ADR-0043](../../adr/0043-outline-range-and-blueprint-field-feedback-revision.md) bounds outline range CAS revision and single blueprint field-level partial adoption for `FEEDBACK-003`:
+  - Outline range revision: supports scoped revision (e.g. chapters 3-4) with strict character slicing in `planning-feedback-outline-adapter.ts`. Outer preamble, prior chapters, and trailing chapters retain 100% exact bytes.
+  - Single blueprint field partial adoption: `blueprint-feedback-contract.ts` enforces explicit field merging; unselected fields on target chapter retain original values.
+  - Identity Closure: `validateBlueprintFeedbackChanges` enforces that all new character candidates and relation endpoints (`from`/`to`) in `relationshipHints` exist in `characters`; unclosed references hard-reject with zero database writes.
+  - Zero write on hand-edit errors: missing, duplicated, or out-of-range chapter numbers in hand-edited outlines reject before persistence.
+  - Anti-full overwrite: `blueprint-feedback-adapter.ts` hardcodes `mode: 'replace-range'` restricted to `[chapterNumber, chapterNumber]`, eliminating whole-book blueprint deletion risk.
+  - CAS concurrency protection: baseline hashes verify that concurrent external edits reject with `PLANNING_FEEDBACK_SOURCE_CONFLICT` or `BLUEPRINT_SOURCE_CONFLICT`.
+  - Idempotent replay: identical `operationId` replays cached receipt; conflicting payloads under identical keys are rejected with `BLUEPRINT_OPERATION_CONFLICT`.
+- Implementation:
+  - `src/shared/blueprint-feedback-contract.ts`: Pure contract for blueprint field changes, validation, identity closure, and change application.
+  - `src/shared/__tests__/blueprint-feedback-contract.test.ts`: Unit tests for validation, identity closure, field filtering, and unselected field preservation.
+  - `electron/repositories/blueprint-feedback-adapter.ts`: Main-process adapter for baseline capture, hash calculation, CAS validation, and range-restricted commit.
+  - `electron/repositories/__tests__/blueprint-feedback-adapter.test.ts`: Integration tests for scoped updates, out-of-range blueprint preservation, unclosed relation zero-writes, CAS conflicts, and idempotence.
+  - `electron/repositories/__tests__/feedback-outline-range.test.ts`: Tests for outline range isolation, hand-edited format validation, partial adoption, and unadopted candidate abandonment.
+  - `electron/repositories/blueprint-repository.ts`: Updated `getByChapter` to accept optional `db` parameter.
+- Actual execution:
+  - 3 focus suites passed (17/17 tests passed): `blueprint-feedback-contract.test.ts` (8 tests), `blueprint-feedback-adapter.test.ts` (5 tests), `feedback-outline-range.test.ts` (4 tests).
+  - 6 planning feedback suites passed (155/155 tests passed).
+  - All static and build checks passed: `typecheck` (exit 0), `lint` (exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent review:
+  - Role: Stage 9 Independent Reviewer (`pro` model).
+  - Verdict: PASS.
+- Acceptance:
+  - `FEEDBACK-003` marked `completed` / `passes=true`.
+  - Completed feature count reaches 11/35.
+
+
 
 
 
