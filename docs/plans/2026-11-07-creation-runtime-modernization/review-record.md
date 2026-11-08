@@ -553,6 +553,30 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `UI-001` marked `completed` / `passes=true`.
   - Total completed features: 17/35 (48.6%).
 
+## Stage 16: API-001 本地安全入站通道、命令白名单、严格授权验证与幂等重试契约
+- Target Feature: `API-001` (本地安全入站通道、命令白名单、严格授权验证与幂等重试契约)
+- Review Date: 2026-11-09
+- Reviewer: Stage 16 Independent Reviewer (`pro` model, subagent `913f1f72-e114-498f-ac51-e8bdeea30f89`)
+- Scope & Verification:
+  - ADR Reference: `docs/adr/0050-inbound-domain-api-security-and-idempotency-contract.md`
+  - Evidence Document: `docs/plans/2026-11-07-creation-runtime-modernization/stage-16-evidence.md`
+  - Code Changes:
+    - `src/shared/inbound-domain-contract.ts`
+    - `src/shared/__tests__/inbound-domain-contract.test.ts`
+    - `electron/services/inbound-api-service.ts`
+    - `electron/controllers/inbound-api-controller.ts`
+    - `electron/controllers/__tests__/inbound-api-controller.test.ts`
+  - Test Suite:
+    - `src/shared/__tests__/inbound-domain-contract.test.ts` (15/15 passed)
+    - `electron/controllers/__tests__/inbound-api-controller.test.ts` (11/11 passed)
+  - Gates:
+    - `typecheck` exit 0, `lint` exit 0, `check:i18n` exit 0, `build` exit 0.
+- Acceptance:
+  - Verdict: PASS.
+  - `API-001` marked `completed` / `passes=true`.
+  - Total completed features: 18/35 (51.4%).
+
+
 
 
 

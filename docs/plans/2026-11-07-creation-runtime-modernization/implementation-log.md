@@ -695,6 +695,29 @@ The observations below retain their chronological state. The final acceptance at
   - `UI-001` marked `completed` / `passes=true`.
   - Completed feature count reaches 17/35 (48.6%).
 
+### Stage 16: API-001 本地安全入站通道、命令白名单、严格授权验证与幂等重试契约
+- Target Feature: `API-001` (本地安全入站通道、命令白名单、严格授权验证与幂等重试契约)
+- ADR Reference: `docs/adr/0050-inbound-domain-api-security-and-idempotency-contract.md`
+- Evidence Document: `docs/plans/2026-11-07-creation-runtime-modernization/stage-16-evidence.md`
+- Key Modifications:
+  - `src/shared/inbound-domain-contract.ts`: 共享入站契约、9 种窄领域命令白名单、载荷递归键排序归一化（SHA-256）、安全校验（路径穿越拦截、SQL 注入拦截、512KB 载荷上限）、Host/Origin 本地回环标头防护规则；
+  - `electron/services/inbound-api-service.ts`: 主进程入站领域服务，负责 Token 签发与 Scope 生命周期管理、单书 Project Grant 校验、双重幂等记录存储、事件序号流（Sequence Cursor）、人审 Scope 隔离与防自批门禁；
+  - `electron/controllers/inbound-api-controller.ts`: 本机入站控制器，支持进程内/IPC 直接调用与本地回环（127.0.0.1）HTTP 监听，严格解析与校验 Host、Origin 及 Bearer Token；
+- Acceptance Criteria Verification:
+  - AC-1: 真实执行与命令白名单。仅暴露 9 种结构化命令，严密校验 callerId、Token、ProjectId 及 Project Grant，禁止任何未授权项目、路径穿越、直接 SQL 或随意 Preload 暴露；
+  - AC-2: 幂等绑定与同键异载荷防御。针对 (projectId, callerId, grantId, command, idempotencyKey) 绑定唯一归一化哈希；同载荷重发直接幂等返回已持久化收据；同键异载荷坚决拦截拒绝（IDEMPOTENCY_KEY_PAYLOAD_MISMATCH）；终态为 unknown 的任务严禁以同键自动重试；支持序号游标 afterSequence 事件增量续读；
+  - AC-3: 通道认证、人审 Scope 隔离与网络安全保护。严格隔离 task 与 human_review Scope，严禁 task 凭据自批；在未建立可信物理人审交互渠道前保持写入口关闭；本地回环强制校验 Host/Origin 头部防范 DNS Rebinding 与 CSRF；载荷严格限制 512KB。
+- Actual Execution:
+  - 26 focus/integration tests passed across 2 test suites (`inbound-domain-contract.test.ts` 15/15, `inbound-api-controller.test.ts` 11/11).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 16 Independent Reviewer (`pro` model, subagent `913f1f72-e114-498f-ac51-e8bdeea30f89`).
+  - Verdict: PASS.
+- Acceptance:
+  - `API-001` marked `completed` / `passes=true`.
+  - Completed feature count reaches 18/35 (51.4%).
+
+
 
 
 

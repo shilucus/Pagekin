@@ -1643,9 +1643,18 @@
         "deterministic",
         "electron"
       ],
-      "status": "not_started",
-      "passes": false,
-      "evidence": []
+      "status": "completed",
+      "passes": true,
+      "evidence": [
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-16-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Inbound domain API security, whitelist, strict idempotency, and scope separation tests passed (2 suites, 26/26 passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
+          "limitations": "CLI client implementation belongs to CLI-001; MCP inbound tools belong to MCP-001"
+        }
+      ]
     },
     {
       "id": "CLI-001",
