@@ -576,6 +576,27 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `API-001` marked `completed` / `passes=true`.
   - Total completed features: 18/35 (51.4%).
 
+## Stage 17: CLI-001 创作 CLI 驱动、run --wait、收据打印与非交互人审消费
+- Target Feature: `CLI-001` (提供创作 CLI 驱动、run --wait、收据打印与非交互人审消费)
+- Review Date: 2026-11-09
+- Reviewer: Stage 17 Independent Reviewer (`pro` model, subagent `d6209d86-a96d-4d3a-a10b-cbe7ce6f40ac`)
+- Scope & Verification:
+  - ADR Reference: `docs/adr/0051-creation-cli-driver-receipts-and-human-review-consumption.md`
+  - Evidence Document: `docs/plans/2026-11-07-creation-runtime-modernization/stage-17-evidence.md`
+  - Code Changes:
+    - `scripts/cli/creation-cli.ts`
+    - `scripts/cli/__tests__/creation-cli.test.ts`
+  - Test Suite:
+    - `scripts/cli/__tests__/creation-cli.test.ts` (12/12 passed)
+    - 联合聚焦测试 (38/38 passed)
+  - Gates:
+    - `typecheck` exit 0, `lint` exit 0, `check:i18n` exit 0, `build` exit 0.
+- Acceptance:
+  - Verdict: PASS.
+  - `CLI-001` marked `completed` / `passes=true`.
+  - Total completed features: 19/35 (54.3%).
+
+
 
 
 

@@ -1695,9 +1695,18 @@
         "deterministic",
         "electron"
       ],
-      "status": "not_started",
-      "passes": false,
-      "evidence": []
+      "status": "completed",
+      "passes": true,
+      "evidence": [
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-17-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Creation CLI driver, run --wait, receipt printing, and human review consumption tests passed (12/12 passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
+          "limitations": "Automated workflow loop belongs to AUTO-001; MCP inbound tools belong to MCP-001"
+        }
+      ]
     },
     {
       "id": "AUTO-001",

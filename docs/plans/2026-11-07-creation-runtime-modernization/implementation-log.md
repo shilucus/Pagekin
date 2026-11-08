@@ -717,6 +717,28 @@ The observations below retain their chronological state. The final acceptance at
   - `API-001` marked `completed` / `passes=true`.
   - Completed feature count reaches 18/35 (51.4%).
 
+### Stage 17: CLI-001 创作 CLI 驱动、run --wait、收据打印与非交互人审消费
+- Target Feature: `CLI-001` (提供创作 CLI 驱动、run --wait、收据打印与非交互人审消费)
+- ADR Reference: `docs/adr/0051-creation-cli-driver-receipts-and-human-review-consumption.md`
+- Evidence Document: `docs/plans/2026-11-07-creation-runtime-modernization/stage-17-evidence.md`
+- Key Modifications:
+  - `scripts/cli/creation-cli.ts`: 标准创作 CLI 客户端与命令行分发器（`executeCli`），提供 `submit`、`run --wait`、`events`、`receipt`、`resume`、`approve` 等完整子命令体系，定义标准退出码契约（0~5）及自动秘密脱敏（`maskSecret`）；
+  - `scripts/cli/__tests__/creation-cli.test.ts`: CLI 单元与集成测试套件（12/12 passed）；
+- Acceptance Criteria Verification:
+  - AC-1: run --wait 实际驱动和等待步骤，不把 task 受理等同创作完成；JSON/退出状态严格区分成功 (0)、失败 (1)、取消 (2)、unknown (3)、待人工决策 (4)；
+  - AC-2: UI/CLI 竞争同章走共同 claims 与 CAS，断线重连按原 task/key/收据恢复，秘密通过 `maskSecret` 自动脱敏，不进入 argv/stdout/日志；
+  - AC-3: approve 只能消费已确认的单次人审能力；task 凭据调用坚决拦截拒绝（退出码 5），杜绝自批；物理通道未开启时保持锁定。
+- Actual Execution:
+  - 12 focus/integration tests passed in `creation-cli.test.ts` (12/12 passed; 联合聚焦测试 38/38 passed).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 17 Independent Reviewer (`pro` model, subagent `d6209d86-a96d-4d3a-a10b-cbe7ce6f40ac`).
+  - Verdict: PASS.
+- Acceptance:
+  - `CLI-001` marked `completed` / `passes=true`.
+  - Completed feature count reaches 19/35 (54.3%).
+
+
 
 
 
