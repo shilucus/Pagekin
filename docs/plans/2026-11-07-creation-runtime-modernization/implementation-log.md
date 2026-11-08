@@ -829,6 +829,24 @@ The observations below retain their chronological state. The final acceptance at
   - `ACCEPT-003` marked `completed` / `passes=true`.
   - Completed feature count reaches 24/35 (68.6%).
 
+### 2026-11-09 - Stage 23: Scratch-to-Candidate Creation Orchestration and Multi-Book Qualification (AUTO-003)
+- Feature ID: `AUTO-003`
+- Focus: 从零编排与多书自主创作资格。
+- Acceptance Criteria & Gates:
+  - AC-1: 从作者任务到必要规划事实采用有明确授权和收据，不能只支持已有规划就宣称从零创作；
+  - AC-2: 设定/角色/蓝图依赖保留，缺必要材料或超过授权修复次数时待决，不编造作者确认或无限重试；
+  - AC-3: 多书分别完成到可追溯候选和初验报告/待作者终验；文学质量另按协议举证，未批准不最终定稿。
+- Actual Execution:
+  - 10 focus/contract tests passed across 2 test suites (`scratch-orchestration-contract.test.ts` 3/3, `scratch-creation-orchestrator.test.ts` 7/7).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 23 Independent Reviewer (`pro` model, subagent `b96de1cf-cef6-4bc5-af83-d299f95c0f9c`).
+  - Verdict: PASS (初审指出断点恢复依赖持久化、状态机自愈、有限重试收敛、allowedStages 严格保护、真实初验草稿对接与 try/catch 异常安全 6 项要求；整改后复核全票通过).
+- Acceptance:
+  - `AUTO-003` marked `completed` / `passes=true`.
+  - Completed feature count reaches 25/35 (71.4%).
+
+
 
 
 
