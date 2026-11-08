@@ -723,6 +723,29 @@ Recovery qualification (Stage 6D1): the following historical execution and `pro`
   - `AUTO-003` marked `completed` / `passes=true`.
   - Total completed features: 25/35 (71.4%).
 
+### 2026-11-09 - Stage 24 Review: Inbound Narrow-Domain MCP Adapter (MCP-001)
+- Feature ID: `MCP-001`
+- Reviewer: Stage 24 Independent Reviewer (`pro` model, subagent `71452546-1152-475f-a2cc-139b9da26ea2`)
+- Scope & Verification:
+  - ADR Reference: `docs/adr/0058-inbound-narrow-domain-mcp-adapter.md`
+  - Evidence Document: `docs/plans/2026-11-07-creation-runtime-modernization/stage-24-evidence.md`
+  - Code Changes:
+    - `src/shared/inbound-mcp-contract.ts`
+    - `src/shared/__tests__/inbound-mcp-contract.test.ts`
+    - `electron/services/inbound-mcp-adapter.ts`
+    - `electron/services/__tests__/inbound-mcp-adapter.test.ts`
+    - `electron/services/inbound-api-service.ts`
+  - Test Suite:
+    - `src/shared/__tests__/inbound-mcp-contract.test.ts` (6/6 passed)
+    - `electron/services/__tests__/inbound-mcp-adapter.test.ts` (9/9 passed)
+  - Gates:
+    - `typecheck` exit 0, `lint` exit 0, `check:i18n` exit 0, `build` exit 0.
+- Acceptance:
+  - Verdict: PASS (初审指出粗暴 SQL 正则误杀创作文本、callerId 自动解析、pagekin_list_projects 项目自动推断与 JSON-RPC 2.0 id=null 规范；整改后复核全票通过).
+  - `MCP-001` marked `completed` / `passes=true`.
+  - Total completed features: 26/35 (74.3%).
+
+
 
 
 

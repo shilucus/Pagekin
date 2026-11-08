@@ -2105,9 +2105,18 @@
         "deterministic",
         "electron"
       ],
-      "status": "not_started",
-      "passes": false,
-      "evidence": []
+      "status": "completed",
+      "passes": true,
+      "evidence": [
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-24-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Inbound narrow-domain MCP adapter and contract tests passed (2 suites, 15/15 tests passed); 8 whitelisted tools, callerId auto-binding, anti-self-approval, non-false-positive SQL defense and JSON-RPC 2.0 compliance verified; typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
+          "limitations": "Inbound MCP tools are strictly restricted to 8 whitelisted novel domain tools"
+        }
+      ]
     },
     {
       "id": "SKILL-001",

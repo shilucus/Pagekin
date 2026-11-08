@@ -50,6 +50,13 @@ export class InboundApiService {
   }
 
   /**
+   * Retrieves an auth token record for inspection (read-only).
+   */
+  getToken(tokenStr: string): InboundAuthToken | undefined {
+    return this.tokens.get(tokenStr)
+  }
+
+  /**
    * Issues a new structured auth token for an external caller (CLI / tool).
    */
   issueToken(options: {
@@ -234,6 +241,13 @@ export class InboundApiService {
       }
 
       case 'project:list': {
+        const token = this.tokens.get(req.token)
+        const projectIds = token?.scopes.includes('admin')
+          ? [req.projectId]
+          : (token?.allowedProjectIds && token.allowedProjectIds.length > 0
+              ? token.allowedProjectIds
+              : [req.projectId])
+
         return {
           operationKey,
           idempotencyKey: req.idempotencyKey,
@@ -243,7 +257,7 @@ export class InboundApiService {
           payloadHash,
           status: 'succeeded',
           result: {
-            projects: [{ projectId: req.projectId, grantId: req.grantId }],
+            projects: projectIds.map(p => ({ projectId: p, grantId: req.grantId })),
           },
           createdAt: now,
           completedAt: now,

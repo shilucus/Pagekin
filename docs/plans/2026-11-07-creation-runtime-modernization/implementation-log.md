@@ -846,6 +846,24 @@ The observations below retain their chronological state. The final acceptance at
   - `AUTO-003` marked `completed` / `passes=true`.
   - Completed feature count reaches 25/35 (71.4%).
 
+### 2026-11-09 - Stage 24: Inbound Narrow-Domain MCP Adapter (MCP-001)
+- Feature ID: `MCP-001`
+- Focus: 入站窄领域 MCP 适配器。
+- Acceptance Criteria & Gates:
+  - AC-1: 入站工具与 API 共享 grant、幂等、调度及收据，不暴露 SQL/任意文件/全部 preload 或任意外部进程能力；
+  - AC-2: 同一任务经 CLI/MCP 重连/竞争不重复 effect，取消/unknown/待人工真实传播；任务凭据不能自批；
+  - AC-3: 现有出站 MCP 连接/工具确认边界保留；handler 注册、连接可达与实际工具执行分开举证。
+- Actual Execution:
+  - 15 focus/contract tests passed across 2 test suites (`inbound-mcp-contract.test.ts` 6/6, `inbound-mcp-adapter.test.ts` 9/9).
+  - All quality gates passed: `typecheck` (exit 0), `lint` (exit 0, ESLint 0 warnings, check-color-literals exit 0), `check:i18n` (exit 0), `build` (tsc && vite build, exit 0).
+- Independent Review:
+  - Role: Stage 24 Independent Reviewer (`pro` model, subagent `71452546-1152-475f-a2cc-139b9da26ea2`).
+  - Verdict: PASS (初审指出粗暴 SQL 正则误杀创作文本、callerId 自动解析、pagekin_list_projects 项目自动推断与 JSON-RPC 2.0 id=null 规范；整改后复核全票通过).
+- Acceptance:
+  - `MCP-001` marked `completed` / `passes=true`.
+  - Completed feature count reaches 26/35 (74.3%).
+
+
 
 
 
