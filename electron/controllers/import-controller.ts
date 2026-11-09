@@ -236,8 +236,89 @@ function sourceMediaType(displayName: string): string {
   return extension === '.md' ? 'text/markdown' : 'text/plain'
 }
 
+export const yieldEventLoop = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
+
+/** 单趟解析：在单次切分中同时完成章节切分、标题检测与指纹计算，无标题则回退单章，彻底消除重复预扫描 */
+export function parseOrFallbackSingleFileContent(
+  content: string,
+  fallbackTitle: string,
+  maxChapters: number,
+): ParsedChapter[] {
+  const lines = content.split('\n')
+  const chapters: ParsedChapter[] = []
+  let currentChapter: { headerLine: string; lines: string[] } | null = null
+  let autoNumber = 0
+  let hasHeading = false
+
+  const appendChapter = (chapter: ParsedChapter) => {
+    if (chapters.length >= maxChapters) {
+      throw new Error('IMPORT_CHAPTER_COUNT_EXCEEDED')
+    }
+    chapters.push(chapter)
+  }
+
+  for (const line of lines) {
+    if (isChapterHeading(line)) {
+      hasHeading = true
+      if (currentChapter) {
+        autoNumber++
+        const num = extractChapterNumber(currentChapter.headerLine) || autoNumber
+        const text = currentChapter.lines.join('\n').trim()
+        if (text.length > 0) {
+          appendChapter({
+            number: num,
+            title: extractTitle(currentChapter.headerLine),
+            content: text,
+            wordCount: countDraftUnits(text),
+            contentFingerprint: sha256(text),
+            contentSize: Buffer.byteLength(text, 'utf8'),
+          })
+        }
+      }
+      currentChapter = { headerLine: line, lines: [] }
+    } else if (currentChapter) {
+      currentChapter.lines.push(line)
+    } else {
+      // 在第一个章节标题之前的内容 → 创建前言/序章
+      if (!currentChapter) {
+        currentChapter = { headerLine: line, lines: [] }
+      }
+    }
+  }
+
+  // 保存最后一个章节
+  if (currentChapter) {
+    autoNumber++
+    const num = extractChapterNumber(currentChapter.headerLine) || autoNumber
+    const text = currentChapter.lines.join('\n').trim()
+    if (text.length > 0) {
+      appendChapter({
+        number: num,
+        title: extractTitle(currentChapter.headerLine),
+        content: text,
+        wordCount: countDraftUnits(text),
+        contentFingerprint: sha256(text),
+        contentSize: Buffer.byteLength(text, 'utf8'),
+      })
+    }
+  }
+
+  if (!hasHeading) {
+    return [{
+      number: extractChapterNumber(fallbackTitle) || 1,
+      title: fallbackTitle,
+      content,
+      wordCount: countDraftUnits(content),
+      contentFingerprint: sha256(content),
+      contentSize: Buffer.byteLength(content, 'utf8'),
+    }]
+  }
+
+  return chapters
+}
+
 /** 将单个文件内容拆分为章节数组 */
-function splitSingleFileContent(content: string, maxChapters: number): ParsedChapter[] {
+export function splitSingleFileContent(content: string, maxChapters: number): ParsedChapter[] {
   const lines = content.split('\n')
   const chapters: ParsedChapter[] = []
   let currentChapter: { headerLine: string; lines: string[] } | null = null
@@ -263,6 +344,8 @@ function splitSingleFileContent(content: string, maxChapters: number): ParsedCha
             title: extractTitle(currentChapter.headerLine),
             content: text,
             wordCount: countDraftUnits(text),
+            contentFingerprint: sha256(text),
+            contentSize: Buffer.byteLength(text, 'utf8'),
           })
         }
       }
@@ -289,6 +372,8 @@ function splitSingleFileContent(content: string, maxChapters: number): ParsedCha
         title: extractTitle(currentChapter.headerLine),
         content: text,
         wordCount: countDraftUnits(text),
+        contentFingerprint: sha256(text),
+        contentSize: Buffer.byteLength(text, 'utf8'),
       })
     }
   }
@@ -297,7 +382,7 @@ function splitSingleFileContent(content: string, maxChapters: number): ParsedCha
 }
 
 /** 如果内容中没有匹配到任何章节标题，则整文件视为一章 */
-function hasChapterHeadings(content: string): boolean {
+export function hasChapterHeadings(content: string): boolean {
   const lines = content.split('\n')
   return lines.some(line => isChapterHeading(line))
 }
@@ -546,14 +631,13 @@ export function registerImportController(
               }
               continue
             }
-            parsed = measurePerformanceOperation('import.parse.ms', () => hasChapterHeadings(content))
-              ? measurePerformanceOperation('import.parse.ms', () => splitSingleFileContent(content, limits.maxChapters - chapterCount))
-              : [{
-                  number: extractChapterNumber(path.basename(sourceFileName, path.extname(sourceFileName))) || 1,
-                  title: path.basename(sourceFileName, path.extname(sourceFileName)),
-                  content,
-                  wordCount: countDraftUnits(content),
-                }]
+            parsed = measurePerformanceOperation('import.parse.ms', () =>
+              parseOrFallbackSingleFileContent(
+                content,
+                path.basename(sourceFileName, path.extname(sourceFileName)),
+                limits.maxChapters - chapterCount,
+              ),
+            )
           }
           sources.push({
             ...encoded,
@@ -599,10 +683,11 @@ export function registerImportController(
                 sourceChapterNumber,
                 title: chapter.title,
                 content: chapter.content,
-                contentFingerprint: sha256(chapter.content),
-                contentSize: Buffer.byteLength(chapter.content, 'utf8'),
+                contentFingerprint: chapter.contentFingerprint ?? sha256(chapter.content),
+                contentSize: chapter.contentSize ?? Buffer.byteLength(chapter.content, 'utf8'),
               }
             })
+            await yieldEventLoop()
             assertFrozenProject()
             measurePerformanceOperation('import.save.ms', () => ImportRunRepository.commitParsedSource(parsingRun.id, opaqueSourceId, sourceChapters))
           }
