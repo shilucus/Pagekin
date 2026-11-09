@@ -217,6 +217,8 @@ function PlanningFeedbackDialogInner({
         text: adoptedContent,
       })
 
+      if (sessionToCheck && !isProjectSessionCurrent(sessionToCheck)) return
+
       toast.success(text(`已采用候选至「${label}」`, `Adopted candidate for ${label}.`))
       onAdopted(adoptedContent)
       onClose()

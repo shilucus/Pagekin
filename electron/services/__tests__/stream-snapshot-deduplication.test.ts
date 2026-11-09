@@ -384,4 +384,19 @@ describe('Stream Snapshot Deduplication and Publish Guard (PERF-003)', () => {
     expect(onPublish).not.toHaveBeenCalled()
     expect(guard.getStats('att-6')?.storageFailed).toBe(true)
   })
+
+  it('preserves the stored hash when the durable text does not match it', () => {
+    const receipt = mockReceipt('att-hash', 1, 'stored text')
+    receipt.artifact!.textHash = computeSnapshotTextHash('different text')
+    const onPublish = vi.fn()
+    const guard = createStreamSnapshotGuard({ onPublish, readReceipt: () => receipt, snapshotOf: mockSnapshotOf })
+
+    const result = guard.handleStreamEvent({
+      attemptId: 'att-hash', visibleText: 'stored text', durableText: 'stored text', durableRevision: 1, storageFailed: false,
+    })
+
+    expect(result?.textHash).toBe(receipt.artifact!.textHash)
+    expect(result?.textHash).not.toBe(computeSnapshotTextHash('stored text'))
+    expect(onPublish).toHaveBeenCalledWith(result)
+  })
 })

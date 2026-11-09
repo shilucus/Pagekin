@@ -15,9 +15,9 @@ export function isWorkflowBackgroundQualified(run: WorkflowBackgroundCandidate):
   if (!run.projectSession || !run.projectSession.projectId || !run.projectSession.leaseId || !run.projectSession.projectPath) {
     return false
   }
+  // Import execution still depends on the active project session.
+  if (run.type === 'novel_import') return false
   if (run.backgroundQualified === true) return true
-  // novel_import 已在 Stage 6E/13/14 完整迁移多书隔离与独立上下文
-  if (run.type === 'novel_import') return true
   // batch_generate 已在 Stage 5B1 完成主进程调度与独立 ProjectSession 隔离
   if (run.type === 'batch_generate') return true
   return false

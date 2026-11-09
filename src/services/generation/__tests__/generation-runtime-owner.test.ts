@@ -4,6 +4,7 @@ import type { GenerationOutcome, GenerationTask } from '../generation-harness'
 import { hashAuthorText } from '../../../shared/source-ref'
 import { useLLMStore } from '../../../stores/llm-store'
 import { createPerformanceBaseline } from '../../../shared/performance-baseline'
+import { createStreamSnapshotGuard } from '../../../../electron/services/stream-snapshot-guard'
 
 const handle: MainGenerationRunHandle = { projectId: '项目甲', epoch: '打开甲', rootActionId: '动作甲', runId: '运行甲' }
 const task: GenerationTask = { purpose: '正文', output: 'visible-text', messages: [{ role: 'user', content: '续写铜钥匙的故事' }] }
@@ -38,6 +39,26 @@ function installPerformanceObservation(sink: unknown) {
 }
 
 describe('main owned generation facade', () => {
+  it('rejects a corrupted snapshot forwarded unchanged by the stream guard', async () => {
+    const f = fixture(), shown = vi.fn()
+    const runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)
+    const corrupt = { ...await snapshot(), textHash: 'f'.repeat(64) }
+    const guard = createStreamSnapshotGuard({
+      readReceipt: () => ({} as never),
+      snapshotOf: () => corrupt,
+      onPublish: f.emit,
+    })
+    try {
+      const published = guard.handleStreamEvent({
+        attemptId: corrupt.attemptId, visibleText: corrupt.text, durableText: corrupt.text,
+        durableRevision: corrupt.durableRevision, storageFailed: false,
+      })
+      expect(published?.textHash).toBe('f'.repeat(64))
+      await expect(runtime.read()).rejects.toThrow('INVALID_MAIN_SNAPSHOT')
+      expect(shown).not.toHaveBeenCalled()
+    } finally { await runtime.close() }
+  })
+
   it('does not encode diagnostic payloads or read a clock without an observer', async () => {
     const restore = installPerformanceObservation(undefined)
     const f = fixture(), value = await snapshot(), shown = vi.fn()

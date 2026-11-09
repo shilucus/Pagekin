@@ -8,9 +8,8 @@ import { navigate } from '../../../stores/navigation/navigation-intents'
 import { openBuiltinEditor } from '../../../stores/open-builtin-editor'
 import { useProjectStore } from '../../../stores/project-store'
 import { clearArchSection } from '../../editor/clear-arch-section'
-import { createProjectArchTabId } from '../../editor/arch-file-refresh-policy'
+import { createProjectArchTabId, shouldSyncProjectArchTab } from '../../editor/arch-file-refresh-policy'
 import { ARCH_FILES, useArchitectureOverview } from '../../editor/use-architecture-overview'
-import { writeCoreContent } from '../../../services/resource-protocol'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../../project-session-gate'
 import { Button } from '../../ui/Button'
@@ -84,19 +83,19 @@ export default function StageArchitecture({ projectKey }: { projectKey: string }
     toast.success(text(`已清空「${name}」`, `Cleared ${name}`))
   }
 
-  const handleAdoptFeedback = async (adoptedText: string) => {
+  const handleAdoptFeedback = (adoptedText: string) => {
     if (!feedbackKey) return
     const session = captureProjectSession(useProjectStore.getState().currentProject)
     if (!session || !isProjectSessionPath(session, projectKey) || !isProjectSessionCurrent(session)) return
     const uri = `ai-novel://core/${feedbackKey}`
-    const success = await writeCoreContent(uri, adoptedText, session)
-    if (success && isProjectSessionCurrent(session)) {
-      const store = useEditorStore.getState()
-      const tabId = createProjectArchTabId(session.projectPath, uri)
+    const store = useEditorStore.getState()
+    const tabId = createProjectArchTabId(session.projectPath, uri)
+    const tab = store.tabs.find(item => item.id === tabId)
+    if (tab && shouldSyncProjectArchTab(tab, projectKey)) {
       store.syncTabContent(tabId, adoptedText)
       store.markTabSaved(tabId, adoptedText)
-      reload()
     }
+    reload()
   }
 
   const summary = (key: ArchStepKey) => {
@@ -188,7 +187,7 @@ export default function StageArchitecture({ projectKey }: { projectKey: string }
         label={feedbackKey ? text(...ARCH_STEP_NAMES[feedbackKey]) : ''}
         baseText={feedbackKey ? (overview.contents[feedbackKey] ?? '') : ''}
         onClose={() => setFeedbackKey(null)}
-        onAdopted={adopted => { void handleAdoptFeedback(adopted) }}
+        onAdopted={handleAdoptFeedback}
       />
     </div>
   )

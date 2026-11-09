@@ -118,12 +118,6 @@ export function createStreamSnapshotGuard(deps: StreamSnapshotGuardDependencies)
       return null
     }
 
-    const calculatedHash = computeSnapshotTextHash(snapshot.text)
-    if (snapshot.textHash && snapshot.textHash !== calculatedHash) {
-      // In production artifacts, textHash is strictly enforced against content
-      snapshot.textHash = calculatedHash
-    }
-
     const mergedDiagnostics = mergeDiagnostics(snapshot.diagnostics, state.cumulativeDiagnostics)
 
     state.lastPublishedRevision = snapshot.durableRevision

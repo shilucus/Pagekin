@@ -46,8 +46,8 @@ describe('QUAL-001: Full-Chain Performance and Quality Non-Regression Evaluation
     const sessionA = { projectId: 'book-a', leaseId: 'lease-a-1', projectPath: 'C:\\books\\a' }
     const sessionB = { projectId: 'book-b', leaseId: 'lease-b-1', projectPath: 'C:\\books\\b' }
 
-    // 允许已迁移的长篇拆解和批量草稿后台运行
-    expect(isWorkflowBackgroundQualified({ type: 'novel_import', projectSession: sessionA })).toBe(true)
+    // 未迁移的导入保留切书保护；批量草稿仍具备后台资格
+    expect(isWorkflowBackgroundQualified({ type: 'novel_import', projectSession: sessionA })).toBe(false)
     expect(isWorkflowBackgroundQualified({ type: 'batch_generate', projectSession: sessionB })).toBe(true)
 
     // 拒绝未迁移或无会话的链路
