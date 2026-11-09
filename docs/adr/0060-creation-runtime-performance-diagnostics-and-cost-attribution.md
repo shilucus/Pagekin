@@ -1,7 +1,7 @@
 # ADR-0060: 创作运行时性能诊断基线与成本归因契约
 
 ## 状态
-已接受 (Accepted) - 对应 `PERF-001` 特性。
+已接受 (Accepted) - 对应 `PERF-001` 特性的内部统计合同。2026-11-10 的 Stage 35 更正聚合指标的推断边界；ADR 本身不授予功能或运行资格。
 
 ## 背景与问题
 在小说创作与分析的长链路中（含原稿拆解、大纲抽取、风格分析、正文分批生成与多轮审修），耗时分布复杂，涵盖本地准备、事件排队、模型远端推理、内容校验解析与 SQLite 持久化事务等多重阶段：
@@ -18,25 +18,29 @@
 ## 决策内容
 
 1. **分段成本归因模型 (Creation Cost Attribution)**:
-   - 在 `src/shared/performance-baseline.ts` 定义 `CreationCostAttribution` 契约，将全链路划分为 5 大独立成本分类：
+   - 在 `src/shared/performance-baseline.ts` 定义 `CreationCostAttribution` 契约，将实际观测分为以下 5 类；它们不是互斥的独占耗时，不能相加为全链路时长：
      - **本地准备 (localPreparation)**: 原稿检验、读取字节数、样本抽取与合法性校验耗时；
-     - **队列等待 (queueWait)**: 任务排队等待分发耗时与队列深度；
-     - **模型执行 (modelExecution)**: 远端物理请求耗时、首响应/首思考/首可见输出耗时、Token 用量与 HTTP 429 频次；
-     - **解析计算 (parsingComputation)**: 章节切分、正文哈希、快照差异计算与数据清洗耗时；
-     - **持久化保存 (persistenceSave)**: SQLite 事务、快照持久化与定稿发布投递耗时。
+     - **队列等待 (queueWait)**: renderer 快照队列等待与任务队列深度的历史样本；没有分发等待计时则不伪造；
+     - **模型执行 (modelExecution)**: provider 调用累计耗时、物理请求计数、首响应/首思考/首可见样本、已知 Token 用量与 HTTP 429 频次；不把 provider 调用时长等同纯模型推理时间；
+     - **解析计算 (parsingComputation)**: 章节解析、导入哈希及 renderer 快照哈希/处理的各自累计耗时；
+     - **持久化相关 (persistenceSave)**: 导入保存、生成快照写入、权威收据回读的各自耗时，以及快照/发布字节数；发布字节数不是定稿 outbox 投递耗时。
+   - `import.inspect.ms` 包含读取、解析、哈希及保存等子过程；`source.capture.ms` 包含读取、选择及校验。分别保留观测，不叠加父子计时，也不从重叠统计倒推出独占成本。
+   - `transport.*.events` 与 `generation.*.events` 是不同层的观察，分别报告，不相加。首响应/首思考/首可见的分布跨多个请求，不是同一请求的时间线；队列深度样本之和不是当前 pending 数。
+   - 原始 `PerformanceBaselineSnapshot` 保持 schema 1。内部派生 `CreationCostAttribution` 使用 schema 2，去除伪总时长、当前 pending 数和合并事件字段，首响应等字段明确为跨样本最小值；缺失指标为 `null`。除聚焦单测外未发现派生函数/类型的生产消费者，不添加旧错误语义的兼容 fallback。
 
 2. **区分网络等待与 UI 卡死 (Network Waiting vs UI Freezing)**:
-   - 提供 `isNetworkWaitingVsUiFreeze` 诊断断言函数：
-     - 若模型处于请求阶段或已建立连接但首个可见/思考输出尚未返回（`firstResponseMs === null` 或 `visibleEvents === 0`），判定为正常远端网络/思考等待（`isNetworkWait: true, uiFrozen: false`）；
-     - 仅当本地主事件循环持续阻塞超过阈值且无网络等待时，才判定为本地渲染/计算停顿。
+   - `isNetworkWaitingVsUiFreeze` 不得从累计聚合数据作实时断言：请求总数大于零、没有首字/思考样本，不证明请求仍在途；网络等待也不能排除同时发生的客户端停顿。
+   - 当前聚合合同缺少同一窗口的活动请求、UI 交互和事件循环时序，所以实时网络等待与 UI 冻结均为未知。`renderer.snapshot.queue_ms` 是异步排队观测，不是主线程阻塞，累计超过 500ms 也不能判卡死。
+   - 驱动独立采集的主进程 event-loop 分布和 renderer heartbeat 作为原始、带覆盖边界的观测保留，不混入快照队列或据此承诺全部交互无停顿。
 
 3. **来源可追溯元数据与零敏感安全约束 (Provenance & Privacy)**:
    - `PerformanceProvenanceMetadata` 仅记录：`corpusHash`、`sampleChapters`、`sampleBooks`、`sourceSha`、`environment` 及 `multiBookStatus`；
-   - 强制执行严格的字段过滤与脱敏，杜绝任何提示词与正文流入。
+   - 只复制约定的元数据字段；调用方仅提供固定虚构语料、来源和环境标识，不传正文、提示词或秘密。未知书数、失败分母或未执行状态不得默认成已观测事实。
 
 4. **候选目标客观评估 (Candidate Targets Evaluation)**:
-   - 实现 `evaluateCandidateTargets` 函数，对传入的 Snapshot 进行 p95 响应时间与主线程停顿的度量对比，输出结构化的目标达成情况与清晰的非硬性门槛说明。
+   - `evaluateCandidateTargets` 分别展示已有 renderer 快照处理/队列代理指标，不把它们冒称真实交互 p95 或主线程停顿。缺少对应直接测量时目标是否达成为未知，即使代理指标很小或全无样本也不能宣称达成。
+   - 100ms / 500ms 仅为候选观察目标，不能用其拒发、掩盖失败、宣称提速或替代功能验收。
 
 ## 效果与保证
-- 满足 `PERF-001` 的全部验收条件（AC-1: 虚构语料采样与分母记录；AC-2: 细分指标与网络/UI区分；AC-3: 来源可追溯与候选目标评估）；
-- 为后续 `PERF-002`（分段样本选择优化）、`PERF-003`（增量流式差异优化）、`PERF-004`（Worker 重计算分离）及 `SCHED-001`（单书有界调度）提供权威度量底座。
+- 本 ADR 只定义可信观测与未知边界。`PERF-001` 是否满足采样、来源和诊断验收，由实际记录、源码和独立 review 决定，不从 ADR 的存在推导完成。
+- 后续 `PERF-002/003/004` 和 `SCHED-001` 使用带来源与失败分母的观测确定优化目标；是否需要隔离纯计算应由实际测量决定，不预设必须使用 Worker。

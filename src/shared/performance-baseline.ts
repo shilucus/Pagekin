@@ -104,49 +104,58 @@ export interface PerformanceProvenanceMetadata {
   failed?: number
 }
 
+/** Duration fields are sample sums except named minima; they are not exclusive or wall-clock totals. */
 export interface CreationCostAttribution {
-  schemaVersion: 1
+  schemaVersion: 2
   localPreparation: {
-    elapsedMs: number
-    readUtf8Bytes: number
-    readArchiveBytes: number
-    inspectCalls: number
-    inspectFailed: number
-    inspectCancelled: number
+    inspectMs: number | null
+    importReadMs: number | null
+    sourceCaptureMs: number | null
+    sourceReadMs: number | null
+    sourceSelectMs: number | null
+    sourceValidateMs: number | null
+    importReadUtf8Bytes: number | null
+    sourceReadUtf8Bytes: number | null
+    readArchiveBytes: number | null
+    inspectCalls: number | null
+    inspectFailed: number | null
+    inspectCancelled: number | null
   }
   queueWait: {
-    queueMs: number
-    pendingCount: number
-    snapshotQueueCalls: number
+    snapshotQueueMs: number | null
+    pendingSamples: PerformanceMetricSummary | null
+    snapshotQueueSamples: PerformanceMetricSummary | null
   }
   modelExecution: {
-    providerMs: number
-    firstResponseMs: number | null
-    firstVisibleMs: number | null
-    firstReasoningMs: number | null
-    visibleEvents: number
-    reasoningEvents: number
-    physicalRequests: number
-    http429Count: number
-    inputTokens: number
-    completionTokens: number
-    reasoningTokens: number
-    totalTokens: number
-    isNetworkWaiting: boolean
+    providerMs: number | null
+    firstResponseMinMs: number | null
+    firstVisibleMinMs: number | null
+    firstReasoningMinMs: number | null
+    transportVisibleEvents: number | null
+    generationVisibleEvents: number | null
+    transportReasoningEvents: number | null
+    generationReasoningEvents: number | null
+    physicalRequests: number | null
+    http429Count: number | null
+    inputTokens: number | null
+    completionTokens: number | null
+    reasoningTokens: number | null
+    totalTokens: number | null
   }
   parsingComputation: {
-    parseMs: number
-    hashMs: number
-    processingMs: number
+    parseMs: number | null
+    importHashMs: number | null
+    rendererSnapshotHashMs: number | null
+    rendererSnapshotProcessingMs: number | null
   }
   persistenceSave: {
-    saveMs: number
-    snapshotMs: number
-    receiptMs: number
-    snapshotUtf8Bytes: number
-    publishUtf8Bytes: number
-    snapshotCalls: number
-    snapshotFailed: number
+    saveMs: number | null
+    snapshotMs: number | null
+    receiptMs: number | null
+    snapshotUtf8Bytes: number | null
+    publishUtf8Bytes: number | null
+    snapshotCalls: number | null
+    snapshotFailed: number | null
   }
   provenance: PerformanceProvenanceMetadata
 }
@@ -155,148 +164,94 @@ export function computeCreationCostAttribution(
   snapshot: PerformanceBaselineSnapshot,
   provenance?: Partial<PerformanceProvenanceMetadata>
 ): CreationCostAttribution {
-  const getSum = (name: PerformanceMetric) => snapshot.metrics[name]?.sum ?? 0
+  const getSum = (name: PerformanceMetric) => snapshot.metrics[name]?.sum ?? null
   const getMin = (name: PerformanceMetric) => snapshot.metrics[name]?.min ?? null
-  const getCount = (name: PerformanceMetric) => snapshot.metrics[name]?.count ?? 0
-
-  const inspectMs = getSum('import.inspect.ms')
-  const readMs = getSum('import.read.ms')
-  const captureMs = getSum('source.capture.ms')
-  const sourceReadMs = getSum('source.read.ms')
-  const selectMs = getSum('source.select.ms')
-  const validateMs = getSum('source.validate.ms')
-  const localPrepMs = inspectMs + readMs + captureMs + sourceReadMs + selectMs + validateMs
-
-  const queueMs = getSum('renderer.snapshot.queue_ms')
-  const pendingCount = getSum('generation.pending')
-  const snapshotQueueCalls = getCount('renderer.snapshot.queue')
-
-  const providerMs = getSum('generation.provider.ms')
-  const firstResponseMs = getMin('transport.first_response.ms')
-  const firstVisibleMs = getMin('transport.first_visible.ms')
-  const firstReasoningMs = getMin('transport.first_reasoning.ms')
-  const visibleEvents = getSum('transport.visible.events') + getSum('generation.visible.events')
-  const reasoningEvents = getSum('transport.reasoning.events') + getSum('generation.reasoning.events')
-  const physicalRequests = getSum('transport.requests')
-  const http429Count = getSum('transport.http_429')
-
-  const inputTokens = getSum('generation.usage.input_tokens')
-  const completionTokens = getSum('generation.usage.completion_tokens')
-  const reasoningTokens = getSum('generation.usage.reasoning_tokens')
-  const totalTokens = getSum('generation.usage.total_tokens')
-
-  const isNetworkWaiting = physicalRequests > 0 && (firstVisibleMs === null || visibleEvents === 0)
-
-  const parseMs = getSum('import.parse.ms')
-  const hashMs = getSum('import.hash.ms') + getSum('renderer.snapshot.hash_ms')
-  const processingMs = getSum('renderer.snapshot.processing_ms')
-
-  const saveMs = getSum('import.save.ms')
-  const snapshotMs = getSum('generation.snapshot.ms')
-  const receiptMs = getSum('generation.receipt.ms')
-  const snapshotUtf8Bytes = getSum('generation.snapshot.utf8_bytes')
-  const publishUtf8Bytes = getSum('generation.publish.utf8_bytes')
-  const snapshotCalls = getCount('generation.snapshot.calls')
-  const snapshotFailed = getSum('generation.snapshot.failed')
 
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     localPreparation: Object.freeze({
-      elapsedMs: localPrepMs,
-      readUtf8Bytes: getSum('import.read.utf8_bytes') + getSum('source.read.utf8_bytes'),
+      inspectMs: getSum('import.inspect.ms'),
+      importReadMs: getSum('import.read.ms'),
+      sourceCaptureMs: getSum('source.capture.ms'),
+      sourceReadMs: getSum('source.read.ms'),
+      sourceSelectMs: getSum('source.select.ms'),
+      sourceValidateMs: getSum('source.validate.ms'),
+      importReadUtf8Bytes: getSum('import.read.utf8_bytes'),
+      sourceReadUtf8Bytes: getSum('source.read.utf8_bytes'),
       readArchiveBytes: getSum('import.read.archive_bytes'),
-      inspectCalls: getCount('import.inspect.calls'),
+      inspectCalls: getSum('import.inspect.calls'),
       inspectFailed: getSum('import.inspect.failed'),
       inspectCancelled: getSum('import.inspect.cancelled'),
     }),
     queueWait: Object.freeze({
-      queueMs,
-      pendingCount,
-      snapshotQueueCalls,
+      snapshotQueueMs: getSum('renderer.snapshot.queue_ms'),
+      pendingSamples: snapshot.metrics['generation.pending'] ?? null,
+      snapshotQueueSamples: snapshot.metrics['renderer.snapshot.queue'] ?? null,
     }),
     modelExecution: Object.freeze({
-      providerMs,
-      firstResponseMs,
-      firstVisibleMs,
-      firstReasoningMs,
-      visibleEvents,
-      reasoningEvents,
-      physicalRequests,
-      http429Count,
-      inputTokens,
-      completionTokens,
-      reasoningTokens,
-      totalTokens,
-      isNetworkWaiting,
+      providerMs: getSum('generation.provider.ms'),
+      firstResponseMinMs: getMin('transport.first_response.ms'),
+      firstVisibleMinMs: getMin('transport.first_visible.ms'),
+      firstReasoningMinMs: getMin('transport.first_reasoning.ms'),
+      transportVisibleEvents: getSum('transport.visible.events'),
+      generationVisibleEvents: getSum('generation.visible.events'),
+      transportReasoningEvents: getSum('transport.reasoning.events'),
+      generationReasoningEvents: getSum('generation.reasoning.events'),
+      physicalRequests: getSum('transport.requests'),
+      http429Count: getSum('transport.http_429'),
+      inputTokens: getSum('generation.usage.input_tokens'),
+      completionTokens: getSum('generation.usage.completion_tokens'),
+      reasoningTokens: getSum('generation.usage.reasoning_tokens'),
+      totalTokens: getSum('generation.usage.total_tokens'),
     }),
     parsingComputation: Object.freeze({
-      parseMs,
-      hashMs,
-      processingMs,
+      parseMs: getSum('import.parse.ms'),
+      importHashMs: getSum('import.hash.ms'),
+      rendererSnapshotHashMs: getSum('renderer.snapshot.hash_ms'),
+      rendererSnapshotProcessingMs: getSum('renderer.snapshot.processing_ms'),
     }),
     persistenceSave: Object.freeze({
-      saveMs,
-      snapshotMs,
-      receiptMs,
-      snapshotUtf8Bytes,
-      publishUtf8Bytes,
-      snapshotCalls,
-      snapshotFailed,
+      saveMs: getSum('import.save.ms'),
+      snapshotMs: getSum('generation.snapshot.ms'),
+      receiptMs: getSum('generation.receipt.ms'),
+      snapshotUtf8Bytes: getSum('generation.snapshot.utf8_bytes'),
+      publishUtf8Bytes: getSum('generation.publish.utf8_bytes'),
+      snapshotCalls: getSum('generation.snapshot.calls'),
+      snapshotFailed: getSum('generation.snapshot.failed'),
     }),
     provenance: Object.freeze({
       corpusHash: provenance?.corpusHash,
       sampleChapters: provenance?.sampleChapters,
-      sampleBooks: provenance?.sampleBooks ?? 1,
+      sampleBooks: provenance?.sampleBooks,
       sourceSha: provenance?.sourceSha,
       environment: provenance?.environment,
-      multiBookStatus: provenance?.multiBookStatus ?? [
-        { books: 2, status: 'not_executed' as const },
-        { books: 4, status: 'not_executed' as const },
-      ],
+      multiBookStatus: provenance?.multiBookStatus,
       attempted: provenance?.attempted,
-      failed: provenance?.failed ?? 0,
+      failed: provenance?.failed,
     }),
   })
 }
 
-export function isNetworkWaitingVsUiFreeze(attribution: CreationCostAttribution): {
-  isNetworkWaiting: boolean
-  isUiFrozen: boolean
+export function isNetworkWaitingVsUiFreeze(): {
+  isNetworkWaiting: null
+  isUiFrozen: null
   explanation: string
 } {
-  const { modelExecution, queueWait } = attribution
-  if (modelExecution.isNetworkWaiting || (modelExecution.physicalRequests > 0 && modelExecution.visibleEvents === 0)) {
-    return {
-      isNetworkWaiting: true,
-      isUiFrozen: false,
-      explanation: 'Network transport/model reasoning is in flight; client event loop is waiting on remote response, not frozen.',
-    }
-  }
-
-  if (queueWait.queueMs > 500 && modelExecution.physicalRequests === 0) {
-    return {
-      isNetworkWaiting: false,
-      isUiFrozen: true,
-      explanation: 'Main thread/queue processing delay exceeded 500ms candidate threshold without active remote network request.',
-    }
-  }
-
   return {
-    isNetworkWaiting: false,
-    isUiFrozen: false,
-    explanation: 'Normal execution cadence within candidate latency targets.',
+    isNetworkWaiting: null,
+    isUiFrozen: null,
+    explanation: 'Aggregate counters and snapshot queue times do not establish current network activity or event-loop blocking.',
   }
 }
 
 export interface CandidateTargetsEvaluation {
   p95CandidateTargetMs: 100
   mainThreadCandidateTargetMs: 500
-  isCandidateTargetMet: boolean
+  isCandidateTargetMet: null
   isHardThreshold: false
   observations: {
-    rendererSnapshotProcessingP95: number | null
-    rendererSnapshotQueueP95: number | null
-    exceededTargets: readonly string[]
+    rendererSnapshotProcessingP95UpperBound: number | null
+    rendererSnapshotQueueP95UpperBound: number | null
   }
   notice: string
 }
@@ -305,24 +260,15 @@ export function evaluateCandidateTargets(snapshot: PerformanceBaselineSnapshot):
   const processingP95 = snapshot.metrics['renderer.snapshot.processing_ms']?.p95UpperBound ?? null
   const queueP95 = snapshot.metrics['renderer.snapshot.queue_ms']?.p95UpperBound ?? null
 
-  const exceeded: string[] = []
-  if (processingP95 !== null && processingP95 > 100) {
-    exceeded.push(`renderer.snapshot.processing_ms p95 (${processingP95}ms > 100ms)`)
-  }
-  if (queueP95 !== null && queueP95 > 500) {
-    exceeded.push(`renderer.snapshot.queue_ms p95 (${queueP95}ms > 500ms)`)
-  }
-
   return Object.freeze({
     p95CandidateTargetMs: 100,
     mainThreadCandidateTargetMs: 500,
-    isCandidateTargetMet: exceeded.length === 0,
+    isCandidateTargetMet: null,
     isHardThreshold: false,
     observations: Object.freeze({
-      rendererSnapshotProcessingP95: processingP95,
-      rendererSnapshotQueueP95: queueP95,
-      exceededTargets: Object.freeze(exceeded),
+      rendererSnapshotProcessingP95UpperBound: processingP95,
+      rendererSnapshotQueueP95UpperBound: queueP95,
     }),
-    notice: 'p95 100ms and main-thread 500ms are candidate optimization goals, not hard gates or permanent prerequisites.',
+    notice: 'Snapshot processing and queue metrics do not measure interaction p95 or main-thread blocking; candidate goals are not hard gates.',
   })
 }

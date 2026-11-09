@@ -207,6 +207,22 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Creation runtime performance baseline and cost attribution passed (2 suites, 19/19 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Segmented text selection and stream delta optimizations belong to subsequent features (PERF-002, PERF-003)"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "8e6eed0da1c1478e7e63d1f763d9d29621407c33",
+          "artifactOrReceipt": "stage-35-evidence.md#source-identity",
+          "environment": "Windows x64; Node 24.13.0; pinned pnpm 11.11.0; entry SHA plus frozen source blobs",
+          "result": "Partial diagnostic correction: raw schema 1 preserved; derived schema 2 separates overlapping timers/layered events, preserves unknown observations and does not infer live waiting/freeze or achieved targets. Seven files 200/200; typecheck/lint/i18n/build exit 0 after the recorded unused-parameter repair; independent source review has no blocker.",
+          "limitations": "Supersedes Stage 26's unsupported inference claims, not full PERF-001 acceptance. No new live-state producer, UI, literary-quality or platform evidence. Missing matrix/source/step observations remain open and no dependent feature is unlocked."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "8baf0225917a660a441a99b15ff0d4fb0e100f17",
+          "artifactOrReceipt": "stage-34-revalidation.md#baseline-observations",
+          "environment": "Windows x64; Electron 44.9.3; local fictional provider; 1440x900 light; uncontrolled disk cache; source/build/report hashes retained",
+          "result": "Six current-entry-baseline attempts preserved: five successful scenarios and one 1000-chapter workflow timeout with cancellation/drain then forced quit. Two/four books unsupported/not executed. No cutoff requests, external requests/writes or residual processes observed.",
+          "limitations": "Not a full-matrix PASS or workflow p95. The 1000-chapter report has unavailable result counts and no renderer snapshot queue observation. Fixture usage/guarded requests are not real billing/remote execution; raw local artifacts contain paths/device metadata and are not anonymized exports."
         }
       ]
     },
