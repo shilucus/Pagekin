@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { parseOrFallbackSingleFileContent } from '../controllers/import-controller'
-import { generateEmbeddings } from '../embedding'
 import { normalizeEmbeddingOptions } from '../../src/shared/embedding-options'
 import { isWorkflowBackgroundQualified } from '../../src/shared/workflow-background-qualification'
 
@@ -35,9 +34,8 @@ describe('QUAL-001: Full-Chain Performance and Quality Non-Regression Evaluation
     expect(parsedChapters[2].title).toBe('宗门大比')
   })
 
-  it('preserves deterministic FTS-only outcome and avoids partial vector commits during network faults', async () => {
+  it('preserves deterministic FTS-only outcome and avoids partial vector commits during network faults', () => {
     // 验证有界并发调度在遭遇普通网络中断时，能保证整文档结果一致性
-    const texts = ['段落1', '段落2', '段落3', '段落4']
     const options = normalizeEmbeddingOptions(model.embeddingOptions)
     expect(options.concurrencyLimit).toBe(2)
     expect(options.batchSize).toBe(2)
