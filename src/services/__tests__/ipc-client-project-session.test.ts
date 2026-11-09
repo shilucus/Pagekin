@@ -78,6 +78,17 @@ describe('project-scoped IPC session transport', () => {
       'content',
     )
   })
+  it('keeps representative reads on the captured project without borrowing a later active session', async () => {
+    const frozen = Object.freeze({ projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' })
+    const sample = [{ number: 2 }]
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    invoke.mockResolvedValueOnce(sample)
+    await expect(ipc.invokeWithProjectSession(frozen, 'db:import-run-list-representative-chapters', 'fixture-run', frozen.projectPath)).resolves.toBe(sample)
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('db:import-run-list-representative-chapters', 'fixture-run', frozen.projectPath, frozen)
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('db:import-run-list-representative-chapters', 'fixture-run', frozen.projectPath)).rejects.toThrow()
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
   it('retained-view admission uses its target grant and never borrows an active project lease', async () => {
     const target = { grantId: 'fictional-open-grant', displayName: 'Fictional project' }
     invoke.mockResolvedValue({ success: true })

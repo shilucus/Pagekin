@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const ipcMocks = vi.hoisted(() => ({ invoke: vi.fn() }))
 const characterSyncMocks = vi.hoisted(() => ({ retry: vi.fn() }))
-const commandMocks = vi.hoisted(() => ({ blueprintContext: undefined as WorkflowContext | undefined }))
+const commandMocks = vi.hoisted(() => ({
+  blueprintContext: undefined as WorkflowContext | undefined,
+  global: vi.fn(),
+  style: vi.fn(),
+}))
 vi.mock('../../ipc-client', () => ({
   ipc: { invokeWithProjectSession: ipcMocks.invoke },
 }))
@@ -12,10 +16,30 @@ vi.mock('../directory-character-sync-recovery', () => ({
   retryDirectoryCharacterSync: characterSyncMocks.retry,
 }))
 vi.mock('../commands/import-novel.command', () => ({
+  InferGlobalSettingsCommand: class {
+    constructor(_unused: unknown, private commit: (payload: unknown) => Promise<unknown>, private fillEmpty: boolean) {}
+    async execute(params: { context: WorkflowContext }): Promise<void> {
+      commandMocks.global(params.context, this.fillEmpty)
+      await this.commit({ generated: 'global' })
+    }
+  },
   InferBlueprintsPerChapterCommand: class {
     async execute(params: { context: WorkflowContext }): Promise<void> {
       commandMocks.blueprintContext = params.context
       throw new Error('stop-after-blueprint-prompt-context')
+    }
+  },
+}))
+vi.mock('../commands/analyze-style.command', () => ({
+  AnalyzeWritingStyleCommand: class {
+    constructor(
+      private options: unknown,
+      _unused: unknown,
+      private commit: (style: string) => Promise<string>,
+    ) {}
+    async execute(params: { context: WorkflowContext }): Promise<string> {
+      commandMocks.style(this.options, params.context)
+      return this.commit('sample style')
     }
   },
 }))
@@ -72,6 +96,101 @@ beforeEach(() => {
 afterEach(() => useProjectStore.setState({ currentProject: null }))
 
 describe('createImportWorkflow', () => {
+  it.each([
+    ['reference', 'global', 1, 'global-facts', 'project-global-facts', 'style'],
+    ['reference', 'style', 2, 'writing-style', 'project-writing-style', 'blueprints'],
+    ['author-manuscript', 'global', 3, 'global-facts', 'project-global-facts', 'style'],
+    ['author-manuscript', 'style', 4, 'writing-style', 'project-writing-style', 'blueprints'],
+  ] as const)('uses representative chapters for the production %s %s step with its frozen session and durable commit', async (purpose, stage, stepIndex, effectKey, kind, nextStage) => {
+    const author = purpose === 'author-manuscript'
+    const snapshot = run({ purpose, authorInference: author, effectNamespace: `import:${purpose}:import-run-1`, stage, totalChapters: 10, manifestChapterCount: 10, manifestWordCount: 9000 })
+    const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+    const selected = [1, 2, 3, 9, 10].map(number => ({
+      number, title: `Chapter ${number}`, content: `Content ${number}`,
+      contentFingerprint: 'a'.repeat(64), contentSize: 10,
+    }))
+    let receipt: ImportRunEffectReceipt | null = null
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      switch (channel) {
+        case 'db:import-run-get': return snapshot
+        case 'db:import-run-start-resume': return { success: true, start: { run: snapshot, execution } }
+        case 'db:import-run-renew-execution': return { success: true, execution }
+        case 'db:import-run-list-representative-chapters': return selected
+        case 'db:import-run-effect-receipt-get': return receipt
+        case 'db:import-run-effect-receipt-prepare':
+          receipt = {
+            schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+            runId: snapshot.id, effectNamespace: snapshot.effectNamespace, effectKey, stage,
+            batchId: 'done', kind, payloadHash: 'c'.repeat(64), state: 'prepared',
+            payload: (args[0] as { payload: unknown }).payload,
+            createdAt: '2026-01-01', updatedAt: '2026-01-01',
+          }
+          return { success: true, receipt }
+        case 'db:import-run-effect-receipt-commit':
+          receipt = { ...receipt!, state: 'committed', effectReceipt: stage === 'style' ? { writingStyle: 'sample style' } : {} }
+          return { success: true, result: { receipt, run: snapshot, cancelApplied: false } }
+        case 'db:import-run-advance-stage': return { success: true, run: { ...snapshot, stage: nextStage } }
+        default: throw new Error(`Unexpected channel ${channel}`)
+      }
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner, ...(author ? { authorChapterNumbers: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] } : {}) })
+    const stepContext = context()
+    useProjectStore.setState({ currentProject: {
+      id: 'project-b', sessionLease: 'lease-b', name: 'B', path: 'C:\\project-b',
+      novelConfig: {} as never, characterStates: '', createdAt: '', updatedAt: '',
+    } })
+
+    await workflow.steps[stepIndex].executor({} as never, stepContext, callbacks)
+
+    expect(ipcMocks.invoke).toHaveBeenCalledWith(session, 'db:import-run-list-representative-chapters', snapshot.id, session.projectPath)
+    expect(ipcMocks.invoke.mock.calls.filter(call => call[1] === 'db:import-run-list-representative-chapters')).toHaveLength(1)
+    expect(ipcMocks.invoke.mock.calls.some(call => call[1] === 'db:import-run-list-chapters')).toBe(false)
+    expect(ipcMocks.invoke.mock.calls.every(call => call[0] === session)).toBe(true)
+    const expectedChapters = selected.map(({ number, title, content }) => expect.objectContaining({ number, title, content }))
+    expect(stepContext.data.importGenerationSlot).toEqual({ runId: snapshot.id, stage, batchId: 'done' })
+    expect(stepContext.data.importRunPurpose).toBe(purpose)
+    if (stage === 'global') {
+      expect(commandMocks.global).toHaveBeenCalledWith(stepContext, author)
+      expect(stepContext.data.chapters).toEqual(expectedChapters)
+      expect(stepContext.data.importRunTotalChapters).toBe(10)
+      expect(stepContext.data.importRunTotalWords).toBe(9000)
+      expect(commandMocks.style).not.toHaveBeenCalled()
+    } else {
+      expect(commandMocks.style).toHaveBeenCalledWith({ chapters: expectedChapters, fillEmpty: author }, stepContext)
+      expect(commandMocks.global).not.toHaveBeenCalled()
+    }
+    expect(ipcMocks.invoke).toHaveBeenCalledWith(session, 'db:import-run-effect-receipt-prepare', {
+      runId: snapshot.id, stage, batchId: 'done', effectKey, kind,
+      payload: stage === 'global' ? { generated: 'global' } : { writingStyle: 'sample style' },
+    }, execution, session.projectPath)
+    expect(ipcMocks.invoke).toHaveBeenCalledWith(session, 'db:import-run-effect-receipt-commit', snapshot.id, stage, 'done', execution, session.projectPath)
+    expect(ipcMocks.invoke).toHaveBeenCalledWith(session, 'db:import-run-advance-stage', snapshot.id, stage, nextStage, execution, session.projectPath)
+  })
+
+  it.each([['global', 1, 'style'], ['style', 2, 'blueprints']] as const)(
+    'does not rediscover chapters or regenerate a completed %s checkpoint', async (stage, stepIndex, nextStage) => {
+      const snapshot = run({ stage, completedBatches: { [stage]: ['done'] } })
+      const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+      ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+        switch (channel) {
+          case 'db:import-run-get': return snapshot
+          case 'db:import-run-start-resume': return { success: true, start: { run: snapshot, execution } }
+          case 'db:import-run-renew-execution': return { success: true, execution }
+          case 'db:import-run-advance-stage': return { success: true, run: { ...snapshot, stage: nextStage } }
+          default: throw new Error(`Unexpected channel ${channel}`)
+        }
+      })
+      const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+
+      await workflow.steps[stepIndex].executor({} as never, context(), callbacks)
+
+      expect(commandMocks.global).not.toHaveBeenCalled()
+      expect(commandMocks.style).not.toHaveBeenCalled()
+      expect(ipcMocks.invoke).toHaveBeenCalledWith(session, 'db:import-run-advance-stage', snapshot.id, stage, nextStage, execution, session.projectPath)
+      expect(ipcMocks.invoke.mock.calls.some(call => call[1] === 'db:import-run-list-representative-chapters' || call[1] === 'db:import-run-list-chapters')).toBe(false)
+    },
+  )
+
   it('loads sparse frozen chapter numbers from a resumed author run manifest', async () => {
     const snapshot = run({
       purpose: 'author-manuscript',
@@ -294,7 +413,7 @@ describe('createImportWorkflow', () => {
         success: true,
         execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
       }
-      if (channel === 'db:import-run-list-chapters') return []
+      if (channel === 'db:import-run-list-representative-chapters') return []
       if (channel === 'db:import-run-effect-receipt-get') {
         receiptReads += 1
         return receiptReads === 1 ? receipt : { ...receipt, payloadHash: 'd'.repeat(64) }

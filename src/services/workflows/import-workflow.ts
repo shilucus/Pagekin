@@ -251,6 +251,9 @@ function productionDependencies(
     listChapters: (runId, after, limit) => ipc.invokeWithProjectSession(
       session, 'db:import-run-list-chapters', runId, after, limit, projectPath,
     ),
+    listRepresentativeChapters: runId => ipc.invokeWithProjectSession(
+      session, 'db:import-run-list-representative-chapters', runId, projectPath,
+    ),
     importReference: async (chapter, run, executionAuthority) => {
       const result = await ipc.invokeWithProjectSession(
         session,

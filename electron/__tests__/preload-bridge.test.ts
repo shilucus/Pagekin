@@ -80,6 +80,14 @@ describe('桌面预加载接口', () => {
     }
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)
   })
+  it('forwards representative chapter reads and their frozen session without adding authority', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const session = Object.freeze({ projectId: 'fixture-project', leaseId: 'fixture-lease', projectPath: 'C:/fictional-project' })
+    const sample = [{ number: 2 }]
+    electron.ipcRenderer.invoke.mockResolvedValueOnce(sample)
+    await expect(bridge.invoke('db:import-run-list-representative-chapters', 'fixture-run', session.projectPath, session)).resolves.toBe(sample)
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith('db:import-run-list-representative-chapters', 'fixture-run', session.projectPath, session)
+  })
   it('forwards only closed workflow driver literals and never adds an approval or generic execute route', async () => {
     const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
     const request = Object.freeze({ taskId: 'fictional-task' })

@@ -2375,6 +2375,32 @@ export class ImportRunRepository {
     return rows.map(chapterRowToSnapshot)
   }
 
+  static listRepresentativeChapters(runId: string, context?: CapturedImportRunContext): ImportRunChapterSnapshot[] {
+    if (context) {
+      const run = readRunRow(runId, context.database)
+      if (run) assertCapturedReference(run, context)
+    }
+    const rows = db(context).prepare(`
+      WITH selected AS (
+        SELECT chapter_number FROM (
+          SELECT chapter_number FROM import_run_chapters
+          WHERE run_id = ? AND chapter_number > 0 ORDER BY chapter_number ASC LIMIT 3
+        )
+        UNION
+        SELECT chapter_number FROM (
+          SELECT chapter_number FROM import_run_chapters
+          WHERE run_id = ? AND chapter_number > 0 ORDER BY chapter_number DESC LIMIT 2
+        )
+      )
+      SELECT chapter_number, source_id, source_chapter_number,
+             title, content_fingerprint, content_size, content_snapshot
+      FROM import_run_chapters
+      WHERE run_id = ? AND chapter_number IN (SELECT chapter_number FROM selected)
+      ORDER BY chapter_number ASC
+    `).all(runId, runId, runId) as ImportRunChapterRow[]
+    return rows.map(chapterRowToSnapshot)
+  }
+
   static getEffectReceipt(
     runId: string,
     stage: ImportRunStage,

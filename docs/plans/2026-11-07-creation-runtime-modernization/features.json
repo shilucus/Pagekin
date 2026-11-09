@@ -287,6 +287,22 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Targeted chapter sampling and range reading passed (3 suites, 37/37 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Stream delta notification deduplication belongs to PERF-003"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "0c75c59ebed08c7aec1a2c3f85e80ae93abb1ccb + stage-37-evidence.md source blobs",
+          "artifactOrReceipt": "stage-37-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Production representative IPC/delegate connected; 14 focused files 284/284 and complete prompt parity 40/40 after documented fixture repair; typecheck/lint/i18n/build exit 0; independent final source review has no blocker.",
+          "limitations": "Selected-only query intentionally defers unselected corrupt-row detection to actual consumption; original readers/authority/checkpoints remain. PERF-001 prerequisite and full feature qualification remain open. See final artifact review in stage evidence."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "0c75c59ebed08c7aec1a2c3f85e80ae93abb1ccb + stage-37-evidence.md source blobs",
+          "artifactOrReceipt": "stage-37-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage37/perf-import-10-light.json",
+          "environment": "Isolated fictional Electron 44.9.3 / Node 24.22.0 / Chrome 152.0.7977.167, 1440x900 light, loopback fixture, uncontrolled cache",
+          "result": "Real author-inference import completes 10/10 chapters, 32 requests, normal clean quit; SQLite 10/100/1000 fixed-body comparison returns 15360 representative bytes versus 30720/307200/3072000 paged bytes.",
+          "limitations": "Returned body bytes are not disk IO or latency; one scene is not workflow p95, speedup, real-model quality, background migration or platform qualification. Six original baseline failures/denominators remain unchanged; feature stays false."
         }
       ]
     },

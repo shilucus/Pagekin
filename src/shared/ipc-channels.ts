@@ -947,6 +947,10 @@ export interface DatabaseChannels {
     args: [runId: string, afterChapterNumber: number, limit: number, expectedProjectPath: string]
     return: ImportRunChapterSnapshot[]
   }
+  'db:import-run-list-representative-chapters': {
+    args: [runId: string, expectedProjectPath: string]
+    return: ImportRunChapterSnapshot[]
+  }
   'db:import-run-effect-receipt-get': {
     args: [runId: string, stage: ImportRunStage, batchId: string, expectedProjectPath: string]
     return: ImportRunEffectReceipt | null

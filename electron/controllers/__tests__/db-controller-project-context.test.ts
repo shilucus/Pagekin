@@ -65,6 +65,7 @@ const mocks = vi.hoisted(() => ({
   importRunFail: vi.fn(),
   importRunBeginParsing: vi.fn(),
   importRunPrepareEffectReceipt: vi.fn(),
+  importRunListRepresentativeChapters: vi.fn((): Array<Record<string, unknown>> => []),
   draftGetFull: vi.fn(() => ({
     id: 1,
     content: mocks.currentProjectPath.endsWith('/A') ? 'A content' : 'B content',
@@ -224,6 +225,7 @@ vi.mock('../../repositories/import-run-repository', () => ({
     fail: mocks.importRunFail,
     beginParsing: mocks.importRunBeginParsing,
     prepareEffectReceipt: mocks.importRunPrepareEffectReceipt,
+    listRepresentativeChapters: mocks.importRunListRepresentativeChapters,
   },
 }))
 
@@ -328,6 +330,7 @@ beforeEach(() => {
   mocks.importRunGet.mockReset()
   mocks.importRunRestart.mockReset()
   mocks.importRunGetEffectReceipt.mockReset()
+  mocks.importRunListRepresentativeChapters.mockReset().mockReturnValue([])
   mocks.assertCurrentProjectContext.mockImplementation((context: {
     projectPath?: string
   } | undefined, currentProjectPath: string) => {
@@ -350,6 +353,54 @@ beforeEach(() => {
 })
 
 describe('database controller project context guard', () => {
+  it('reads representative snapshots only through the active project and the existing legacy guard', async () => {
+    const sample = [{ number: 2, content: 'fictional selected text' }]
+    mocks.importRunListRepresentativeChapters.mockReturnValueOnce(sample)
+    await expect(handler('db:import-run-list-representative-chapters')({}, 'fiction-run', 'C:/projects/A')).resolves.toBe(sample)
+    expect(mocks.assertViewContext).toHaveBeenCalledExactlyOnceWith(currentSession())
+    expect(mocks.acquireLegacyOperation).toHaveBeenCalledExactlyOnceWith('db:import-run-list-representative-chapters')
+    expect(mocks.importRunListRepresentativeChapters).toHaveBeenCalledExactlyOnceWith('fiction-run')
+    expect(mocks.releaseLegacyOperation).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a missing or rejected representative-read session before the repository', async () => {
+    await expect(rawHandler('db:import-run-list-representative-chapters')({}, 'fiction-run', 'C:/projects/A')).rejects.toThrow()
+    expect(mocks.assertViewContext).toHaveBeenLastCalledWith(undefined)
+    expect(mocks.importRunListRepresentativeChapters).not.toHaveBeenCalled()
+    expect(mocks.acquireLegacyOperation).not.toHaveBeenCalled()
+    const frozenA = currentSession()
+    mocks.currentProjectPath = 'C:/projects/B'
+    await expect(rawHandler('db:import-run-list-representative-chapters')({}, 'fiction-run', 'C:/projects/A', frozenA)).rejects.toThrow()
+    expect(mocks.assertViewContext).toHaveBeenLastCalledWith(frozenA)
+    expect(mocks.importRunListRepresentativeChapters).not.toHaveBeenCalled()
+  })
+
+  it('refuses a stale representative-read lease through the same session admission', async () => {
+    mocks.assertViewContext.mockImplementationOnce(() => { throw new Error('PROJECT_SESSION_STALE') })
+    await expect(handler('db:import-run-list-representative-chapters')({}, 'fiction-run', 'C:/projects/A')).rejects.toThrow()
+    expect(mocks.importRunListRepresentativeChapters).not.toHaveBeenCalled()
+    expect(mocks.acquireLegacyOperation).not.toHaveBeenCalled()
+  })
+
+  it('refuses a foreign expected path or coexisting legacy runtime before representative reads', async () => {
+    await expect(handler('db:import-run-list-representative-chapters')({}, 'fiction-run', 'C:/projects/B')).rejects.toThrow()
+    expect(mocks.importRunListRepresentativeChapters).not.toHaveBeenCalled()
+    expect(mocks.releaseLegacyOperation).toHaveBeenCalledOnce()
+    mocks.runtimeCount = 2
+    await expect(handler('db:import-run-list-representative-chapters')({}, 'fiction-run', 'C:/projects/A'))
+      .rejects.toThrow('PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE')
+    expect(mocks.importRunListRepresentativeChapters).not.toHaveBeenCalled()
+    expect(mocks.releaseLegacyOperation).toHaveBeenCalledOnce()
+  })
+
+  it('propagates representative snapshot corruption without substituting a full-book read', async () => {
+    mocks.importRunListRepresentativeChapters.mockImplementationOnce(() => { throw new Error('IMPORT_RUN_SNAPSHOT_CORRUPT') })
+    await expect(handler('db:import-run-list-representative-chapters')({}, 'fiction-run', 'C:/projects/A'))
+      .rejects.toThrow('IMPORT_RUN_SNAPSHOT_CORRUPT')
+    expect(mocks.importRunListRepresentativeChapters).toHaveBeenCalledExactlyOnceWith('fiction-run')
+    expect(mocks.releaseLegacyOperation).toHaveBeenCalledOnce()
+  })
+
   it('routes classified core reads and writes through the captured DB even when another runtime is retained', async () => {
     mocks.runtimeCount = 2
     const database = { project: 'captured-A' }

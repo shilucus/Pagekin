@@ -425,6 +425,15 @@ export function registerDatabaseController() {
     return ImportRunRepository.listChapterBatch(runId, { afterChapterNumber, limit })
   })
 
+  ipcMain.handle('db:import-run-list-representative-chapters', async (
+    _event,
+    runId: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return ImportRunRepository.listRepresentativeChapters(runId)
+  })
+
   ipcMain.handle('db:import-run-effect-receipt-get', async (
     _event,
     runId: string,
