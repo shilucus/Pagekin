@@ -756,9 +756,18 @@
         "deterministic",
         "performance"
       ],
-      "status": "not_started",
-      "passes": false,
-      "evidence": []
+      "status": "completed",
+      "passes": true,
+      "evidence": [
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-30-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Vitest 4.1.12",
+          "result": "Bounded concurrency limit, out-of-order assembly, and first-failure adjudication by original batch order passed (6/6 tests passed; regression 30/30 tests passed); tsc, eslint, check:i18n, check:color-literals exit 0",
+          "limitations": "Cross-book fair scheduling belongs to SCHED-002"
+        }
+      ]
     },
     {
       "id": "SCHED-002",

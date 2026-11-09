@@ -8,7 +8,7 @@
  * 本模块仅保留 Embedding API 调用和文本分块功能
  */
 
-import { normalizeEmbeddingOptions } from '../src/shared/embedding-options'
+import { normalizeEmbeddingOptions, type EmbeddingOptions } from '../src/shared/embedding-options'
 import { EmbeddingResponseValidationError } from './services/embedding-response-error'
 
 const RELEASE_SMOKE_BASE_URL_PREFIX = 'vela-release-smoke://'
@@ -307,38 +307,117 @@ export async function embedGemini(
   return validateGeminiEmbeddings(data, texts.length)
 }
 
-/** 统一的 Embedding 调用接口 */
+/** 统一的 Embedding 调用接口 (支持 SCHED-001 单书独立网络任务有界并发与首失败保序裁决) */
 export async function generateEmbeddings(
   texts: string[],
   protocol: 'openai' | 'gemini',
-  model: { baseUrl: string; apiKey: string; modelName?: string },
+  model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: Partial<EmbeddingOptions> | null },
   configuredBatchSize?: number,
   assertActive?: () => void,
   signal?: AbortSignal,
+  configuredConcurrencyLimit?: number,
 ): Promise<number[][]> {
   // 空文本处理
   if (texts.length === 0) return []
   const smokeEmbeddings = releaseSmokeEmbeddings(texts, model)
   if (smokeEmbeddings) return smokeEmbeddings
 
-  // 批量限制：每次最多 50 条
-  // 旧配置未提供 batchSize 时保持原有协议默认值，避免升级后意外改变云端调用。
+  // 批量与并发参数规范化
+  const normalizedOptions = normalizeEmbeddingOptions(model.embeddingOptions)
   const batchSize = configuredBatchSize === undefined
     ? (protocol === 'gemini' ? 100 : 50)
     : normalizeEmbeddingOptions({ batchSize: configuredBatchSize }).batchSize
-  const results: number[][] = []
 
-  for (let i = 0; i < texts.length; i += batchSize) {
-    assertActive?.()
-    const batch = texts.slice(i, i + batchSize)
-    const embeddings = protocol === 'gemini'
-      ? await embedGemini(batch, model, signal)
-      : await embedOpenAI(batch, model, signal)
-    assertActive?.()
-    results.push(...embeddings)
+  const concurrencyLimit = configuredConcurrencyLimit === undefined
+    ? (normalizedOptions.concurrencyLimit ?? 1)
+    : Math.min(4, Math.max(1, Math.trunc(configuredConcurrencyLimit)))
+
+  // 将 texts 切割为带有原始 batch 序号的批次
+  const batches: Array<{ index: number; texts: string[] }> = []
+  for (let i = 0, batchIdx = 0; i < texts.length; i += batchSize, batchIdx++) {
+    batches.push({ index: batchIdx, texts: texts.slice(i, i + batchSize) })
   }
 
-  return validateEmbeddingVectors(protocol === 'gemini' ? 'Gemini' : 'OpenAI', results)
+  // 若只有一个 batch 或并发限制为 1，直接保序串行执行并返回
+  if (batches.length <= 1 || concurrencyLimit === 1) {
+    const results: number[][] = []
+    for (const batch of batches) {
+      assertActive?.()
+      const embeddings = protocol === 'gemini'
+        ? await embedGemini(batch.texts, model, signal)
+        : await embedOpenAI(batch.texts, model, signal)
+      assertActive?.()
+      results.push(...embeddings)
+    }
+    return validateEmbeddingVectors(protocol === 'gemini' ? 'Gemini' : 'OpenAI', results)
+  }
+
+  // 有界并发调度池（bounded concurrency pool）
+  type BatchOutcome =
+    | { status: 'fulfilled'; embeddings: number[][] }
+    | { status: 'rejected'; error: unknown }
+
+  const outcomes: BatchOutcome[] = new Array(batches.length)
+  let nextBatchIndex = 0
+  let stopped = false
+  const activeWorkerPromises: Array<Promise<void>> = []
+
+  const worker = async () => {
+    while (!stopped && !signal?.aborted) {
+      const current = nextBatchIndex++
+      if (current >= batches.length) break
+
+      const batch = batches[current]
+      try {
+        assertActive?.()
+        if (signal?.aborted) {
+          throw new Error('EMBEDDING_REQUEST_ABORTED')
+        }
+        const embeddings = protocol === 'gemini'
+          ? await embedGemini(batch.texts, model, signal)
+          : await embedOpenAI(batch.texts, model, signal)
+        assertActive?.()
+        outcomes[current] = { status: 'fulfilled', embeddings }
+      } catch (error) {
+        outcomes[current] = { status: 'rejected', error }
+        // 标记后续未派发 batch 停止派发，但已在途请求必须等待其自然返回（吸收在途结果）
+        stopped = true
+      }
+    }
+  }
+
+  // 启动并发 worker，有界容量为 concurrencyLimit
+  const workersCount = Math.min(concurrencyLimit, batches.length)
+  for (let w = 0; w < workersCount; w++) {
+    activeWorkerPromises.push(worker())
+  }
+
+  // 等待所有在途 worker 彻底退出并吸收所有在途请求结果
+  await Promise.allSettled(activeWorkerPromises)
+
+  // 按原 batch 序号严格首失败裁决（First-Failure Adjudication by Original Batch Order）
+  for (let i = 0; i < batches.length; i++) {
+    const outcome = outcomes[i]
+    if (!outcome) {
+      assertActive?.()
+      if (signal?.aborted) throw new Error('EMBEDDING_REQUEST_ABORTED')
+      throw new Error(`EMBEDDING_BATCH_UNPROCESSED: batch ${i} was not processed due to prior failure`)
+    }
+    if (outcome.status === 'rejected') {
+      throw outcome.error
+    }
+  }
+
+  // 组装结果并执行整文档整体校验
+  const allResults: number[][] = []
+  for (let i = 0; i < batches.length; i++) {
+    const outcome = outcomes[i]
+    if (outcome.status === 'fulfilled') {
+      allResults.push(...outcome.embeddings)
+    }
+  }
+
+  return validateEmbeddingVectors(protocol === 'gemini' ? 'Gemini' : 'OpenAI', allResults)
 }
 
 // ===== 文本分块 =====
