@@ -83,7 +83,7 @@ describe('performance pressure driver orchestration (not Electron qualification)
     expect(result.notApplicable).toContain('renderer-snapshot-queue')
   })
 
-  it.each([['perf-long-stream', null], ['perf-rate-limit', null], ['perf-rate-limit', 'settled'],
+  it.each([['perf-long-stream', null], ['perf-long-stream', 'missing-purpose'], ['perf-rate-limit', null], ['perf-rate-limit', 'settled'],
     ['perf-rate-limit', 'missing-artifact'], ['perf-rate-limit', 'foreign-attempt']])('checks registered generation readback for %s; invalid history=%s (mock only)', async (kind, invalidHistory) => {
     const f = fixture(kind)
     delete f.dependencies.work
@@ -104,10 +104,21 @@ describe('performance pressure driver orchestration (not Electron qualification)
     f.context.invoke.mockImplementation(async (_page, channel) => {
       if (channel === 'generation:list') return lists++ ? [{ handle, operation: 'chapter-draft' }] : []
       if (channel === 'generation:read') return view
-      if (channel === 'generation:read-context') return { attemptedPurposes: long ? ['chapter-draft-short-outline', 'chapter-draft'] : ['chapter-draft-short-outline'] }
+      if (channel === 'generation:read-diagnostics') return { schemaVersion: 1, handle, operation: 'chapter-draft',
+        source: {}, importSlot: null, initialDraftTaskHash: 'fixture-task-hash', parametersCoverage: 'not_recorded',
+        attempts: (long && invalidHistory !== 'missing-purpose' ? ['chapter-draft-short-outline', 'chapter-draft'] : ['chapter-draft-short-outline'])
+          .map((purpose, index) => ({ attemptId: `attempt-${index}`, purpose })) }
       throw new Error('UNEXPECTED_FIXTURE_CHANNEL')
     })
     f.context.fake.streamProse.mockImplementation(plan => { if (plan) f.context.fake.streamLog = plan.chunks.map(() => ({})) })
+    if (invalidHistory === 'missing-purpose') {
+      await expect(runPerformancePressureScenario(kind, f.context, f.dependencies)).rejects.toMatchObject({
+        performanceBaseline: { failed: 1, failureStage: 'evidence', task: { attempted: 2, settled: 2, physicalRequests: 2 } },
+      })
+      const index = f.context.invoke.mock.calls.findIndex(call => call[1] === 'generation:read-diagnostics')
+      expect(f.dependencies.stop.mock.invocationCallOrder[0]).toBeLessThan(f.context.invoke.mock.invocationCallOrder[index])
+      return
+    }
     if (invalidHistory) {
       await expect(runPerformancePressureScenario(kind, f.context, f.dependencies)).rejects.toMatchObject({
         performanceBaseline: { failed: 1, failureStage: 'producer', task: {
@@ -122,7 +133,15 @@ describe('performance pressure driver orchestration (not Electron qualification)
       unknown: long ? 0 : 1, artifactCount: 1 })
     expect(f.context.invoke.mock.calls.map(call => call[1])).not.toContain('generation:execute')
     expect(f.context.invoke.mock.calls.map(call => call[1])).not.toContain('generation:resume')
-    if (long) expect(f.context.fake.streamProse.mock.calls[0][0].reasoningChunks).toHaveLength(20)
+    expect(f.context.invoke.mock.calls.map(call => call[1])).not.toContain('generation:read-context')
+    const diagnosticCall = f.context.invoke.mock.calls.findIndex(call => call[1] === 'generation:read-diagnostics')
+    expect(diagnosticCall).toBeGreaterThanOrEqual(0)
+    expect(f.dependencies.stop.mock.invocationCallOrder[0]).toBeLessThan(f.context.invoke.mock.invocationCallOrder[diagnosticCall])
+    expect(result.task.frozenInitialTaskSha256).toBe('fixture-task-hash')
+    if (long) {
+      expect(f.context.fake.streamProse.mock.calls[0][0].reasoningChunks).toHaveLength(20)
+      expect(result.diagnostics.generation.runs[0].attempts.items.map(item => item.purpose)).toContain('chapter-draft')
+    }
     else expect(f.context.fake.rejectRateLimit).toHaveBeenNthCalledWith(1)
   })
 
@@ -238,17 +257,23 @@ describe('performance pressure driver orchestration (not Electron qualification)
   it.each([false, true])('cancels the actual owned RunCard on producer failure; cancel throws=%s', async throws => {
     const f = fixture(), original = new Error('original-producer'), cancelError = new Error('cancel-failed')
     delete f.dependencies.cancel
-    const locator = { count: async () => 1, click: vi.fn(async () => { if (throws) throw cancelError }), evaluateAll: async () => [] }
+    const locator = { count: async () => 1, click: vi.fn(async () => { if (throws) throw cancelError }), evaluateAll: vi.fn(async () => []) }
     for (const method of ['getByRole', 'first']) locator[method] = () => locator
     f.context.page = { getByRole: () => locator }
     f.dependencies.work.mockImplementation(async (_kind, _context, state) => { state.workflowStarted = true; throw original })
     let caught
     try { await runPerformancePressureScenario('perf-long-stream', f.context, f.dependencies) } catch (error) { caught = error }
     expect(locator.click).toHaveBeenCalledOnce()
+    expect(locator.evaluateAll).toHaveBeenCalledTimes(throws ? 0 : 1)
     expect(caught.performanceBaseline).toMatchObject({ failureStage: 'producer', failed: 1, cleanupFailures: Number(throws) })
     if (throws) expect(caught.cause.errors).toEqual([original, cancelError])
     else expect(caught.cause).toBe(original)
-    expect(f.context.invoke).not.toHaveBeenCalled()
+    const channels = f.context.invoke.mock.calls.map(call => call[1])
+    expect(channels).toEqual(['generation:list'])
+    expect(channels).not.toContain('generation:execute')
+    expect(channels).not.toContain('generation:resume')
+    expect(channels).not.toContain('generation:retry')
+    expect(f.dependencies.stop.mock.invocationCallOrder[0]).toBeLessThan(f.context.invoke.mock.invocationCallOrder[0])
   })
 
   it('retains the before-quit request cutoff and rejects actual post-measurement increments', async () => {

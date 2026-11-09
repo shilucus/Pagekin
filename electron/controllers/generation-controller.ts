@@ -124,6 +124,11 @@ export function generationIpcErrorCode(channel: string, error: unknown): string 
     return 'GENERATION_PROJECT_SESSION_STALE'
   }
   if (error instanceof Error && (error.message === 'SOURCE_DRAFT_CHANGED' || GENERATION_ERROR_CODE.test(error.message))) return error.message
+  if (channel === 'generation:read-diagnostics') {
+    // Corrupt receipt JSON may appear in a parser message or fabricated stack frame.
+    console.error('[generation] diagnostic read failed', { channel, name: 'Error' })
+    return 'GENERATION_REQUEST_FAILED'
+  }
   if (channel.startsWith('planning-feedback:v1:') || channel.startsWith('runtime-feedback:')
     || channel.startsWith('workflow-driver:') || channel.startsWith('workflow-batch:')) {
     console.error('[generation] unmapped feedback failure', { channel, name: error instanceof Error ? 'Error' : typeof error,
@@ -636,6 +641,11 @@ export function registerGenerationController(options: {
       try {
         const session = raw.pop()
         if (!isProjectSessionContext(session) || raw.length !== arity && !(channel === 'generation:compose-visible' && raw.length === 3)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
+        if (channel === 'generation:read-diagnostics') {
+          const request = raw[0]
+          if (!request || typeof request !== 'object' || Array.isArray(request)
+            || Object.keys(request).length !== 1 || !Object.hasOwn(request, 'handle')) throw new Error('GENERATION_DIAGNOSTICS_INVALID')
+        }
         if (channel.startsWith('planning-feedback:v1:')) assertPlanningFeedbackRequest(channel as PlanningFeedbackChannel, raw[0])
         const owner = authorizedOwner(session, event)
         const runtime = ownerRuntimes.get(owner)!
@@ -771,6 +781,7 @@ export function registerGenerationController(options: {
     return guardKnowledge(owner, context.draftSave.kind === 'current' ? undefined : context.knowledgeSnapshot, () => owner.commitDraft(request))
   })
   register('generation:read-context', 1, (owner, request) => owner.readContext(request.handle))
+  register('generation:read-diagnostics', 1, (owner, request) => owner.readDiagnostics(request.handle))
   register('generation:begin-batch', 1, (owner, request) => owner.beginBatch(request))
   register('generation:read-batch', 1, (owner, request) => owner.readBatch(request.batchId))
   register('generation:list-batches', 0, owner => owner.listBatches())

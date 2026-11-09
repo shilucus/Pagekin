@@ -4,6 +4,9 @@ import type { WritingSkillStage } from './writing-skills'
 import type { GenerationKnowledgeSnapshot } from './generation-knowledge'
 import type { ImportGenerationSlot } from './import-generation'
 import type { ImportRunExecutionAuthority } from './import-run'
+import type { FrozenInputFingerprint } from './source-ref'
+import type { GenerationTransportDiagnostics, PhysicalAttempt } from './generation-contract'
+import type { FinalizationGenerationSlot } from './finalization-generation'
 
 /** Raw text explicitly supplied for this author action, never inferred candidate text. */
 export interface GenerationAuthorInput { id: string; text: string }
@@ -136,6 +139,33 @@ export interface GenerationDraftCommitRequest {
   batchId?: string
 }
 export type ShortOutlineRetry = { kind: 'available'; failedAttemptId: string } | { kind: 'unavailable' }
+/** Read-only receipt projection. Never expand a task, manifest, manuscript or raw error here. */
+export interface GenerationRunDiagnostics {
+  schemaVersion: 1
+  handle: MainGenerationRunHandle
+  operation: string
+  status: MainGenerationRunView['status']
+  source: {
+    modelIdHash: string | null
+    modelReceiptHash: string | null
+    fingerprint: FrozenInputFingerprint
+  }
+  importSlot: ImportGenerationSlot | null
+  finalizationSlot: FinalizationGenerationSlot | null
+  /** Hash of the same frozen first draft task used by short-outline recovery; no task text. */
+  initialDraftTaskHash: string | null
+  /** Historical effective request parameters are not present in existing durable receipts. */
+  parametersCoverage: 'not_recorded'
+  attempts: readonly {
+    attemptId: string
+    status: PhysicalAttempt['status']
+    purpose: string | null
+    requestedOutputTokens: number
+    actual: { input: number | null; completion: number | null; reasoning: number | null; total: number | null } | null
+    transport: Omit<GenerationTransportDiagnostics, 'startedAt'> | null
+    failureCode: string | null
+  }[]
+}
 export interface GenerationRecoveryContext {
   planningContinuation?: PlanningContinuation
   blueprintRecovery?: BlueprintRecovery
@@ -303,6 +333,7 @@ export interface GenerationOwnerChannels {
   'generation:prepare-draft-context': { args: [PrepareDraftContextRequest]; return: PreparedDraftContext }
   'generation:commit-draft': { args: [GenerationDraftCommitRequest]; return: GenerationDraftCommitReceipt }
   'generation:read-context': { args: [{ handle: MainGenerationRunHandle }]; return: GenerationRecoveryContext }
+  'generation:read-diagnostics': { args: [{ handle: MainGenerationRunHandle }]; return: GenerationRunDiagnostics }
   'generation:retry-draft-short-outline': { args: [{ handle: MainGenerationRunHandle; failedAttemptId: string }]; return: MainGenerationExecuteReceipt }
   'generation:begin-batch': { args: [BeginGenerationBatchRequest]; return: GenerationBatchProgress }
   'generation:read-batch': { args: [{ batchId: string }]; return: GenerationBatchProgress }

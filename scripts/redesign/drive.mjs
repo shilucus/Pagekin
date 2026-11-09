@@ -18,6 +18,7 @@ import { dismissCompletionToasts, dismissStartupNotice, firstInteractiveControl,
 import { PERFORMANCE_SCENARIOS } from './performance-scenarios.mjs'
 import { PERFORMANCE_PRESSURE_SCENARIOS } from './performance-pressure-scenarios.mjs'
 import { appendPerformanceFailureDiagnostic } from './performance-baseline.mjs'
+import { performanceError, projectPerformanceResult } from './drive-performance-output.mjs'
 
 const asEntryPoint = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 // 场景模块会 import 应用里的 .ts：静态 import 会在任何代码运行前报 ERR_UNKNOWN_FILE_EXTENSION，所以先查再动态加载。
@@ -644,7 +645,9 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
       networkMessage: fake ? 'fetch 越过夹具访问外部网络' : '无夹具场景发出了 fetch' })
     sessionErrors.push(...final.errors.map(error => performanceBaseline ? performanceMessageOf(error, 'cleanup', 'driver_finalize') : messageOf(error)))
     if (final.performanceBaseline && current !== null) results[current].measured = final.performanceBaseline
-    if (options.console) writeConsoleLog(`${base(sessionName)}.console.log`, diagnostics, sessionErrors, realKey)
+    if (performanceBaseline && realKey && diagnostics.some(line => line.includes(realKey))) sessionErrors.push('诊断日志里出现了密钥，写盘前已遮蔽')
+    if (options.console) writeConsoleLog(`${base(sessionName)}.console.log`, performanceBaseline
+      ? [`PERFORMANCE_DIAGNOSTICS_REDACTED:${diagnostics.length}`] : diagnostics, sessionErrors, realKey)
     if (launched && realKey) await harvestModelLog(launched.app, modelLog, sessionErrors)
     const fixtureRequestsBeforeQuit = fake?.requests.length
     const cleanupMessage = error => performanceBaseline
@@ -682,11 +685,11 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
 async function main() {
   let options
   try { options = parseArgs(process.argv.slice(2)) } catch (error) {
-    process.stderr.write(`${error.message}\n`)
+    process.stderr.write(`${performanceRequested() ? performanceError(error) : error.message}\n`)
     process.exit(2)
   }
   try { assertBuilt(options.appRoot) } catch (error) {
-    process.stderr.write(`${error.message}\n`)
+    process.stderr.write(`${SCENARIOS[options.scenario]?.performance ? performanceError(error) : error.message}\n`)
     process.exit(2)
   }
   fs.mkdirSync(options.out, { recursive: true })
@@ -701,6 +704,17 @@ async function main() {
   process.exitCode = await driveSessions({ sessions, options, realKey })
 }
 
+function performanceRequested() {
+  const index = process.argv.indexOf('--scenario')
+  return index >= 0 && Boolean(SCENARIOS[process.argv[index + 1]]?.performance)
+}
+
+function containedOutputArtifact(file, out) {
+  const root = fs.realpathSync(out), target = fs.realpathSync(file)
+  const relative = path.relative(root, target)
+  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+}
+
 /**
  * 依次跑各会话，再扫密钥、打印、写结果 JSON，返回退出码。
  * 会话里任何一步（包括收尾清理）抛错都收成该会话的错误，不会逃出去：结果 JSON 与密钥扫描一定执行。
@@ -708,6 +722,7 @@ async function main() {
  */
 export async function driveSessions({ sessions, options, realKey, run = runSession, makeRoots = () => createIsolatedRoots(scratchParent()) }) {
   const results = []
+  const performanceResults = []
   const outBefore = realKey ? fileStamps(options.out) : null
   for (const [sessionName, names] of sessions) {
     let sessionResults
@@ -717,14 +732,16 @@ export async function driveSessions({ sessions, options, realKey, run = runSessi
       sessionResults = await run(sessionName, names, options, realKey, roots)
     } catch (error) {
       sessionResults = names.map(scenario => ({ scenario, theme: options.theme, session: sessionName, isolationRoot: roots?.root,
-        error: `会话中途出错，没有正常收尾：${messageOf(error)}` }))
+        error: SCENARIOS[scenario]?.performance ? performanceError(error) : `会话中途出错，没有正常收尾：${messageOf(error)}` }))
     }
-    for (const raw of sessionResults) {
+    for (const [index, raw] of sessionResults.entries()) {
       // 报错与诊断里若带出密钥，打印和写盘之前就遮掉，并判这次失败。
       const { value: result, redacted } = realKey ? redactSecret(raw, realKey) : { value: raw, redacted: false }
       if (redacted) result.secretRedacted = true
       results.push(result)
-      if (!realKey) process.stdout.write(`${JSON.stringify(result)}\n`)
+      const performance = Boolean(SCENARIOS[names[index]]?.performance)
+      performanceResults.push(performance)
+      if (!realKey && !performance) process.stdout.write(`${JSON.stringify(result)}\n`)
     }
   }
   const resultFile = path.join(options.out, `${options.scenario}-${options.theme}.json`)
@@ -733,11 +750,16 @@ export async function driveSessions({ sessions, options, realKey, run = runSessi
     try { scanRunForSecret(results, options.out, outBefore, realKey) } catch (error) {
       for (const result of results) result.keyScan = { error: messageOf(error) }
     }
-    for (const result of results) process.stdout.write(`${JSON.stringify(result)}\n`)
+    for (let index = 0; index < results.length; index++) if (!performanceResults[index]) process.stdout.write(`${JSON.stringify(results[index])}\n`)
   }
   const failed = results.filter(result => result.error || result.residualProcesses?.length !== 0 || result.externalWrites?.length !== 0
     || result.keyScan?.hits?.length > 0 || result.keyScan?.unreadable?.length > 0 || result.keyScan?.error || result.secretRedacted)
-  fs.writeFileSync(resultFile, JSON.stringify(results, null, 2))
+  const output = results.map((result, index) => performanceResults[index]
+    ? projectPerformanceResult(result, options.out, { contained: containedOutputArtifact }) : result)
+  for (let index = 0; index < results.length; index++) if (performanceResults[index]) {
+    process.stdout.write(`${JSON.stringify(output[index])}\n`)
+  }
+  fs.writeFileSync(resultFile, JSON.stringify(output, null, 2))
   if (realKey && filesContaining([resultFile], realKey).hits.length > 0) {
     removePath(resultFile)
     process.stderr.write('结果 JSON 含密钥，已删除\n')
@@ -746,4 +768,10 @@ export async function driveSessions({ sessions, options, realKey, run = runSessi
   return failed.length ? 1 : 0
 }
 
-if (asEntryPoint) await main()
+if (asEntryPoint) {
+  try { await main() } catch (error) {
+    if (!performanceRequested()) throw error
+    process.stderr.write(`${performanceError(error)}\n`)
+    process.exitCode = 1
+  }
+}

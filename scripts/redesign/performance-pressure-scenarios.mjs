@@ -7,7 +7,7 @@ import { seedStageSample } from './scenarios.mjs'
 import { countUnits } from './stage-sample.mjs'
 import * as blueprint from './pages/blueprint.mjs'
 import * as runSheet from './pages/run-sheet.mjs'
-import { appendPerformanceFailureDiagnostic, assertPerformanceProbeCoverage, performanceMetadata, readModelRequestSummary, startPerformanceBaseline, stopPerformanceBaseline } from './performance-baseline.mjs'
+import { appendPerformanceFailureDiagnostic, assertPerformanceProbeCoverage, performanceMetadata, readModelRequestSummary, readPerformanceRunDiagnostics, startPerformanceBaseline, stopPerformanceBaseline, summarizeFixtureChats } from './performance-baseline.mjs'
 
 const KINDS = ['perf-long-stream', 'perf-slow-embedding', 'perf-rate-limit']
 const LONG_CHUNKS = streamingProse(400, 24)
@@ -94,13 +94,10 @@ async function generationWork(kind, context, state) {
   assertProducerActive(state)
   state.task = taskSummary(view)
   assert.ok(view.budgetDiagnostics?.length, 'PERFORMANCE_PRESSURE_NO_ATTEMPT')
-  const recovery = await invoke(page, 'generation:read-context', { handle: state.handle }, state.session)
-  assertProducerActive(state)
   if (kind === 'perf-long-stream') {
     assert.ok(view.budgetDiagnostics.every(item => item.actualState === 'settled'), 'PERFORMANCE_PRESSURE_UNKNOWN_ATTEMPT')
     assert.ok(view.artifacts.some(item => item.text === LONG_CHUNKS.join('') && item.status === 'completed'), 'PERFORMANCE_PRESSURE_ARTIFACT_MISMATCH')
     assert.ok(view.artifacts.every(item => !item.text.includes(REASONING[0])))
-    assert.ok(recovery.attemptedPurposes.includes('chapter-draft'))
     assert.equal(fake.streamLog.length, LONG_CHUNKS.length)
     assert.equal(view.ledger.physicalRequests, 2)
   } else {
@@ -118,8 +115,7 @@ async function generationWork(kind, context, state) {
     assert.equal(view.artifacts[0].status, 'failed')
     assert.equal(view.artifacts[0].compositionEligible, false)
   }
-  state.task = { ...taskSummary(view),
-    frozenInitialTaskSha256: recovery.draftShortOutline?.initialDraftTask ? sha256(JSON.stringify(recovery.draftShortOutline.initialDraftTask)) : null }
+  state.task = taskSummary(view)
 }
 
 function taskSummary(view) {
@@ -221,13 +217,13 @@ export async function runPerformancePressureScenario(kind, context, dependencies
   const verify = dependencies.verify ?? verifyMeasurements
   const state = { pending: null, session: null, handle: null, task: { attempted: 0, failed: 0, settled: 0 } }
   const report = { metadata: performanceMetadata(12), scenario: kind, attempted: 1, failed: 0, success: false,
-    failureStage: null, cleanupFailures: 0, failureDiagnostics: [], measurements: null, requestSummary: null, task: null,
+    failureStage: null, cleanupFailures: 0, failureDiagnostics: [], measurements: null, requestSummary: null, task: null, diagnostics: null,
     finalRequestSummary: null, requestsAfterMeasurement: null, requestSummaryCutoff: 'after_drain_probe_stop',
     fixtureAcceptedRequests: null, finalFixtureAcceptedRequests: null,
     fixture: { kind: 'local-openai-compatible-fiction', protocol: 'openai', model: kind === 'perf-slow-embedding' ? EMBEDDING_MODEL.modelName : FAKE_MODEL.modelName,
       temperature: kind === 'perf-slow-embedding' ? null : FAKE_MODEL.temperature,
       configuredMaxTokens: kind === 'perf-long-stream' ? 32768 : kind === 'perf-rate-limit' ? FAKE_MODEL.maxTokens : null,
-      skill: 'isolated-fixture-default-no-custom-install', independentSkillDigest: 'not_available_from_public_readback',
+      skill: 'isolated-fixture-default-no-custom-install',
       corpusSha256: sha256(kind === 'perf-long-stream' ? LONG_CHUNKS.join('') : kind === 'perf-slow-embedding' ? EMBEDDING_TEXT : 'local-http-429'),
       visibleChunks: kind === 'perf-long-stream' ? LONG_CHUNKS.length : 0,
       reasoningChunks: kind === 'perf-long-stream' ? REASONING.length : 0,
@@ -308,11 +304,21 @@ export async function runPerformancePressureScenario(kind, context, dependencies
       if (kind === 'perf-rate-limit' && report.measurements.coverage.renderer === 'live_zero_events') report.notApplicable.push('renderer-snapshot-queue')
     } catch (error) { cleanupFailure(error, failedStage) }
   }
+  report.elapsedMs = performance.now() - beganAt
   try {
     report.requestSummary = await bounded(() => readRequests(context.app), 10_000)
     assert.ok(Array.isArray(context.fake.requests), 'PERFORMANCE_FIXTURE_REQUEST_CUTOFF_CHANGED')
     report.fixtureAcceptedRequests = context.fake.requests.length
   } catch (error) { cleanupFailure(error, 'request_summary') }
+  report.diagnostics = await readPerformanceRunDiagnostics(context, state.session, state.workflowStarted === true)
+  if (state.handle) {
+    const own = report.diagnostics.generation.runs.find(run => run.runId === state.handle.runId)
+    state.task = { ...state.task, frozenInitialTaskSha256: own?.initialDraftTaskHash ?? null }
+    if (kind === 'perf-long-stream' && finished && !failure && !cleanupErrors.length) {
+      try { assert.ok(own?.attempts?.items.some(attempt => attempt.purpose === 'chapter-draft'), 'PERFORMANCE_PRESSURE_PURPOSE_UNAVAILABLE') }
+      catch (error) { failure = error; report.failureStage = 'evidence'; appendPerformanceFailureDiagnostic(report.failureDiagnostics, error, 'scenario', 'evidence') }
+    }
+  }
   if (!failure && !cleanupErrors.length) {
     try { verify(kind, report.measurements, report.requestSummary) }
     catch (error) {
@@ -321,14 +327,16 @@ export async function runPerformancePressureScenario(kind, context, dependencies
     }
   }
   report.task = state.task
-  report.elapsedMs = performance.now() - beganAt
   report.fixture.dispatchedParameters = (context.fake.chats ?? []).slice(0, 32).map(chat => ({
     maxTokens: Number.isSafeInteger(chat.maxTokens) ? chat.maxTokens : null,
     temperature: typeof chat.temperature === 'number' && Number.isFinite(chat.temperature) ? chat.temperature : null,
     messagesSha256: sha256(JSON.stringify(chat.messages)),
   }))
+  const httpParameters = summarizeFixtureChats(context.fake.chats)
+  report.fixture.dispatchedParametersObserved = httpParameters.observed
+  report.fixture.dispatchedParametersRetained = httpParameters.retained
   report.fixture.dispatchedParametersCoverage = kind === 'perf-rate-limit' ? 'not_available_http429'
-    : kind === 'perf-slow-embedding' ? 'not_applicable_embedding' : 'observed_http_requests'
+    : kind === 'perf-slow-embedding' ? 'not_applicable_embedding' : httpParameters.coverage
   report.cleanupFailures = cleanupErrors.length
   report.failed = failure || cleanupErrors.length ? 1 : 0
   report.success = report.failed === 0

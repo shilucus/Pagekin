@@ -1,14 +1,14 @@
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, MaterialDecisionReceipt, VisibleCompositionAlgorithm, GenerationOwnerChannels, GenerationRecoveryList, ShortOutlineRetry, PlanningContinuation } from '../../src/shared/generation-owner-contract'
+import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, GenerationRunDiagnostics, MaterialDecisionReceipt, VisibleCompositionAlgorithm, GenerationOwnerChannels, GenerationRecoveryList, ShortOutlineRetry, PlanningContinuation } from '../../src/shared/generation-owner-contract'
 import { isDraftVisibleTextVersion } from '../../src/shared/draft-visible-text'
 import { generationOutputContract, type GenerationAuthorInput } from '../../src/shared/generation-owner-contract'
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunSummary, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import type { CreativeStrategy } from '../../src/shared/reasoning-types'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
-import { TERMINAL_PROVIDER_FAILURE_CODES, rootBudgetExhausted, tokenLiability } from '../../src/shared/generation-contract'
+import { TERMINAL_PROVIDER_FAILURE_CODES, rootBudgetExhausted, safeTransportError, tokenLiability } from '../../src/shared/generation-contract'
 import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock, withoutDraftReconciliationArtifacts } from '../../src/shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
@@ -32,7 +32,7 @@ import { decodeBlueprintAuthorPayload } from '../../src/shared/blueprint-semanti
 import { GenerationDraftEffects, assertGenerationBatchIntent } from './generation-draft-effects'
 import { CharacterProposalService } from './character-proposal-service'
 import { proveCharacterProposal } from './generation-character-proposal-proof'
-import { compareGenerationSourceBindings, recordedModelName } from './generation-source-binding'
+import { compareGenerationSourceBindings, generationModelReceiptHash, recordedModelName } from './generation-source-binding'
 import { createStreamSnapshotGuard } from './stream-snapshot-guard'
 import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
 import type { PrepareDraftContextRequest, PreparedDraftContext } from '../../src/shared/generation-owner-contract'
@@ -63,7 +63,7 @@ import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 import { readLegacyRosterSource, adoptLegacyCards } from './legacy-roster-source'
 import { buildLegacyRosterJsonRepairTask, buildLegacyRosterReplacementTask, parseLegacyRosterJson } from '../../src/shared/legacy-roster-generation-pure'
 import { validateGraphGenerationInput, readGraphGenerationContext } from './graph-generation-source'
-import { planningTargetInstruction, parsePlanningTargetUnits, renderPlotOutlineRange, plotOutlineRecoveryDraft, plotOutlineSourceInvalid, validPlotOutlineAuthorPrefix, type PlotOutlineSource, type PlotOutlineProgress, type PlotOutlineRecovery, type PlotOutlineAuthorEditReceipt } from '../../src/shared/plot-outline-contract'
+import { planningTargetInstruction, parsePlanningTargetUnits, parsePlotOutlinePurpose, renderPlotOutlineRange, plotOutlineRecoveryDraft, plotOutlineSourceInvalid, validPlotOutlineAuthorPrefix, type PlotOutlineSource, type PlotOutlineProgress, type PlotOutlineRecovery, type PlotOutlineAuthorEditReceipt } from '../../src/shared/plot-outline-contract'
 import { ProjectCoreRepository, type ProjectCoreSynopsisExpected, type ProjectCoreSynopsisCommitRequest } from '../repositories/project-core-repository'
 import { measurePerformanceOperation, recordPerformanceCount, recordPerformanceTextBytes } from './performance-diagnostics'
 // 尝试 id 都由 randomUUID 生成；recoverFrom 还拼进 nonce，只收 UUID，免得拼出别的尝试的 nonce。
@@ -75,6 +75,29 @@ const RECOVERY_KIND: ReadonlyMap<string, 'planning' | 'review' | 'editor' | 'dra
   ['review-chapter', 'review'], ['refine-draft', 'review'], ['refine-from-review', 'review'],
   ['editor-inline', 'editor'], ['chapter-draft', 'draft'],
 ] as const)
+// Only labels emitted by the workflow commands and main-owned task constructors are diagnostic data.
+const DIAGNOSTIC_OPERATIONS: ReadonlySet<string> = new Set([
+  'generate-global-config', 'generate-core-seed', 'character-architecture', 'generate-world-building', 'generate-plot-outline',
+  'chapter-blueprint-directory', 'chapter-draft', 'review-chapter', 'refine-draft', 'refine-from-review',
+  'planning-material-character-extraction', 'import-global-facts', 'import-blueprints', 'analyze-writing-style',
+  'agent-round', 'editor-inline', 'finalized-chapter-notes', 'finalized-character-state',
+  ...Object.values(graphOperations), 'legacy-character-roster-repair', 'planning-feedback', 'batch-chapters',
+])
+const DIAGNOSTIC_PURPOSES: ReadonlySet<string> = new Set([
+  ...DIAGNOSTIC_OPERATIONS, 'agent', 'generate-global-config-replacement', 'generate-global-guidance-replacement',
+  'character-architecture-manifest', 'character-architecture-details', 'chapter-draft-short-outline', 'chapter-draft-reconcile',
+  'chapter-draft-continuation', 'chapter-draft-no-progress-recovery', 'chapter-draft-condense', 'review-chapter-rebuild',
+  'import-inference', 'import-inference:endpoint-card-recovery', 'legacy-character-roster-json-repair',
+  'editor-ai-refine', 'editor-ai-expand', 'editor-ai-continue', 'editor-ai-dialogue', 'editor-ai-instruct',
+  'generate-plot-architecture', 'generate-plot-architecture-resume', 'generate-plot-architecture-batch',
+])
+function diagnosticPurpose(value: string): string | null {
+  if (DIAGNOSTIC_PURPOSES.has(value) || parsePlotOutlinePurpose(value)) return value
+  const chapter = /^chapter-blueprint-directory:compact-single:chapter-([1-9]\d*)$/u.exec(value)
+  if (chapter && Number.isSafeInteger(Number(chapter[1]))) return value
+  const repair = /^(?:finalized-character-state|finalized-chapter-notes):repair:(0|[1-9]\d*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/u.exec(value)
+  return repair && (ATTEMPT_ID.test(repair[1]!) || Number.isSafeInteger(Number(repair[1]))) ? value : null
+}
 
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>
 export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt): SafeGenerationModelReceipt {
@@ -501,6 +524,86 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         activeElapsedMs: budget.activeElapsedMs, blockedCode: budget.blockedCode }, artifacts, candidates,
       ...(preservedTails.length ? { recoveryTails: preservedTails } : {}),
       unsavedTails: service.readUnsavedTails().filter(tail => budget.attempts.some(attempt => attempt.attemptId === tail.attemptId)) }
+  }
+  const readDiagnostics = (handle: MainGenerationRunHandle): GenerationRunDiagnostics => {
+    const run = requireRun(handle), manifest = run.binding.sourceManifest
+    const nonnegative = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0
+    const tokens = (value: unknown): number | null => nonnegative(value) && Number.isSafeInteger(value) ? value : null
+    const operation = typeof manifest.operation === 'string' && DIAGNOSTIC_OPERATIONS.has(manifest.operation) ? manifest.operation : 'unknown'
+    const status = run.status as GenerationRunDiagnostics['status']
+    const fingerprint = {
+      chapterBriefHash: run.binding.fingerprint.chapterBriefHash, authorGuidanceHash: run.binding.fingerprint.authorGuidanceHash,
+      dependencyHash: run.binding.fingerprint.dependencyHash, contextSnapshotHash: run.binding.fingerprint.contextSnapshotHash,
+      templateHash: run.binding.fingerprint.templateHash, skillSnapshotHash: run.binding.fingerprint.skillSnapshotHash,
+      modelLeaseRevision: run.binding.fingerprint.modelLeaseRevision, policyHash: run.binding.fingerprint.policyHash,
+      outputContractHash: run.binding.fingerprint.outputContractHash,
+    }
+    if (!['running', 'paused', 'completed', 'failed', 'cancelled'].includes(status)
+      || Object.values(fingerprint).some(value => typeof value !== 'string' || !/^[a-f0-9]{64}$/u.test(value)))
+      throw new Error('GENERATION_DIAGNOSTICS_INVALID')
+    const frozenModel = manifest.modelReceipt as SafeGenerationModelReceipt | undefined
+    const capability = frozenModel?.capabilityEvidence
+    const modelReceiptProjection = frozenModel ? {
+      modelId: frozenModel.modelId, provider: frozenModel.provider, protocol: frozenModel.protocol, modelName: frozenModel.modelName,
+      modelRevision: frozenModel.modelRevision, endpointFingerprint: frozenModel.endpointFingerprint,
+      capabilityEvidence: capability ? {
+        source: { contextWindowTokens: capability.source?.contextWindowTokens, maxOutputTokens: capability.source?.maxOutputTokens,
+          featureFlags: capability.source?.featureFlags },
+        subjectFingerprint: capability.subjectFingerprint, contextWindowTokens: capability.contextWindowTokens,
+        maxOutputTokens: capability.maxOutputTokens, reasoning: capability.reasoning, structuredOutput: capability.structuredOutput, usage: capability.usage,
+      } : undefined,
+    } : null
+    const storedImportSlot = manifest.importSlot as GenerationRunDiagnostics['importSlot'] | undefined
+    const importSlot = storedImportSlot ? { runId: storedImportSlot.runId, stage: storedImportSlot.stage, batchId: storedImportSlot.batchId } : null
+    if (importSlot) importGenerationSlotKey(importSlot)
+    const storedFinalizationSlot = manifest.finalizationGenerationSlot as GenerationRunDiagnostics['finalizationSlot'] | undefined
+    const finalizationSlot = storedFinalizationSlot ? {
+      source: { draftId: storedFinalizationSlot.source?.draftId, finalizationId: storedFinalizationSlot.source?.finalizationId,
+        chapterNumber: storedFinalizationSlot.source?.chapterNumber, contentHash: storedFinalizationSlot.source?.contentHash },
+      stepKey: storedFinalizationSlot.stepKey,
+    } : null
+    if (finalizationSlot) finalizationSlotKey(finalizationSlot)
+    const rows = runAttempts(run.runId)
+    const attempts = rows.map(row => {
+      const receipt = repository.receipt(row.attemptId), attempt = receipt.attempt, usage = receipt.result?.usage
+      if (!['reserved', 'dispatch-marked', 'settled', 'unknown', 'cancelled-before-dispatch'].includes(attempt.status)
+        || tokens(attempt.requestedOutputTokens) === null) throw new Error('GENERATION_DIAGNOSTICS_INVALID')
+      const diagnostics = receipt.diagnostics
+      let transport: GenerationRunDiagnostics['attempts'][number]['transport'] = null
+      if (diagnostics && nonnegative(diagnostics.elapsedMs) && nonnegative(diagnostics.visibleEvents) && nonnegative(diagnostics.reasoningEvents)
+        && [diagnostics.firstResponseMs, diagnostics.lastResponseMs, diagnostics.lastOutputMs].every(value => value === null || nonnegative(value))
+        && ['request', 'response', 'stream', 'complete'].includes(diagnostics.phase)) {
+        const errors = safeTransportError({ name: diagnostics.errorName, code: diagnostics.errorCode, cause: { code: diagnostics.causeCode } })
+        const providerCode = ['HTTP_ERROR', 'RESPONSE_BODY_MISSING', 'PROVIDER_STREAM_ERROR', 'STREAM_INVALID', 'STREAM_INCOMPLETE'].includes(diagnostics.errorCode ?? '')
+          ? diagnostics.errorCode : undefined
+        const errorCode = providerCode ?? errors.errorCode
+        transport = {
+          elapsedMs: diagnostics.elapsedMs, firstResponseMs: diagnostics.firstResponseMs, lastResponseMs: diagnostics.lastResponseMs,
+          lastOutputMs: diagnostics.lastOutputMs, phase: diagnostics.phase, visibleEvents: diagnostics.visibleEvents, reasoningEvents: diagnostics.reasoningEvents,
+          ...(typeof diagnostics.httpStatus === 'number' && Number.isInteger(diagnostics.httpStatus) && diagnostics.httpStatus >= 100 && diagnostics.httpStatus <= 599 ? { httpStatus: diagnostics.httpStatus } : {}),
+          ...(['completed', 'cancelled', 'failed'].includes(diagnostics.endReason ?? '') ? { endReason: diagnostics.endReason } : {}),
+          ...(errors.errorName ? { errorName: errors.errorName } : {}),
+          ...(errorCode ? { errorCode } : {}),
+          ...(errors.causeCode ? { causeCode: errors.causeCode } : {}),
+        }
+      }
+      const failureCode = [...RENDERER_SAFE_FAILURE_CODES, 'GENERATION_STREAM_INVALID', 'GENERATION_CANCELLED', 'GENERATION_PROJECT_CLOSED']
+        .find(code => code === receipt.failureCode) ?? null
+      return { attemptId: row.attemptId, status: attempt.status, purpose: diagnosticPurpose(row.purpose),
+        requestedOutputTokens: attempt.requestedOutputTokens,
+        actual: usage?.trusted === true ? { input: tokens(usage.inputTokens), completion: tokens(usage.completionTokens),
+          reasoning: tokens(usage.reasoningTokens), total: tokens(usage.actualTokens) } : null,
+        transport, failureCode }
+    })
+    const decision = manifest.materialDecision as MaterialDecisionReceipt | undefined
+    const initialDraft = decision?.shortOutlinePromptHash ? rows.find(row => row.purpose === 'chapter-draft' && row.status !== 'cancelled-before-dispatch') : undefined
+    const recordedTask = initialDraft ? JSON.parse(deps.database.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?')
+      .pluck().get(initialDraft.attemptId) as string).replayTask as GenerationTask | undefined : undefined
+    return { schemaVersion: 1, handle: handleOf(run), operation, status,
+      source: { modelIdHash: typeof frozenModel?.modelId === 'string' ? textHash(frozenModel.modelId) : null,
+        modelReceiptHash: modelReceiptProjection ? generationModelReceiptHash(modelReceiptProjection as SafeGenerationModelReceipt) : null, fingerprint },
+      importSlot, finalizationSlot, parametersCoverage: 'not_recorded',
+      initialDraftTaskHash: recordedTask ? textHash(JSON.stringify(recordedTask)) : null, attempts }
   }
   /** 本作品的全部运行，新的在前；只从库里取身份、状态与操作类型，不解析整份冻结上下文。 */
   const runSummaries = () => (deps.database.prepare(`SELECT run_id,root_action_id,status,
@@ -2177,7 +2280,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     assertSynopsisCommit, commitPlotOutlineAuthorEdit, commitBlueprintAuthorEdit,
     withAgentChildEffect: <T>(handle: MainGenerationRunHandle, effect: () => T): T => { const run = requireRun(handle); assertAuthorFollowupWritable(run.runId); return agents.withChildEffect(handle, effect) },
-    read: (handle: MainGenerationRunHandle) => viewOf(requireRun(handle)),
+    read: (handle: MainGenerationRunHandle) => viewOf(requireRun(handle)), readDiagnostics,
     listDirectoryProgress: () => {
       assertCurrent()
       const catalog = repository.listDirectoryProgress()

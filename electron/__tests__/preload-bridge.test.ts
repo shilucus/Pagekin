@@ -55,6 +55,18 @@ describe('桌面预加载接口', () => {
       .rejects.toThrow('PROJECT_RUNTIME_CHANNEL_NOT_ALLOWED')
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(callsBefore)
   })
+  it('forwards read-only diagnostics without adding execution authority or changing the handle', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const handle = Object.freeze({ projectId: 'fixture-project', epoch: 'fixture-epoch', rootActionId: 'fixture-root', runId: 'fixture-run' })
+    const request = Object.freeze({ handle })
+    const session = Object.freeze({ projectId: handle.projectId, leaseId: 'fixture-lease', projectPath: 'C:/fictional-project' })
+    const result = { schemaVersion: 1 }
+    electron.ipcRenderer.invoke.mockResolvedValueOnce(result)
+    await expect(bridge.invoke('generation:read-diagnostics', request, session)).resolves.toBe(result)
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith('generation:read-diagnostics', request, session)
+    expect(Object.keys(request)).toEqual(['handle'])
+    expect(Object.keys(handle)).toEqual(['projectId', 'epoch', 'rootActionId', 'runId'])
+  })
   it('forwards only closed runtime-feedback literals without manufacturing an execution grant', async () => {
     const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
     const request = Object.freeze({ grantId: 'fictional-reference' })

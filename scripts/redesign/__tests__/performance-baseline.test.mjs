@@ -1,13 +1,82 @@
 import fs from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cancelPerformanceImport, corpusSha256, performanceCorpus, PERFORMANCE_SCENARIOS, runPerformanceImportScenario } from '../performance-scenarios.mjs'
-import { appendPerformanceFailureDiagnostic, assertPerformanceProbeCoverage, performanceMetadata, readModelRequestSummary, startPerformanceBaseline, stopPerformanceBaseline } from '../performance-baseline.mjs'
+import { appendPerformanceFailureDiagnostic, assertPerformanceProbeCoverage, performanceMetadata, readModelRequestSummary, readPerformanceRunDiagnostics, startPerformanceBaseline, stopPerformanceBaseline, summarizeFixtureChats } from '../performance-baseline.mjs'
 
 const collectorKey = Symbol.for('pagekin.performance-baseline')
 beforeEach(() => { globalThis[collectorKey] = () => ({ schemaVersion: 1, quantiles: 'fixed-histogram-upper-bounds', metrics: { 'source.capture.calls': { count: 1 } } }) })
 afterEach(() => { delete globalThis[collectorKey]; vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('performance baseline contract', () => {
+  it('reads bounded safe receipts and actual import slots after the probe boundary', async () => {
+    const session = { leaseId: 'private-lease', projectPath: 'private-path' }
+    const handle = { runId: 'generation-1', rootActionId: 'root-1' }
+    const diagnostic = { schemaVersion: 1, handle, operation: 'import', status: 'completed',
+      source: { modelIdHash: 'model-hash', modelReceiptHash: 'receipt-hash', fingerprint: { skillSnapshotHash: 'skill-hash', private: 'private-fingerprint' } },
+      importSlot: { runId: 'import-1', stage: 'blueprints', batchId: 'batch-1' }, finalizationSlot: null,
+      parametersCoverage: 'not_recorded', initialDraftTaskHash: null,
+      attempts: Array.from({ length: 33 }, (_, i) => ({ attemptId: `attempt-${i}`, status: 'settled', purpose: 'import',
+        requestedOutputTokens: 20, actual: { total: 12, private: 'private-usage' }, transport: { visibleEvents: 1, private: 'private-transport' } })) }
+    const invoke = vi.fn(async (_page, channel, argument) => {
+      if (channel === 'generation:list') return Array.from({ length: 33 }, () => ({ handle }))
+      if (channel === 'generation:read-diagnostics') return diagnostic
+      if (channel === 'db:import-run-get') return { id: argument, rootRunId: 'root-1', stage: 'blueprints', status: 'running',
+        completedBatches: { blueprints: ['private-checkpoint'] }, sourceDisplay: 'private-source', lastError: 'private-error' }
+      throw new Error('unexpected')
+    })
+    const result = await readPerformanceRunDiagnostics({ page: {}, invoke }, session, true)
+    expect(result).toMatchObject({ sampleBoundary: 'after_probe_stop_attempt',
+      generation: { coverage: 'partial', observed: 33, retained: 32, cutoff: true },
+      importRun: { coverage: 'partial', observed: 1, retained: 1, runs: [{ id: 'import-1', checkpointCounts: { blueprints: 1 } }] } })
+    expect(result.generation.runs[0]).toMatchObject({ source: { fingerprint: { skillSnapshotHash: 'skill-hash' } }, attempts: { observed: 33, retained: 32 } })
+    expect(invoke).toHaveBeenCalledWith(expect.anything(), 'db:import-run-get', 'import-1', 'private-path', session)
+    expect(JSON.stringify(result)).not.toMatch(/private-/u)
+    expect(result.sampleEndedAt).toBeGreaterThanOrEqual(result.sampleStartedAt)
+    const parameters = summarizeFixtureChats(Array.from({ length: 33 }, () => ({ maxTokens: 42, temperature: 0, messages: 'private-prompt' })))
+    expect(parameters).toMatchObject({ observed: 33, retained: 32 })
+    expect(parameters.items[0]).toEqual({ maxTokens: 42, temperature: 0 })
+    expect(JSON.stringify(parameters)).not.toContain('private-prompt')
+  })
+
+  it('distinguishes unentered, unreadable and missing checkpoint observations', async () => {
+    const context = { page: {}, invoke: vi.fn() }
+    expect((await readPerformanceRunDiagnostics(context, null, false)).generation.coverage).toBe('not_entered')
+    expect((await readPerformanceRunDiagnostics(context, null, true)).generation.coverage).toBe('unavailable')
+    context.invoke.mockImplementation(async (_page, channel) => {
+      if (channel === 'generation:list') return [{ handle: { runId: 'g' } }]
+      if (channel === 'generation:read-diagnostics') return { schemaVersion: 1, handle: { runId: 'g' },
+        importSlot: { runId: 'i' }, attempts: [] }
+      return { id: 'i' }
+    })
+    const result = await readPerformanceRunDiagnostics(context, { leaseId: 'l' }, true)
+    expect(result.importRun.runs[0].checkpointCounts).toBeNull()
+    context.invoke.mockRejectedValue(new Error('private-error'))
+    expect((await readPerformanceRunDiagnostics(context, { leaseId: 'l' }, true)).generation.coverage).toBe('unavailable')
+  })
+
+  it('retains the prepared import during author postprocessing even if generation listing fails', async () => {
+    const invoke = vi.fn(async (_page, channel, id) => {
+      if (channel === 'db:import-run-get') return { id, rootRunId: 'root-1', stage: 'author-postprocess', status: 'running',
+        completedBatches: { 'author-postprocess': ['a', 'b'] }, sourceDisplay: 'private-source' }
+      throw new Error('private-error')
+    })
+    const result = await readPerformanceRunDiagnostics({ page: {}, invoke }, { leaseId: 'lease', projectPath: 'path' }, true, 'prepared-id')
+    expect(result.generation.coverage).toBe('unavailable')
+    expect(result.importRun).toMatchObject({ coverage: 'observed', observed: 1, retained: 1,
+      runs: [{ id: 'prepared-id', stage: 'author-postprocess', checkpointCounts: { 'author-postprocess': 2 } }] })
+    expect(JSON.stringify(result)).not.toMatch(/private-|lease|path/u)
+  })
+
+  it('bounds the entire diagnostic read and reports the unretained denominator', async () => {
+    vi.useFakeTimers()
+    const invoke = vi.fn(async (_page, channel) => channel === 'generation:list'
+      ? Array.from({ length: 33 }, (_, i) => ({ handle: { runId: `run-${i}` } })) : new Promise(() => {}))
+    const pending = readPerformanceRunDiagnostics({ page: {}, invoke }, { leaseId: 'lease' }, true)
+    await vi.advanceTimersByTimeAsync(10_000)
+    const result = await pending
+    expect(result.generation).toMatchObject({ observed: 33, retained: 2, cutoff: true, coverage: 'partial' })
+    expect(invoke).toHaveBeenCalledTimes(3)
+  })
   it('exposes three isolated single-book scenarios and deterministic synthetic corpora', () => {
     expect(Object.keys(PERFORMANCE_SCENARIOS)).toEqual(['perf-import-10', 'perf-import-100', 'perf-import-1000'])
     for (const count of [10, 100, 1000]) {
@@ -254,14 +323,23 @@ describe('performance baseline contract', () => {
 function importFixture() {
   vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {})
   const events = []
-  const action = { isChecked: async () => true, click: async () => {} }
+  const original = vi.fn(async () => ({ success: true, preparation: { run: { id: 'import-1' } } }))
+  const handlers = new Map([['db:import-run-prepare-inspection', original]])
+  const action = { isChecked: async () => true, click: async () => { await handlers.get('db:import-run-prepare-inspection')() } }
   const dialog = { getByRole: () => action, waitFor: async () => {} }
   const context = {
     page: { setDefaultTimeout: vi.fn() }, roots: { temp: 'unused' },
     fake: { requests: Array(32).fill(null), replyReview: () => {} },
-    app: { evaluate: vi.fn().mockResolvedValue({ leaseId: 'fictional-lease', projectPath: 'fictional-project' }) },
-    invoke: vi.fn(async (_page, channel) => channel === 'db:draft-list-all'
-      ? Array.from({ length: 10 }, () => ({ status: 'finalized' })) : Array(10).fill({})),
+    app: { evaluate: vi.fn(async callback => callback.toString().includes('ipcMain')
+      ? callback({ ipcMain: { _invokeHandlers: handlers } }) : { leaseId: 'fictional-lease', projectPath: 'fictional-project' }) },
+    invoke: vi.fn(async (_page, channel) => {
+      if (channel === 'db:draft-list-all') return Array.from({ length: 10 }, () => ({ status: 'finalized' }))
+      if (channel === 'generation:list') return [{ handle: { runId: 'generation-1' } }]
+      if (channel === 'generation:read-diagnostics') return { schemaVersion: 1, handle: { runId: 'generation-1' },
+        importSlot: { runId: 'import-1', stage: 'global', batchId: 'done' }, attempts: [], source: {} }
+      if (channel === 'db:import-run-get') return { id: 'import-1', completedBatches: { global: ['done'] } }
+      return Array(10).fill({})
+    }),
   }
   const summary = count => ({ coverage: 'guarded_fetch_attempts', byRoute: { '/v1/chat/completions': { count } } })
   const dependencies = {
@@ -276,7 +354,7 @@ function importFixture() {
     cancelImport: vi.fn(async () => { events.push('cancel'); return { status: 'drained', cancellationRequested: true } }),
     readRequests: vi.fn(async () => { events.push('summary'); return summary(32) }),
   }
-  return { context, dependencies, events, summary }
+  return { context, dependencies, events, summary, handlers, original }
 }
 
 describe('performance import failure evidence', () => {
@@ -353,6 +431,8 @@ describe('performance import failure evidence', () => {
     const f = importFixture()
     const report = await runPerformanceImportScenario(10, f.context, f.dependencies)
     expect(report.success).toBe(true)
+    expect(report.diagnostics.importRun.runs[0]).toMatchObject({ id: 'import-1', checkpointCounts: { global: 1 } })
+    expect(f.handlers.get('db:import-run-prepare-inspection')).toBe(f.original)
     expect(f.dependencies.cancelImport).not.toHaveBeenCalled()
     f.dependencies.readRequests.mockResolvedValueOnce(f.summary(33))
     await expect(f.context.finalizePerformanceEvidence()).rejects.toMatchObject({ performanceBaseline: report })
@@ -388,7 +468,8 @@ describe('performance import failure evidence', () => {
     expect(caught.cause).toBe(original)
     expect(caught.performanceBaseline).toBe(report)
     expect(report).toMatchObject({ failureStage: 'workflow', failed: 1, requestsAfterMeasurement: 2, cleanupFailures: 1 })
-    expect(f.context.invoke).not.toHaveBeenCalled()
+    expect(f.context.invoke.mock.calls.map(call => call[1])).toEqual(['db:import-run-get', 'generation:list', 'generation:read-diagnostics'])
+    expect(f.dependencies.stop.mock.invocationCallOrder[0]).toBeLessThan(f.context.invoke.mock.invocationCallOrder[0])
   })
 
   it('uses the actual import cancel button and bounds a non-draining executor', async () => {

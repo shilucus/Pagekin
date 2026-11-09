@@ -29,7 +29,101 @@ export async function readModelRequestSummary(app) {
   }))
 }
 
-async function boundedObservation(read, timeoutMs = 5_000) {
+const FINGERPRINT_KEYS = ['chapterBriefHash', 'authorGuidanceHash', 'dependencyHash', 'contextSnapshotHash',
+  'templateHash', 'skillSnapshotHash', 'modelLeaseRevision', 'policyHash', 'outputContractHash']
+const TRANSPORT_KEYS = ['elapsedMs', 'firstResponseMs', 'lastResponseMs', 'lastOutputMs', 'httpStatus', 'phase',
+  'endReason', 'errorName', 'errorCode', 'causeCode', 'visibleEvents', 'reasoningEvents']
+const IMPORT_STAGES = ['parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'author-commit',
+  'author-publish', 'author-postprocess', 'refresh', 'completed']
+const pick = (value, keys) => Object.fromEntries(keys.filter(key => value?.[key] !== undefined).map(key => [key, value[key]]))
+
+/** Read existing receipts only after measurement; never retain sessions, source text or raw errors. */
+export async function readPerformanceRunDiagnostics({ page, invoke }, session, workflowEntered, preparedImportId = null) {
+  const result = { sampleBoundary: 'after_probe_stop_attempt', sampleStartedAt: Date.now(), sampleEndedAt: null,
+    generation: { scope: 'isolated_project', coverage: workflowEntered ? 'unavailable' : 'not_entered', observed: null, retained: 0, cutoff: false, runs: [] },
+    importRun: { coverage: workflowEntered ? 'unavailable' : 'not_entered', observed: null, retained: 0, runs: [] } }
+  const deadline = Date.now() + 10_000
+  const read = operation => {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new Error('PERFORMANCE_OBSERVATION_TIMEOUT')
+    return boundedObservation(operation, Math.min(5_000, remaining))
+  }
+  try {
+    if (!workflowEntered || !session?.leaseId || typeof invoke !== 'function') return result
+    const importIds = new Set(preparedImportId ? [preparedImportId] : [])
+    const readImport = async id => {
+      try {
+        const run = await read(() => invoke(page, 'db:import-run-get', id, session.projectPath, session))
+        if (!run || run.id !== id) throw new Error('IMPORT_DIAGNOSTIC_UNAVAILABLE')
+        const checkpoints = run.completedBatches && typeof run.completedBatches === 'object'
+          ? Object.fromEntries(IMPORT_STAGES.map(stage => [stage,
+            Array.isArray(run.completedBatches[stage]) ? run.completedBatches[stage].length : 0])) : null
+        result.importRun.runs.push({ coverage: 'observed', id: run.id, rootRunId: run.rootRunId,
+          purpose: run.purpose, stage: run.stage, status: run.status, checkpointCounts: checkpoints })
+      } catch { result.importRun.runs.push({ coverage: 'unavailable' }) }
+    }
+    if (preparedImportId) await readImport(preparedImportId)
+    let list
+    try { list = await read(() => invoke(page, 'generation:list', session)) } catch { list = null }
+    if (!Array.isArray(list)) {
+      result.importRun.observed = importIds.size; result.importRun.retained = result.importRun.runs.length
+      if (preparedImportId) result.importRun.coverage = result.importRun.runs[0].coverage
+      return result
+    }
+    result.generation.observed = list.length
+    result.generation.coverage = list.length ? 'observed' : 'not_entered'
+    for (const item of list.slice(0, 32)) {
+      if (Date.now() >= deadline) { result.generation.coverage = 'partial'; result.generation.cutoff = true; break }
+      const handle = item?.handle
+      try {
+        const diagnostic = await read(() => invoke(page, 'generation:read-diagnostics', { handle }, session))
+        if (diagnostic?.schemaVersion !== 1 || !Array.isArray(diagnostic.attempts)
+          || diagnostic.handle?.runId !== handle?.runId) throw new Error('DIAGNOSTIC_UNAVAILABLE')
+        const slot = diagnostic.importSlot
+        if (slot?.runId) importIds.add(slot.runId)
+        result.generation.runs.push({ coverage: 'observed', runId: diagnostic.handle.runId,
+          rootActionId: diagnostic.handle.rootActionId, operation: diagnostic.operation, status: diagnostic.status,
+          source: { modelIdHash: diagnostic.source?.modelIdHash ?? null, modelReceiptHash: diagnostic.source?.modelReceiptHash ?? null,
+            fingerprint: pick(diagnostic.source?.fingerprint, FINGERPRINT_KEYS) },
+          importSlot: slot ? pick(slot, ['runId', 'stage', 'batchId']) : null,
+          finalizationSlot: diagnostic.finalizationSlot ? { stepKey: diagnostic.finalizationSlot.stepKey,
+            source: pick(diagnostic.finalizationSlot.source, ['draftId', 'finalizationId', 'chapterNumber', 'contentHash']) } : null,
+          initialDraftTaskHash: diagnostic.initialDraftTaskHash ?? null,
+          parametersCoverage: diagnostic.parametersCoverage,
+          attempts: { observed: diagnostic.attempts.length, retained: Math.min(diagnostic.attempts.length, 32),
+            items: diagnostic.attempts.slice(0, 32).map(attempt => ({ ...pick(attempt, ['attemptId', 'status', 'purpose', 'requestedOutputTokens', 'failureCode']),
+              actual: attempt.actual ? pick(attempt.actual, ['input', 'completion', 'reasoning', 'total']) : null,
+              transport: attempt.transport ? pick(attempt.transport, TRANSPORT_KEYS) : null })) } })
+      } catch {
+        result.generation.coverage = 'partial'
+        result.generation.runs.push({ coverage: 'unavailable' })
+      }
+    }
+    result.generation.retained = result.generation.runs.length
+    if (list.length > 32) { result.generation.coverage = 'partial'; result.generation.cutoff = true }
+    result.importRun.observed = importIds.size
+    for (const id of importIds) {
+      if (id !== preparedImportId) await readImport(id)
+    }
+    result.importRun.retained = result.importRun.runs.length
+    if (importIds.size) result.importRun.coverage = result.importRun.runs.every(run => run.coverage === 'observed')
+      && result.generation.coverage !== 'partial' ? 'observed' : 'partial'
+    return result
+  } catch {
+    result.generation.coverage = 'unavailable'
+    result.importRun.coverage = 'unavailable'
+    return result
+  } finally { result.sampleEndedAt = Date.now() }
+}
+
+export function summarizeFixtureChats(chats) {
+  if (!Array.isArray(chats)) return { coverage: 'unavailable', observed: null, retained: 0, items: [] }
+  return { coverage: 'observed_http_requests', observed: chats.length, retained: Math.min(chats.length, 32),
+    items: chats.slice(0, 32).map(chat => ({ maxTokens: Number.isSafeInteger(chat.maxTokens) ? chat.maxTokens : null,
+      temperature: typeof chat.temperature === 'number' && Number.isFinite(chat.temperature) ? chat.temperature : null })) }
+}
+
+export async function boundedObservation(read, timeoutMs = 5_000) {
   let timer
   try {
     return await Promise.race([Promise.resolve().then(read), new Promise((_, reject) => {

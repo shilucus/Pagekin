@@ -9,11 +9,11 @@ import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema
 import { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { migrateSchema } from '../../migrations/runner'
-import { createMainGenerationOwner, safeGenerationModelReceipt } from '../main-generation-owner'
+import { createMainGenerationOwner, safeGenerationModelReceipt, type SafeGenerationModelReceipt } from '../main-generation-owner'
 import { batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY, newMainGenerationPolicy, readMainGenerationPolicy } from '../main-generation-plan'
 import { createModelExecutionLeaseReceipt, ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import * as providerPresets from '../../../src/shared/provider-presets'
-import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
+import { buildGenerationSourceBinding, generationModelReceiptHash, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
 import { readBuiltinWritingSkill } from '../../../src/shared/builtin-writing-skills'
 import type { ArchitecturePlanningIntent, BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
@@ -73,13 +73,14 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
     modelName: silicon ? 'deepseek-ai/DeepSeek-V4-Flash' : 'gpt-4.1', apiKey: 'synthetic-private-key',
     baseUrl: silicon ? 'https://api.siliconflow.cn/v1' : 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'],
     capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: false, usage: true } }
+  const loadModel = vi.fn(() => model)
   const makeOwner = (mode: 'legacy' | 'workflow-batch' = 'legacy', leases = new ModelExecutionLeaseRegistry({ loadModel: () => model })) => {
     const capturedDb = db, capturedEpoch = epoch
     const sourceDeps = { db: capturedDb, projectStorageRoot, globalDataRoot,
       readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => JSON.stringify(getBuiltinPromptTemplate(key, language)), readBuiltinSkill: readBuiltinWritingSkill }
     return createMainGenerationOwner({ database: capturedDb, projectPath: root, projectId: 'project', epoch: capturedEpoch,
       assertCurrent: () => { if (!current || capturedEpoch !== epoch || capturedDb !== db) throw new Error('GENERATION_EPOCH_STALE') },
-      leases, loadModel: () => model, dispatch, mode,
+      leases, loadModel, dispatch, mode,
       ...(mode === 'workflow-batch' ? { workflowDriver: { assertActive: () => {}, assertDispatchAdmission: () => {} } } : {}),
       onReasoning,
       onSnapshot,
@@ -94,7 +95,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
     if (db.open) db.close(); fs.rmSync(root, { recursive: true, force: true }) })
   const begin: BeginGenerationRequest = { operation: 'chapter-draft', uiActionNonce: 'click', modelId: model.id, chapterNumber: 1,
     selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['first_chapter_draft'], skillStages: [], output: 'visible-text' }
-  return { root, model, get db() { return db }, owner: owners[0], begin,
+  return { root, model, loadModel, get db() { return db }, owner: owners[0], begin,
     createBatchOwner: () => {
       const leases = new ModelExecutionLeaseRegistry({ loadModel: () => model })
       const owner = makeOwner('workflow-batch', leases); owners.push(owner)
@@ -132,6 +133,208 @@ function acceptOutline(owner: ReturnType<typeof fixture>['owner'], handle: Param
   const text = joinPlotOutlineEntries(progress.composition?.text ?? '', progress.cursor.text)
   return owner.composeVisible(handle, [...(progress.composition?.artifactIds ?? []), ...progress.cursor.artifactIds], textHash(text), PLOT_OUTLINE_PROTOCOL)
 }
+
+describe('read-only run diagnostics', () => {
+  const transport = { startedAt: 1234, elapsedMs: 15, firstResponseMs: 0, lastResponseMs: 10, lastOutputMs: 12,
+    phase: 'complete' as const, endReason: 'completed' as const, visibleEvents: 1, reasoningEvents: 0, httpStatus: 200 }
+  function successfulFixture() {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onDiagnostics?.(transport)
+      options.onVisible({ kind: 'delta', text: 'Private fictional manuscript body' })
+      return { finishReason: 'stop', usage: { promptTokens: 10, completionTokens: 4, reasoningTokens: 0, totalTokens: 14,
+        accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } }
+    })
+    return { f: fixture(dispatch), dispatch }
+  }
+  it('reads settled receipts without writing, dispatching or loading the current model', async () => {
+    const { f, dispatch } = successfulFixture(), run = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'diagnostics-settled', task })
+    const binding = new GenerationRunRepository(() => f.db).get(run.handle.runId).binding
+    const changes = f.db.prepare('SELECT total_changes()').pluck().get()
+    f.model.id = 'changed-live-model'
+    f.model.apiKey = 'changed-live-private-key'
+    f.loadModel.mockClear()
+    dispatch.mockClear()
+    let diagnostic: ReturnType<typeof f.owner.readDiagnostics>
+    f.db.pragma('query_only = ON')
+    try { diagnostic = f.owner.readDiagnostics(run.handle) }
+    finally { f.db.pragma('query_only = OFF') }
+    expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+    expect(f.loadModel).not.toHaveBeenCalled()
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(diagnostic!).toMatchObject({ schemaVersion: 1, handle: run.handle, operation: 'chapter-draft', parametersCoverage: 'not_recorded',
+      initialDraftTaskHash: null, importSlot: null, finalizationSlot: null,
+      source: { modelIdHash: textHash('model'), modelReceiptHash: generationModelReceiptHash(binding.sourceManifest.modelReceipt as SafeGenerationModelReceipt), fingerprint: binding.fingerprint },
+      attempts: [{ status: 'settled', purpose: 'chapter-draft', actual: { input: 10, completion: 4, reasoning: 0, total: 14 },
+        transport: { elapsedMs: 15, firstResponseMs: 0, lastResponseMs: 10, lastOutputMs: 12, phase: 'complete', endReason: 'completed',
+          visibleEvents: 1, reasoningEvents: 0, httpStatus: 200 }, failureCode: null }] })
+    expect(diagnostic!.attempts[0].requestedOutputTokens).toBeGreaterThan(0)
+    expect(diagnostic!.attempts[0].transport).not.toHaveProperty('startedAt')
+    const serialized = JSON.stringify(diagnostic!)
+    for (const privateValue of ['Private fictional manuscript body', 'synthetic-private-key', 'changed-live-private-key', f.model.baseUrl, task.messages[0].content])
+      expect(serialized).not.toContain(privateValue)
+    expect(serialized).not.toContain('changed-live-model')
+    const restored = f.reopen().readDiagnostics(run.handle)
+    expect(restored.handle).toEqual(run.handle)
+    expect(restored.source).toEqual(diagnostic!.source)
+    expect(restored.attempts).toEqual(diagnostic!.attempts)
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+  it.each(['projectId', 'rootActionId', 'epoch'] as const)('rejects a mismatched %s before returning diagnostics', field => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(), f = fixture(dispatch), run = f.owner.begin(f.begin)
+    expect(() => f.owner.readDiagnostics({ ...run.handle, [field]: 'foreign-identity' })).toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+  it('uses only attempts belonging to the requested run even when roots are shared', async () => {
+    const { f } = successfulFixture(), first = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: first.handle, invocationNonce: 'diagnostics-first', task })
+    const second = f.owner.begin({ ...f.begin, uiActionNonce: 'diagnostics-second', parentRootActionId: first.handle.rootActionId })
+    await f.owner.execute({ handle: second.handle, invocationNonce: 'diagnostics-second', task })
+    const firstDiagnostic = f.owner.readDiagnostics(first.handle), secondDiagnostic = f.owner.readDiagnostics(second.handle)
+    expect(firstDiagnostic.attempts).toHaveLength(1)
+    expect(secondDiagnostic.attempts).toHaveLength(1)
+    expect(firstDiagnostic.attempts[0].attemptId).not.toBe(secondDiagnostic.attempts[0].attemptId)
+  })
+  it('retains unknown attempts and absent historical measurements after reopening without resending', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => { throw new Error('NETWORK_ERROR') })
+    const f = fixture(dispatch), run = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'diagnostics-unknown', task })
+    f.db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_remove(usage_receipt_json,'$.purpose','$.replayTask') WHERE run_id=?").run(run.handle.runId)
+    f.db.prepare("UPDATE generation_runs SET binding_json=json_remove(binding_json,'$.sourceManifest.modelReceipt') WHERE run_id=?").run(run.handle.runId)
+    const diagnostic = f.owner.readDiagnostics(run.handle)
+    expect(diagnostic.source.modelIdHash).toBeNull()
+    expect(diagnostic.source.modelReceiptHash).toBeNull()
+    expect(diagnostic.initialDraftTaskHash).toBeNull()
+    expect(diagnostic.attempts).toMatchObject([{ status: 'unknown', purpose: null, actual: null, transport: null, failureCode: 'NETWORK_ERROR' }])
+    expect(f.reopen().readDiagnostics(run.handle).attempts).toEqual(diagnostic.attempts)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('projects nested slots and receipt fields without persisted extras or raw errors', async () => {
+    const { f } = successfulFixture(), run = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'diagnostics-extra', task })
+    const before = f.owner.readDiagnostics(run.handle)
+    const binding = new GenerationRunRepository(() => f.db).get(run.handle.runId).binding
+    const importSlot = { runId: 'fictional-import', stage: 'global', batchId: 'done' }
+    const finalizationSlot = { source: { draftId: 1, finalizationId: 'fictional-finalization', chapterNumber: 1, contentHash: textHash('fictional') }, stepKey: 'chapter_notes' }
+    const malicious = 'https://private.example/raw-error?apiKey=private-body'
+    const modified = { ...binding, sourceManifest: { ...binding.sourceManifest,
+      modelReceipt: { ...(binding.sourceManifest.modelReceipt as object), apiKey: malicious },
+      importSlot: { ...importSlot, privateBody: malicious },
+      finalizationGenerationSlot: { ...finalizationSlot, source: { ...finalizationSlot.source, privateBody: malicious }, privateBody: malicious } } }
+    f.db.prepare('UPDATE generation_runs SET binding_json=? WHERE run_id=?').run(JSON.stringify(modified), run.handle.runId)
+    const row = f.db.prepare('SELECT attempt_id,usage_receipt_json FROM generation_attempts WHERE run_id=?').get(run.handle.runId) as { attempt_id: string; usage_receipt_json: string }
+    const usage = JSON.parse(row.usage_receipt_json)
+    usage.purpose = malicious
+    usage.result.failureCode = malicious
+    Object.assign(usage.result.diagnostics, { privateBody: malicious, errorName: malicious, errorCode: malicious, causeCode: malicious })
+    Object.assign(usage.result.usage, { privateBody: malicious, inputTokens: malicious })
+    f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(usage), row.attempt_id)
+    const diagnostic = f.owner.readDiagnostics(run.handle)
+    expect(diagnostic.importSlot).toEqual(importSlot)
+    expect(diagnostic.finalizationSlot).toEqual(finalizationSlot)
+    expect(diagnostic.source).toEqual(before.source)
+    expect(diagnostic.attempts[0]).toMatchObject({ purpose: null, failureCode: null, actual: { input: null, completion: 4, reasoning: 0, total: 14 } })
+    expect(diagnostic.attempts[0].transport).not.toHaveProperty('errorName')
+    expect(diagnostic.attempts[0].transport).not.toHaveProperty('errorCode')
+    expect(diagnostic.attempts[0].transport).not.toHaveProperty('causeCode')
+    expect(JSON.stringify(diagnostic)).not.toContain(malicious)
+    expect(JSON.stringify(diagnostic)).not.toContain('privateBody')
+  })
+  it('ignores extra fingerprint fields before any artifact is bound and preserves canonical model hashes across key order', () => {
+    const f = fixture(), run = f.owner.begin(f.begin)
+    const before = f.owner.readDiagnostics(run.handle)
+    const binding = new GenerationRunRepository(() => f.db).get(run.handle.runId).binding
+    const modelReceipt = binding.sourceManifest.modelReceipt as SafeGenerationModelReceipt
+    const reorderedModelReceipt = Object.fromEntries(Object.entries({ ...modelReceipt,
+      capabilityEvidence: Object.fromEntries(Object.entries(modelReceipt.capabilityEvidence).reverse()),
+    }).reverse()) as SafeGenerationModelReceipt
+    expect(generationModelReceiptHash(reorderedModelReceipt)).toBe(generationModelReceiptHash(modelReceipt))
+    const modified = { ...binding, fingerprint: { ...binding.fingerprint, privateBody: 'private-fingerprint-body' },
+      sourceManifest: { ...binding.sourceManifest, modelReceipt: reorderedModelReceipt } }
+    f.db.prepare('UPDATE generation_runs SET binding_json=? WHERE run_id=?').run(JSON.stringify(modified), run.handle.runId)
+    const diagnostic = f.owner.readDiagnostics(run.handle)
+    expect(diagnostic.source).toEqual(before.source)
+    expect(diagnostic.attempts).toEqual([])
+    expect(JSON.stringify(diagnostic)).not.toContain('private-fingerprint-body')
+    expect(JSON.stringify(diagnostic)).not.toContain('privateBody')
+  })
+  it('retains only the existing safe transport and provider failure categories', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onDiagnostics?.({ ...transport, phase: 'stream', endReason: 'failed', errorName: 'TypeError', errorCode: 'UND_ERR_SOCKET', causeCode: 'ECONNRESET' })
+      throw new Error('NETWORK_ERROR')
+    })
+    const f = fixture(dispatch), run = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'diagnostics-safe-errors', task })
+    expect(f.owner.readDiagnostics(run.handle).attempts).toMatchObject([{ failureCode: 'NETWORK_ERROR',
+      transport: { errorName: 'TypeError', errorCode: 'UND_ERR_SOCKET', causeCode: 'ECONNRESET' } }])
+  })
+  it.each(['private-author-guidance', 'private_api_key_123'])('does not expose an arbitrary ASCII label: %s', async privateLabel => {
+    const { f } = successfulFixture(), run = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'diagnostics-ascii-private', task })
+    f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.operation',?) WHERE run_id=?")
+      .run(privateLabel, run.handle.runId)
+    f.db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.purpose',?) WHERE run_id=?")
+      .run(privateLabel, run.handle.runId)
+    const diagnostic = f.owner.readDiagnostics(run.handle)
+    expect(diagnostic.operation).toBe('unknown')
+    expect(diagnostic.attempts[0].purpose).toBeNull()
+    expect(JSON.stringify(diagnostic)).not.toContain(privateLabel)
+  })
+  it('retains defined machine-purpose namespaces but not arbitrary suffixes', async () => {
+    const { f } = successfulFixture(), run = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'diagnostics-purpose-namespaces', task })
+    const update = f.db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.purpose',?) WHERE run_id=?")
+    for (const purpose of ['plot-outline:chapter:7:compact', 'chapter-blueprint-directory:compact-single:chapter-7',
+      'finalized-character-state:repair:2', `finalized-character-state:repair:${randomUUID()}`]) {
+      update.run(purpose, run.handle.runId)
+      expect(f.owner.readDiagnostics(run.handle).attempts[0].purpose).toBe(purpose)
+    }
+    for (const purpose of ['plot-outline:chapter:7:private-author-guidance', 'chapter-blueprint-directory:private-author-guidance',
+      'finalized-character-state:repair:private-author-guidance']) {
+      update.run(purpose, run.handle.runId)
+      expect(f.owner.readDiagnostics(run.handle).attempts[0].purpose).toBeNull()
+    }
+  })
+  it('returns no transport measurement when a historical diagnostic is incomplete', async () => {
+    const { f } = successfulFixture(), run = f.owner.begin(f.begin)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'diagnostics-partial', task })
+    f.db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_remove(usage_receipt_json,'$.result.diagnostics.elapsedMs') WHERE run_id=?").run(run.handle.runId)
+    expect(f.owner.readDiagnostics(run.handle).attempts[0].transport).toBeNull()
+  })
+  it('hashes the recorded initial draft task without exporting it and preserves missing coverage', async () => {
+    const base = 'Private fictional draft requirement', outlinePrompt = 'Private fictional short outline input'
+    const outline = 'Private fictional short outline output'
+    const decision = { version: 1 as const, verdict: 'admitted' as const,
+      promptHash: textHash(base), shortOutlinePromptHash: textHash(outlinePrompt),
+      capacity: { maxInputUnits: 8000, methodVersion: 'utf8-bytes-v1' as const, admittedUnits: 1 },
+      coverage: { required: 1, included: 1, complete: true }, included: [{ sourceId: 'author:required', revision: 1,
+        contentHash: 'a'.repeat(64), category: 'author' as const, required: true, units: 1 }], omitted: [] }
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      options.onVisible({ kind: 'delta', text: (request as { task: GenerationTask }).task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE ? outline : 'Private fictional manuscript body' })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch), run = f.owner.begin({ ...f.begin, materialDecision: decision })
+    expect(f.owner.readDiagnostics(run.handle).initialDraftTaskHash).toBeNull()
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'diagnostics-short-outline', task: {
+      purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text', messages: [{ role: 'user', content: outlinePrompt }] } })
+    expect(f.owner.readDiagnostics(run.handle).initialDraftTaskHash).toBeNull()
+    const initialDraftTask = { ...task, messages: [{ role: 'user' as const, content: `${base}\n\n${draftShortOutlineBlock('zh-CN', outline)}` }] }
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'diagnostics-task-hash', task: initialDraftTask })
+    const row = f.db.prepare("SELECT attempt_id,usage_receipt_json FROM generation_attempts WHERE run_id=? AND json_extract(usage_receipt_json,'$.purpose')='chapter-draft'")
+      .get(run.handle.runId) as { attempt_id: string; usage_receipt_json: string }
+    const recorded = JSON.parse(row.usage_receipt_json).replayTask as GenerationTask
+    expect(recorded).toEqual(initialDraftTask)
+    const diagnostic = f.owner.readDiagnostics(run.handle)
+    expect(diagnostic.initialDraftTaskHash).toBe(textHash(JSON.stringify(recorded)))
+    expect(diagnostic).not.toHaveProperty('initialDraftTask')
+    expect(JSON.stringify(diagnostic)).not.toContain(recorded.messages[0].content)
+    expect(f.reopen().readDiagnostics(run.handle).initialDraftTaskHash).toBe(diagnostic.initialDraftTaskHash)
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    f.db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_remove(usage_receipt_json,'$.replayTask') WHERE attempt_id=?").run(row.attempt_id)
+    const reopened = f.reopen()
+    expect(reopened.readDiagnostics(run.handle).initialDraftTaskHash).toBeNull()
+  })
+})
 
 describe('native failure receipt', () => {
   it('retains the reserved empty artifact and terminal result for a provider failure', () => {

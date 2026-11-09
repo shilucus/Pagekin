@@ -105,6 +105,19 @@ describe('project-scoped IPC session transport', () => {
     expect(invoke).toHaveBeenCalledExactlyOnceWith('planning-feedback:v1:list-bases', { target: 'premise' }, frozen)
   })
 
+  it('keeps diagnostic reads bound to the captured project and rejects a missing session', async () => {
+    const frozen = Object.freeze({ projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' })
+    const handle = { projectId: 'project-A', epoch: 'lease-A', rootActionId: 'root-A', runId: 'run-A' }
+    const report = { schemaVersion: 1 }
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    invoke.mockResolvedValueOnce(report)
+    await expect(ipc.invokeWithProjectSession(frozen, 'generation:read-diagnostics', { handle })).resolves.toBe(report)
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('generation:read-diagnostics', { handle }, frozen)
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('generation:read-diagnostics', { handle })).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
   it('appends the active session to direct planning-feedback requests', async () => {
     invoke.mockResolvedValue([])
     await ipc.invoke('planning-feedback:v1:list-runs', { baseId: 'base-A' })

@@ -1257,6 +1257,66 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     await expect(invoke('generation:read', { ...run.handle, rootActionId: 'foreign' })).rejects.toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
     expect(fetch).not.toHaveBeenCalled()
   })
+  it('reads safe diagnostic receipts through the production client without another request or ledger write', async () => {
+    const fetch = stream('private fictional candidate')
+    const run = await invoke('generation:begin', request)
+    await invoke('generation:execute', { handle: run.handle, invocationNonce: 'diagnostic-read',
+      task: { purpose: 'draft', output: 'visible-text', messages: [{ role: 'user', content: 'private fictional prompt' }] } })
+    const database = getProjectDb()!
+    const changes = database.prepare('SELECT total_changes()').pluck().get()
+    const bridge = vi.fn((channel: string, ...args: unknown[]) => mocks.handlers.get(channel)!({ sender }, ...args))
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: bridge } })
+    const diagnostics = await ipc.invokeWithProjectSession(session, 'generation:read-diagnostics', { handle: run.handle })
+    // This generic fixture label is outside the domain allowlist and omits trusted usage.
+    expect(diagnostics).toMatchObject({ schemaVersion: 1, handle: run.handle, operation: 'unknown', parametersCoverage: 'not_recorded',
+      attempts: [{ status: 'unknown', purpose: null, actual: null }] })
+    expect(diagnostics.source.fingerprint.skillSnapshotHash).toMatch(/^[a-f0-9]{64}$/u)
+    expect(diagnostics.source.modelIdHash).toBe(textHash(model.id))
+    expect(diagnostics.source.modelReceiptHash).toMatch(/^[a-f0-9]{64}$/u)
+    const encoded = JSON.stringify(diagnostics)
+    for (const forbidden of ['private fictional candidate', 'private fictional prompt', model.apiKey, model.baseUrl!, session.projectPath, 'authorInputs', 'replayTask', 'sourceManifest']) {
+      expect(encoded).not.toContain(forbidden)
+    }
+    expect(database.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(bridge).toHaveBeenCalledExactlyOnceWith('generation:read-diagnostics', { handle: run.handle }, session)
+  })
+  it('requires the current project lease and exact run identity for diagnostics', async () => {
+    const fetch = stream()
+    const run = await invoke('generation:begin', request)
+    const handler = mocks.handlers.get('generation:read-diagnostics')!
+    await expect(handler({ sender }, { handle: run.handle })).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    for (const invalid of [{ ...session, leaseId: 'stale' }, { ...session, projectPath: mocks.globalRoot }, { ...session, projectId: 'foreign' }]) {
+      await expect(handler({ sender }, { handle: run.handle }, invalid)).rejects.toThrow('GENERATION_PROJECT_SESSION_STALE')
+    }
+    for (const invalid of [{ ...run.handle, projectId: 'foreign' }, { ...run.handle, rootActionId: 'foreign' }, { ...run.handle, epoch: 'foreign' }, { ...run.handle, extra: true }]) {
+      await expect(handler({ sender }, { handle: invalid }, session)).rejects.toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
+    }
+    const old = { ...session }
+    session = { ...session, leaseId: projectAccess.beginSession(openedProject).leaseId }
+    await expect(handler({ sender }, { handle: run.handle }, old)).rejects.toThrow('GENERATION_PROJECT_SESSION_STALE')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it.each([null, [], 42, 'invalid', {}, { handle: null, extra: 'fixture-private-extra' }])('rejects malformed diagnostic requests before owner admission: %j', async payload => {
+    const admission = vi.spyOn(projectAccess, 'assertViewContext')
+    await expect(mocks.handlers.get('generation:read-diagnostics')!({ sender }, payload, session)).rejects.toThrow('GENERATION_DIAGNOSTICS_INVALID')
+    expect(admission).not.toHaveBeenCalled()
+  })
+  it('does not log corrupt receipt fragments while returning a diagnostic failure', async () => {
+    const fetch = stream('fictional candidate')
+    const run = await invoke('generation:begin', request)
+    await invoke('generation:execute', { handle: run.handle, invocationNonce: 'diagnostic-corrupt',
+      task: { purpose: 'draft', output: 'visible-text', messages: [{ role: 'user', content: 'fictional prompt' }] } })
+    const logging = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const marker = 'fixture-private-receipt-fragment'
+    getProjectDb()!.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE run_id=?').run(`{"${marker}":`, run.handle.runId)
+    await expect(invoke('generation:read-diagnostics', { handle: run.handle })).rejects.toThrow('GENERATION_REQUEST_FAILED')
+    expect(logging).toHaveBeenCalledExactlyOnceWith('[generation] diagnostic read failed', { channel: 'generation:read-diagnostics', name: 'Error' })
+    expect(JSON.stringify(logging.mock.calls)).not.toContain(marker)
+    expect(logging.mock.calls[0][1]).not.toHaveProperty('message')
+    expect(logging.mock.calls[0][1]).not.toHaveProperty('stack')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
   it('requires source revalidation for public resume and leaves stale candidates readable', async () => {
     stream()
     const run = await invoke('generation:begin', request)

@@ -223,6 +223,22 @@
           "environment": "Windows x64; Electron 44.9.3; local fictional provider; 1440x900 light; uncontrolled disk cache; source/build/report hashes retained",
           "result": "Six current-entry-baseline attempts preserved: five successful scenarios and one 1000-chapter workflow timeout with cancellation/drain then forced quit. Two/four books unsupported/not executed. No cutoff requests, external requests/writes or residual processes observed.",
           "limitations": "Not a full-matrix PASS or workflow p95. The 1000-chapter report has unavailable result counts and no renderer snapshot queue observation. Fixture usage/guarded requests are not real billing/remote execution; raw local artifacts contain paths/device metadata and are not anonymized exports."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "33fde136b7df7bcb78fbbef5b9f60e2063175a9c",
+          "artifactOrReceipt": "stage-36-evidence.md#source-identity",
+          "environment": "Windows x64; Node 24.13.0; pnpm 11.11.0; entry SHA plus 16 frozen source/test/ADR blobs",
+          "result": "Partial production diagnostic integration: authorized exact-handle receipt projection, bounded actual driver consumer and performance-only safe exports. Final driver/bridge package 152/152, native/core package 493/493; typecheck/lint/i18n/build exit 0. Independent final source review has no blocker after the recorded repairs.",
+          "limitations": "No new execution/recovery authority, persistence or UI. Old missing parameters/usage/transport stay unknown. This does not assert complete PERF-001 acceptance."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "33fde136b7df7bcb78fbbef5b9f60e2063175a9c",
+          "artifactOrReceipt": "stage-36-evidence.md#controlled-electron-observations",
+          "environment": "Windows x64; Electron 44.9.3; local fictional provider; 1440x900 light; sourceSha null with explicit entry/blobs/build/report identities",
+          "result": "Three serial Electron scenarios exit 0: 10 chapters and 32 requests with observed import checkpoints; long stream 2 settled requests and true initial-task hash; HTTP429 1 failed unknown generation with no resend. Safe exports retain source/slot/attempt evidence. All quit normally without cutoff requests/external writes/residual processes.",
+          "limitations": "The 429 scene passes failure handling, not generation. Single observations are not statistical workflow p95, remote billing, literary-quality or platform evidence. Original six baseline reports and their timeout/missing coverage remain unchanged; two/four books not executed."
         }
       ]
     },
