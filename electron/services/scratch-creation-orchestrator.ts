@@ -34,7 +34,7 @@ export class ScratchCreationOrchestrator {
 
   constructor(
     private readonly autonomousExecutor: AutonomousCreationExecutor,
-    private readonly acceptanceService: PreliminaryAcceptanceService,
+    _acceptanceService: PreliminaryAcceptanceService,
     private readonly domainGenerator: DomainFactGenerator,
   ) {}
 
@@ -302,63 +302,23 @@ export class ScratchCreationOrchestrator {
 
       // 阶段 6: 结构化初验评估 (preliminary_acceptance)
       if (manifest.currentStage === 'preliminary_acceptance') {
-        manifest.preliminaryReportIds = []
-
-        try {
-          for (let chNum = 1; chNum <= grant.targetChapterCount; chNum++) {
-            const chId = `ch-${chNum}`
-            let actualProse = manifest.stagedArtifacts.draftContents?.[chNum]
-            if (!actualProse && this.domainGenerator.getChapterContent) {
-              actualProse = (await this.domainGenerator.getChapterContent(grant.projectId, chNum)) ?? undefined
-            }
-            const evaluatedContent = actualProse ?? `Candidate draft prose for ${chId} generated from scratch`
-            const executionReceiptId = `ser-${manifest.orchestrationId}-draft-${chNum}`
-
-            const report = this.acceptanceService.evaluateAndRecord({
-              projectId: grant.projectId,
-              targetType: 'chapter',
-              targetId: chId,
-              targetVersion: 1,
-              content: evaluatedContent,
-              sourceOrigin: 'generation',
-              executionInput: { receiptId: executionReceiptId, evidenceAvailable: true },
-              scopeInput: {
-                targetRange: { startChapter: 1, endChapter: grant.targetChapterCount },
-                modifiedEntities: [{ id: chId, type: 'chapter' }],
-                evidenceAvailable: true,
-              },
-              qualityInput: {
-                wordCountMin: 10,
-                evidenceAvailable: true,
-              },
-            })
-            manifest.preliminaryReportIds.push(report.reportId)
-          }
-        } catch (err: unknown) {
-          const suspended = this.handleStageFailure(
-            manifest,
-            grant,
-            'preliminary_acceptance',
-            err instanceof Error ? err.message : String(err),
-          )
-          if (suspended) {
-            return manifest
-          }
-          continue
-        }
-
+        // This stage check is not a physical receipt: the API lacks versioned acceptance evidence.
+        const reason = 'SCRATCH_PRELIMINARY_EVIDENCE_UNAVAILABLE'
         manifest.stageReceipts.push(
           assembleStageExecutionReceipt({
             orchestrationId: manifest.orchestrationId,
             stage: 'preliminary_acceptance',
-            success: true,
-            entityCount: manifest.preliminaryReportIds.length,
+            success: false,
+            entityCount: 0,
+            error: reason,
           }),
         )
-        manifest.currentStage = 'completed'
-        manifest.status = 'completed'
+        manifest.suspendedAtStage = 'preliminary_acceptance'
+        manifest.currentStage = 'suspended_needs_author'
+        manifest.status = 'suspended'
+        manifest.suspensionReason = reason
         manifest.updatedAt = Date.now()
-        break
+        return manifest
       }
     }
 

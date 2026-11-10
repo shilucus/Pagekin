@@ -848,3 +848,13 @@ Independent source reviewer baseline_audit traced the integrated owner/service/g
 Root executed final 14/14 targeted cases, then 448/448 across six files, typecheck/lint/i18n/build and the isolated fictional long-stream scene. Normal clean quit and unchanged finalized count were observed; exact source/artifact identities, failed report and limitations are in [Stage 39 evidence](stage-39-evidence.md). Separate artifact review follows. This is a narrow PERF-003 safety correction, not whole-feature, literary-quality, visual-fidelity or platform acceptance.
 
 Final artifact reviewer feedback_audit independently matched all 21 source, report, build and original-baseline identities, checked the raw denominators and personally inspected the screenshot. No blocker remains for the narrow increment. It did not rerun commands; quality/build exits remain root's execution evidence. PERF-003 stays in_progress/passes=false and stored owner running is not presented as domain completion.
+
+## 2026-11-10 - Stage 40 Protection Corrections
+
+Independent source reviewers baseline_audit and feedback_audit found two approval blockers despite initial 203/203 green tests: available current dirty input was lost on disconnect/conflict, and missing dirty content still allowed freeze. The implementer retained buffers before failure, failed closed for absent content, preserved empty-string input and added four regressions. Both reviewers re-read the new frozen bytes and found no remaining scope correctness blocker or required missing case. Header/scratch corrections had no source blocker and remain bounded to the exact existing contracts.
+
+Root's final package executed 13 files, 207/207, zero failed/pending; typecheck/lint/i18n exit 0. [Stage 40 evidence](stage-40-evidence.md) retains the first report, final source identities, actual commands and qualification limits. Build and final artifact inspection are recorded after completion. No API, trusted approval or scratch whole-feature promotion follows from this increment.
+
+Root build exited 0 with unchanged known warnings and Stage39 entry hashes. This is source-build compatibility, not production composition or application runtime evidence; no Electron/model/platform qualification was added. Final artifact review follows against recorded identities.
+
+Final artifact reviewer feedback_audit matched all 16 source/test/ADR, report and build identities and actual 207/207, including all four added regressions. No blocker remains for the narrow commit; original green-but-incomplete coverage and subsequent corrections are retained. The review did not rerun commands or grant full feature qualification.

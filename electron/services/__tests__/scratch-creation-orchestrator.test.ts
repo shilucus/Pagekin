@@ -39,13 +39,9 @@ describe('ScratchCreationOrchestrator', () => {
   }
 
   const createMockAcceptanceService = (): PreliminaryAcceptanceService => {
-    let counter = 1
     return {
       evaluateAndRecord: vi.fn().mockImplementation(() => {
-        return {
-          reportId: `ar-mock-${counter++}`,
-          status: 'verified',
-        }
+        throw new Error('PRELIMINARY_EVALUATOR_MUST_NOT_RUN')
       }),
     } as unknown as PreliminaryAcceptanceService
   }
@@ -96,7 +92,7 @@ describe('ScratchCreationOrchestrator', () => {
     timestamp: Date.now(),
   }
 
-  it('runs complete scratch creation pipeline from zero to preliminary acceptance', async () => {
+  it('preserves generated candidates and suspends when preliminary evidence is unavailable', async () => {
     const autonomousExecutor = createMockAutonomousExecutor()
     const acceptanceService = createMockAcceptanceService()
     const domainGenerator = createMockDomainGenerator()
@@ -109,13 +105,22 @@ describe('ScratchCreationOrchestrator', () => {
 
     const manifest = await orchestrator.startOrchestration(validGrant)
 
-    expect(manifest.status).toBe('completed')
-    expect(manifest.currentStage).toBe('completed')
+    expect(manifest.status).toBe('suspended')
+    expect(manifest.currentStage).toBe('suspended_needs_author')
+    expect(manifest.suspendedAtStage).toBe('preliminary_acceptance')
+    expect(manifest.suspensionReason).toBe('SCRATCH_PRELIMINARY_EVIDENCE_UNAVAILABLE')
+    expect(manifest.repairAttempts).toBe(0)
     expect(manifest.isHumanConfirmed).toBe(false)
     expect(manifest.canAutoFinalize).toBe(false)
     expect(manifest.candidateChapterIds).toEqual(['ch-1', 'ch-2'])
-    expect(manifest.preliminaryReportIds.length).toBe(2)
+    expect(manifest.preliminaryReportIds).toEqual([])
     expect(manifest.stageReceipts.length).toBe(6)
+    expect(manifest.stageReceipts[5]).toMatchObject({
+      stage: 'preliminary_acceptance',
+      success: false,
+      entityCount: 0,
+      error: 'SCRATCH_PRELIMINARY_EVIDENCE_UNAVAILABLE',
+    })
 
     // Staged artifacts preserved
     expect(manifest.stagedArtifacts.foundation).toBe('Cyberpunk Eastern Fantasy Novel World')
@@ -123,9 +128,124 @@ describe('ScratchCreationOrchestrator', () => {
     expect(manifest.stagedArtifacts.characters?.length).toBe(2)
     expect(manifest.stagedArtifacts.blueprintsCount).toBe(2)
 
-    // Preliminary acceptance used real prose from domain generator
-    expect(domainGenerator.getChapterContent).toHaveBeenCalledWith('proj-cyber-novel', 1)
-    expect(domainGenerator.getChapterContent).toHaveBeenCalledWith('proj-cyber-novel', 2)
+    expect(domainGenerator.getChapterContent).not.toHaveBeenCalled()
+    expect(acceptanceService.evaluateAndRecord).not.toHaveBeenCalled()
+  })
+
+  it.each(['absent', 'null', 'prose', 'throws'] as const)(
+    'does not consult a %s chapter content getter to manufacture preliminary evidence',
+    async (contentCase) => {
+      const getChapterContent = contentCase === 'absent'
+        ? undefined
+        : vi.fn().mockImplementation(async () => {
+            if (contentCase === 'throws') {
+              throw new Error('CHAPTER_CONTENT_MUST_NOT_BE_READ')
+            }
+            return contentCase === 'prose' ? 'Existing fictional chapter prose without versioned evidence' : null
+          })
+      const acceptanceService = createMockAcceptanceService()
+      const orchestrator = new ScratchCreationOrchestrator(
+        createMockAutonomousExecutor(),
+        acceptanceService,
+        createMockDomainGenerator({ getChapterContent }),
+      )
+
+      const manifest = await orchestrator.startOrchestration({ ...validGrant, maxRepairAttempts: 1 })
+
+      expect(manifest.status).toBe('suspended')
+      expect(manifest.currentStage).toBe('suspended_needs_author')
+      expect(manifest.suspendedAtStage).toBe('preliminary_acceptance')
+      expect(manifest.suspensionReason).toBe('SCRATCH_PRELIMINARY_EVIDENCE_UNAVAILABLE')
+      expect(manifest.repairAttempts).toBe(0)
+      expect(manifest.preliminaryReportIds).toEqual([])
+      expect(manifest.stageReceipts.filter(receipt => receipt.stage === 'preliminary_acceptance')).toEqual([
+        expect.objectContaining({ success: false, entityCount: 0, error: 'SCRATCH_PRELIMINARY_EVIDENCE_UNAVAILABLE' }),
+      ])
+      if (getChapterContent) {
+        expect(getChapterContent).not.toHaveBeenCalled()
+      }
+      expect(acceptanceService.evaluateAndRecord).not.toHaveBeenCalled()
+    },
+  )
+
+  it('keeps staged prose, report IDs and history through two default resumes without regeneration', async () => {
+    const autonomousExecutor = createMockAutonomousExecutor()
+    const acceptanceService = createMockAcceptanceService()
+    const domainGenerator = createMockDomainGenerator({
+      generateFoundation: vi.fn()
+        .mockResolvedValueOnce({ success: false, error: 'Temporary foundation failure' })
+        .mockResolvedValue({ success: true, worldView: 'Recovered fictional foundation' }),
+    })
+    const orchestrator = new ScratchCreationOrchestrator(autonomousExecutor, acceptanceService, domainGenerator)
+    const manifest = await orchestrator.startOrchestration(validGrant)
+    manifest.stagedArtifacts.draftContents = { 1: 'Existing unversioned fictional draft', 2: 'Another fictional draft' }
+    manifest.preliminaryReportIds.push('existing-report-id')
+    const stagedArtifacts = structuredClone(manifest.stagedArtifacts)
+    const candidateChapterIds = [...manifest.candidateChapterIds]
+    const stageHistory = structuredClone(manifest.stageReceipts)
+    const initialUpdatedAt = manifest.updatedAt
+    const clock = vi.spyOn(Date, 'now')
+
+    try {
+      for (const attempt of [1, 2]) {
+        const updatedAt = initialUpdatedAt + attempt * 100
+        clock.mockReturnValue(updatedAt)
+        const resumed = await orchestrator.resumeOrchestration(manifest.orchestrationId)
+
+        expect(resumed).toBe(manifest)
+        expect(resumed.status).toBe('suspended')
+        expect(resumed.currentStage).toBe('suspended_needs_author')
+        expect(resumed.suspendedAtStage).toBe('preliminary_acceptance')
+        expect(resumed.suspensionReason).toBe('SCRATCH_PRELIMINARY_EVIDENCE_UNAVAILABLE')
+        expect(resumed.updatedAt).toBe(updatedAt)
+        expect(resumed.repairAttempts).toBe(0)
+        expect(resumed.candidateChapterIds).toEqual(candidateChapterIds)
+        expect(resumed.preliminaryReportIds).toEqual(['existing-report-id'])
+        expect(resumed.stagedArtifacts).toEqual(stagedArtifacts)
+        expect(resumed.stageReceipts.slice(0, stageHistory.length)).toEqual(stageHistory)
+        expect(resumed.stageReceipts).toHaveLength(stageHistory.length + attempt)
+        expect(resumed.stageReceipts.slice(stageHistory.length)).toEqual(
+          Array.from({ length: attempt }, () => expect.objectContaining({
+            stage: 'preliminary_acceptance',
+            success: false,
+            entityCount: 0,
+            error: 'SCRATCH_PRELIMINARY_EVIDENCE_UNAVAILABLE',
+          })),
+        )
+      }
+    } finally {
+      clock.mockRestore()
+    }
+
+    expect(domainGenerator.generateFoundation).toHaveBeenCalledTimes(2)
+    expect(domainGenerator.generateOutline).toHaveBeenCalledTimes(1)
+    expect(domainGenerator.generateCharacters).toHaveBeenCalledTimes(1)
+    expect(domainGenerator.generateBlueprints).toHaveBeenCalledTimes(1)
+    expect(autonomousExecutor.executeBatchChain).toHaveBeenCalledTimes(1)
+    expect(domainGenerator.getChapterContent).not.toHaveBeenCalled()
+    expect(acceptanceService.evaluateAndRecord).not.toHaveBeenCalled()
+  })
+
+  it('preserves explicit earlier-stage retry without bypassing preliminary suspension', async () => {
+    const autonomousExecutor = createMockAutonomousExecutor()
+    const acceptanceService = createMockAcceptanceService()
+    const domainGenerator = createMockDomainGenerator()
+    const orchestrator = new ScratchCreationOrchestrator(autonomousExecutor, acceptanceService, domainGenerator)
+    const manifest = await orchestrator.startOrchestration(validGrant)
+    const stageHistory = structuredClone(manifest.stageReceipts)
+
+    const resumed = await orchestrator.resumeOrchestration(manifest.orchestrationId, 'outline_generation')
+
+    expect(resumed.status).toBe('suspended')
+    expect(resumed.suspendedAtStage).toBe('preliminary_acceptance')
+    expect(resumed.stageReceipts.slice(0, stageHistory.length)).toEqual(stageHistory)
+    expect(domainGenerator.generateFoundation).toHaveBeenCalledTimes(1)
+    expect(domainGenerator.generateOutline).toHaveBeenCalledTimes(2)
+    expect(domainGenerator.generateCharacters).toHaveBeenCalledTimes(2)
+    expect(domainGenerator.generateBlueprints).toHaveBeenCalledTimes(2)
+    expect(autonomousExecutor.executeBatchChain).toHaveBeenCalledTimes(2)
+    expect(domainGenerator.getChapterContent).not.toHaveBeenCalled()
+    expect(acceptanceService.evaluateAndRecord).not.toHaveBeenCalled()
   })
 
   it('converges in-stage retry before hitting max repair attempts limit', async () => {
@@ -150,7 +270,8 @@ describe('ScratchCreationOrchestrator', () => {
 
     const manifest = await orchestrator.startOrchestration(validGrant)
 
-    expect(manifest.status).toBe('completed')
+    expect(manifest.status).toBe('suspended')
+    expect(manifest.suspendedAtStage).toBe('preliminary_acceptance')
     expect(manifest.stagedArtifacts.foundation).toBe('Recovered WorldView')
     // Should have a failed receipt followed by a success receipt for foundation_setup
     const foundationReceipts = manifest.stageReceipts.filter(r => r.stage === 'foundation_setup')
@@ -236,10 +357,13 @@ describe('ScratchCreationOrchestrator', () => {
     // Author resumes via public API (NO manual property manipulation!)
     const resumedManifest = await orchestrator.resumeOrchestration(manifest.orchestrationId)
 
-    expect(resumedManifest.status).toBe('completed')
-    expect(resumedManifest.currentStage).toBe('completed')
+    expect(resumedManifest.status).toBe('suspended')
+    expect(resumedManifest.currentStage).toBe('suspended_needs_author')
+    expect(resumedManifest.suspendedAtStage).toBe('preliminary_acceptance')
     expect(resumedManifest.stagedArtifacts.outline?.length).toBe(2)
     expect(resumedManifest.stagedArtifacts.characters?.length).toBe(2)
+    expect(domainGenerator.generateFoundation).toHaveBeenCalledTimes(1)
+    expect(acceptanceService.evaluateAndRecord).not.toHaveBeenCalled()
   })
 
   it('strictly respects allowedStages and halts before unauthorized candidate drafting', async () => {

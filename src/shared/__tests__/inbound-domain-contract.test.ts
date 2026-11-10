@@ -126,6 +126,35 @@ describe('inbound-domain-contract', () => {
       expect(() => validateHostHeader('[::1]:9000')).not.toThrow()
     })
 
+    it.each(['localhost', '[::1]', ' LOCALHOST:80 ', '127.0.0.1:0', '[::1]:65535', 'localhost:00080'])(
+      'preserves valid loopback authority %j',
+      host => expect(() => validateHostHeader(host)).not.toThrow(),
+    )
+
+    it.each([
+      'localhost.evil', '127.0.0.1.evil', 'localhost:', 'localhost:abc', 'localhost:-1',
+      'localhost:65536', 'localhost:1.5', 'localhost:1e2', 'localhost:80/path',
+      'localhost:80?query', 'localhost:80#hash', 'localhost:80@evil.example',
+      'user@localhost', 'localhost,127.0.0.1', 'localhost 127.0.0.1', 'local\thost',
+      'localhost\r\n:80', 'localhost\u0000', 'localhost\u007f', 'localhost\\evil',
+      '127.1', '2130706433', '0x7f000001', '127.000.000.001', '%6cocalhost',
+      'localhost.', '[0:0:0:0:0:0:0:1]', '[::1]:', '[::1]:65536', ' ',
+    ])('rejects malformed or nonliteral Host %j without echoing it', host => {
+      expect(() => validateHostHeader(host)).toThrowError(expect.objectContaining({
+        code: INBOUND_ERROR_CODES.INVALID_HOST_HEADER,
+        status: 403,
+        message: 'Host header is not a permitted loopback authority',
+      }))
+    })
+
+    it.each([undefined, null, ''])('preserves missing Host status for %j', host => {
+      expect(() => validateHostHeader(host)).toThrowError(expect.objectContaining({
+        code: INBOUND_ERROR_CODES.INVALID_HOST_HEADER,
+        status: 400,
+        message: 'Missing Host header',
+      }))
+    })
+
     it('rejects external or dangerous hosts', () => {
       expect(() => validateHostHeader('example.com')).toThrowError(InboundDomainError)
       expect(() => validateHostHeader('192.168.1.100:8080')).toThrowError(InboundDomainError)
@@ -137,6 +166,7 @@ describe('inbound-domain-contract', () => {
     it('accepts undefined/null origin (CLI calls)', () => {
       expect(() => validateOriginHeader(undefined)).not.toThrow()
       expect(() => validateOriginHeader(null)).not.toThrow()
+      expect(() => validateOriginHeader('')).not.toThrow()
     })
 
     it('accepts local webview or local origins', () => {
@@ -144,6 +174,46 @@ describe('inbound-domain-contract', () => {
       expect(() => validateOriginHeader('http://127.0.0.1:3000')).not.toThrow()
       expect(() => validateOriginHeader('vscode-webview://my-extension')).not.toThrow()
       expect(() => validateOriginHeader('ai-novel://local')).not.toThrow()
+    })
+
+    it.each([
+      'http://localhost', 'http://127.0.0.1:80', ' HTTP://LOCALHOST:5180 ',
+      'http://localhost:0', 'http://127.0.0.1:65535', 'http://localhost:00080',
+      'vscode-webview://another-extension', 'ai-novel://another-local-authority:9000',
+    ])('preserves existing origin policy for %j', origin => {
+      expect(() => validateOriginHeader(origin)).not.toThrow()
+    })
+
+    it.each([
+      'http://localhost.evil', 'http://127.0.0.1.evil', 'http://localhost@evil.example',
+      'http://evil@localhost', 'http://localhost/', 'http://localhost/path',
+      'http://localhost?', 'http://localhost?query', 'http://localhost#', 'http://localhost#hash',
+      'http://localhost,http://127.0.0.1', 'http://localhost http://127.0.0.1',
+      'http://local\thost', 'http://localhost\r\n:80', 'http://localhost\u0000',
+      'http://localhost\u007f', 'http://localhost\\evil', 'http://localhost:',
+      'http://localhost:abc', 'http://localhost:-1', 'http://localhost:65536',
+      'http://localhost:1.5', 'http://localhost:1e2', 'http://127.1', 'http://2130706433',
+      'http://0x7f000001', 'http://127.000.000.001', 'http://%6cocalhost', 'http://localhost.',
+      'https://localhost', 'http://[::1]', 'vela://local', 'file://local', 'null', ' ',
+    ])('rejects non-origin or out-of-policy input %j without echoing it', origin => {
+      expect(() => validateOriginHeader(origin)).toThrowError(expect.objectContaining({
+        code: INBOUND_ERROR_CODES.INVALID_ORIGIN_HEADER,
+        status: 403,
+        message: 'Origin header is not permitted to access local domain API',
+      }))
+    })
+
+    it.each(['vscode-webview:', 'ai-novel:'])('requires a single syntactic authority for %s', protocol => {
+      for (const authority of [
+        '', 'user@local', 'user:password@local', 'local/', 'local/path', 'local?', 'local#',
+        'local:abc', 'local:', 'local:65536', 'local local', 'local,local', 'local\\path',
+        'lo\tcal', 'local\r\n:80', 'local\u0000', 'local\u007f',
+      ]) {
+        expect(() => validateOriginHeader(`${protocol}//${authority}`)).toThrowError(expect.objectContaining({
+          code: INBOUND_ERROR_CODES.INVALID_ORIGIN_HEADER,
+          status: 403,
+        }))
+      }
     })
 
     it('rejects external website origins', () => {

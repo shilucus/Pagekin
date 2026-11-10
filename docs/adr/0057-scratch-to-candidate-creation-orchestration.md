@@ -25,10 +25,11 @@
 
 3. **多书资格与候选隔离 (Candidate Fact Store & Multi-Book Isolation)**:
    - 生成的实体正文与规划均作为候选版本保存，不直接标记为权威定稿；
-   - 最终产物自动调用 `PreliminaryAcceptanceService` 生成初验质量与范围报告，并将完整准入包交给人审，待作者通过 ACCEPT-002 签署批准清单后方可提交定稿；
+   - 具备实际版本、hash、生成收据与范围/质量证据后，才可调用 `PreliminaryAcceptanceService` 生成初验报告并交给人审，待作者通过 ACCEPT-002 签署批准清单后方可提交定稿；
+   - 当前 scratch 输入接口不能提供该证据包，抵达 `preliminary_acceptance` 时保留候选、历史阶段记录及已有报告引用，以 `SCRATCH_PRELIMINARY_EVIDENCE_UNAVAILABLE` 暂停待作者处理。不调用 unversioned 正文 getter 或评估器来猜测证据，不消耗生成修复预算；默认恢复仍停在该阶段，不重新生成前序产物；
    - 多书任务按各自独立的 `ProjectSessionContext` 与数据库租约并发执行，严格杜绝跨作品数据泄漏。
 
 ## 效果与保证
-- 实现了从零输入提示到全套高质量候选草稿及初验报告的自主闭环编排；
+- 目标是从作者任务到候选与真实初验报告的有据编排；缺证据时暂停，不声称已形成高质量自主闭环；
 - 避免了死循环重试和未授权定稿；
-- 满足 `AUTO-003` 的全部验收条件（AC-1, AC-2, AC-3）。
+- 内存编排与局部回归不证明完整生产驱动、持久恢复、多书或模型质量资格；实际状态以 `features.json` 和阶段证据为准。

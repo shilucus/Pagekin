@@ -42,12 +42,13 @@
 
 5. **网络与环境安全防御 (Host/Origin & Loopback Protection)**:
    - 本地入站通道仅绑定本机回环地址（`127.0.0.1`）；
-   - 请求必须校验 `Host` 头部（仅允许 `127.0.0.1:*` 或 `localhost:*`），防范 DNS Rebinding 攻击；
-   - 严格拦截非预期的外部 Web `Origin`，防范外部网页的 CSRF / 跨站嗅探；
+   - 请求必须校验 `Host` 头部：精确字面量 `127.0.0.1`、`localhost`，以及既有兼容 `[::1]`，可带合法十进制端口；拒绝凭据、路径、query/hash、多值与非法端口。IPv6 header 兼容不扩大监听绑定；
+   - `Origin` 仅保留既有 `http://localhost`、`http://127.0.0.1`、`vscode-webview://<authority>`、`ai-novel://<authority>` 形态；必须是单一非空 authority，不含凭据、显式路径、query/hash 或内部分隔空白。缺失/空字符串 Origin 保持既有允许行为；
+   - 解析前核对原始 authority，不能因 URL 归一化引入数字 IP 别名等新来源。自定义协议当前只收紧语法，不从测试示例臆造 authority 白名单；不新增 HTTPS、其他协议或 HTTP IPv6 Origin 支持。非法头部在 body 消费、鉴权与领域 dispatch 前拒绝，合法头部不替代 Bearer/project 授权；
    - 限制单个请求载荷最大上限为 512KB，防止超大请求导致主进程内存耗尽。
 
 ## 效果与保证
 - 实现外部 CLI 与工具链对 Pagekin 创作运行时的安全受控调用；
 - 保障单书隔离与人审门禁不可突破；
 - 具备工业级网络重试容错与序号续读能力；
-- 满足 `API-001` 全部验收条件，为 `CLI-001` 与 `MCP-001` 提供稳固基石。
+- 上述为目标契约，不证明生产入口已接线或整项资格已通过；实际状态与待验项以方案的 `features.json` 和分阶段证据为准。

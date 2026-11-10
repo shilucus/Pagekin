@@ -1785,6 +1785,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Inbound domain API security, whitelist, strict idempotency, and scope separation tests passed (2 suites, 26/26 passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "CLI client implementation belongs to CLI-001; MCP inbound tools belong to MCP-001"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-40-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Exact Host/Origin authority guard and pre-body handler regressions passed within final 13-file 207/207 package; existing token/project checks retained; independent frozen-source review accepted the narrow correction",
+          "limitations": "No API startup or real workflow driver qualification; idempotency concurrency, task ownership, trusted approval and production persistence remain incomplete"
         }
       ]
     },
@@ -2018,6 +2026,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Scratch-to-candidate creation contract and orchestrator tests passed (2 suites, 10/10 tests passed); stagedArtifacts persistence, auto-resume, allowedStages guard and true draft preliminary acceptance verified; typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Human author approval required for finalization per ACCEPT-002/003 gates"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-40-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Removed fabricated preliminary prose/version/receipt/evidence; missing real acceptance evidence suspends and preserves candidates/history on repeated default resume; final focused package 207/207 with independent source review",
+          "limitations": "Corrects the earlier Stage23 true-draft preliminary-acceptance claim, not complete automation; real evidence adapter, production/persistence qualification and candidate unknown-no-resend remain open"
         }
       ]
     },
@@ -2076,6 +2092,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Preliminary acceptance and human review admission gate tests passed (2 suites, 12/12 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Preliminary acceptance only gates admission to human review and never signs finalized drafts or confirmed human review"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-40-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Scratch caller fails closed without actual versioned execution/scope/quality evidence; evaluator and unversioned getter are not called; final focused package 207/207",
+          "limitations": "No new acceptance report or quality claim; full production evidence, human admission and real semantic/model qualification remain unavailable"
         }
       ]
     },
@@ -2137,6 +2161,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Batch approval manifest, editor handshake and safety freeze contract tests passed (2 suites, 11/11 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Human approval cannot be self-issued by ordinary client scope; handshake is executed outside SQL transactions"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-40-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Async revoke/clear/replace and duplicate-probe protections, retained late/current dirty buffers and missing-content fail-closed regressions passed; final 207/207 after two independent review findings were fixed and re-reviewed",
+          "limitations": "In-memory coordinator only; no trusted author capability, visible workflow, persistence/restart or finalization barrier qualification"
         }
       ]
     },

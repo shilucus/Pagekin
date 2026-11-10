@@ -204,42 +204,57 @@ function checkForbiddenString(str: string): void {
   }
 }
 
+function parseHeaderAuthority(protocol: string, authority: string): URL | null {
+  // URL parsing can discard controls and reinterpret separators; reject them before parsing.
+  if (
+    !authority ||
+    authority.endsWith(':') ||
+    /[\\/?#@,\s]/.test(authority) ||
+    Array.from(authority).some(character => character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f)
+  ) {
+    return null
+  }
+
+  try {
+    const parsed = new URL(`${protocol}//${authority}`)
+    return parsed.hostname && !parsed.username && !parsed.password ? parsed : null
+  } catch {
+    return null
+  }
+}
+
 /**
- * Validates Host header against local loopback patterns.
+ * Validates a single loopback Host authority without accepting URL-normalized aliases.
  */
 export function validateHostHeader(host?: string | null): void {
   if (!host) {
     throw new InboundDomainError(INBOUND_ERROR_CODES.INVALID_HOST_HEADER, 'Missing Host header', 400)
   }
   const cleanHost = host.trim().toLowerCase()
-  const isLoopback =
-    cleanHost === 'localhost' ||
-    cleanHost.startsWith('localhost:') ||
-    cleanHost === '127.0.0.1' ||
-    cleanHost.startsWith('127.0.0.1:') ||
-    cleanHost === '[::1]' ||
-    cleanHost.startsWith('[::1]:')
+  const isLoopback = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?$/.test(cleanHost)
 
-  if (!isLoopback) {
-    throw new InboundDomainError(INBOUND_ERROR_CODES.INVALID_HOST_HEADER, `Host '${host}' is not a permitted loopback interface`, 403)
+  if (!isLoopback || !parseHeaderAuthority('http:', cleanHost)) {
+    throw new InboundDomainError(INBOUND_ERROR_CODES.INVALID_HOST_HEADER, 'Host header is not a permitted loopback authority', 403)
   }
 }
 
 /**
- * Validates Origin header: if present, must be empty or a local loopback origin, preventing cross-site attacks.
+ * Validates a single origin using the existing loopback and custom-protocol policy.
  */
 export function validateOriginHeader(origin?: string | null): void {
   if (!origin) {
     return // CLI/Curl usually don't set Origin, which is completely fine
   }
   const cleanOrigin = origin.trim().toLowerCase()
-  const isAllowedOrigin =
-    cleanOrigin.startsWith('http://localhost') ||
-    cleanOrigin.startsWith('http://127.0.0.1') ||
-    cleanOrigin.startsWith('vscode-webview://') ||
-    cleanOrigin.startsWith('ai-novel://')
+  const originParts = /^(http:|vscode-webview:|ai-novel:)\/\/(.+)$/.exec(cleanOrigin)
+  const protocol = originParts?.[1]
+  const authority = originParts?.[2]
+  const parsed = protocol && authority ? parseHeaderAuthority(protocol, authority) : null
+  const isAllowedOrigin = authority && parsed && (
+    protocol !== 'http:' || /^(?:localhost|127\.0\.0\.1)(?::[0-9]+)?$/.test(authority)
+  )
 
   if (!isAllowedOrigin) {
-    throw new InboundDomainError(INBOUND_ERROR_CODES.INVALID_ORIGIN_HEADER, `Origin '${origin}' is not permitted to access local domain API`, 403)
+    throw new InboundDomainError(INBOUND_ERROR_CODES.INVALID_ORIGIN_HEADER, 'Origin header is not permitted to access local domain API', 403)
   }
 }

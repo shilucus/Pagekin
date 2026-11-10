@@ -25,6 +25,7 @@ export interface HandshakeFreezeResult {
 
 export class ApprovalManifestCoordinator {
   private readonly manifests = new Map<string, ApprovalManifest>()
+  private readonly handshakes = new Map<string, symbol>()
 
   /**
    * 准备批次批准清单，执行权限与范围强校验
@@ -44,6 +45,7 @@ export class ApprovalManifestCoordinator {
       }
     }
 
+    this.handshakes.delete(manifest.manifestId)
     this.manifests.set(manifest.manifestId, manifest)
     return {
       success: true,
@@ -85,61 +87,100 @@ export class ApprovalManifestCoordinator {
       }
     }
 
+    if (this.handshakes.has(manifestId)) {
+      return { success: false, manifest, error: 'EDITOR_HANDSHAKE_IN_PROGRESS' }
+    }
+
+    const token = Symbol()
+    this.handshakes.set(manifestId, token)
     manifest.status = 'pending_handshake'
     manifest.updatedAt = Date.now()
 
-    // 逐章握手探测各章节活跃编辑器
-    for (const item of manifest.items) {
-      const probeResult = await editorProbe(item.chapterNumber)
-
-      // 1. 若编辑器断连
-      if (!probeResult.connected) {
-        manifest.status = 'pending_author_action'
-        // i18n-exempt: 内部协调器诊断原因，不直接在界面错误框显示
-        manifest.pendingReason = `第 ${item.chapterNumber} 章活跃编辑器已断开连接，挂起等待作者恢复`
-        manifest.updatedAt = Date.now()
-        return {
-          success: false,
-          manifest,
-          error: manifest.pendingReason,
-        }
-      }
-
-      // 2. 若握手期间发生输入并发冲突（作者正在键入）
-      if (probeResult.hasConcurrencyConflict) {
-        manifest.status = 'pending_author_action'
-        // i18n-exempt: 内部协调器诊断原因，不直接在界面错误框显示
-        manifest.pendingReason = `握手期间检测到第 ${item.chapterNumber} 章产生并发新输入，挂起等待作者裁决`
-        manifest.updatedAt = Date.now()
-        return {
-          success: false,
-          manifest,
-          error: manifest.pendingReason,
-        }
-      }
-
-      // 3. 若存在脏缓冲，则进行安全封存，绝不丢失作者输入
-      if (probeResult.isDirty && probeResult.dirtyContent !== undefined) {
-        const frozenBuffer: FrozenEditorBuffer = {
-          chapterNumber: item.chapterNumber,
-          bufferHash: computeBufferHash(probeResult.dirtyContent),
-          content: probeResult.dirtyContent,
-          revision: probeResult.revision,
-          timestamp: Date.now(),
-        }
-        const updatedManifest = mergeEditorBufferSnapshot(manifest, frozenBuffer)
-        manifest.frozenBuffers = updatedManifest.frozenBuffers
-      }
+    const isCurrent = () => this.manifests.get(manifestId) === manifest
+      && this.handshakes.get(manifestId) === token && manifest.status === 'pending_handshake'
+    const invalidated = (buffer?: FrozenEditorBuffer): HandshakeFreezeResult => {
+      // Late author input remains recoverable without reviving or changing the revoked approval.
+      let snapshot = structuredClone(manifest)
+      if (buffer) snapshot = mergeEditorBufferSnapshot(snapshot, buffer)
+      snapshot.status = 'pending_author_action'
+      snapshot.pendingReason = 'EDITOR_HANDSHAKE_INVALIDATED'
+      snapshot.updatedAt = Date.now()
+      return { success: false, manifest: snapshot, error: snapshot.pendingReason }
     }
 
-    // 所有章节握手成功并完成必要封存，进入 frozen 就绪状态
-    manifest.status = 'frozen'
-    manifest.pendingReason = undefined
-    manifest.updatedAt = Date.now()
+    try {
+      // 逐章握手探测各章节活跃编辑器
+      for (const item of manifest.items) {
+        let probeResult: EditorRevisionProbeResult
+        try {
+          probeResult = await editorProbe(item.chapterNumber)
+        } catch {
+          if (!isCurrent()) return invalidated()
+          manifest.status = 'pending_author_action'
+          manifest.pendingReason = 'EDITOR_HANDSHAKE_PROBE_FAILED'
+          manifest.updatedAt = Date.now()
+          return { success: false, manifest, error: manifest.pendingReason }
+        }
 
-    return {
-      success: true,
-      manifest,
+        const frozenBuffer: FrozenEditorBuffer | undefined = probeResult.isDirty && probeResult.dirtyContent !== undefined
+          ? {
+            chapterNumber: item.chapterNumber,
+            bufferHash: computeBufferHash(probeResult.dirtyContent),
+            content: probeResult.dirtyContent,
+            revision: probeResult.revision,
+            timestamp: Date.now(),
+          } : undefined
+        if (!isCurrent()) return invalidated(frozenBuffer)
+
+        if (probeResult.isDirty && probeResult.dirtyContent === undefined) {
+          manifest.status = 'pending_author_action'
+          manifest.pendingReason = 'EDITOR_HANDSHAKE_BUFFER_UNAVAILABLE'
+          manifest.updatedAt = Date.now()
+          return { success: false, manifest, error: manifest.pendingReason }
+        }
+
+        // Preserve returned author input even when disconnection or conflict blocks approval.
+        if (frozenBuffer) {
+          const updatedManifest = mergeEditorBufferSnapshot(manifest, frozenBuffer)
+          manifest.frozenBuffers = updatedManifest.frozenBuffers
+        }
+
+        // 1. 若编辑器断连
+        if (!probeResult.connected) {
+          manifest.status = 'pending_author_action'
+          // i18n-exempt: 内部协调器诊断原因，不直接在界面错误框显示
+          manifest.pendingReason = `第 ${item.chapterNumber} 章活跃编辑器已断开连接，挂起等待作者恢复`
+          manifest.updatedAt = Date.now()
+          return {
+            success: false,
+            manifest,
+            error: manifest.pendingReason,
+          }
+        }
+
+        // 2. 若握手期间发生输入并发冲突（作者正在键入）
+        if (probeResult.hasConcurrencyConflict) {
+          manifest.status = 'pending_author_action'
+          // i18n-exempt: 内部协调器诊断原因，不直接在界面错误框显示
+          manifest.pendingReason = `握手期间检测到第 ${item.chapterNumber} 章产生并发新输入，挂起等待作者裁决`
+          manifest.updatedAt = Date.now()
+          return {
+            success: false,
+            manifest,
+            error: manifest.pendingReason,
+          }
+        }
+      }
+
+      if (!isCurrent()) return invalidated()
+      // 所有章节握手成功并完成必要封存，进入 frozen 就绪状态
+      manifest.status = 'frozen'
+      manifest.pendingReason = undefined
+      manifest.updatedAt = Date.now()
+
+      return { success: true, manifest }
+    } finally {
+      if (this.handshakes.get(manifestId) === token) this.handshakes.delete(manifestId)
     }
   }
 
@@ -164,6 +205,7 @@ export class ApprovalManifestCoordinator {
       }
     }
 
+    this.handshakes.delete(manifestId)
     manifest.status = 'unfrozen'
     manifest.updatedAt = Date.now()
     return { success: true }
@@ -201,6 +243,7 @@ export class ApprovalManifestCoordinator {
   public clearProjectManifests(projectId: string): void {
     for (const [id, m] of Array.from(this.manifests.entries())) {
       if (m.projectId === projectId) {
+        this.handshakes.delete(id)
         this.manifests.delete(id)
       }
     }
