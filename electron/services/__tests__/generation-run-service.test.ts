@@ -28,6 +28,22 @@ function fixture() {
 }
 const usage: GenerationProviderUsage = { promptTokens: 50, completionTokens: 50, totalTokens: 100, reasoningTokens: 20, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true };
 describe('scheduled dispatch admission', () => {
+    it('hands the reserved attempt identity to its main owner before streaming and does not repeat the handoff for replay', async () => {
+        const f = fixture(), run = f.repository.open(f.open), onAttemptReserved = vi.fn();
+        const service = createGenerationRunService({ repository: f.repository, dispatch: async (_request, options) => {
+            expect(onAttemptReserved).toHaveBeenCalledOnce();
+            options.onVisible({ kind: 'delta', text: 'fictional output' });
+            return { usage, finishReason: 'stop' };
+        } });
+        const request = { ...f.request(run.runId), onAttemptReserved };
+        const receipt = await service.execute(request);
+        expect(onAttemptReserved).toHaveBeenCalledExactlyOnceWith(receipt.attempt.attemptId);
+        await service.execute(request);
+        expect(onAttemptReserved).toHaveBeenCalledOnce();
+        await expect(service.execute({ ...f.request(run.runId, 'invalid-reservation'), reservedTokens: 1, onAttemptReserved }))
+            .rejects.toThrow('GENERATION_RESERVATION_INVALID');
+        expect(onAttemptReserved).toHaveBeenCalledOnce();
+    });
     it.each(['ordinary', 'runtime-feedback', 'workflow-driver'] as const)('rechecks %s eligibility and marks dispatch in one native transaction', async mode => {
         const f = fixture(), run = f.repository.open(f.open);
         const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ usage, finishReason: 'stop' }));

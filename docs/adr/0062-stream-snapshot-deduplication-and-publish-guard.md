@@ -26,6 +26,7 @@ Accepted
 
 ### 2. 诊断合并与终态保障 (Diagnostics Coalescing & Terminal Guarantee)
 - **诊断合并**：在流式生成期间，若收到新的 `diagnostics`（如网络传输指标、首字耗时等）但尚未触发新的落盘 revision，去重器将最新诊断合并缓冲至 `pendingDiagnostics`，随下一次权威快照或终态快照一并交付。
+- **终态收据优先**：终态快照已有的诊断字段来自实际 settle 后的权威收据，不能被先前缓冲的 elapsed、phase、endReason 或计数覆盖；缓冲只补充收据真正缺失的字段，不推测缺失数值。
 - **终态与故障 100% 及时送达**：
   - 生成终态（`settle` 产生的 `completed` / `failed` / `cancelled`）不受同 revision 抑制，必须权威构建并即刻发送；
   - 若触发 `storageFailed` 故障，去重器记录故障状态，并通过快照与未保存尾部机制保证故障信息可被外部准确获知与恢复；
@@ -36,7 +37,12 @@ Accepted
 - **异常同 revision 不同正文检测**：若在相同 revision 下出现不同正文内容，触发一致性防御；
 - **哈希校验**：发布的快照必须携带权威 `textHash`（SHA-256），与数据库 artifact 严格一致。
 
+### 4. 活跃缓存与物理请求生命周期
+- 去重器只保留活跃 attempt 的全文和诊断缓存。逻辑执行结束后，即使权威回读、来源检查或订阅者通知抛错，也必须清理该 attempt 的发布缓存；存储失败的可复制尾部仍由既有 recovery-tail/volatile-receipt 机制保留。
+- 缓存清理不是物理请求结束。取消或 unknown 后，原 transport 的 permit、idle、quarantine 和计账继续按实际物理生命周期管理；不得为清缓存而提前补位、重发或丢弃失败收据。
+- 迟到的 provider 回调仍受 generation service 的 terminal/abort 门禁约束。重连不依赖发布缓存，继续读取权威完整快照。
+
 ## 结果与收益 (Consequences)
-- 消除 95% 以上流式过程中的重复 SQLite 查询（`generation.receipt.calls`）与无效 IPC 全文字节传输（`generation.publish.utf8_bytes`）；
+- 同 durable revision 的正常 delta 不增加重复回读与全文发布；实际降幅以固定语料运行的 `generation.receipt.calls` / `generation.publish.utf8_bytes` 为依据，不预设 95% 或将单测比例当成实测性能；
 - 维持渲染进程与主进程之间的合同不变性，不破坏既有订阅者模式；
 - 崩溃尾窗与持久化落盘频率完全不变，重连行为 100% 权威。

@@ -938,6 +938,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const operation = (async () => {
     let scheduled: ScheduledDispatch | undefined
     let queuedController: AbortController | undefined
+    let snapshotAttemptId: string | undefined
     try {
     const assertFrozenSources = () => {
       const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
@@ -999,6 +1000,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     deps.beforeDispatch?.()
     assertAdmission()
     return { promise: service.execute({ runId: run.runId, invocationNonce: request.invocationNonce, requestHash,
+      onAttemptReserved: attemptId => { snapshotAttemptId = attemptId },
       providerRequest: { model, task, plan, conversationId: run.rootActionId, ...(scheduled ? { scheduling: scheduled } : {}) } satisfies ProviderRequest, reservedTokens: plan.reservedTokens,
       requestedOutputTokens: plan.requestedOutputTokens, inputUpperBoundTokens: plan.inputUpperBoundTokens,
       reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy, purpose: task.purpose,
@@ -1028,6 +1030,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       ? await deps.withDispatchKnowledge(run.binding.sourceManifest.knowledgeSnapshot as GenerationKnowledgeSnapshot | undefined, startDispatch)
       : startDispatch()
     const receipt = await started.promise
+    snapshotAttemptId = receipt.attempt.attemptId
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)
     assertCurrent()
     const snapshot = snapshotOf(receipt)
@@ -1037,6 +1040,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     return outcomeOf(receipt, task)
     } finally {
+      if (snapshotAttemptId) streamSnapshotGuard.clear(snapshotAttemptId)
       queuedExecutions.delete(key)
       if (scheduled && !scheduled.started) scheduled.permit.finish()
       else if (scheduled && !scheduled.finished) {

@@ -51,6 +51,8 @@ export interface ExecuteGenerationRequest {
     replayTask?: import('../../src/services/generation/generation-harness').GenerationTask;
     /** 首稿提示经主进程复核确实带有生成前定稿对账注入块；恢复据此决定续写/压缩是否沿用对账结果。 */
     reconciliationInjected?: boolean;
+    /** Main-only identity handoff, before any stream event or terminal receipt read can fail. */
+    onAttemptReserved?: (attemptId: string) => void;
     /** Main-only admission checked inside the same immediate transaction as reserve and dispatch marking. */
     runtimeFeedbackAdmission?: () => void;
     workflowDriverAdmission?: () => void;
@@ -181,6 +183,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             if (receipt.attempt.status !== (request.dispatchAdmission || request.runtimeFeedbackAdmission || request.workflowDriverAdmission ? 'dispatch-marked' : 'reserved'))
                 return receipt;
             const attemptId = receipt.attempt.attemptId, controller = new AbortController();
+            request.onAttemptReserved?.(attemptId);
             let text = receipt.artifact!.text, durable = text, revision = receipt.artifact!.revision, storageFailed = false, streamFailed = false, terminal = false, suspended = false;
             let diagnostics: GenerationTransportDiagnostics | undefined;
             let diagnosticsAt = performance.now();

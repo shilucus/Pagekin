@@ -369,6 +369,30 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Stream snapshot publish guard deduplicates same-revision reads and publishes, coalesces diagnostics, enforces strict monotonicity and divergent text defense (7/7 tests passed; 4 suites 115 tests regression passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Measurement-driven parsing optimizations belong to PERF-004"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "996a6602b877fbdcdb3d1d6687c58ab9c769b163 + stage-39-evidence.md source blobs",
+          "artifactOrReceipt": "stage-39-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage39/focused-tests-final.json",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, isolated fictional SQLite",
+          "result": "Terminal receipt diagnostics outrank buffered stream fields; owner clears attempt cache on settlement and exceptional return without releasing physical permits. Final regression 448/448, typecheck/lint/i18n/build exit 0; corrected fixture failures and independent re-review recorded.",
+          "limitations": "Initial 437/443 report retained. No renderer whitelist, accounting, flush window, unknown replay, recovery tail or reconnect protection weakened; full feature remains incomplete."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "996a6602b877fbdcdb3d1d6687c58ab9c769b163 + stage-39-evidence.md source blobs",
+          "artifactOrReceipt": "stage-39-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage39/perf-long-stream-light.json",
+          "environment": "Isolated fictional Electron 44.9.3 / Node 24.22.0 / Chrome 152.0.7977.167, 1440x900 light, loopback fixture, uncontrolled cache",
+          "result": "Two settled requests, 448 notifications, 11 guarded receipt reads, 13 full publications and nine durable snapshots; main event-loop max 108.265471 ms, RSS max 144994304 bytes.",
+          "limitations": "Single controlled observation, not a promised reduction ratio, memory improvement, p95 target, real-model quality or complete matrix. Original baseline reports and failures unchanged."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "996a6602b877fbdcdb3d1d6687c58ab9c769b163 + stage-39-evidence.md source blobs",
+          "artifactOrReceipt": "stage-39-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage39/perf-long-stream-light.json",
+          "environment": "Same isolated fictional Windows x64 Electron scene, no real model or user data",
+          "result": "Exit 0, 32168.9298 ms, normal quit, zero cutoff/external requests/writes/residuals; screenshot inspected for chapter 3, v2/9200 and unchanged 2/12 finalized.",
+          "limitations": "Cancellation, storage failure and exceptional-return coverage is native deterministic evidence, not separate Electron scenarios. No visual fidelity, literary or three-platform qualification."
         }
       ]
     },

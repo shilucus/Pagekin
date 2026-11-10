@@ -6,6 +6,7 @@ import {
 } from '../stream-snapshot-guard'
 import type { MainGenerationSnapshot } from '../../../src/services/generation/generation-runtime'
 import type { GenerationExecutionReceipt } from '../../repositories/generation-run-repository'
+import type { GenerationTransportDiagnostics } from '../../../src/shared/generation-contract'
 
 describe('Stream Snapshot Deduplication and Publish Guard (PERF-003)', () => {
   const mockReceipt = (attemptId: string, revision: number, text: string, status: 'running' | 'completed' | 'failed' | 'cancelled' = 'running'): GenerationExecutionReceipt => {
@@ -83,6 +84,18 @@ describe('Stream Snapshot Deduplication and Publish Guard (PERF-003)', () => {
       status: receipt.result ? 'completed' : 'running',
     }
   }
+
+  const diagnostics = (overrides: Partial<GenerationTransportDiagnostics> = {}): GenerationTransportDiagnostics => ({
+    startedAt: 1000,
+    elapsedMs: 100,
+    firstResponseMs: 10,
+    lastResponseMs: 100,
+    lastOutputMs: 90,
+    phase: 'stream',
+    visibleEvents: 1,
+    reasoningEvents: 2,
+    ...overrides,
+  })
 
   it('suppresses duplicate receipt reads and full text publishing across high frequency token deltas', () => {
     const published: MainGenerationSnapshot[] = []
@@ -258,6 +271,87 @@ describe('Stream Snapshot Deduplication and Publish Guard (PERF-003)', () => {
     expect(terminal).not.toBeNull()
     expect(terminal.status).toBe('completed')
     expect(terminal.diagnostics).toMatchObject({ elapsedMs: 500, endReason: 'completed' })
+  })
+
+  it.each(['completed', 'failed', 'cancelled'] as const)('preserves authoritative %s diagnostics over stale stream fields', status => {
+    const attemptId = `att-terminal-${status}`
+    const receipt = mockReceipt(attemptId, 1, 'durable text', status)
+    const readReceipt = vi.fn(() => receipt)
+    const onPublish = vi.fn()
+    const guard = createStreamSnapshotGuard({ onPublish, readReceipt, snapshotOf: mockSnapshotOf })
+    guard.handleStreamEvent({ attemptId, visibleText: 'durable text', durableText: 'durable text', durableRevision: 1,
+      storageFailed: false, diagnostics: diagnostics({ httpStatus: 202, endReason: 'completed', errorName: 'Error',
+        errorCode: 'ECONNRESET', causeCode: 'UND_ERR_SOCKET' }) })
+    const authoritative = diagnostics({ startedAt: 2000, elapsedMs: 1200, firstResponseMs: null,
+      lastResponseMs: 0, lastOutputMs: null, phase: 'complete', endReason: status, httpStatus: 200,
+      errorName: 'AbortError', errorCode: 'ABORT_ERR', causeCode: 'ETIMEDOUT', visibleEvents: 0, reasoningEvents: 0 })
+    const snapshot: MainGenerationSnapshot = { ...mockSnapshotOf(receipt)!, status, diagnostics: authoritative }
+    const original = structuredClone(snapshot)
+
+    const terminal = guard.mergeTerminalDiagnostics(snapshot)
+
+    expect(terminal).toEqual(original)
+    expect(snapshot).toEqual(original)
+    expect(readReceipt).toHaveBeenCalledTimes(1)
+    expect(onPublish).toHaveBeenCalledTimes(1)
+    expect(guard.getStats(attemptId)?.publishedCount).toBe(2)
+  })
+
+  it('fills only absent terminal diagnostic fields from pending metadata', () => {
+    const attemptId = 'att-terminal-missing'
+    const receipt = mockReceipt(attemptId, 1, 'durable text', 'completed')
+    const guard = createStreamSnapshotGuard({ onPublish: vi.fn(), readReceipt: () => receipt, snapshotOf: mockSnapshotOf })
+    guard.handleStreamEvent({ attemptId, visibleText: 'durable text', durableText: 'durable text', durableRevision: 1,
+      storageFailed: false, diagnostics: diagnostics({ httpStatus: 200, errorCode: 'ECONNRESET' }) })
+    const authoritative = diagnostics({ elapsedMs: 1000, firstResponseMs: null, phase: 'complete', endReason: 'completed',
+      visibleEvents: 0, reasoningEvents: 0 })
+
+    const terminal = guard.mergeTerminalDiagnostics({ ...mockSnapshotOf(receipt)!, diagnostics: authoritative })
+
+    expect(terminal.diagnostics).toEqual({ ...authoritative, httpStatus: 200, errorCode: 'ECONNRESET' })
+    expect(authoritative).not.toHaveProperty('httpStatus')
+    expect(authoritative).not.toHaveProperty('errorCode')
+  })
+
+  it('keeps explicitly undefined optional terminal fields instead of reviving pending values', () => {
+    const attemptId = 'att-terminal-undefined'
+    const receipt = mockReceipt(attemptId, 1, 'durable text', 'cancelled')
+    const guard = createStreamSnapshotGuard({ onPublish: vi.fn(), readReceipt: () => receipt, snapshotOf: mockSnapshotOf })
+    guard.handleStreamEvent({ attemptId, visibleText: 'durable text', durableText: 'durable text', durableRevision: 1,
+      storageFailed: false, diagnostics: diagnostics({ httpStatus: 200, endReason: 'completed', errorName: 'Error',
+        errorCode: 'ECONNRESET', causeCode: 'UND_ERR_SOCKET' }) })
+    const authoritative = diagnostics({ httpStatus: undefined, endReason: undefined, errorName: undefined,
+      errorCode: undefined, causeCode: undefined })
+
+    const terminal = guard.mergeTerminalDiagnostics({ ...mockSnapshotOf(receipt)!, status: 'cancelled', diagnostics: authoritative })
+
+    expect(terminal.diagnostics).toEqual(authoritative)
+    for (const key of ['httpStatus', 'endReason', 'errorName', 'errorCode', 'causeCode']) {
+      expect(Object.hasOwn(terminal.diagnostics!, key)).toBe(true)
+      expect(terminal.diagnostics?.[key as keyof GenerationTransportDiagnostics]).toBeUndefined()
+    }
+  })
+
+  it('does not create terminal diagnostics when no stream or receipt recorded them', () => {
+    const receipt = mockReceipt('att-terminal-unrecorded', 1, 'durable text', 'failed')
+    const readReceipt = vi.fn(() => receipt)
+    const guard = createStreamSnapshotGuard({ onPublish: vi.fn(), readReceipt, snapshotOf: mockSnapshotOf })
+    const snapshot: MainGenerationSnapshot = { ...mockSnapshotOf(receipt)!, status: 'failed' }
+
+    expect(guard.mergeTerminalDiagnostics(snapshot)).toBe(snapshot)
+    expect(snapshot).not.toHaveProperty('diagnostics')
+    expect(readReceipt).not.toHaveBeenCalled()
+  })
+
+  it('retains latest stream metadata priority for running snapshots', () => {
+    const receipt = mockReceipt('att-live-priority', 1, 'durable text')
+    const guard = createStreamSnapshotGuard({ onPublish: vi.fn(), readReceipt: () => receipt,
+      snapshotOf: value => ({ ...mockSnapshotOf(value)!, diagnostics: diagnostics({ elapsedMs: 10, phase: 'request' }) }) })
+
+    const snapshot = guard.handleStreamEvent({ attemptId: 'att-live-priority', visibleText: 'durable text', durableText: 'durable text',
+      durableRevision: 1, storageFailed: false, diagnostics: { elapsedMs: 200, phase: 'stream', visibleEvents: 3 } })
+
+    expect(snapshot?.diagnostics).toMatchObject({ elapsedMs: 200, phase: 'stream', visibleEvents: 3 })
   })
 
   it('drops out-of-order revision regression safely', () => {

@@ -49,6 +49,7 @@ import { PLOT_OUTLINE_CONTENT, PLOT_OUTLINE_PROTOCOL, joinPlotOutlineEntries, pl
 import { synopsisForDraftChapter } from '../../../src/services/workflows/commands/generate-draft.command'
 import { parseTextBlueprintsStrict } from '../../../src/services/workflows/directory-workflow'
 import { ProjectCoreRepository, type ProjectCoreSynopsisCommitRequest } from '../../repositories/project-core-repository'
+import * as snapshotGuards from '../stream-snapshot-guard'
 vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const cleanups: (() => void)[] = []
@@ -386,6 +387,173 @@ describe('read-only run diagnostics', () => {
     f.db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_remove(usage_receipt_json,'$.replayTask') WHERE attempt_id=?").run(row.attempt_id)
     const reopened = f.reopen()
     expect(reopened.readDiagnostics(run.handle).initialDraftTaskHash).toBeNull()
+  })
+})
+
+describe('stream snapshot cache lifecycle', () => {
+  const prefix = 'fictional'.repeat(600)
+  const diagnostics = { startedAt: 1234, elapsedMs: 20, firstResponseMs: 1, lastResponseMs: 10, lastOutputMs: 15,
+    phase: 'stream' as const, visibleEvents: 1, reasoningEvents: 0 }
+  function observedFixture(dispatch: GenerationRunServiceDependencies['dispatch'], onSnapshot?: Parameters<typeof fixture>[3]) {
+    const factory = vi.spyOn(snapshotGuards, 'createStreamSnapshotGuard')
+    cleanups.push(() => factory.mockRestore())
+    const f = fixture(dispatch, false, undefined, onSnapshot)
+    const guard = factory.mock.results[0]!.value as ReturnType<typeof snapshotGuards.createStreamSnapshotGuard>
+    return { f, guard }
+  }
+  it.each(['success', 'failure'] as const)('releases each %s attempt cache across repeated runs', async mode => {
+    const published: MainGenerationSnapshot[] = []
+    const { f, guard } = observedFixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: prefix })
+      options.onDiagnostics?.(diagnostics)
+      if (mode === 'failure') throw new Error('NETWORK_ERROR')
+      return { usage: null, finishReason: 'stop' }
+    }, snapshot => published.push(snapshot))
+    for (let index = 0; index < 3; index++) {
+      const run = f.owner.begin({ ...f.begin, uiActionNonce: `${mode}-${index}` })
+      const result = await f.owner.execute({ handle: run.handle, invocationNonce: `${mode}-${index}`, task })
+      const attemptId = result.outcome.receipt.visibleArtifact!.attemptId
+      expect(result.outcome.status).toBe(mode === 'success' ? 'completed' : 'incomplete')
+      expect(published.some(snapshot => snapshot.attemptId === attemptId && snapshot.status === 'running' && snapshot.text === prefix)).toBe(true)
+      expect(guard.getStats(attemptId)).toBeUndefined()
+    }
+  })
+  it('releases cancelled caches without freeing physical idle or recreating state from late callbacks', async () => {
+    const published: MainGenerationSnapshot[] = []
+    let entered!: () => void, finish!: () => void
+    let late!: Parameters<GenerationRunServiceDependencies['dispatch']>[1]
+    const { f, guard } = observedFixture(async (_request, options) => {
+      late = options
+      options.onVisible({ kind: 'delta', text: prefix })
+      options.onDiagnostics?.(diagnostics)
+      return new Promise(resolve => { finish = () => resolve({ usage: null, finishReason: 'stop' }); entered() })
+    }, snapshot => published.push(snapshot))
+    for (let index = 0; index < 3; index++) {
+      const started = new Promise<void>(resolve => { entered = resolve })
+      const run = f.owner.begin({ ...f.begin, uiActionNonce: `cancel-${index}` })
+      const execution = f.owner.execute({ handle: run.handle, invocationNonce: `cancel-${index}`, task })
+      try {
+        await started
+        const attemptId = published.at(-1)!.attemptId
+        expect(guard.getStats(attemptId)?.lastPublishedText).toBe(prefix)
+        f.owner.cancel(run.handle)
+        const result = await execution
+        const receipt = new GenerationRunRepository(() => f.db).receipt(attemptId)
+        expect(result.outcome).toMatchObject({ status: 'incomplete', finishReason: 'error', content: prefix,
+          receipt: { diagnostics: { endReason: 'cancelled' } } })
+        expect(receipt).toMatchObject({ failureCode: 'GENERATION_CANCELLED', attempt: { status: 'unknown' } })
+        expect(result.run.status).toBe('cancelled')
+        expect(result.run.ledger!.tokenLiability).toBeGreaterThan(0)
+        expect(published.at(-1)!.diagnostics).toEqual(receipt.diagnostics)
+        expect(published.at(-1)!.durableRevision).toBe(receipt.artifact!.revision)
+        expect(guard.getStats(attemptId)).toBeUndefined()
+        expect(f.owner.hasPhysicalInFlight()).toBe(true)
+        let idle = false
+        const drain = f.owner.whenPhysicalIdle().then(() => { idle = true })
+        const before = f.db.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts ORDER BY attempt_id').all()
+        const beforeArtifacts = f.db.prepare('SELECT artifact_json FROM generation_artifacts ORDER BY artifact_id').all()
+        const count = published.length
+        late.onVisible({ kind: 'delta', text: 'Late fictional text must be ignored' })
+        late.onDiagnostics?.({ ...diagnostics, elapsedMs: 999, endReason: 'completed' })
+        expect(published).toHaveLength(count)
+        expect(guard.getStats(attemptId)).toBeUndefined()
+        expect(f.db.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts ORDER BY attempt_id').all()).toEqual(before)
+        expect(f.db.prepare('SELECT artifact_json FROM generation_artifacts ORDER BY artifact_id').all()).toEqual(beforeArtifacts)
+        await Promise.resolve()
+        expect(idle).toBe(false)
+        finish()
+        await drain
+        expect(f.owner.hasPhysicalInFlight()).toBe(false)
+        expect(guard.getStats(attemptId)).toBeUndefined()
+        expect(f.db.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts ORDER BY attempt_id').all()).toEqual(before)
+      } finally {
+        finish()
+        await execution.catch(() => undefined)
+        await f.owner.whenPhysicalIdle()
+      }
+    }
+  })
+  it.each(
+    (['epoch', 'snapshot', 'notification', 'outcome', 'final-receipt'] as const)
+      .flatMap(boundary => (['unknown', 'trusted'] as const).map(accounting => [boundary, accounting] as const)),
+  )('clears state when %s processing throws with %s synthetic usage without replacing the error', async (boundary, accounting) => {
+    const failure = new Error(`FICTIONAL_${boundary.toUpperCase()}_FAILED`)
+    let terminalPublished = false
+    const { f, guard } = observedFixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: prefix })
+      options.onDiagnostics?.(diagnostics)
+      if (boundary === 'epoch') f.invalidate()
+      return { finishReason: 'stop', usage: accounting === 'trusted' ? { promptTokens: 10, completionTokens: 4, reasoningTokens: 0, totalTokens: 14,
+        accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } : null }
+    }, snapshot => {
+      if (snapshot.status !== 'running') {
+        terminalPublished = true
+        if (boundary === 'notification') throw failure
+      }
+    })
+    const run = f.owner.begin(f.begin)
+    let restore = () => {}
+    if (boundary === 'snapshot') {
+      const original = f.db.prepare.bind(f.db)
+      const spy = vi.spyOn(f.db, 'prepare').mockImplementation(((sql: string) => {
+        if (sql === "SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'") throw failure
+        return original(sql)
+      }) as typeof f.db.prepare)
+      restore = () => spy.mockRestore()
+    } else if (boundary === 'outcome') {
+      const original = GenerationRunRepository.prototype.readRunView
+      const spy = vi.spyOn(GenerationRunRepository.prototype, 'readRunView').mockImplementation(function (this: GenerationRunRepository, runId) {
+        if (terminalPublished) throw failure
+        return original.call(this, runId)
+      })
+      restore = () => spy.mockRestore()
+    } else if (boundary === 'final-receipt') {
+      let finalRead = false
+      const read = GenerationRunRepository.prototype.receipt, settle = GenerationRunRepository.prototype.settle
+      const settleSpy = vi.spyOn(GenerationRunRepository.prototype, 'settle').mockImplementation(function (this: GenerationRunRepository, ...args) {
+        const receipt = settle.apply(this, args)
+        finalRead = true
+        return receipt
+      })
+      const readSpy = vi.spyOn(GenerationRunRepository.prototype, 'receipt').mockImplementation(function (this: GenerationRunRepository, attemptId) {
+        if (finalRead) { finalRead = false; throw failure }
+        return read.call(this, attemptId)
+      })
+      restore = () => { readSpy.mockRestore(); settleSpy.mockRestore() }
+    }
+    try {
+      const execution = f.owner.execute({ handle: run.handle, invocationNonce: boundary, task })
+      if (boundary === 'epoch') await expect(execution).rejects.toThrow('GENERATION_EPOCH_STALE')
+      else await expect(execution).rejects.toBe(failure)
+      const attempt = f.db.prepare('SELECT attempt_id,attempt_json,usage_receipt_json FROM generation_attempts').get() as {
+        attempt_id: string; attempt_json: string; usage_receipt_json: string
+      }
+      const storedAttempt = JSON.parse(attempt.attempt_json)
+      if (accounting === 'trusted') expect(storedAttempt).toMatchObject({ status: 'settled', actualTokens: 14 })
+      else {
+        expect(storedAttempt.status).toBe('unknown')
+        expect(storedAttempt).not.toHaveProperty('actualTokens')
+      }
+      expect(JSON.parse(attempt.usage_receipt_json).result.finishReason).toBe('stop')
+      expect(guard.getStats(attempt.attempt_id)).toBeUndefined()
+      expect(f.owner.hasPhysicalInFlight()).toBe(false)
+    } finally { restore() }
+  })
+  it('clears a storage-failed attempt without discarding its copyable unsaved tail', async () => {
+    const { f, guard } = observedFixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: 'Retained fictional suffix' })
+      return { usage: null, finishReason: 'stop' }
+    })
+    const run = f.owner.begin(f.begin)
+    f.db.exec("CREATE TRIGGER fail_cache_snapshot BEFORE UPDATE OF artifact_json ON generation_artifacts BEGIN SELECT RAISE(FAIL,'fictional disk failure'); END")
+    try {
+      const result = await f.owner.execute({ handle: run.handle, invocationNonce: 'storage-cache', task })
+      const attemptId = result.outcome.receipt.visibleArtifact!.attemptId
+      expect(result.outcome.receipt.failureCode).toBe('GENERATION_STORAGE_FAILED')
+      expect(result.run.unsavedTails).toMatchObject([{ attemptId, text: 'Retained fictional suffix' }])
+      expect(f.owner.read(run.handle).unsavedTails).toEqual(result.run.unsavedTails)
+      expect(guard.getStats(attemptId)).toBeUndefined()
+    } finally { f.db.exec('DROP TRIGGER fail_cache_snapshot') }
   })
 })
 

@@ -143,7 +143,10 @@ export function createStreamSnapshotGuard(deps: StreamSnapshotGuardDependencies)
     state.publishedCount++
     deps.recordPublish?.(snapshot.text)
 
-    const mergedDiagnostics = mergeDiagnostics(snapshot.diagnostics, state.cumulativeDiagnostics)
+    // Settled receipt fields, including explicit null/undefined, outrank stale stream metadata.
+    const mergedDiagnostics = snapshot.diagnostics
+      ? { ...state.cumulativeDiagnostics, ...snapshot.diagnostics }
+      : mergeDiagnostics(undefined, state.cumulativeDiagnostics)
     if (!mergedDiagnostics) return snapshot
 
     return {
