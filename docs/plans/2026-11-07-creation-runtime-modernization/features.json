@@ -317,8 +317,8 @@
         "deterministic",
         "performance"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -343,6 +343,22 @@
           "environment": "Isolated fictional Electron 44.9.3 / Node 24.22.0 / Chrome 152.0.7977.167, 1440x900 light, loopback fixture, uncontrolled cache",
           "result": "Real author-inference import completes 10/10 chapters, 32 requests, normal clean quit; SQLite 10/100/1000 fixed-body comparison returns 15360 representative bytes versus 30720/307200/3072000 paged bytes.",
           "limitations": "Returned body bytes are not disk IO or latency; one scene is not workflow p95, speedup, real-model quality, background migration or platform qualification. Six original baseline failures/denominators remain unchanged; feature stays false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "dd4b76dd13ca21610fe8c1ce3204d5ff18859b75",
+          "artifactOrReceipt": "stage-48-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage48/focused-tests.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; fictional native SQLite",
+          "result": "Fresh18-file package771/771, zero failed/pending; independent complete old-paged prompt oracle40/40, actual representative/range authority, source/checkpoint/session and no-replay recovery regressions passed. Two independent reviewers accepted all three AC and implementation/run gates.",
+          "limitations": "No production/test changes in this stage. Unselected bad rows reject at actual consumption per ADR-0061; historical failure reports retained. No complete import/imitation or platform qualification."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "dd4b76dd13ca21610fe8c1ce3204d5ff18859b75",
+          "artifactOrReceipt": "stage-48-evidence.md; stage-47-evidence.md",
+          "environment": "Fresh fictional SQLite10/100/1000 fixed-body comparison; explicitly reused matching-byte Stage47 isolated Electron/build/quality evidence",
+          "result": "Five representative3072-byte bodies return15360 bytes at all three sizes versus paged30720/307200/3072000; actual Stage47 import10/import100 complete and large failure remain attributed to their original executions.",
+          "limitations": "Payload volume is not disk IO, CPU or latency. Stage47 scenes/build/quality are reused, not rerun. Import1000 timeout, forced quit, null coverage, unsupported2/4 and real-model/platform limits remain."
         }
       ]
     },
@@ -383,8 +399,8 @@
         "performance",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -417,6 +433,30 @@
           "environment": "Same isolated fictional Windows x64 Electron scene, no real model or user data",
           "result": "Exit 0, 32168.9298 ms, normal quit, zero cutoff/external requests/writes/residuals; screenshot inspected for chapter 3, v2/9200 and unchanged 2/12 finalized.",
           "limitations": "Cancellation, storage failure and exceptional-return coverage is native deterministic evidence, not separate Electron scenarios. No visual fidelity, literary or three-platform qualification."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "dd4b76dd13ca21610fe8c1ce3204d5ff18859b75",
+          "artifactOrReceipt": "stage-48-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage48/focused-tests.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; fictional native SQLite and real owner/transport integration",
+          "result": "Fresh18-file771/771 package covers same-revision deduplication, diagnostics/terminal/flush, hash/identity/order conflicts, storage-failed tail, authoritative reconnect, cancellation/unknown and late physical drain. Both independent reviewers accepted all three AC and implementation/run gates.",
+          "limitations": "No production/test change; original1000ms/4096-byte flush and complete authoritative snapshot protocol unchanged. Deterministic branches are not claimed as separate Electron scenes."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "dd4b76dd13ca21610fe8c1ce3204d5ff18859b75",
+          "artifactOrReceipt": "stage-48-evidence.md; stage-47-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage47/perf-long-stream-light.json",
+          "environment": "Explicitly reused matching-byte Stage47 fictional isolated Electron44.9.3, Windows x64, loopback fixture",
+          "result": "Actual long-stream two settled requests,449 notifications,11 guarded receipt reads,13 complete publications,9 durable snapshots and13 serialized IPC snapshots; exact final text retained.",
+          "limitations": "These are distinct layer counters, not a reduction ratio, p95 or tail-window improvement. Reused original execution, not a fresh Stage48 scene; failed1000 and other baseline limits unchanged."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "dd4b76dd13ca21610fe8c1ce3204d5ff18859b75",
+          "artifactOrReceipt": "stage-48-evidence.md; stage-47-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage47/perf-long-stream-light.json",
+          "environment": "Same explicitly reused Stage47 actual fictional Windows x64 Electron scene and rehashed build entries",
+          "result": "Long-stream exit0, normal quit, exact final content, original-session receipts and inspected actual screenshot; zero cutoff/external requests/writes/residuals. Actual final artifact and current source identities independently reviewed.",
+          "limitations": "No new Stage48 Electron execution, visual fidelity, literary quality, complete workflow/multi-book or target-platform qualification."
         }
       ]
     },
