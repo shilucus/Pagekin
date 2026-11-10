@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
 import type BetterSqlite3 from 'better-sqlite3'
 
 import { getProjectDb } from '../../database'
@@ -152,6 +153,83 @@ describe('BlueprintRepository reads rows with NULL columns', () => {
 })
 
 describe('BlueprintRepository range commit', () => {
+  it('keeps the legacy payload hash encoding and author-field defaults without feedback options', () => {
+    const db = createBlueprintDb()
+    const input = blueprintFor(1)
+    const request = { mode: 'replace-range' as const, operationId: 'legacy-hash', startChapter: 1, endChapter: 1, blueprints: [input] }
+    try {
+      BlueprintRepository.upsert({ ...input, userGuidance: 'Keep author guidance', notes: 'Keep author notes', notesUpdatedAt: 'original-stamp' }, db)
+      const canonicalInput = Object.fromEntries(Object.entries(input).sort(([left], [right]) => left.localeCompare(right, 'en-US')))
+      const expectedHash = createHash('sha256').update(JSON.stringify({ blueprints: [canonicalInput], endChapter: 1,
+        mode: 'replace-range', startChapter: 1 })).digest('hex')
+      const receipt = BlueprintRepository.commitRange(request, undefined, db)
+      expect(receipt.payloadHash).toBe(expectedHash)
+      expect(receipt.snapshot[0]).toEqual({ ...input, userGuidance: 'Keep author guidance', notes: 'Keep author notes', notesUpdatedAt: 'original-stamp' })
+    } finally { db.close() }
+  })
+
+  it('writes explicit empty feedback author fields exactly while preserving the merged F0 and other chapters', () => {
+    const db = createBlueprintDb()
+    const original = { ...blueprintFor(1), userGuidance: 'Original author guidance', notes: 'Original notes', notesUpdatedAt: 'original-stamp' }
+    const outside = blueprintFor(2)
+    try {
+      BlueprintRepository.upsert(original, db)
+      BlueprintRepository.upsert(outside, db)
+      const merged = { ...original, userGuidance: '', notes: '' }
+      const guard = vi.fn(() => expect(db.inTransaction).toBe(true))
+      const receipt = BlueprintRepository.commitRange({ mode: 'replace-range', operationId: 'feedback-exact-fields',
+        startChapter: 1, endChapter: 1, blueprints: [merged] }, guard, db, 'replace', {
+        authorFields: 'exact', feedbackRequestHash: 'a'.repeat(64),
+      })
+      expect(guard).toHaveBeenCalledTimes(1)
+      expect(receipt.snapshot).toEqual([merged])
+      expect(receipt.characterSyncInput).toEqual([merged])
+      expect(receipt.characterSyncOperation.status).toBe('pending')
+      expect(BlueprintRepository.getAll(db)).toEqual([merged, outside])
+      expect(db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+      expect(receipt.characterSyncInput[0]).not.toHaveProperty('newCharacterCandidates')
+      expect(receipt.characterSyncInput[0]).not.toHaveProperty('relationshipHints')
+    } finally { db.close() }
+  })
+
+  it('binds feedback provenance to idempotency without repeating CAS or overwriting later author edits', () => {
+    const db = createBlueprintDb()
+    const request = { mode: 'replace-range' as const, operationId: 'feedback-bound-replay', startChapter: 1,
+      endChapter: 1, blueprints: [blueprintFor(1)] }
+    const feedback = { authorFields: 'exact' as const, feedbackRequestHash: 'a'.repeat(64) }
+    const guard = vi.fn(() => expect(db.inTransaction).toBe(true))
+    try {
+      const first = BlueprintRepository.commitRange(request, guard, db, 'replace', feedback)
+      db.prepare("UPDATE blueprints SET title='Later author edit' WHERE chapter_number=1").run()
+      const changes = db.prepare('SELECT total_changes()').pluck().get()
+      const replay = BlueprintRepository.commitRange(request, guard, db, 'replace', feedback)
+      expect(replay).toMatchObject({ idempotent: true, payloadHash: first.payloadHash, characterSyncInput: first.characterSyncInput })
+      expect(replay.snapshot[0].title).toBe('Later author edit')
+      expect(guard).toHaveBeenCalledTimes(1)
+      expect(() => BlueprintRepository.commitRange(request, guard, db, 'replace', { ...feedback,
+        feedbackRequestHash: 'b'.repeat(64) })).toThrow('BLUEPRINT_OPERATION_CONFLICT')
+      expect(() => BlueprintRepository.commitRange(request, guard, db)).toThrow('BLUEPRINT_OPERATION_CONFLICT')
+      expect(guard).toHaveBeenCalledTimes(1)
+      expect(db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+      expect(db.prepare('SELECT COUNT(*) FROM blueprint_commit_operations').pluck().get()).toBe(1)
+    } finally { db.close() }
+  })
+
+  it('rejects malformed internal feedback binding before creating a range or operation', () => {
+    const db = createBlueprintDb()
+    const request = { mode: 'replace-range' as const, operationId: 'bad-feedback-binding', startChapter: 1,
+      endChapter: 1, blueprints: [blueprintFor(1)] }
+    try {
+      for (const feedback of [{ authorFields: 'exact', feedbackRequestHash: 'not-a-hash' },
+        { authorFields: 'preserve', feedbackRequestHash: 'a'.repeat(64) }, { feedbackRequestHash: 'a'.repeat(64) }]) {
+        expect(() => BlueprintRepository.commitRange(request, undefined, db, 'replace',
+          feedback as Parameters<typeof BlueprintRepository.commitRange>[4])).toThrow('BLUEPRINT_FEEDBACK_BINDING_INVALID')
+      }
+      expect(BlueprintRepository.count(db)).toBe(0)
+      expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name='blueprint_commit_operations'").get()).toBeUndefined()
+    } finally { db.close() }
+  })
+
   it('guards a new formal effect inside its transaction and keeps acknowledged replay read-only', () => {
     const db = createBlueprintDb()
     vi.mocked(getProjectDb).mockReturnValue(db)

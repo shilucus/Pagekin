@@ -305,7 +305,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     const graphInput = input.graphGenerationInput ? validateGraphGenerationInput(input.graphGenerationInput) : undefined;
     if (input.planningFeedbackInput !== undefined || input.operation === 'planning-feedback') {
         if (input.operation !== 'planning-feedback' || !input.planningFeedbackInput
-            || !(['planning-feedback-v1', 'planning-feedback-v2'].some(key => isDeepStrictEqual(input.promptKeys, [key])))
+            || !(['planning-feedback-v1', 'planning-feedback-v2', 'planning-feedback-v3'].some(key => isDeepStrictEqual(input.promptKeys, [key])))
             || !isDeepStrictEqual(input.skillStages, ['planning'])
             || input.selectedDraftIds.length || input.selectedFinalizedDraftIds.length || input.selectedBlueprintChapterNumbers?.length
             || input.chapterNumber !== undefined || input.authorInputs?.length || input.outputContract !== 'visible-text'

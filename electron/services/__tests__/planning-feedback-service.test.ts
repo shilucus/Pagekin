@@ -13,6 +13,7 @@ import { PlanningFeedbackService } from '../planning-feedback-service'
 import { assertPlanningFeedbackProof, buildPlanningFeedbackTask, readPlanningFeedbackTask } from '../planning-feedback-generation'
 import { GenerationRunRepository, textHash, type GenerationExecutionReceipt } from '../../repositories/generation-run-repository'
 import { ProjectCoreRepository } from '../../repositories/project-core-repository'
+import { BlueprintRepository } from '../../repositories/blueprint-repository'
 import { planningFeedbackCoreSnapshot, type PlanningFeedbackBase,
   type PlanningFeedbackCandidate, type PlanningFeedbackCoreTarget } from '../../../src/shared/planning-feedback'
 
@@ -38,6 +39,41 @@ beforeEach(() => {
 afterEach(() => db.close())
 
 describe('planning feedback preparation', () => {
+  it('lists canonical blueprint field summaries without exposing source or widening other lists', () => {
+    db.close()
+    db = new Database(':memory:')
+    initializeLegacyBaselineSchema(db)
+    migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry())
+    db.prepare("INSERT INTO project_core(id,project_name,core_outline) VALUES('main','Fiction','Original')").run()
+    service = new PlanningFeedbackService({ database: db, projectId: 'project', projectPath: 'fixture',
+      assertCurrent: () => {}, assertGenerationBindingCurrent: () => {} })
+    for (const chapterNumber of [1, 2]) BlueprintRepository.upsert({ chapterNumber, title: `Fictional chapter ${chapterNumber}`,
+      role: 'Setup', purpose: 'Fictional purpose', keyEvents: 'Fictional event', characters: ['Fictional lead'],
+      suspenseHook: '', userGuidance: 'Keep', notes: 'Private F0 notes', notesUpdatedAt: 'F0 stamp' }, db)
+    const scope = { kind: 'blueprint-fields' as const, chapterNumber: 1, fields: ['title', 'notes'] as const }
+    const base = service.captureBase({ ...scope, fields: ['notes', 'title'] })
+    service.captureBase({ ...scope, fields: ['title'] })
+    service.captureBase({ ...scope, chapterNumber: 2 })
+    const field = service.captureBase('coreOutline'), changes = db.prepare('SELECT total_changes()').pluck().get()
+    const expected = [{ baseId: base.baseId, projectId: base.projectId, target: 'blueprintFields', scope,
+      createdAt: base.createdAt, closedAt: null, closedByAdoptionId: null }]
+    expect(service.listBlueprintBases(scope)).toEqual(expected)
+    expect(service.listBlueprintBases({ ...scope, fields: ['notes', 'title'] })).toEqual(expected)
+    expect(service.listRangeBases({ kind: 'plot-outline-range', from: 1, to: 1 })).toEqual([])
+    expect(service.listFieldBases('coreOutline')).toEqual([{ baseId: field.baseId, projectId: field.projectId, target: field.target,
+      createdAt: field.createdAt, closedAt: null, closedByAdoptionId: null }])
+    expect(db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+    const copied = new PlanningFeedbackService({ database: db, projectId: 'copy', projectPath: 'fixture',
+      assertCurrent: () => {}, assertGenerationBindingCurrent: () => {} })
+    expect(copied.listBlueprintBases(scope)).toEqual([])
+    frozen.value = true
+    expect(copied.listBlueprintBases(scope)).toEqual(expected)
+    const stale = new PlanningFeedbackService({ database: db, projectId: 'project', projectPath: 'fixture',
+      assertCurrent: () => { throw new Error('FICTIONAL_SESSION_STALE') }, assertGenerationBindingCurrent: () => {} })
+    expect(() => stale.listBlueprintBases(scope)).toThrow('FICTIONAL_SESSION_STALE')
+    expect(() => service.listBlueprintBases({ ...scope, fields: [] })).toThrow('PLANNING_FEEDBACK_SCOPE_INVALID')
+  })
+
   it('lists exact range summaries through the service without exposing frozen sources or changing v1 lists', () => {
     db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'")
       .run('# Plot Outline\n\n## Chapter 1: One\nFirst.\n\n## Chapter 2: Two\nSecond.\n\n## Chapter 3: Three\nThird.\n\n## Chapter 4: Four\nFourth.')

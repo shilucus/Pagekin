@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3'
 import { PlanningFeedbackRepository } from '../repositories/planning-feedback-repository'
 import type { GenerationExecutionReceipt } from '../repositories/generation-run-repository'
 import { assertPlanningFeedbackId, assertPlanningFeedbackObject, assertPlanningFeedbackInstructions, type PlanningFeedbackCaptureTarget, type PlanningFeedbackCoreTarget, type StagePlanningFeedbackCandidate, type AdoptPlanningFeedbackCandidate,
-  type RelineagePlanningFeedbackCandidate, type PlanningFeedbackTable } from '../../src/shared/planning-feedback'
+  type RelineagePlanningFeedbackCandidate, type PlanningFeedbackTable, type PlanningFeedbackBlueprintScope } from '../../src/shared/planning-feedback'
 import { readPortableRuntimeFreeze, type PortableRuntimeFreezeTable } from './portable-runtime-freeze'
 import { assertPlanningFeedbackProof, buildPlanningFeedbackContext, type PlanningFeedbackGenerationContext } from './planning-feedback-generation'
 import type { PlanningFeedbackRangeScope } from '../../src/shared/planning-feedback-ipc'
@@ -68,6 +68,7 @@ export class PlanningFeedbackService {
   getBase(baseId: string) { return this.repository().getBase(baseId) }
   listFieldBases(target: PlanningFeedbackCoreTarget) { return this.repository().listFieldBases(target) }
   listRangeBases(target: PlanningFeedbackRangeScope) { return this.repository().listRangeBases(target) }
+  listBlueprintBases(target: PlanningFeedbackBlueprintScope) { return this.repository().listBlueprintBases(target) }
 
   prepare(input: PlanningFeedbackGenerationInput) {
     const context = capturePlanningFeedbackContext(this.options.database, input, { projectId: this.options.projectId,

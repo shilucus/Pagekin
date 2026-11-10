@@ -774,7 +774,8 @@ function projectDisplay(value: unknown, many: boolean): unknown {
 function projectPlanningSource(value: unknown): PlanningFeedbackSource {
   const source = parseJson(value)
   try {
-    const target = source && typeof source === 'object' && Object.hasOwn(source, 'core') ? 'plotOutlineRange' : 'premise'
+    const target = source && typeof source === 'object' && Object.hasOwn(source, 'blueprint') ? 'blueprintFields'
+      : source && typeof source === 'object' && Object.hasOwn(source, 'core') ? 'plotOutlineRange' : 'premise'
     return parsePlanningFeedbackSource(target, source)
   }
   catch { return fail('PORTABLE_UNSAFE_PROJECTION') }
@@ -784,7 +785,7 @@ function projectPlanningScope(value: unknown): unknown {
   if (value === null) return null
   try {
     const scope = parsePlanningFeedbackScope(parseJson(value))
-    if (scope.kind !== 'plot-outline-range') fail('PORTABLE_UNSAFE_PROJECTION')
+    if (scope.kind !== 'plot-outline-range' && scope.kind !== 'blueprint-fields') fail('PORTABLE_UNSAFE_PROJECTION')
     return scope
   } catch { return fail('PORTABLE_UNSAFE_PROJECTION') }
 }
@@ -955,6 +956,8 @@ export function sanitizePortableDatabase(databasePath: string): {
       const domainHistory = new Set(readOrdinaryHistoryDomainRecords(db).map(row => `${row.table}:${row.recordId}`))
       db.prepare('DELETE FROM import_legacy_identity_bridge').run()
       db.prepare('DELETE FROM text_metric_versions').run()
+      db.prepare('DELETE FROM planning_feedback_blueprint_revisions').run()
+      db.prepare('INSERT INTO planning_feedback_blueprint_revisions SELECT chapter_number,0 FROM blueprints').run()
       db.prepare('DELETE FROM llm_calls').run()
       db.prepare("UPDATE character_avatar_assets SET source_reference='' ").run()
       const tables = db.prepare("SELECT name FROM pragma_table_list WHERE schema='main' AND type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
@@ -1304,6 +1307,7 @@ export async function exportPortableProject(input: ExportPortableProjectInput): 
       omittedItems: [
         { id: 'vectors', reason: 'rebuild-stale' },
         { id: 'cache', reason: 'rebuild-stale' },
+        { id: 'planning-feedback-blueprint-revisions', reason: 'rebuild-stale' },
         { id: 'logs', reason: 'exclude-machine-authority' },
         { id: 'temp', reason: 'exclude-machine-authority' },
         { id: 'migration-backups', reason: 'exclude-machine-authority' },

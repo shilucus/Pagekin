@@ -1520,6 +1520,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, isolated fictional SQLite/archives and deterministic provider",
           "result": "Eleven closed desktop range-v2 IPC/client operations wired to actual main owner and writer; exact scope, two-way version rejection, F0-C1-C2, raw outside bytes, CAS/replay/ABA, cancel/unknown, reopen and portable frozen history covered. Final 16 files 1064/1064, typecheck/lint/i18n/build exit 0; independent frozen-source re-review accepted the narrow increment.",
           "limitations": "Initial 1062 report and first type/lint failures retained with corrections. No UI or trusted human capability, blueprint durable feedback, real-model quality or target-platform qualification; whole FEEDBACK-003 and its dependencies remain incomplete."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "dd62da50fcf31b728eb9af97dea873a170cf9ab2 + stage-42-evidence.md final source hashes",
+          "artifactOrReceipt": "stage-42-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage42/focused-tests-final.json",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, isolated fictional SQLite/archives and deterministic provider",
+          "result": "Internal schema3 single-chapter blueprint field feedback now persists F0-C1-C2, exact author-selected JSON adoption, durable replay and ABA fences through the existing writer. Actual central M15 backup/upgrade and two archive/restore cycles covered. Final 32 files 1415/1415; typecheck/lint/i18n/build exit 0; independent frozen-source re-review accepted the narrow increment.",
+          "limitations": "Initial type/lint and 1347/1351 native failures retained with test-only corrections. Dedicated v3 desktop entry follows separately; no UI, auxiliary character identity/relationship writes, trusted human capability, real-model quality or platform qualification. Whole FEEDBACK-003 remains in_progress/passes=false."
         }
       ]
     },

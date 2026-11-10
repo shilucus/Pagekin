@@ -4,6 +4,8 @@ import {
   assertPlanningFeedbackId, assertPlanningFeedbackInstructions, isPlanningFeedbackTarget,
   planningFeedbackAdoptionBinding, planningFeedbackCoreSnapshot, parsePlanningFeedbackScope, parsePlanningFeedbackSource,
   planningFeedbackSourceCore, planningFeedbackAdoptedScope, type PlanningFeedbackBase, type PlanningFeedbackCandidate,
+  BLUEPRINT_FEEDBACK_FIELDS, parsePlanningFeedbackBlueprintText, planningFeedbackBlueprintValue,
+  type PlanningFeedbackBlueprintSource, type PlanningFeedbackBlueprintScope,
 } from '../planning-feedback'
 
 describe('single-field planning feedback v1', () => {
@@ -70,6 +72,94 @@ describe('single-field planning feedback v1', () => {
       planningFeedbackAdoptionBinding(request, candidate, base, 'different-payload'),
     ]
     expect(variants.every(value => value !== original)).toBe(true)
+  })
+})
+
+describe('closed blueprint field planning feedback schema3', () => {
+  const scope: PlanningFeedbackBlueprintScope = { kind: 'blueprint-fields', chapterNumber: 3, fields: ['title', 'characters', 'notes'] }
+  const core = planningFeedbackCoreSnapshot(Object.fromEntries(Object.keys(PLANNING_FEEDBACK_CORE_COLUMNS)
+    .map(key => [key, key === 'totalChapters' || key === 'wordsPerChapter' ? 100 : 'Fictional author facts'])))
+  const source: PlanningFeedbackBlueprintSource = { core, synopsis: 'Fictional formal outline', charactersArch: 'Fictional architecture',
+    blueprint: { chapterNumber: 3, title: 'Original title', role: 'Turning point', purpose: 'Reach the harbor', keyEvents: 'Mira finds a letter',
+      characters: ['Mira', 'Ren'], suspenseHook: 'The sender is missing', userGuidance: '', notes: 'Author note\r\n', notesUpdatedAt: '2026-11-10T00:00:00.000Z' } }
+
+  it('uses the existing eight-field whitelist and canonicalizes a nonempty distinct selection', () => {
+    expect(BLUEPRINT_FEEDBACK_FIELDS).toEqual(['title', 'role', 'purpose', 'keyEvents', 'characters', 'suspenseHook', 'userGuidance', 'notes'])
+    expect(isPlanningFeedbackTarget('blueprintFields')).toBe(true)
+    expect(PLANNING_FEEDBACK_TARGETS).toHaveLength(8)
+    expect(parsePlanningFeedbackScope({ kind: 'blueprint-fields', chapterNumber: 3, fields: ['notes', 'title', 'characters'] })).toEqual(scope)
+    expect(parsePlanningFeedbackScope({ kind: 'blueprint-fields', chapterNumber: 1, fields: ['notes'] }))
+      .toEqual({ kind: 'blueprint-fields', chapterNumber: 1, fields: ['notes'] })
+  })
+
+  it('rejects empty, duplicate, sparse, auxiliary or malformed scope declarations', () => {
+    for (const fields of [[], ['title', 'title'], new Array<string>(1), ['newCharacterCandidates'], ['relationshipHints'], ['chapterNumber'], ['notesUpdatedAt'], ['Title'], [null]]) {
+      expect(() => parsePlanningFeedbackScope({ ...scope, fields })).toThrow()
+    }
+    for (const chapterNumber of [0, -1, 1.5, '3', Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => parsePlanningFeedbackScope({ ...scope, chapterNumber })).toThrow()
+    }
+    expect(() => parsePlanningFeedbackScope({ ...scope, source: 'renderer' })).toThrow()
+  })
+
+  it('freezes exactly the ten persisted blueprint fields without auxiliary evidence or mutations', () => {
+    const parsed = parsePlanningFeedbackSource('blueprintFields', source) as PlanningFeedbackBlueprintSource
+    expect(parsed).toEqual(source)
+    expect(parsed).not.toBe(source)
+    expect(parsed.blueprint.characters).not.toBe(source.blueprint.characters)
+    expect(Object.keys(parsed.blueprint)).toEqual(['chapterNumber', ...BLUEPRINT_FEEDBACK_FIELDS, 'notesUpdatedAt'])
+    expect(planningFeedbackSourceCore(parsed)).toEqual(core)
+    for (const extra of [{ newCharacterCandidates: [] }, { relationshipHints: [] }, { createdAt: 'date' }, { source: 'claim' }]) {
+      expect(() => parsePlanningFeedbackSource('blueprintFields', { ...source, blueprint: { ...source.blueprint, ...extra } })).toThrow()
+    }
+    expect(() => parsePlanningFeedbackSource('blueprintFields', { ...source, extra: 'not a source field' })).toThrow()
+    expect(() => parsePlanningFeedbackSource('blueprintFields', { ...source, core: { ...core, characterStates: 'derived' } })).toThrow()
+    expect(() => parsePlanningFeedbackSource('plotOutlineRange', source)).toThrow()
+    for (const characters of [new Array<string>(1), ['Mira', ' Mira '], [''], ['Mira', null]]) {
+      expect(() => parsePlanningFeedbackSource('blueprintFields', { ...source, blueprint: { ...source.blueprint, characters } })).toThrow()
+    }
+    expect(() => parsePlanningFeedbackSource('blueprintFields', { ...source, blueprint: { ...source.blueprint, notesUpdatedAt: null } })).toThrow()
+    expect(() => parsePlanningFeedbackSource('blueprintFields', { ...source, blueprint: { ...source.blueprint, title: 3 } })).toThrow()
+  })
+
+  it('projects only selected F0 values in canonical order and binds them to the actual chapter', () => {
+    expect(planningFeedbackBlueprintValue(source, scope)).toBe(JSON.stringify({ title: source.blueprint.title, characters: ['Mira', 'Ren'], notes: 'Author note\r\n' }))
+    expect(planningFeedbackBlueprintValue(source, { ...scope, fields: ['notes', 'title'] })).toBe(JSON.stringify({ title: source.blueprint.title, notes: 'Author note\r\n' }))
+    expect(() => planningFeedbackBlueprintValue(source, { ...scope, chapterNumber: 4 })).toThrow('PLANNING_FEEDBACK_SCOPE_INVALID')
+  })
+
+  it('requires all and only generated fields but allows a nonempty explicit adopted subset', () => {
+    const text = JSON.stringify({ notes: '', characters: ['Mira'], title: ' Revised title\r\n' })
+    expect(parsePlanningFeedbackBlueprintText(text, scope, true)).toEqual({ title: ' Revised title\r\n', characters: ['Mira'], notes: '' })
+    expect(Object.keys(parsePlanningFeedbackBlueprintText(text, scope, true))).toEqual(scope.fields)
+    expect(parsePlanningFeedbackBlueprintText('{"notes":""}', scope, false)).toEqual({ notes: '' })
+    expect(parsePlanningFeedbackBlueprintText('{"userGuidance":"","notes":""}', { ...scope, fields: ['userGuidance', 'notes'] }, true))
+      .toEqual({ userGuidance: '', notes: '' })
+    for (const invalid of ['{}', '[]', 'null', 'not JSON', '```json\n{"title":"T"}\n```', '{"title":"T"}{"notes":"N"}',
+      '{"title":"T","notes":"N","characters":[] ,"chapterNumber":3}', '{"title":"T","notes":"N","characters":[],"newCharacterCandidates":[]}',
+      '{"title":"T","notes":"N","characters":[],"relationshipHints":[]}', '{"title":3}', '{"characters":["Mira"," Mira "]}', '{"characters":[null]}']) {
+      expect(() => parsePlanningFeedbackBlueprintText(invalid, scope, false)).toThrow('PLANNING_FEEDBACK_TEXT_INVALID')
+    }
+    expect(() => parsePlanningFeedbackBlueprintText('{"title":"Only one field"}', scope, true)).toThrow('PLANNING_FEEDBACK_TEXT_INVALID')
+  })
+
+  it('derives adopted scope from actual final JSON and binds full equality without new wire fields', () => {
+    const base = { schemaVersion: 3, target: 'blueprintFields', scope, baseId: 'blueprint-f0', projectId: 'project', sourceRevision: 9,
+      sourceHash: 'source', source, value: planningFeedbackBlueprintValue(source, scope), valueHash: 'f0-hash', createdAt: 1,
+      closedAt: null, closedByAdoptionId: null } as const satisfies PlanningFeedbackBase
+    const candidate = { schemaVersion: 3, candidateId: 'c2', text: '{"title":"T","characters":["Mira"],"notes":""}',
+      textHash: 'candidate-hash', generationParentHash: 'c1-hash' } as PlanningFeedbackCandidate
+    const request = { candidateId: 'c2', idempotencyKey: 'author-action', decision: 'partial' as const, text: '{"notes":""}' }
+    expect(planningFeedbackAdoptedScope(base, undefined, request.text)).toEqual({ kind: 'blueprint-fields', chapterNumber: 3, fields: ['notes'] })
+    expect(() => planningFeedbackAdoptedScope(base)).toThrow('PLANNING_FEEDBACK_SCOPE_INVALID')
+    expect(() => planningFeedbackAdoptedScope(base, { from: 3, to: 3 }, request.text)).toThrow('PLANNING_FEEDBACK_SCOPE_INVALID')
+    expect(() => assertPlanningFeedbackAdoption({ ...request, adoptedFields: ['notes'] })).toThrow()
+    const binding = planningFeedbackAdoptionBinding(request, candidate, base, 'payload')
+    expect(JSON.parse(binding)).toEqual([3, 'c2', 3, 'blueprint-f0', 'project', 'blueprintFields', scope,
+      { kind: 'blueprint-fields', chapterNumber: 3, fields: ['notes'] }, 9, 'source', 'candidate-hash', 'c1-hash', 'partial', 'author-action', 'payload'])
+    expect(() => planningFeedbackAdoptionBinding({ ...request, decision: 'full' }, candidate, base, 'payload')).toThrow('PLANNING_FEEDBACK_TEXT_INVALID')
+    expect(() => planningFeedbackAdoptionBinding({ ...request, decision: 'full', text: candidate.text }, candidate, base, 'payload')).not.toThrow()
+    expect(() => planningFeedbackAdoptionBinding({ ...request, text: '{"role":"not selected"}' }, candidate, base, 'payload')).toThrow('PLANNING_FEEDBACK_TEXT_INVALID')
   })
 })
 

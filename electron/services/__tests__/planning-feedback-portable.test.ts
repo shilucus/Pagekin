@@ -241,6 +241,65 @@ describe('planning feedback portable history', () => {
     }
   })
 
+  it('preserves closed schema3 sources twice, rebuilds local fences and requires explicit new lineage for adoption', async () => {
+    const f = fixture(), db = getProjectDb()!
+    db.prepare(`INSERT INTO blueprints(chapter_number,title,role,purpose,key_events,characters,suspense_hook,user_guidance,notes,notes_updated_at)
+      VALUES(3,'F0 title','turn','Author purpose','Author events','[]','Author hook','Author guidance','Author notes','old-notes-time')`).run()
+    db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(99,'Deleted local chapter'); DELETE FROM blueprints WHERE chapter_number=99")
+    const scope = { kind: 'blueprint-fields', chapterNumber: 3, fields: ['title', 'userGuidance', 'notes'] } as const
+    const repo = repository(f.root, f.projectId), base = repo.captureBase(scope)
+    if (base.target !== 'blueprintFields') throw new Error('expected blueprint base')
+    const candidateText = JSON.stringify({ title: 'Candidate title', userGuidance: 'Candidate guidance', notes: 'Candidate notes' })
+    candidate(db, base, 'blueprint-C1', candidateText)
+    const before = db.prepare('SELECT * FROM blueprints WHERE chapter_number=3').get() as Record<string, unknown>
+    const adoption = repo.adopt({ candidateId: 'blueprint-C1', idempotencyKey: originalNonce,
+      decision: 'partial', text: JSON.stringify({ title: 'Candidate title' }) })
+    const approved = db.prepare('SELECT * FROM blueprints WHERE chapter_number=3').get() as Record<string, unknown>
+    expect(approved).toMatchObject({ ...before, title: 'Candidate title', updated_at: approved.updated_at })
+    expect(adoption).toMatchObject({ schemaVersion: 3, target: 'blueprintFields',
+      adoptedScope: { kind: 'blueprint-fields', chapterNumber: 3, fields: ['title'] } })
+    let sourceRoot = f.root, sourceProjectId: string = f.projectId
+    let freshBaseId = '', freshCandidateId = ''
+    for (const index of [1, 2]) {
+      closeProjectDatabase()
+      const sourcePath = path.join(sourceRoot, '.ai-novel', 'project.db'), sourceBytes = fs.readFileSync(sourcePath)
+      const archivePath = await archive(f.base, sourceRoot, sourceProjectId, `blueprint-cycle-${index}`)
+      expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes)
+      const target = path.join(f.base, `blueprint-restored-${index}`)
+      const restored = await restorePortableProject({ archivePath, targetProjectRoot: target })
+      initProjectDatabase(target)
+      const copied = getProjectDb()!, history = repository(target, restored.targetProjectId)
+      expect(copied.prepare('SELECT * FROM planning_feedback_blueprint_revisions').all()).toEqual([{ chapter_number: 3, revision: 0 }])
+      expect(history.getBase(base.baseId)).toEqual({ ...base, closedAt: adoption.createdAt, closedByAdoptionId: adoption.adoptionId })
+      expect(history.getCandidate('blueprint-C1')).toMatchObject({ schemaVersion: 3, text: candidateText,
+        generationParentHash: base.valueHash, origin: { kind: 'portable-history', sourceKind: 'generated' } })
+      expect(history.listAdoptions(base.baseId)[0]).toMatchObject({ adoptedScope: adoption.adoptedScope,
+        text: adoption.text, beforeValue: base.value, decisionSource: 'author-action' })
+      expect(history.candidateState('blueprint-C1')).toBe('frozen')
+      expect(() => history.adopt({ candidateId: 'blueprint-C1', idempotencyKey: originalNonce,
+        decision: 'full', text: candidateText })).toThrow('PLANNING_FEEDBACK_HISTORY_FROZEN')
+      expect(copied.prepare('SELECT role,purpose,key_events,characters,suspense_hook,user_guidance FROM blueprints WHERE chapter_number=3').get())
+        .toEqual({ role: 'turn', purpose: 'Author purpose', key_events: 'Author events', characters: '[]', suspense_hook: 'Author hook', user_guidance: 'Author guidance' })
+      if (index === 1) {
+        const fresh = history.captureBase(scope)
+        freshBaseId = fresh.baseId
+        const next = history.relineageCandidate({ baseId: fresh.baseId, sourceCandidateId: 'blueprint-C1', feedback: 'Fresh author authorization', constraints: [] })
+        freshCandidateId = next.candidateId
+        expect(freshCandidateId).not.toBe('blueprint-C1')
+        history.adopt({ candidateId: next.candidateId, idempotencyKey: 'fresh-blueprint-nonce', decision: 'partial', text: JSON.stringify({ notes: 'Candidate notes' }) })
+        expect(copied.prepare('SELECT title,notes FROM blueprints WHERE chapter_number=3').get())
+          .toEqual({ title: 'Candidate title', notes: 'Candidate notes' })
+      } else {
+        expect(history.candidateState(freshCandidateId)).toBe('frozen')
+        expect(history.listAdoptions(freshBaseId)).toHaveLength(1)
+        expect(copied.prepare('SELECT title,notes FROM blueprints WHERE chapter_number=3').get())
+          .toEqual({ title: 'Candidate title', notes: 'Candidate notes' })
+      }
+      sourceRoot = target
+      sourceProjectId = restored.targetProjectId
+    }
+  })
+
   it('moves two real adoption nonces through disjoint temporary keys when one occupies another final history label', async () => {
     const f = fixture(), repo = repository(f.root, f.projectId)
     const firstBase = repo.captureBase('coreOutline')
@@ -280,7 +339,7 @@ describe('planning feedback portable history', () => {
     }
   })
 
-  it.each([8, 9, 10, 11, 12] as const)('restores a schema-%s package without re-encoding v1 history and can export current schema', async version => {
+  it.each([8, 9, 10, 11, 12, 15] as const)('restores a schema-%s package without re-encoding v1 history and can export current schema', async version => {
     const f = fixture()
     const oldBase = repository(f.root, f.projectId).captureBase('coreOutline')
     closeProjectDatabase()
@@ -452,5 +511,29 @@ describe('planning feedback portable history', () => {
       : { ...base.source, core: { ...base.source.core, secretRef: 'not-portable' } }))
     closeProjectDatabase()
     expect(() => sanitizePortableDatabase(f.databasePath)).toThrow('PORTABLE_UNSAFE_PROJECTION')
+  })
+
+  it.each(['source', 'core', 'blueprint', 'scope', 'adopted-scope'] as const)('rejects unclassified blueprint %s and rolls back all sanitizer changes', mode => {
+    const f = fixture(), db = getProjectDb()!
+    db.prepare("INSERT INTO blueprints(chapter_number,title,notes) VALUES(3,'F0 title','Author notes')").run()
+    const repo = repository(f.root, f.projectId)
+    const base = repo.captureBase({ kind: 'blueprint-fields', chapterNumber: 3, fields: ['title', 'notes'] })
+    if (base.target !== 'blueprintFields') throw new Error('expected blueprint base')
+    const text = JSON.stringify({ title: 'Candidate title', notes: 'Candidate notes' })
+    candidate(db, base, 'opaque-blueprint-candidate', text)
+    if (mode === 'adopted-scope') {
+      repo.adopt({ candidateId: 'opaque-blueprint-candidate', idempotencyKey: originalNonce, decision: 'partial', text: JSON.stringify({ title: 'Candidate title' }) })
+      db.prepare('UPDATE planning_feedback_adoptions SET adopted_scope_json=?')
+        .run(JSON.stringify({ kind: 'blueprint-fields', chapterNumber: 3, fields: ['title'], secretRef: 'not-portable' }))
+    } else if (mode === 'scope') db.prepare('UPDATE planning_feedback_bases SET scope_json=?')
+      .run(JSON.stringify({ ...base.scope, secretRef: 'not-portable' }))
+    else db.prepare('UPDATE planning_feedback_bases SET source_json=?').run(JSON.stringify(mode === 'source'
+      ? { ...base.source, secretRef: 'not-portable' } : mode === 'core'
+        ? { ...base.source, core: { ...base.source.core, secretRef: 'not-portable' } }
+        : { ...base.source, blueprint: { ...base.source.blueprint, secretRef: 'not-portable' } }))
+    closeProjectDatabase()
+    const before = fs.readFileSync(f.databasePath)
+    expect(() => sanitizePortableDatabase(f.databasePath)).toThrow('PORTABLE_UNSAFE_PROJECTION')
+    expect(fs.readFileSync(f.databasePath)).toEqual(before)
   })
 })

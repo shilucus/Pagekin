@@ -68,6 +68,12 @@ export interface BlueprintRangeCommitRequest {
     blueprints: BlueprintData[]
 }
 
+/** Internal feedback callers have already merged the explicitly selected fields into F0. */
+export interface BlueprintFeedbackCommitOptions {
+    authorFields: 'exact'
+    feedbackRequestHash: string
+}
+
 export interface BlueprintRangeCommitReceipt {
     authorEdit?: import('../../src/shared/generation-owner-contract').BlueprintAuthorEditReceipt
     generationProgress?: import('../../src/shared/generation-owner-contract').DirectoryGenerationProgress
@@ -222,12 +228,13 @@ function canonicalize(value: unknown): unknown {
     )
 }
 
-function commitPayloadHash(request: BlueprintRangeCommitRequest): string {
+function commitPayloadHash(request: BlueprintRangeCommitRequest, feedback?: BlueprintFeedbackCommitOptions): string {
     return createHash('sha256').update(JSON.stringify(canonicalize({
         mode: request.mode,
         startChapter: request.startChapter,
         endChapter: request.endChapter,
         blueprints: request.blueprints,
+        ...(feedback ? { feedback } : {}),
     }))).digest('hex')
 }
 
@@ -601,11 +608,15 @@ export class BlueprintRepository {
         assertGenerationSources?: () => void,
         database?: NonNullable<ReturnType<typeof getProjectDb>>,
         fill: 'replace' | 'fill-empty' = 'replace',
+        feedback?: BlueprintFeedbackCommitOptions,
     ): BlueprintRangeCommitReceipt {
         const db = database === undefined ? requireProjectDb() : database
         assertExactRange(request)
+        if (feedback && (feedback.authorFields !== 'exact' || !SHA256_HEX.test(feedback.feedbackRequestHash))) {
+            throw new Error('BLUEPRINT_FEEDBACK_BINDING_INVALID')
+        }
         ensureBlueprintCommitSchema(db)
-        const payloadHash = commitPayloadHash(request)
+        const payloadHash = commitPayloadHash(request, feedback)
         const tx = db.transaction(() => {
             const existingOperation = db.prepare(`
               SELECT operation_id, payload_hash, mode, start_chapter, end_chapter, character_sync_input
@@ -659,7 +670,8 @@ export class BlueprintRepository {
             const blueprints = request.blueprints.map(blueprint => (
                 kept(blueprint.chapterNumber)
                     ? existingByChapter.get(blueprint.chapterNumber)!
-                    : withExistingAuthorFields(blueprint, existingByChapter.get(blueprint.chapterNumber))
+                    : feedback ? { ...blueprint }
+                        : withExistingAuthorFields(blueprint, existingByChapter.get(blueprint.chapterNumber))
             ))
             for (const blueprint of blueprints) {
                 if (!kept(blueprint.chapterNumber)) BlueprintRepository.upsert(blueprint, db)

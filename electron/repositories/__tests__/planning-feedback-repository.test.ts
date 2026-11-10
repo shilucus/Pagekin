@@ -6,15 +6,21 @@ import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { applyBaselineTables } from '../../migrations/baseline-schema'
 import { M01_GENERATION_SQL } from '../../migrations/m01-generation-runs'
+import { applyM02CharacterIdentity } from '../../migrations/m02-character-identity'
 import { applyM08PlanningFeedback, verifyM08PlanningFeedback } from '../../migrations/m08-planning-feedback'
 import { applyM09PlanningFeedbackRanges } from '../../migrations/m09-planning-feedback-ranges'
+import { applyM10RuntimeFeedbackGrants } from '../../migrations/m10-runtime-feedback-grants'
+import { applyM15PlanningFeedbackBlueprints } from '../../migrations/m15-planning-feedback-blueprints'
+import { ensureBaselineBlueprintTables } from '../../migrations/baseline-blueprint-schema'
 import { PLANNING_FEEDBACK_CORE_COLUMNS, type PlanningFeedbackBase, type PlanningFeedbackCandidate,
-  type StagePlanningFeedbackCandidate } from '../../../src/shared/planning-feedback'
+  BLUEPRINT_FEEDBACK_FIELDS, type BlueprintFeedbackField, type StagePlanningFeedbackCandidate } from '../../../src/shared/planning-feedback'
 import { GenerationRunRepository } from '../generation-run-repository'
 import { PlanningFeedbackRepository, planningFeedbackSourceHash, readPlanningFeedbackCoreSnapshot,
   type PlanningFeedbackRepositoryOptions } from '../planning-feedback-repository'
 import { ProjectCoreRepository } from '../project-core-repository'
 import { plotOutlineCoverageNote } from '../../../src/shared/plot-outline-contract'
+import { BlueprintRepository, type BlueprintData } from '../blueprint-repository'
+import { ensureCharacterRosterSchema } from '../character-roster-schema'
 
 const handles: Database.Database[] = []
 const directories: string[] = []
@@ -678,6 +684,281 @@ describe('fixed plot-outline range feedback adapter', () => {
     const fresh = copy.relineageCandidate({ baseId: freshBase.baseId, sourceCandidateId: candidate.candidateId, feedback: 'Explicit new copy', constraints: [] })
     expect(fresh.origin).toMatchObject({ kind: 'copied', sourceCandidateId: candidate.candidateId })
     copy.adopt({ candidateId: fresh.candidateId, idempotencyKey: 'fresh-range', decision: 'full', text: fresh.text })
+    expect(copy.getCandidate(candidate.candidateId)).toEqual(candidate)
+  })
+})
+
+function blueprintFixture(file = ':memory:') {
+  const f = outlineFixture(file)
+  f.db.transaction(() => { ensureCharacterRosterSchema(f.db); applyM02CharacterIdentity(f.db) })()
+  f.db.transaction(() => applyM10RuntimeFeedbackGrants(f.db))()
+  ensureBaselineBlueprintTables(f.db)
+  for (const chapterNumber of [1, 2, 3]) {
+    const blueprint: BlueprintData = { chapterNumber, title: `Title ${chapterNumber}`, role: 'Turn', purpose: 'Original purpose',
+      keyEvents: 'Original events', characters: ['Original hero'], suspenseHook: 'Original hook',
+      userGuidance: 'Original guidance', notes: 'Original notes', notesUpdatedAt: '2026-11-10T00:00:00.000Z' }
+    BlueprintRepository.upsert(blueprint, f.db)
+  }
+  f.db.transaction(() => applyM15PlanningFeedbackBlueprints(f.db))()
+  return f
+}
+
+const blueprintScope = (fields: readonly BlueprintFeedbackField[] = ['title', 'purpose']) =>
+  ({ kind: 'blueprint-fields' as const, chapterNumber: 2, fields })
+
+describe('persistent single-chapter blueprint feedback kernel', () => {
+  it('records actual F0-C1-C2 proof while leaving formal blueprints and character facts unchanged until adoption', () => {
+    const f = blueprintFixture(), original = BlueprintRepository.getAll(f.db)
+    const base = f.repository.captureBase(blueprintScope(['purpose', 'title']))
+    const first = stage(f, base, JSON.stringify({ title: 'C1 title', purpose: 'C1 purpose' }))
+    const second = stage(f, base, JSON.stringify({ purpose: 'C2 purpose', title: 'C2 title' }), first)
+    expect(base).toMatchObject({ schemaVersion: 3, target: 'blueprintFields', scope: blueprintScope(),
+      value: JSON.stringify({ title: 'Title 2', purpose: 'Original purpose' }) })
+    expect(Object.keys(base.source.blueprint)).toEqual(['chapterNumber', ...BLUEPRINT_FEEDBACK_FIELDS, 'notesUpdatedAt'])
+    expect(second).toMatchObject({ schemaVersion: 3, baseId: base.baseId, parentCandidateId: first.candidateId,
+      generationParentHash: first.textHash, origin: { kind: 'generated' } })
+    expect(first.generationParentHash).toBe(base.valueHash)
+    expect(f.repository.getCandidate(second.candidateId)).toEqual(second)
+    expect(f.repository.readSource('blueprintFields', base.scope)).toEqual({ source: base.source, sourceHash: base.sourceHash, sourceRevision: base.sourceRevision })
+    expect(BlueprintRepository.getAll(f.db)).toEqual(original)
+    expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+    expect(f.db.prepare('SELECT COUNT(*) FROM blueprint_commit_operations').pluck().get()).toBe(0)
+    const invalid = generated(f, base, second.text, { parent: second, wrongProof: true })
+    expect(() => f.repository.stageCandidate(invalid.request)).toThrow('PLANNING_FEEDBACK_GENERATION_UNPROVEN')
+    expect(f.repository.listCandidates(base.baseId)).toHaveLength(2)
+  })
+
+  it.each(['partial', 'full'] as const)('adopts %s scope without authorizing identity/proposal sync or copying historic auxiliary input', decision => {
+    const f = blueprintFixture(), original = BlueprintRepository.getAll(f.db)
+    // A prior ordinary writer operation may retain auxiliary proposals; schema3 reads only the persisted ten fields.
+    BlueprintRepository.commitRange({ mode: 'replace-range', operationId: 'old-auxiliary', startChapter: 2, endChapter: 2,
+      blueprints: [{ ...original[1]!, newCharacterCandidates: [], relationshipHints: [] }] }, undefined, f.db)
+    const rosterBefore = f.db.prepare('SELECT * FROM character_roster_meta').all()
+    const identityTables = ['character_identity_meta', 'character_identity_origins', 'character_aliases',
+      'character_identity_proposals', 'character_identity_approvals', 'character_relationships'] as const
+    const identitiesBefore = identityTables.map(table => f.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())
+    const oldInput = f.db.prepare("SELECT character_sync_input FROM blueprint_commit_operations WHERE operation_id='old-auxiliary'").pluck().get()
+    const base = f.repository.captureBase(blueprintScope(['title', 'purpose', 'characters']))
+    const first = stage(f, base, JSON.stringify({ title: 'C1 title', purpose: 'C1 purpose', characters: ['Original hero'] }))
+    const candidate = stage(f, base, JSON.stringify({ title: 'C2 title', purpose: 'C2 purpose', characters: ['Candidate-only name'] }), first)
+    const text = decision === 'full' ? candidate.text : JSON.stringify({ title: 'Author selected title' })
+    const receipt = f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: `blueprint-${decision}`, decision, text })
+    const expectedFields = decision === 'full' ? ['title', 'purpose', 'characters'] : ['title']
+    expect(receipt).toMatchObject({ schemaVersion: 3, target: 'blueprintFields', beforeValue: base.value,
+      beforeHash: base.valueHash, sourceRevision: base.sourceRevision, committedRevision: base.sourceRevision + 1,
+      adoptedScope: blueprintScope(expectedFields as BlueprintFeedbackField[]) })
+    expect(BlueprintRepository.getByChapter(2, f.db)).toEqual({ ...original[1],
+      ...(decision === 'full' ? JSON.parse(candidate.text) : { title: 'Author selected title' }) })
+    expect(BlueprintRepository.getByChapter(1, f.db)).toEqual(original[0])
+    expect(BlueprintRepository.getByChapter(3, f.db)).toEqual(original[2])
+    expect(f.repository.candidateState(first.candidateId)).toBe('conflict')
+    expect(f.repository.candidateState(candidate.candidateId)).toBe('adopted')
+    const operation = BlueprintRepository.getCommittedRangeOperation(`planning-feedback:${receipt.adoptionId}`, f.db)!
+    expect(Object.keys(operation.characterSyncInput[0]!)).toEqual(['chapterNumber', ...BLUEPRINT_FEEDBACK_FIELDS, 'notesUpdatedAt'])
+    expect(operation.characterSyncOperation.status).toBe('pending')
+    expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+    expect(f.db.prepare('SELECT * FROM character_roster_meta').all()).toEqual(rosterBefore)
+    expect(identityTables.map(table => f.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())).toEqual(identitiesBefore)
+    expect(f.db.prepare('SELECT COUNT(*) FROM character_roster_operations').pluck().get()).toBe(0)
+    expect(f.db.prepare("SELECT character_sync_input FROM blueprint_commit_operations WHERE operation_id='old-auxiliary'").pluck().get()).toBe(oldInput)
+  })
+
+  it('saves explicitly empty author fields without refreshing notesUpdatedAt', () => {
+    const f = blueprintFixture(), base = f.repository.captureBase(blueprintScope(['notes', 'userGuidance']))
+    const candidate = stage(f, base, JSON.stringify({ userGuidance: '', notes: '' }))
+    f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'empty-author-fields', decision: 'full', text: candidate.text })
+    expect(BlueprintRepository.getByChapter(2, f.db)).toMatchObject({ userGuidance: '', notes: '', notesUpdatedAt: base.source.blueprint.notesUpdatedAt })
+  })
+
+  it.each(['{}', '{"title":"missing purpose"}', '{"title":"x","purpose":"p","notes":"outside selection"}',
+    '{"title":"x","purpose":"p","newCharacterCandidates":[]}', '{"title":"x","purpose":"p","relationshipHints":{}}',
+    '```json\n{"title":"x","purpose":"p"}\n```'])('rejects invalid generated selection %s before creating a candidate or formal write', text => {
+    const f = blueprintFixture(), base = f.repository.captureBase(blueprintScope()), request = generated(f, base, text).request
+    const original = BlueprintRepository.getAll(f.db)
+    expect(() => f.repository.stageCandidate(request)).toThrow('PLANNING_FEEDBACK_TEXT_INVALID')
+    expect(f.repository.listCandidates(base.baseId)).toEqual([])
+    expect(BlueprintRepository.getAll(f.db)).toEqual(original)
+  })
+
+  it('requires exact full candidate text and a nonempty selected-only author subset', () => {
+    const f = blueprintFixture(), base = f.repository.captureBase(blueprintScope()), candidate = stage(f, base, '{"title":"C1","purpose":"P1"}')
+    const original = BlueprintRepository.getAll(f.db)
+    for (const text of ['{}', '{"notes":"outside"}', '{"chapterNumber":3,"title":"x"}', '{"title":"x","relationshipHints":{}}']) {
+      expect(() => f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'invalid-subset', decision: 'partial', text })).toThrow('PLANNING_FEEDBACK_TEXT_INVALID')
+    }
+    expect(() => f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'invalid-full', decision: 'full', text: '{"title":"C1"}' })).toThrow('PLANNING_FEEDBACK_TEXT_INVALID')
+    expect(BlueprintRepository.getAll(f.db)).toEqual(original)
+    expect(f.repository.getBase(base.baseId).closedAt).toBeNull()
+  })
+
+  it.each([{ characters: ['Name', ' Name '] }, { characters: [''] }, { characters: [null] }])('rejects invalid character-name values %j rather than authorizing identity changes', ({ characters }) => {
+    const f = blueprintFixture(), base = f.repository.captureBase(blueprintScope(['characters']))
+    const request = generated(f, base, JSON.stringify({ characters })).request
+    expect(() => f.repository.stageCandidate(request)).toThrow('PLANNING_FEEDBACK_TEXT_INVALID')
+    expect(f.repository.listCandidates(base.baseId)).toEqual([])
+    expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+  })
+
+  it.each(['chapter-edit', 'delete-reinsert', 'upstream-core', 'upstream-outline', 'upstream-characters'] as const)('rejects source ABA through %s', mutation => {
+    const f = blueprintFixture(), base = f.repository.captureBase(blueprintScope()), candidate = stage(f, base, '{"title":"C1","purpose":"P1"}')
+    const original = BlueprintRepository.getByChapter(2, f.db)!
+    if (mutation === 'chapter-edit') {
+      BlueprintRepository.upsert({ ...original, notes: 'changed unselected source' }, f.db)
+      BlueprintRepository.upsert(original, f.db)
+    } else if (mutation === 'delete-reinsert') {
+      f.db.prepare('DELETE FROM blueprints WHERE chapter_number=2').run()
+      BlueprintRepository.upsert(original, f.db)
+    } else {
+      const column = mutation === 'upstream-core' ? 'premise' : mutation === 'upstream-outline' ? 'synopsis' : 'characters_arch'
+      const value = f.db.prepare(`SELECT ${column} FROM project_core WHERE id='main'`).pluck().get()
+      f.db.prepare(`UPDATE project_core SET ${column}=? WHERE id='main'`).run('ABA replacement')
+      f.db.prepare(`UPDATE project_core SET ${column}=? WHERE id='main'`).run(value)
+    }
+    expect(f.repository.readSource('blueprintFields', base.scope).sourceHash).toBe(base.sourceHash)
+    expect(f.repository.candidateState(candidate.candidateId)).toBe('conflict')
+    expect(() => f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'stale-blueprint', decision: 'full', text: candidate.text }))
+      .toThrow('PLANNING_FEEDBACK_SOURCE_CONFLICT')
+  })
+
+  it('ignores unrelated chapter edits but same-content adoption consumes every candidate at the target chapter F0', () => {
+    const f = blueprintFixture(), base = f.repository.captureBase(blueprintScope()), otherBase = f.repository.captureBase(blueprintScope(['notes']))
+    const first = stage(f, base, base.value), second = stage(f, base, base.value, first), other = stage(f, otherBase, '{"notes":"other"}')
+    BlueprintRepository.upsert({ ...BlueprintRepository.getByChapter(3, f.db)!, title: 'Unrelated chapter edit' }, f.db)
+    expect(f.repository.candidateState(first.candidateId)).toBe('ready')
+    const receipt = f.repository.adopt({ candidateId: first.candidateId, idempotencyKey: 'same-blueprint', decision: 'full', text: first.text })
+    expect(receipt.committedRevision).toBe(base.sourceRevision + 1)
+    expect(f.repository.candidateState(second.candidateId)).toBe('conflict')
+    expect(f.repository.candidateState(other.candidateId)).toBe('conflict')
+    expect(f.repository.readSource('blueprintFields', base.scope).sourceHash).toBe(base.sourceHash)
+  })
+
+  it.each(['characters-format', 'nullable-author-fields'] as const)('consumes exactly one revision when a same-content writer normalizes %s', representation => {
+    const f = blueprintFixture()
+    if (representation === 'characters-format') {
+      f.db.prepare('UPDATE blueprints SET characters=? WHERE chapter_number=2').run('[ "Original hero" ]')
+    } else {
+      f.db.prepare('UPDATE blueprints SET user_guidance=NULL,notes=NULL,notes_updated_at=NULL WHERE chapter_number=2').run()
+    }
+    const base = f.repository.captureBase(blueprintScope()), first = stage(f, base, base.value), second = stage(f, base, base.value, first)
+    const chapterRevision = f.db.prepare('SELECT revision FROM planning_feedback_blueprint_revisions WHERE chapter_number=2').pluck().get() as number
+    const outlineRevision = f.repository.readSource('plotOutlineRange').sourceRevision
+    const request = { candidateId: first.candidateId, idempotencyKey: `normalize-${representation}`, decision: 'full' as const, text: first.text }
+    const receipt = f.repository.adopt(request)
+    expect(receipt.committedRevision).toBe(base.sourceRevision + 1)
+    expect(f.db.prepare('SELECT revision FROM planning_feedback_blueprint_revisions WHERE chapter_number=2').pluck().get()).toBe(chapterRevision + 1)
+    expect(f.repository.readSource('plotOutlineRange').sourceRevision).toBe(outlineRevision)
+    expect(f.repository.readSource('blueprintFields', base.scope).sourceHash).toBe(base.sourceHash)
+    expect(BlueprintRepository.getByChapter(2, f.db)).toEqual(base.source.blueprint)
+    if (representation === 'characters-format') {
+      expect(f.db.prepare('SELECT characters FROM blueprints WHERE chapter_number=2').pluck().get()).toBe('["Original hero"]')
+    } else {
+      expect(f.db.prepare('SELECT user_guidance,notes,notes_updated_at FROM blueprints WHERE chapter_number=2').get())
+        .toEqual({ user_guidance: '', notes: '', notes_updated_at: '' })
+    }
+    expect(f.repository.candidateState(second.candidateId)).toBe('conflict')
+    const changes = f.db.prepare('SELECT total_changes()').pluck().get()
+    expect(f.repository.adopt(request)).toEqual(receipt)
+    expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+  })
+
+  it('rejects multiple revision consumptions during normalized same-content adoption and rolls back the writer', () => {
+    const f = blueprintFixture()
+    f.db.prepare('UPDATE blueprints SET characters=? WHERE chapter_number=2').run('[ "Original hero" ]')
+    const base = f.repository.captureBase(blueprintScope()), candidate = stage(f, base, base.value)
+    const original = f.db.prepare('SELECT * FROM blueprints ORDER BY chapter_number').all()
+    const revisions = f.db.prepare('SELECT * FROM planning_feedback_blueprint_revisions ORDER BY chapter_number').all()
+    f.db.exec(`CREATE TRIGGER synthetic_extra_blueprint_revision AFTER UPDATE ON blueprints BEGIN
+      UPDATE planning_feedback_blueprint_revisions SET revision=revision+1 WHERE chapter_number=NEW.chapter_number;
+    END`)
+    expect(() => f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'extra-normalization-revision', decision: 'full', text: candidate.text }))
+      .toThrow('PLANNING_FEEDBACK_WRITE_FAILED')
+    expect(f.db.prepare('SELECT * FROM blueprints ORDER BY chapter_number').all()).toEqual(original)
+    expect(f.db.prepare('SELECT * FROM planning_feedback_blueprint_revisions ORDER BY chapter_number').all()).toEqual(revisions)
+    expect(f.db.prepare('SELECT COUNT(*) FROM blueprint_commit_operations').pluck().get()).toBe(0)
+    expect(f.db.prepare('SELECT COUNT(*) FROM blueprint_character_sync_operations').pluck().get()).toBe(0)
+    expect(f.repository.getBase(base.baseId).closedAt).toBeNull()
+    expect(f.repository.listAdoptions(base.baseId)).toEqual([])
+    expect(f.repository.candidateState(candidate.candidateId)).toBe('ready')
+  })
+
+  it.each([['writer', false], ['history', false], ['writer', true], ['history', true]] as const)('rolls back blueprint rows, operations, revisions and F0 consumption on %s failure (same content %s)', (failure, sameContent) => {
+    const f = blueprintFixture(), base = f.repository.captureBase(blueprintScope())
+    const candidate = stage(f, base, sameContent ? base.value : '{"title":"C1","purpose":"P1"}')
+    const original = BlueprintRepository.getAll(f.db), revisions = f.db.prepare('SELECT * FROM planning_feedback_blueprint_revisions ORDER BY chapter_number').all()
+    f.db.exec(failure === 'writer'
+      ? "CREATE TRIGGER reject_blueprint_write BEFORE UPDATE ON blueprints BEGIN SELECT RAISE(ABORT,'synthetic writer failure'); END"
+      : "CREATE TRIGGER reject_blueprint_history BEFORE INSERT ON planning_feedback_adoptions BEGIN SELECT RAISE(ABORT,'synthetic history failure'); END")
+    expect(() => f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'rollback-blueprint', decision: 'full', text: candidate.text }))
+      .toThrow(`synthetic ${failure} failure`)
+    expect(BlueprintRepository.getAll(f.db)).toEqual(original)
+    expect(f.db.prepare('SELECT * FROM planning_feedback_blueprint_revisions ORDER BY chapter_number').all()).toEqual(revisions)
+    expect(f.db.prepare('SELECT COUNT(*) FROM blueprint_commit_operations').pluck().get()).toBe(0)
+    expect(f.db.prepare('SELECT COUNT(*) FROM blueprint_character_sync_operations').pluck().get()).toBe(0)
+    expect(f.repository.getBase(base.baseId).closedAt).toBeNull()
+    expect(f.repository.listAdoptions(base.baseId)).toEqual([])
+    expect(f.repository.candidateState(candidate.candidateId)).toBe('ready')
+  })
+
+  it('replays the unchanged adoption after a real disk reopen before CAS, while binding candidate, decision and actual subset', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pagekin-blueprint-feedback-'))
+    directories.push(directory)
+    const file = path.join(directory, 'project.sqlite'), f = blueprintFixture(file)
+    const base = f.repository.captureBase(blueprintScope()), first = stage(f, base, '{"title":"C1","purpose":"P1"}')
+    const second = stage(f, base, '{"title":"C2","purpose":"P2"}', first)
+    const request = { candidateId: second.candidateId, idempotencyKey: 'disk-blueprint', decision: 'partial' as const, text: '{"title":"author choice"}' }
+    const receipt = f.repository.adopt(request)
+    BlueprintRepository.upsert({ ...BlueprintRepository.getByChapter(2, f.db)!, title: 'Later formal edit' }, f.db)
+    f.db.close()
+    const reopened = new Database(file)
+    handles.push(reopened)
+    const repository = new PlanningFeedbackRepository(reopened, f.options), writer = vi.spyOn(BlueprintRepository, 'commitRange')
+    const changes = reopened.prepare('SELECT total_changes()').pluck().get()
+    expect(repository.adopt(request)).toEqual(receipt)
+    expect(writer).not.toHaveBeenCalled()
+    expect(BlueprintRepository.getByChapter(2, reopened)?.title).toBe('Later formal edit')
+    for (const altered of [{ ...request, candidateId: first.candidateId }, { ...request, decision: 'edited' as const },
+      { ...request, text: '{"purpose":"author choice"}' }]) {
+      expect(() => repository.adopt(altered)).toThrow('PLANNING_FEEDBACK_IDEMPOTENCY_CONFLICT')
+    }
+    expect(reopened.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+  })
+
+  it('lists exact canonical schema3 summaries only and preserves authority/frozen-history boundaries', () => {
+    const f = blueprintFixture(), base = f.repository.captureBase(blueprintScope(['purpose', 'title']))
+    f.repository.captureBase(blueprintScope(['title']))
+    f.repository.captureBase({ ...blueprintScope(), chapterNumber: 3 })
+    f.repository.captureBase({ kind: 'plot-outline-range', from: 1, to: 2 })
+    f.repository.captureBase('premise')
+    f.db.prepare('UPDATE planning_feedback_bases SET scope_json=? WHERE base_id=?')
+      .run(JSON.stringify({ fields: ['purpose', 'title'], chapterNumber: 2, kind: 'blueprint-fields' }), base.baseId)
+    const summary = { baseId: base.baseId, projectId: 'project-A', target: 'blueprintFields', scope: blueprintScope(),
+      createdAt: base.createdAt, closedAt: null, closedByAdoptionId: null }
+    const changes = f.db.prepare('SELECT total_changes()').pluck().get()
+    expect(f.repository.listBlueprintBases(blueprintScope())).toEqual([summary])
+    expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+    const copy = new PlanningFeedbackRepository(f.db, { ...f.options, projectId: 'new-copy' })
+    expect(copy.listBlueprintBases(blueprintScope())).toEqual([])
+    f.frozen.add(`planning_feedback_bases:${base.baseId}`)
+    expect(copy.listBlueprintBases(blueprintScope())).toEqual([summary])
+    expect(() => copy.assertBaseCurrent(base.baseId)).toThrow('PLANNING_FEEDBACK_HISTORY_FROZEN')
+    f.assertCurrent.mockImplementation(() => { throw new Error('PROJECT_SESSION_STALE') })
+    expect(() => f.repository.listBlueprintBases(blueprintScope())).toThrow('PROJECT_SESSION_STALE')
+  })
+
+  it('requires explicit exact-scope new lineage before a portable old blueprint candidate can be adopted', () => {
+    const f = blueprintFixture(), base = f.repository.captureBase(blueprintScope()), candidate = stage(f, base, '{"title":"Old C1","purpose":"Old purpose"}')
+    f.frozen.add(`planning_feedback_bases:${base.baseId}`)
+    f.frozen.add(`planning_feedback_candidates:${candidate.candidateId}`)
+    const copy = new PlanningFeedbackRepository(f.db, { ...f.options, projectId: 'new-copy' })
+    expect(() => copy.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'frozen-blueprint', decision: 'full', text: candidate.text }))
+      .toThrow('PLANNING_FEEDBACK_HISTORY_FROZEN')
+    const wrong = copy.captureBase(blueprintScope(['title']))
+    expect(() => copy.relineageCandidate({ baseId: wrong.baseId, sourceCandidateId: candidate.candidateId, feedback: 'Copy', constraints: [] }))
+      .toThrow('PLANNING_FEEDBACK_PARENT_CONFLICT')
+    const freshBase = copy.captureBase(blueprintScope(['purpose', 'title']))
+    const fresh = copy.relineageCandidate({ baseId: freshBase.baseId, sourceCandidateId: candidate.candidateId, feedback: 'Explicit new copy', constraints: [] })
+    expect(fresh.origin).toMatchObject({ kind: 'copied', sourceCandidateId: candidate.candidateId, originProjectId: candidate.projectId })
+    copy.adopt({ candidateId: fresh.candidateId, idempotencyKey: 'fresh-blueprint', decision: 'full', text: fresh.text })
     expect(copy.getCandidate(candidate.candidateId)).toEqual(candidate)
   })
 })

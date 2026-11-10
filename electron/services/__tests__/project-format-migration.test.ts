@@ -394,7 +394,7 @@ it('rejects M13-only target contamination after asset migration and preserves th
   expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
 })
 
-it.each([8, 9, 10, 11, 12, 13, 14].flatMap(sourceVersion =>
+it.each([8, 9, 10, 11, 12, 13, 14, 15].flatMap(sourceVersion =>
   (['valid', 'missing', 'tampered', 'grant-pollution', 'tail-pollution', 'workflow-pollution',
     ...(sourceVersion === 14 ? ['reference-grant-pollution' as const] : [])] as const)
     .map(mode => ({ sourceVersion, mode })),
@@ -403,7 +403,8 @@ it.each([8, 9, 10, 11, 12, 13, 14].flatMap(sourceVersion =>
   const projectionKey = sourceVersion === 8 ? 'preFeedbackDomain'
     : sourceVersion === 9 ? 'preFeedbackRangesDomain' : sourceVersion === 10 ? 'preGrantsDomain'
       : sourceVersion === 11 ? 'preRecoveryTailsDomain' : sourceVersion === 12 ? 'preWorkflowDriverDomain'
-        : sourceVersion === 13 ? 'preWorkflowBatchDomain' : 'preReferenceImportGrantsDomain'
+        : sourceVersion === 13 ? 'preWorkflowBatchDomain' : sourceVersion === 14 ? 'preReferenceImportGrantsDomain'
+          : 'preBlueprintFeedbackDomain'
   let tailInput: PreserveGenerationTailInput | undefined
   let workflowRunId: string | undefined
   const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -416,6 +417,7 @@ it.each([8, 9, 10, 11, 12, 13, 14].flatMap(sourceVersion =>
     migrateSchema(new SqliteSchemaAdapter(source), getDesktopMigrationRegistry(), sourceVersion)
     source.prepare("INSERT INTO project_core(id,project_name,core_outline) VALUES('main','Fiction','Original outline')").run()
     source.prepare('INSERT INTO contents(body) VALUES(?)').run('Synthetic author text')
+    if (sourceVersion === 15) source.prepare("INSERT INTO blueprints(chapter_number,title,notes) VALUES(3,'Original blueprint','Author notes')").run()
     if (sourceVersion === 9) source.prepare(`INSERT INTO planning_feedback_bases
       (base_id,schema_version,project_id,target,source_revision,source_hash,source_json,value,value_hash,created_at)
       VALUES('old-base',1,?,'coreOutline',1,'old-source-hash','{}','Original outline','old-value-hash',1)`).run(options.projectId)
@@ -547,7 +549,7 @@ it.each([8, 9, 10, 11, 12, 13, 14].flatMap(sourceVersion =>
   const result = await migrateProjectFormat({ ...options, checkpoint: stage => { checkpoints.push(stage) } })
   expect(captured.upgraded?.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
   expect(captured.upgraded?.[projectionKey]).toEqual(before.domain)
-  if (sourceVersion < 10) expect(captured.upgraded?.domain).not.toEqual(before.domain)
+  if (sourceVersion < 10 || sourceVersion === 15) expect(captured.upgraded?.domain).not.toEqual(before.domain)
   else expect(captured.upgraded?.domain).toEqual(before.domain)
   expect(captured.upgraded?.domain.tableCounts.planning_feedback_core_revision).toBe(1)
   if (mode !== 'valid') {
@@ -570,6 +572,12 @@ it.each([8, 9, 10, 11, 12, 13, 14].flatMap(sourceVersion =>
     expect(target.prepare("SELECT core_outline FROM project_core WHERE id='main'").pluck().get()).toBe('Original outline')
     expect(target.prepare('SELECT COUNT(*) FROM planning_feedback_core_revision').pluck().get()).toBe(1)
     expect(target.prepare('SELECT COUNT(*) FROM planning_feedback_outline_revision').pluck().get()).toBe(1)
+    if (sourceVersion === 15) {
+      expect(target.prepare('SELECT chapter_number,title,notes FROM blueprints').all())
+        .toEqual([{ chapter_number: 3, title: 'Original blueprint', notes: 'Author notes' }])
+      expect(target.prepare('SELECT chapter_number,revision FROM planning_feedback_blueprint_revisions').all())
+        .toEqual([{ chapter_number: 3, revision: 0 }])
+    }
     if (sourceVersion === 9) expect(target.prepare('SELECT base_id,scope_json FROM planning_feedback_bases').all())
       .toEqual([{ base_id: 'old-base', scope_json: null }])
   } finally { target.close() }

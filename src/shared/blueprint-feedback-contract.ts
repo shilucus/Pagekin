@@ -1,19 +1,9 @@
 import { createHash } from 'node:crypto'
 import type { BlueprintData } from '../../electron/repositories/blueprint-repository'
 import type { BlueprintNewCharacterCandidate } from './blueprint-semantic-contract'
+import { BLUEPRINT_FEEDBACK_FIELDS, type BlueprintFeedbackField } from './planning-feedback'
 
-export const BLUEPRINT_FEEDBACK_FIELDS = [
-  'title',
-  'role',
-  'purpose',
-  'keyEvents',
-  'characters',
-  'suspenseHook',
-  'userGuidance',
-  'notes',
-] as const
-
-export type BlueprintFeedbackField = typeof BLUEPRINT_FEEDBACK_FIELDS[number]
+export { BLUEPRINT_FEEDBACK_FIELDS, type BlueprintFeedbackField } from './planning-feedback'
 
 export interface BlueprintRelationshipHint {
   from: string

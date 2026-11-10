@@ -1,4 +1,7 @@
 import Database from 'better-sqlite3'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ensureBaselineBlueprintTables } from '../../migrations/baseline-blueprint-schema'
 import { getProjectDb } from '../../database'
@@ -16,8 +19,8 @@ vi.mock('../../database', () => ({
   getCurrentProjectPath: vi.fn(() => 'F:/test-project'),
 }))
 
-function createTestBlueprintDb(): Database.Database {
-  const db = new Database(':memory:')
+function createTestBlueprintDb(file = ':memory:'): Database.Database {
+  const db = new Database(file)
   db.exec(`
     CREATE TABLE IF NOT EXISTS blueprints (
       chapter_number INTEGER PRIMARY KEY,
@@ -71,6 +74,7 @@ function makeBlueprint(chapterNumber: number): BlueprintData {
 
 describe('blueprint-feedback-adapter (FEEDBACK-003)', () => {
   let db: Database.Database
+  const directories: string[] = []
 
   beforeEach(() => {
     db = createTestBlueprintDb()
@@ -82,6 +86,7 @@ describe('blueprint-feedback-adapter (FEEDBACK-003)', () => {
   afterEach(() => {
     db.close()
     vi.clearAllMocks()
+    for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true })
   })
 
   it('正确捕获指定章节蓝图基线与哈希，不存在章节抛出错误', () => {
@@ -209,18 +214,15 @@ describe('blueprint-feedback-adapter (FEEDBACK-003)', () => {
     const first = commitBlueprintFeedbackRevision(request, db)
     expect(first.idempotent).toBe(false)
 
-    // 重新捕获最新基线
-    const freshBase = captureBlueprintFeedbackBase(3, db)
-    const second = commitBlueprintFeedbackRevision(
-      {
-        ...request,
-        baseHash: freshBase.sourceHash,
-      },
-      db,
-    )
+    const changes = db.prepare('SELECT total_changes()').pluck().get()
+    const second = commitBlueprintFeedbackRevision(request, db)
     expect(second.idempotent).toBe(true)
     expect(second.operationId).toBe(first.operationId)
     expect(second.payloadHash).toBe(first.payloadHash)
+    expect(db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+    const freshBase = captureBlueprintFeedbackBase(3, db)
+    expect(() => commitBlueprintFeedbackRevision({ ...request, baseHash: freshBase.sourceHash }, db))
+      .toThrow('BLUEPRINT_OPERATION_CONFLICT')
 
     // 尝试用相同 operationId 提交不同载荷
     expect(() =>
@@ -235,5 +237,46 @@ describe('blueprint-feedback-adapter (FEEDBACK-003)', () => {
         db,
       ),
     ).toThrow('BLUEPRINT_OPERATION_CONFLICT')
+  })
+
+  it('replays the original feedback request across a real reopen without replacing subsequent edits', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'blueprint-feedback-replay-'))
+    directories.push(directory)
+    const file = path.join(directory, 'project.sqlite')
+    db.close()
+    db = createTestBlueprintDb(file)
+    vi.mocked(getProjectDb).mockReturnValue(db)
+    BlueprintRepository.upsertMany([1, 2, 3, 4, 5].map(makeBlueprint))
+    const base = captureBlueprintFeedbackBase(3, db)
+    const request = { chapterNumber: 3, baseHash: base.sourceHash, operationId: 'reopen-feedback', changes: { title: 'Fictional adopted title' } }
+    const first = commitBlueprintFeedbackRevision(request, db)
+    BlueprintRepository.upsert({ ...BlueprintRepository.getByChapter(3, db)!, purpose: 'Fictional later author edit' }, db)
+    db.close()
+    db = new Database(file)
+    vi.mocked(getProjectDb).mockReturnValue(db)
+    const before = BlueprintRepository.getByChapter(3, db), changes = db.prepare('SELECT total_changes()').pluck().get()
+    const replay = commitBlueprintFeedbackRevision(request, db)
+    expect(replay).toMatchObject({ operationId: first.operationId, payloadHash: first.payloadHash, idempotent: true })
+    expect(BlueprintRepository.getByChapter(3, db)).toEqual(before)
+    expect(db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+    expect(() => commitBlueprintFeedbackRevision({ ...request, changes: { title: 'Fictional different title' } }, db))
+      .toThrow('BLUEPRINT_OPERATION_CONFLICT')
+  })
+
+  it('rejects a pre-binding operation instead of granting it feedback replay rights', () => {
+    const base = captureBlueprintFeedbackBase(3, db)
+    BlueprintRepository.commitRange({ mode: 'replace-range', operationId: 'unbound-old-operation', startChapter: 3, endChapter: 3,
+      blueprints: [{ ...base.snapshot, title: 'Fictional old write' }] }, undefined, db)
+    const before = BlueprintRepository.getByChapter(3, db)
+    expect(() => commitBlueprintFeedbackRevision({ chapterNumber: 3, baseHash: base.sourceHash,
+      operationId: 'unbound-old-operation', changes: { title: 'Fictional old write' } }, db)).toThrow('BLUEPRINT_OPERATION_CONFLICT')
+    expect(BlueprintRepository.getByChapter(3, db)).toEqual(before)
+  })
+
+  it('keeps explicit empty author fields and the original notes timestamp', () => {
+    const base = captureBlueprintFeedbackBase(3, db)
+    commitBlueprintFeedbackRevision({ chapterNumber: 3, baseHash: base.sourceHash, operationId: 'empty-author-fields',
+      changes: { userGuidance: '', notes: '' } }, db)
+    expect(BlueprintRepository.getByChapter(3, db)).toMatchObject({ userGuidance: '', notes: '', notesUpdatedAt: base.snapshot.notesUpdatedAt })
   })
 })

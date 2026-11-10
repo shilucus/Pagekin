@@ -7,10 +7,20 @@ export const PLANNING_FEEDBACK_TARGETS = [
   'globalGuidance', 'writingStyle', 'premise', 'worldbuilding',
 ] as const
 export type PlanningFeedbackCoreTarget = typeof PLANNING_FEEDBACK_TARGETS[number]
-export type PlanningFeedbackTarget = PlanningFeedbackCoreTarget | 'plotOutlineRange'
+export const BLUEPRINT_FEEDBACK_FIELDS = [
+  'title', 'role', 'purpose', 'keyEvents', 'characters', 'suspenseHook', 'userGuidance', 'notes',
+] as const
+export type BlueprintFeedbackField = typeof BLUEPRINT_FEEDBACK_FIELDS[number]
+export interface PlanningFeedbackBlueprintScope {
+  kind: 'blueprint-fields'
+  chapterNumber: number
+  fields: readonly BlueprintFeedbackField[]
+}
+export type PlanningFeedbackTarget = PlanningFeedbackCoreTarget | 'plotOutlineRange' | 'blueprintFields'
 export type PlanningFeedbackScope = { kind: 'field'; field: PlanningFeedbackCoreTarget }
   | { kind: 'plot-outline-range'; from: number; to: number }
-export type PlanningFeedbackCaptureTarget = PlanningFeedbackCoreTarget | Extract<PlanningFeedbackScope, { kind: 'plot-outline-range' }>
+  | PlanningFeedbackBlueprintScope
+export type PlanningFeedbackCaptureTarget = PlanningFeedbackCoreTarget | Exclude<PlanningFeedbackScope, { kind: 'field' }>
 export type PlanningFeedbackDecision = 'full' | 'partial' | 'edited'
 export type PlanningFeedbackTable = 'planning_feedback_bases' | 'planning_feedback_candidates' | 'planning_feedback_adoptions'
 
@@ -29,7 +39,16 @@ export interface PlanningFeedbackOutlineSource {
   synopsis: string
   charactersArch: string
 }
-export type PlanningFeedbackSource = PlanningFeedbackCoreSnapshot | PlanningFeedbackOutlineSource
+export type PlanningFeedbackBlueprintSnapshot = Record<Exclude<BlueprintFeedbackField, 'characters'>, string> & {
+  chapterNumber: number
+  characters: string[]
+  notesUpdatedAt: string
+}
+export type PlanningFeedbackBlueprintChanges = Partial<Pick<PlanningFeedbackBlueprintSnapshot, BlueprintFeedbackField>>
+export interface PlanningFeedbackBlueprintSource extends PlanningFeedbackOutlineSource {
+  blueprint: PlanningFeedbackBlueprintSnapshot
+}
+export type PlanningFeedbackSource = PlanningFeedbackCoreSnapshot | PlanningFeedbackOutlineSource | PlanningFeedbackBlueprintSource
 
 export function parsePlanningFeedbackScope(value: unknown): PlanningFeedbackScope {
   if (!value || typeof value !== 'object') throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
@@ -38,6 +57,15 @@ export function parsePlanningFeedbackScope(value: unknown): PlanningFeedbackScop
     if (!isPlanningFeedbackCoreTarget(value.field)) throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
     return { kind: 'field', field: value.field }
   }
+  if ((value as Record<string, unknown>).kind === 'blueprint-fields') {
+    assertPlanningFeedbackObject(value, ['kind', 'chapterNumber', 'fields'])
+    if (!Number.isSafeInteger(value.chapterNumber) || Number(value.chapterNumber) < 1
+      || !Array.isArray(value.fields) || !value.fields.length
+      || [...value.fields].some(field => typeof field !== 'string' || !(BLUEPRINT_FEEDBACK_FIELDS as readonly string[]).includes(field))
+      || new Set(value.fields).size !== value.fields.length) throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
+    const selected = value.fields
+    return { kind: 'blueprint-fields', chapterNumber: Number(value.chapterNumber), fields: BLUEPRINT_FEEDBACK_FIELDS.filter(field => selected.includes(field)) }
+  }
   assertPlanningFeedbackObject(value, ['kind', 'from', 'to'])
   if (value.kind !== 'plot-outline-range') throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
   assertPlanningActionRange(value as unknown as PlotOutlineRange)
@@ -45,6 +73,17 @@ export function parsePlanningFeedbackScope(value: unknown): PlanningFeedbackScop
 }
 
 export function parsePlanningFeedbackSource(target: PlanningFeedbackTarget, value: unknown): PlanningFeedbackSource {
+  if (target === 'blueprintFields') {
+    assertPlanningFeedbackObject(value, ['core', 'synopsis', 'charactersArch', 'blueprint'])
+    assertPlanningFeedbackObject(value.core, Object.keys(PLANNING_FEEDBACK_CORE_COLUMNS))
+    assertPlanningFeedbackObject(value.blueprint, ['chapterNumber', ...BLUEPRINT_FEEDBACK_FIELDS, 'notesUpdatedAt'])
+    if (typeof value.synopsis !== 'string' || typeof value.charactersArch !== 'string'
+      || !Number.isSafeInteger(value.blueprint.chapterNumber) || Number(value.blueprint.chapterNumber) < 1
+      || typeof value.blueprint.notesUpdatedAt !== 'string') throw new Error('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+    const blueprint = blueprintFeedbackValues(value.blueprint, BLUEPRINT_FEEDBACK_FIELDS, true, 'PLANNING_FEEDBACK_INTEGRITY_FAILED', ['chapterNumber', 'notesUpdatedAt'])
+    return { core: planningFeedbackCoreSnapshot(value.core), synopsis: value.synopsis, charactersArch: value.charactersArch,
+      blueprint: { chapterNumber: Number(value.blueprint.chapterNumber), ...blueprint, notesUpdatedAt: value.blueprint.notesUpdatedAt } as PlanningFeedbackBlueprintSnapshot }
+  }
   if (target === 'plotOutlineRange') {
     assertPlanningFeedbackObject(value, ['core', 'synopsis', 'charactersArch'])
     assertPlanningFeedbackObject(value.core, Object.keys(PLANNING_FEEDBACK_CORE_COLUMNS))
@@ -54,6 +93,45 @@ export function parsePlanningFeedbackSource(target: PlanningFeedbackTarget, valu
   if (!isPlanningFeedbackCoreTarget(target)) throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
   assertPlanningFeedbackObject(value, Object.keys(PLANNING_FEEDBACK_CORE_COLUMNS))
   return planningFeedbackCoreSnapshot(value)
+}
+
+function blueprintFeedbackValues(value: unknown, fields: readonly BlueprintFeedbackField[], requireAllFields: boolean,
+  error: string, extra: readonly string[] = []): PlanningFeedbackBlueprintChanges {
+  assertPlanningFeedbackObject(value, requireAllFields ? fields : [], [...extra, ...(requireAllFields ? [] : fields)])
+  const keys = Object.keys(value).filter(key => !extra.includes(key))
+  if (!keys.length) throw new Error(error)
+  for (const field of keys) {
+    const item = value[field]
+    if (field === 'characters') {
+      if (!Array.isArray(item) || [...item].some(name => typeof name !== 'string' || !name.trim())
+        || new Set(item.map(name => name.trim())).size !== item.length) throw new Error(error)
+    } else if (typeof item !== 'string') throw new Error(error)
+  }
+  return Object.fromEntries(fields.filter(field => Object.hasOwn(value, field))
+    .map(field => {
+      const item = value[field]
+      return [field, Array.isArray(item) ? [...item] : item]
+    })) as PlanningFeedbackBlueprintChanges
+}
+
+/** Generated text must cover the exact selection; author adoption may choose a nonempty subset. */
+export function parsePlanningFeedbackBlueprintText(text: string, scope: PlanningFeedbackBlueprintScope,
+  requireAllFields: boolean): PlanningFeedbackBlueprintChanges {
+  try {
+    const selected = parsePlanningFeedbackScope(scope)
+    if (selected.kind !== 'blueprint-fields' || typeof text !== 'string') throw new Error('invalid')
+    return blueprintFeedbackValues(JSON.parse(text), selected.fields, requireAllFields, 'PLANNING_FEEDBACK_TEXT_INVALID')
+  } catch {
+    throw new Error('PLANNING_FEEDBACK_TEXT_INVALID')
+  }
+}
+
+/** The F0 value contains only selected persisted fields, in the whitelist order. */
+export function planningFeedbackBlueprintValue(source: PlanningFeedbackBlueprintSource, scope: PlanningFeedbackBlueprintScope): string {
+  const selected = parsePlanningFeedbackScope(scope)
+  const parsed = parsePlanningFeedbackSource('blueprintFields', source) as PlanningFeedbackBlueprintSource
+  if (selected.kind !== 'blueprint-fields' || selected.chapterNumber !== parsed.blueprint.chapterNumber) throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
+  return JSON.stringify(Object.fromEntries(selected.fields.map(field => [field, parsed.blueprint[field]])))
 }
 
 export function planningFeedbackSourceCore(source: PlanningFeedbackSource): PlanningFeedbackCoreSnapshot {
@@ -96,6 +174,11 @@ export type PlanningFeedbackBase = PlanningFeedbackBaseFacts & ({
   target: 'plotOutlineRange'
   scope: Extract<PlanningFeedbackScope, { kind: 'plot-outline-range' }>
   source: PlanningFeedbackOutlineSource
+} | {
+  schemaVersion: 3
+  target: 'blueprintFields'
+  scope: PlanningFeedbackBlueprintScope
+  source: PlanningFeedbackBlueprintSource
 })
 
 export type PlanningFeedbackOrigin = {
@@ -127,7 +210,7 @@ export type PlanningFeedbackOrigin = {
 }
 
 export interface PlanningFeedbackCandidate {
-  schemaVersion: 1 | 2
+  schemaVersion: 1 | 2 | 3
   candidateId: string
   projectId: string
   baseId: string
@@ -167,7 +250,7 @@ export interface AdoptPlanningFeedbackCandidate {
 }
 
 export interface PlanningFeedbackAdoption {
-  schemaVersion: 1 | 2
+  schemaVersion: 1 | 2 | 3
   adoptionId: string
   projectId: string
   baseId: string
@@ -188,7 +271,7 @@ export interface PlanningFeedbackAdoption {
 }
 
 export function isPlanningFeedbackTarget(value: unknown): value is PlanningFeedbackTarget {
-  return value === 'plotOutlineRange' || isPlanningFeedbackCoreTarget(value)
+  return value === 'blueprintFields' || value === 'plotOutlineRange' || isPlanningFeedbackCoreTarget(value)
 }
 
 export function isPlanningFeedbackCoreTarget(value: unknown): value is PlanningFeedbackCoreTarget {
@@ -226,7 +309,12 @@ export function assertPlanningFeedbackAdoption(value: unknown): asserts value is
   }
 }
 
-export function planningFeedbackAdoptedScope(base: PlanningFeedbackBase, adoptedRange?: PlotOutlineRange): PlanningFeedbackScope {
+export function planningFeedbackAdoptedScope(base: PlanningFeedbackBase, adoptedRange?: PlotOutlineRange, adoptedText?: string): PlanningFeedbackScope {
+  if (base.schemaVersion === 3) {
+    if (adoptedRange !== undefined || typeof adoptedText !== 'string') throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
+    const changes = parsePlanningFeedbackBlueprintText(adoptedText, base.scope, false)
+    return { kind: 'blueprint-fields', chapterNumber: base.scope.chapterNumber, fields: BLUEPRINT_FEEDBACK_FIELDS.filter(field => Object.hasOwn(changes, field)) }
+  }
   if (base.target !== 'plotOutlineRange') {
     if (adoptedRange !== undefined) throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
     return base.scope
@@ -241,8 +329,10 @@ export function planningFeedbackAdoptedScope(base: PlanningFeedbackBase, adopted
 
 export function planningFeedbackAdoptionBinding(request: AdoptPlanningFeedbackCandidate, candidate: PlanningFeedbackCandidate,
   base: PlanningFeedbackBase, payloadHash: string): string {
-  const adoptedScope = planningFeedbackAdoptedScope(base, request.adoptedRange)
-  if (base.schemaVersion === 2) return JSON.stringify([2, candidate.candidateId, candidate.schemaVersion,
+  const adoptedScope = planningFeedbackAdoptedScope(base, request.adoptedRange, request.text)
+  if (base.schemaVersion === 3 && request.decision === 'full'
+    && (request.text !== candidate.text || JSON.stringify(adoptedScope) !== JSON.stringify(base.scope))) throw new Error('PLANNING_FEEDBACK_TEXT_INVALID')
+  if (base.schemaVersion === 2 || base.schemaVersion === 3) return JSON.stringify([base.schemaVersion, candidate.candidateId, candidate.schemaVersion,
     base.baseId, base.projectId, base.target, base.scope, adoptedScope, base.sourceRevision, base.sourceHash,
     candidate.textHash, candidate.generationParentHash, request.decision, 'author-action', payloadHash])
   return JSON.stringify([PLANNING_FEEDBACK_SCHEMA_VERSION, candidate.candidateId, candidate.schemaVersion,

@@ -535,6 +535,30 @@ it('rolls back a failed grants migration and retains the schema 10 author copy f
  expect(upgraded.preGrantsDomain).toEqual(before.domain)
  expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
 })
+it('preserves every schema 15 table and column while a failed M15 leaves its backup byte-identical', async () => {
+ const f=fixture()
+ ensureBaselineBlueprintTables(f.db)
+ f.db.prepare("INSERT INTO blueprints(chapter_number,title,notes) VALUES(3,'Fictional F0 title','Author notes')").run()
+ await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:15})
+ const installed=new Database(f.target)
+ try {
+  installed.prepare(`INSERT INTO planning_feedback_bases
+   (base_id,schema_version,project_id,target,source_revision,source_hash,source_json,value,value_hash,created_at)
+   VALUES('v15-base',1,'fictional-project','coreOutline',0,'original-source','{}','Original outline','original-value',1)`).run()
+ } finally { installed.close() }
+ const before=probeProjectSqlite({databasePath:f.target}), original=fs.readFileSync(f.target), registry=getDesktopMigrationRegistry()
+ const failing={...registry,implementations:registry.implementations.map(step=>step.id==='M15'
+  ? {...step,migrate:(reader: Parameters<typeof step.migrate>[0])=>{step.migrate(reader);throw new Error('blueprint-feedback-migration-interruption')}} : step)}
+ expect(()=>upgradeProjectSqlite({databasePath:f.target,registry:failing})).toThrow('blueprint-feedback-migration-interruption')
+ expect(probeProjectSqlite({databasePath:f.target})).toEqual(before)
+ expect(fs.readFileSync(f.target)).toEqual(original)
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.schemaVersion).toBe(16)
+ expect(upgraded.preBlueprintFeedbackDomain).toEqual(before.domain)
+ expect(upgraded.domain.tableCounts.planning_feedback_blueprint_revisions).toBe(1)
+ expect(upgraded.domain.tableCounts.planning_feedback_bases).toBe(1)
+ expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
 it('resolves a trusted system scratch junction before validating its private snapshot', () => {
  const f=fixture(), physical=path.join(f.root,'scratch'), link=path.join(f.root,'scratch-link')
  fs.mkdirSync(physical);fs.symlinkSync(physical,link,'junction')

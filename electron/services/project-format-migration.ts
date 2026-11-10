@@ -21,6 +21,7 @@ export interface ProjectSqliteEvidence {
   preWorkflowDriverDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preWorkflowBatchDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preReferenceImportGrantsDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
+  preBlueprintFeedbackDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
 }
 export interface ProjectAssetSourceEntry {
   readonly relativePath: string
@@ -287,7 +288,8 @@ export async function migrateProjectFormat<V, A = unknown>(options: {
                   : journal.sourceSchema.schemaVersion < 12 ? targetSchema.preRecoveryTailsDomain
                     : journal.sourceSchema.schemaVersion < 13 ? targetSchema.preWorkflowDriverDomain
                       : journal.sourceSchema.schemaVersion < 14 ? targetSchema.preWorkflowBatchDomain
-                        : journal.sourceSchema.schemaVersion < 15 ? targetSchema.preReferenceImportGrantsDomain : targetSchema.domain,
+                        : journal.sourceSchema.schemaVersion < 15 ? targetSchema.preReferenceImportGrantsDomain
+                          : journal.sourceSchema.schemaVersion < 16 ? targetSchema.preBlueprintFeedbackDomain : targetSchema.domain,
         journal.sourceSchema.domain,
       )) fail('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
       checkpoint('sqlite-backed-up')

@@ -14,6 +14,7 @@ import { applyM11GenerationRecoveryTails, createM11Migration, verifyM11Generatio
 import { applyM12WorkflowDriver, createM12Migration, verifyM12WorkflowDriver } from './m12-workflow-driver'
 import { applyM13WorkflowBatch, createM13Migration, verifyM13WorkflowBatch } from './m13-workflow-batch'
 import { applyM14ReferenceImportGrants, createM14Migration } from './m14-reference-import-grants'
+import { applyM15PlanningFeedbackBlueprints, createM15Migration } from './m15-planning-feedback-blueprints'
 import { verifyCurrentReviewCycles } from './current-review-cycle'
 import { createM00Migration } from './m00-baseline'
 import { initializeLegacyBaselineSchema, applyBaselineTables } from './baseline-schema'
@@ -22,7 +23,7 @@ import { SqliteSchemaAdapter, sqliteSchemaFingerprint } from './sqlite-schema-ad
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
-export const CURRENT_DESKTOP_SCHEMA_VERSION = 15
+export const CURRENT_DESKTOP_SCHEMA_VERSION = 16
 let installed: MigrationRegistry | undefined
 
 function installKnownDonorAvatarColumn(db: import('better-sqlite3').Database): void {
@@ -130,11 +131,17 @@ export function getDesktopMigrationRegistry(): MigrationRegistry {
       verifyKnownSchema: db => referenceGrantFingerprints.has(sqliteSchemaFingerprint(native(db)))
         && verifyM02CharacterIdentity(native(db)) && verifyCurrentReviewCycles(native(db)) && verifyM08PlanningFeedback(native(db))
         && verifyM11GenerationRecoveryTails(native(db)) && verifyM12WorkflowDriver(native(db)) && verifyM13WorkflowBatch(native(db)) })
-    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05, m06, m07, m08, m09, m10, m11, m12, m13, m14], [
+    for (const db of references) db.transaction(() => applyM15PlanningFeedbackBlueprints(db))()
+    const blueprintFeedbackSchemas = schemas(16), blueprintFeedbackFingerprints = new Set(blueprintFeedbackSchemas.map(item => item.fingerprint))
+    const m15 = createM15Migration({ database: native,
+      verifyKnownSchema: db => blueprintFeedbackFingerprints.has(sqliteSchemaFingerprint(native(db)))
+        && verifyM02CharacterIdentity(native(db)) && verifyCurrentReviewCycles(native(db)) && verifyM08PlanningFeedback(native(db))
+        && verifyM11GenerationRecoveryTails(native(db)) && verifyM12WorkflowDriver(native(db)) && verifyM13WorkflowBatch(native(db)) })
+    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05, m06, m07, m08, m09, m10, m11, m12, m13, m14, m15], [
       ...sourceSchemas, ...baselineSchemas.map(schema => ({ ...schema, version: 0 })),
       ...baselineSchemas, ...generationSchemas, ...identitySchemas,
       ...reviewCycleSchemas, ...importEffectSchemas, ...characterAssetSchemas, ...mergeSnapshotSchemas, ...recycleSchemas, ...feedbackSchemas,
-      ...feedbackRangeSchemas, ...runtimeGrantSchemas, ...recoveryTailSchemas, ...driverSchemas, ...batchSchemas, ...referenceGrantSchemas,
+      ...feedbackRangeSchemas, ...runtimeGrantSchemas, ...recoveryTailSchemas, ...driverSchemas, ...batchSchemas, ...referenceGrantSchemas, ...blueprintFeedbackSchemas,
     ])
     return installed
   } finally { reference.close(); donor.close() }

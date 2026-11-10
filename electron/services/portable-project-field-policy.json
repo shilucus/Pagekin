@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 15,
+  "schemaVersion": 16,
   "rules": {
     "D": ["preserve-domain", "signed-domain-value", "portable-domain-copy"],
     "H": ["historical-nonreplayable", "nonreplayable-history", "portable-history-projector"],
@@ -26,6 +26,7 @@
   "m12Tables": ["workflow_tasks", "workflow_steps", "workflow_effects"],
   "m13Tables": ["workflow_batch_tasks", "workflow_batch_steps", "workflow_batch_effects"],
   "m14Tables": ["reference_import_grants"],
+  "m15Tables": ["planning_feedback_blueprint_revisions"],
   "optionalFields": ["characters.avatar"],
   "deltaCharacterFields": ["character_id", "legacy_key", "static_provenance", "identity_revision", "retired"],
   "signedOverrides": {
@@ -123,6 +124,7 @@
     "narrative_thread_plans": {"id":"D","title":"D","type":"D","target_start_chapter":"D","target_end_chapter":"D","author_intent":"D","created_at":"D","updated_at":"D"},
     "planning_feedback_core_revision": {"id":"D","revision":"H"},
     "planning_feedback_outline_revision": {"id":"D","revision":"H"},
+    "planning_feedback_blueprint_revisions": {"chapter_number":"B","revision":"B"},
     "planning_feedback_bases": {"base_id":"H","schema_version":"H","project_id":"H","target":"H","source_revision":"H","source_hash":"R","source_json":"R","value":"H","value_hash":"H","created_at":"H","closed_at":"H","closed_by_adoption_id":"H","scope_json":"R"},
     "planning_feedback_candidates": {"candidate_id":"H","schema_version":"H","project_id":"H","base_id":"H","parent_candidate_id":"H","generation_parent_hash":"H","text":"H","text_hash":"H","feedback":"H","constraints_json":"R","origin_json":"R","created_at":"H"},
     "planning_feedback_adoptions": {"adoption_id":"H","schema_version":"H","project_id":"H","base_id":"H","candidate_id":"H","idempotency_key":"X","request_hash":"X","target":"H","decision":"H","decision_source":"H","text":"H","text_hash":"H","before_value":"H","before_hash":"H","source_revision":"H","committed_revision":"H","created_at":"H","adopted_scope_json":"R"},
