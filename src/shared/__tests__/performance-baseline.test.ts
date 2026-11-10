@@ -135,6 +135,62 @@ it('distinguishes missing observations from explicitly recorded zero', () => {
   expect(missing.queueWait.pendingSamples).toBeNull()
 })
 
+it('keeps scheduler admission observations distinct from snapshot queues and phase wall times', () => {
+  const baseline = createPerformanceBaseline()
+  baseline.record('scheduler.acquire.calls', 3)
+  baseline.record('scheduler.acquire.admitted', 2)
+  baseline.record('scheduler.acquire.rejected', 1)
+  baseline.record('scheduler.wait.admitted_ms', 0)
+  baseline.record('scheduler.wait.admitted_ms', 25)
+  baseline.record('scheduler.wait.rejected_ms', 10)
+  baseline.record('scheduler.queue', 1)
+  baseline.record('scheduler.queue', 0)
+  baseline.record('workflow.import.knowledge.ms', 200)
+  baseline.record('workflow.import.global.ms', 300)
+  baseline.record('workflow.import.style.ms', 400)
+  baseline.record('workflow.import.blueprints.ms', 500)
+  baseline.record('workflow.import.author-commit.ms', 600)
+  baseline.record('workflow.import.author-publish.ms', 700)
+  baseline.record('workflow.import.author-postprocess.ms', 800)
+  baseline.record('workflow.import.refresh.ms', 900)
+  baseline.record('workflow.import.parsing.ms' as PerformanceMetric, 1000)
+  baseline.record('workflow.import.prepared.ms' as PerformanceMetric, 1000)
+
+  const snapshot = baseline.snapshot()
+  const attribution = computeCreationCostAttribution(snapshot)
+  expect(snapshot.schemaVersion).toBe(1)
+  expect(attribution.schemaVersion).toBe(2)
+  expect(attribution.queueWait).toMatchObject({
+    snapshotQueueMs: null, pendingSamples: null, snapshotQueueSamples: null,
+    schedulerAcquireCalls: 3, schedulerAdmitted: 2, schedulerRejected: 1,
+    schedulerAdmittedWaitMs: 25, schedulerRejectedWaitMs: 10,
+    schedulerQueueSamples: { count: 2, sum: 1, min: 0, max: 1 },
+  })
+  expect(snapshot.metrics['scheduler.wait.admitted_ms']).toMatchObject({ count: 2, min: 0, max: 25 })
+  expect(snapshot.metrics['workflow.import.knowledge.ms']?.sum).toBe(200)
+  expect(snapshot.metrics).not.toHaveProperty('workflow.import.parsing.ms')
+  expect(snapshot.metrics).not.toHaveProperty('workflow.import.prepared.ms')
+  expect(JSON.stringify(attribution)).not.toContain('workflow.import')
+  expect(attribution.localPreparation.inspectMs).toBeNull()
+  expect(attribution.modelExecution.providerMs).toBeNull()
+  expect(attribution.persistenceSave.saveMs).toBeNull()
+})
+
+it('does not invent scheduler observations for missing metrics or overwrite recorded zero', () => {
+  const baseline = createPerformanceBaseline()
+  const missing = computeCreationCostAttribution(baseline.snapshot()).queueWait
+  expect(missing).toMatchObject({
+    schedulerAcquireCalls: null, schedulerAdmitted: null, schedulerRejected: null,
+    schedulerAdmittedWaitMs: null, schedulerRejectedWaitMs: null, schedulerQueueSamples: null,
+  })
+  baseline.record('scheduler.wait.admitted_ms', 0)
+  baseline.record('scheduler.queue', 0)
+  expect(computeCreationCostAttribution(baseline.snapshot()).queueWait).toMatchObject({
+    schedulerAcquireCalls: null, schedulerAdmittedWaitMs: 0,
+    schedulerQueueSamples: { count: 1, sum: 0, min: 0, max: 0 },
+  })
+})
+
 it.each([
   ['completed', 'transport.completed'],
   ['rate limited', 'transport.http_429'],

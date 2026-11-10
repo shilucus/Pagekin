@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { FAKE_MODEL } from './fake-model.mjs'
 import { EMPTY_BOOK, inferenceReply, openAuthorImport, seedEmptyBook } from './import-infer-scenarios.mjs'
 import * as runSheet from './pages/run-sheet.mjs'
 import { appendPerformanceFailureDiagnostic, assertPerformanceProbeCoverage, boundedObservation, performanceMetadata, readModelRequestSummary, readPerformanceRunDiagnostics, startPerformanceBaseline, stopPerformanceBaseline, summarizeFixtureChats } from './performance-baseline.mjs'
@@ -175,6 +176,9 @@ export async function runPerformanceImportScenario(chapters, context, dependenci
       appendPerformanceFailureDiagnostic(failureDiagnostics, new Error('PERFORMANCE_EVENT_COVERAGE_MISSING'), 'scenario', 'event_coverage')
     }
     const report = { metadata, corpusSha256: corpusHash, importedChapters, blueprintChapters,
+      fixture: { kind: 'local-openai-compatible-fiction', protocol: FAKE_MODEL.protocol, model: FAKE_MODEL.modelName,
+        temperature: FAKE_MODEL.temperature, configuredMaxTokens: FAKE_MODEL.maxTokens,
+        skill: 'isolated-fixture-default-no-custom-install' },
       elapsedMs, fixtureAcceptedRequests, requestSummary,
       countCoverage: { importedChapters: importedChapters === null ? 'unavailable' : 'observed', blueprintChapters: blueprintChapters === null ? 'unavailable' : 'observed' },
       cleanupFailures: cleanupErrors.length, failureDiagnostics, drain, eventCoverage, diagnostics,

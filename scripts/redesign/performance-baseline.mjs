@@ -1,6 +1,6 @@
 import os from 'node:os'
 import { createHash } from 'node:crypto'
-import { PERFORMANCE_METRICS } from '../../src/shared/performance-baseline.ts'
+import { computeCreationCostAttribution, PERFORMANCE_METRICS } from '../../src/shared/performance-baseline.ts'
 import { GENERATION_DIAGNOSTIC_SOURCE_KINDS, MATERIAL_DECISION_CATEGORIES,
   MATERIAL_DECISION_OMISSION_REASONS, MATERIAL_DECISION_SOURCE_ID } from '../../src/shared/generation-owner-contract.ts'
 
@@ -38,6 +38,9 @@ const TRANSPORT_KEYS = ['elapsedMs', 'firstResponseMs', 'lastResponseMs', 'lastO
   'endReason', 'errorName', 'errorCode', 'causeCode', 'visibleEvents', 'reasoningEvents']
 const IMPORT_STAGES = ['parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'author-commit',
   'author-publish', 'author-postprocess', 'refresh', 'completed']
+const PERFORMANCE_OPERATIONS = ['import-global-facts', 'import-blueprints', 'analyze-writing-style',
+  'finalized-chapter-notes', 'finalized-character-state', 'chapter-draft', 'unknown']
+const diagnosticOperation = value => PERFORMANCE_OPERATIONS.includes(value) ? value : 'unknown'
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => value?.[key] !== undefined).map(key => [key, value[key]]))
 const number = value => Number.isSafeInteger(value) && value >= 0 ? value : null
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/iu.test(value) ? value : null
@@ -46,6 +49,26 @@ const record = value => value !== null && typeof value === 'object' && !Array.is
 const sourceId = value => typeof value !== 'string' ? null
   : MATERIAL_DECISION_SOURCE_ID.test(value) || /^opaque:[a-f0-9]{64}$/u.test(value) ? value
   : `opaque:${createHash('sha256').update(value).digest('hex')}`
+
+function representativeRuns(list) {
+  const groups = new Map()
+  for (const [index, item] of list.entries()) {
+    const operation = diagnosticOperation(item?.operation)
+    const group = groups.get(operation) ?? { operation, count: 0, head: index, tail: index, failed: null }
+    group.count++; group.tail = index
+    if (group.failed === null && ['failed', 'cancelled'].includes(item?.status)) group.failed = index
+    groups.set(operation, group)
+  }
+  const selected = new Set()
+  for (const group of groups.values()) {
+    selected.add(group.head); selected.add(group.tail)
+    if (group.failed !== null) selected.add(group.failed)
+  }
+  for (let index = 0; selected.size < Math.min(32, list.length); index++) selected.add(index)
+  return { items: [...selected].map(index => list[index]),
+    operationCounts: PERFORMANCE_OPERATIONS.filter(operation => groups.has(operation))
+      .map(operation => ({ operation, count: groups.get(operation).count })) }
+}
 
 /** Used by both diagnostic consumption and the final stdout/JSON privacy boundary. */
 export function projectPerformanceSelection(selection) {
@@ -87,7 +110,8 @@ export function projectPerformanceSelection(selection) {
 /** Read existing receipts only after measurement; never retain sessions, source text or raw errors. */
 export async function readPerformanceRunDiagnostics({ page, invoke }, session, workflowEntered, preparedImportId = null) {
   const result = { sampleBoundary: 'after_probe_stop_attempt', sampleStartedAt: Date.now(), sampleEndedAt: null,
-    generation: { scope: 'isolated_project', coverage: workflowEntered ? 'unavailable' : 'not_entered', observed: null, retained: 0, cutoff: false, runs: [] },
+    generation: { scope: 'isolated_project', coverage: workflowEntered ? 'unavailable' : 'not_entered', observed: null,
+      retained: 0, omitted: null, samplingRule: 'operation-head-tail-failed-v1', operationCounts: null, cutoff: false, runs: [] },
     importRun: { coverage: workflowEntered ? 'unavailable' : 'not_entered', observed: null, retained: 0, runs: [] } }
   const deadline = Date.now() + 10_000
   const read = operation => {
@@ -118,8 +142,10 @@ export async function readPerformanceRunDiagnostics({ page, invoke }, session, w
       return result
     }
     result.generation.observed = list.length
+    const sample = representativeRuns(list)
+    result.generation.operationCounts = sample.operationCounts
     result.generation.coverage = list.length ? 'observed' : 'not_entered'
-    for (const item of list.slice(0, 32)) {
+    for (const item of sample.items) {
       if (Date.now() >= deadline) { result.generation.coverage = 'partial'; result.generation.cutoff = true; break }
       const handle = item?.handle
       try {
@@ -129,7 +155,7 @@ export async function readPerformanceRunDiagnostics({ page, invoke }, session, w
         const slot = diagnostic.importSlot
         if (slot?.runId) importIds.add(slot.runId)
         result.generation.runs.push({ coverage: 'observed', runId: diagnostic.handle.runId,
-          rootActionId: diagnostic.handle.rootActionId, operation: diagnostic.operation, status: diagnostic.status,
+          rootActionId: diagnostic.handle.rootActionId, operation: diagnosticOperation(diagnostic.operation), status: diagnostic.status,
           source: { modelIdHash: diagnostic.source?.modelIdHash ?? null, modelReceiptHash: diagnostic.source?.modelReceiptHash ?? null,
             fingerprint: pick(diagnostic.source?.fingerprint, FINGERPRINT_KEYS) },
           selection: projectPerformanceSelection(diagnostic.selection),
@@ -139,6 +165,7 @@ export async function readPerformanceRunDiagnostics({ page, invoke }, session, w
           initialDraftTaskHash: diagnostic.initialDraftTaskHash ?? null,
           parametersCoverage: diagnostic.parametersCoverage,
           attempts: { observed: diagnostic.attempts.length, retained: Math.min(diagnostic.attempts.length, 32),
+            omitted: Math.max(0, diagnostic.attempts.length - 32),
             items: diagnostic.attempts.slice(0, 32).map(attempt => ({ ...pick(attempt, ['attemptId', 'status', 'purpose', 'requestedOutputTokens', 'failureCode']),
               actual: attempt.actual ? pick(attempt.actual, ['input', 'completion', 'reasoning', 'total']) : null,
               transport: attempt.transport ? pick(attempt.transport, TRANSPORT_KEYS) : null })) } })
@@ -148,6 +175,7 @@ export async function readPerformanceRunDiagnostics({ page, invoke }, session, w
       }
     }
     result.generation.retained = result.generation.runs.length
+    result.generation.omitted = list.length - result.generation.retained
     if (list.length > 32) { result.generation.coverage = 'partial'; result.generation.cutoff = true }
     result.importRun.observed = importIds.size
     for (const id of importIds) {
@@ -165,10 +193,43 @@ export async function readPerformanceRunDiagnostics({ page, invoke }, session, w
 }
 
 export function summarizeFixtureChats(chats) {
-  if (!Array.isArray(chats)) return { coverage: 'unavailable', observed: null, retained: 0, items: [] }
-  return { coverage: 'observed_http_requests', observed: chats.length, retained: Math.min(chats.length, 32),
-    items: chats.slice(0, 32).map(chat => ({ maxTokens: Number.isSafeInteger(chat.maxTokens) ? chat.maxTokens : null,
-      temperature: typeof chat.temperature === 'number' && Number.isFinite(chat.temperature) ? chat.temperature : null })) }
+  if (!Array.isArray(chats)) return { coverage: 'unavailable', observed: null, retained: 0, omitted: null,
+    groupLimit: 32, grouped: null, overflow: null, groups: [], items: [] }
+  const project = chat => ({
+    model: typeof chat?.model !== 'string' ? null
+      : ['gpt-4.1', 'text-embedding-3-small'].includes(chat.model) || /^opaque:[a-f0-9]{64}$/u.test(chat.model) ? chat.model
+        : `opaque:${createHash('sha256').update(chat.model).digest('hex')}`,
+    maxTokens: number(chat?.maxTokens),
+    temperature: typeof chat?.temperature === 'number' && Number.isFinite(chat.temperature) ? chat.temperature : null,
+  })
+  const groups = new Map()
+  let grouped = 0, overflow = 0
+  for (const chat of chats) {
+    const parameters = project(chat), key = JSON.stringify(parameters)
+    if (groups.has(key)) { groups.get(key).count++; grouped++ }
+    else if (groups.size < 32) { groups.set(key, { ...parameters, count: 1 }); grouped++ }
+    else overflow++
+  }
+  const items = chats.length <= 32 ? chats : [...chats.slice(0, 31), chats.at(-1)]
+  return { coverage: 'observed_http_requests', observed: chats.length, retained: items.length,
+    omitted: chats.length - items.length, groupLimit: 32, grouped, overflow,
+    groups: [...groups.values()], items: items.map(project) }
+}
+
+function performanceCostAttribution(main, renderer, coverage) {
+  const metrics = {}
+  for (const name of PERFORMANCE_METRICS) {
+    const side = name.startsWith('renderer.') || name.startsWith('workflow.import.') ? 'renderer' : 'main'
+    if (coverage[side] === 'unavailable') continue
+    const item = side === 'renderer' ? renderer?.metrics?.[name] : main?.metrics?.metrics?.[name]
+    if (!record(item) || !Number.isSafeInteger(item.count) || item.count < 1
+      || !['sum', 'min', 'max', 'p50UpperBound', 'p95UpperBound'].every(key => Number.isFinite(item[key]) && item[key] >= 0)
+      || item.min > item.max || item.p50UpperBound < item.min || item.p50UpperBound > item.p95UpperBound
+      || item.p95UpperBound > item.max) continue
+    metrics[name] = pick(item, ['count', 'sum', 'min', 'max', 'p50UpperBound', 'p95UpperBound'])
+  }
+  return { coverage: { ...coverage }, ownership: 'main-plus-renderer-owned-metrics',
+    categories: computeCreationCostAttribution({ schemaVersion: 1, quantiles: 'fixed-histogram-upper-bounds', metrics }) }
 }
 
 export async function boundedObservation(read, timeoutMs = 5_000) {
@@ -302,5 +363,6 @@ export async function stopPerformanceBaseline(app, page) {
     else coverage.main = main.eventLoop.count === 0 ? 'insufficient_samples'
       : Object.keys(main.metrics.metrics).length ? 'observed_metrics' : 'live_zero_events'
   } catch { mainStopFailures++ }
-  return { main, renderer, coverage, stopFailures: { main: mainStopFailures, renderer: rendererStopFailures } }
+  return { main, renderer, coverage, stopFailures: { main: mainStopFailures, renderer: rendererStopFailures },
+    costAttribution: performanceCostAttribution(main, renderer, coverage) }
 }

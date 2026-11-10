@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, it, vi } from 'vitest'
 import { performanceArtifactPath, performanceError, projectPerformanceResult } from '../drive-performance-output.mjs'
 import { MATERIAL_DECISION_OMISSION_REASONS } from '../../../src/shared/generation-owner-contract.ts'
+import { PERFORMANCE_METRICS } from '../../../src/shared/performance-baseline.ts'
 
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
 import { driveSessions, releaseSessionRoot } from '../drive.mjs'
@@ -128,6 +129,158 @@ it('contains unknown source IDs and reasons in the final export even without the
   assert.equal(JSON.stringify(result).includes('private-'), false)
   assert.deepEqual(projectPerformanceResult({ selection: result }, '/out').selection, result)
 })
+
+it('drops unknown scalar keys throughout the known report tree and fixes metric authority to the shared list', () => {
+  const secret = { prompt: 'draft', secretNumber: 918273, secretBoolean: true, ['a'.repeat(64)]: false }
+  const metric = { count: 1, sum: 0, min: 0, max: 0, p50UpperBound: 0, p95UpperBound: 0, ...secret }
+  const raw = { ...secret, measured: { ...secret, metadata: { platform: 'win32', ...secret },
+    fixture: { model: 'gpt-4.1', ...secret }, fixtureParameters: { observed: 1, ...secret,
+      items: [{ maxTokens: 0, temperature: 0, ...secret }], groups: [{ count: 1, ...secret }] },
+    measurements: { ...secret, main: { ...secret, metrics: { schemaVersion: 1, ...secret,
+      metrics: { [PERFORMANCE_METRICS[0]]: metric, secretMetric: metric, ['b'.repeat(64)]: metric } },
+    memory: { rssMax: 1, ...secret }, eventLoop: { count: 0, ...secret } },
+    renderer: { ...secret, metrics: { secretMetric: metric }, heartbeat: { count: 0, ...secret } },
+    coverage: { main: 'unavailable', ...secret }, costAttribution: { ...secret, categories: { schemaVersion: 2, ...secret,
+      queueWait: { schedulerAcquireCalls: 0, ...secret }, provenance: { attempted: 1, ...secret } } } },
+    requestSummary: { coverage: 'guarded_fetch_attempts', ...secret, byRoute: { ...secret,
+      '/v1/chat/completions': { count: 0, ...secret }, '/private': { count: 918273 } } },
+    diagnostics: { ...secret, generation: { ...secret, operationCounts: [{ operation: 'chapter-draft', count: 1, ...secret }],
+      runs: [{ ...secret, source: { ...secret, fingerprint: { ...secret } }, importSlot: { stage: 'global', ...secret },
+        finalizationSlot: { ...secret, source: { chapterNumber: 1, ...secret } },
+        attempts: { ...secret, items: [{ ...secret, actual: { input: 0, ...secret }, transport: { phase: 'stream', ...secret } }] } }] },
+    importRun: { ...secret, runs: [{ ...secret, checkpointCounts: { parsing: 0, ...secret } }] } },
+    failureDiagnostics: [{ source: 'scenario', stage: 'workflow', errorClass: 'Error', code: 'TIMEOUT', ...secret }],
+    task: { attempted: 1, ...secret }, drain: { status: 'drained', ...secret }, eventCoverage: { ...secret },
+    countCoverage: { ...secret }, concurrency: { 1: 'executed', ...secret }, thresholds: { ...secret } },
+    keyScan: { hits: [], ...secret, removeFailures: [{ file: '/private', ...secret }] },
+    quit: { forced: false, ...secret }, timing: { launchToInteractiveMs: 0, ...secret } }
+  const before = structuredClone(raw)
+  const result = projectPerformanceResult(raw, '/out')
+  assert.deepEqual(raw, before)
+  const json = JSON.stringify(result)
+  for (const forbidden of ['prompt', 'secretNumber', 'secretBoolean', '918273', 'secretMetric', 'a'.repeat(64), 'b'.repeat(64), '/private']) {
+    assert.equal(json.includes(forbidden), false, forbidden)
+  }
+  assert.deepEqual(Object.keys(result.measured.measurements.main.metrics.metrics), [PERFORMANCE_METRICS[0]])
+  assert.deepEqual(result.measured.measurements.main.metrics.metrics[PERFORMANCE_METRICS[0]],
+    { count: 1, sum: 0, min: 0, max: 0, p50UpperBound: 0, p95UpperBound: 0 })
+  assert.deepEqual(result.measured.measurements.renderer.metrics, {})
+})
+
+it('does not accept globally familiar strings, objects, booleans or numbers as another field type', () => {
+  const result = projectPerformanceResult({ scenario: 'draft', theme: 'failed', error: { message: 'secret' },
+    modelRequests: true, residualProcesses: ['secret', 0, -1], quit: { forced: 'completed' },
+    measured: { attempted: '1', failed: false, success: 'failed', failureStage: 'draft', corpusSha256: true,
+      metadata: { platform: 'draft', arch: 64, ramBytes: Infinity, sourceSha: 'draft', driverNode: 'draft',
+        appRuntime: { node: true } },
+      fixture: { model: { secret: true }, temperature: '0', configuredMaxTokens: false, protocol: 'draft' },
+      task: { physicalRequests: -1, frozenInitialTaskSha256: 'draft' },
+      measurements: { main: { metrics: { schemaVersion: 2, quantiles: 'draft', metrics: {
+        [PERFORMANCE_METRICS[0]]: { count: 1.5, sum: NaN, min: -1, max: true, p50UpperBound: {}, p95UpperBound: '0' },
+      } } }, coverage: { main: 'draft' } },
+      diagnostics: { generation: { runs: [{ runId: 1, operation: true, status: 'draft',
+        source: { modelIdHash: 'draft', fingerprint: { dependencyHash: false } },
+        attempts: { items: [{ failureCode: 'draft', transport: { phase: 'draft', httpStatus: 999, errorName: 'draft' } }] } }] } } },
+  }, '/out')
+  assert.equal(result.scenario, null)
+  assert.equal(result.theme, null)
+  assert.equal(result.error, null)
+  assert.equal(result.modelRequests, null)
+  assert.deepEqual(result.residualProcesses, [null, 0, null])
+  assert.deepEqual(result.quit, { forced: null })
+  assert.deepEqual(result.measured.metadata, { platform: null, arch: null, ramBytes: null, sourceSha: null,
+    driverNode: null, appRuntime: { node: null } })
+  assert.deepEqual(result.measured.fixture, { model: null, temperature: null, configuredMaxTokens: null, protocol: null })
+  assert.deepEqual(result.measured.measurements.main.metrics.metrics[PERFORMANCE_METRICS[0]],
+    { count: null, sum: null, min: null, max: null, p50UpperBound: null, p95UpperBound: null })
+  assert.equal(JSON.stringify(result).includes('draft'), false)
+  assert.deepEqual(result.measured.diagnostics.generation.runs[0].attempts.items[0].transport,
+    { phase: null, httpStatus: null, errorName: null })
+})
+
+it('preserves null versus explicit zero and the additive cost, sampling and parameter-group contracts', () => {
+  const result = projectPerformanceResult({ measured: { attempted: 1, failed: 1, importedChapters: null, blueprintChapters: 0,
+    countCoverage: { importedChapters: 'unavailable', blueprintChapters: 'observed' },
+    fixtureParameters: { coverage: 'observed_http_requests', observed: 40, retained: 32, omitted: 8,
+      groupLimit: 32, grouped: 40, overflow: 0, items: [{ model: null, maxTokens: null, temperature: 0 }],
+      groups: [{ model: `opaque:${'a'.repeat(64)}`, maxTokens: 0, temperature: null, count: 40 }] },
+    diagnostics: { generation: { observed: 40, retained: 32, omitted: 8, samplingRule: 'operation-head-tail-failed-v1',
+      operationCounts: [{ operation: 'import-blueprints', count: 40 }],
+      runs: [{ attempts: { observed: 35, retained: 32, omitted: 3, items: [] } }] } },
+    measurements: { coverage: { main: 'unavailable', renderer: 'live_zero_events' }, main: null,
+      costAttribution: { ownership: 'main-plus-renderer-owned-metrics', coverage: { main: 'unavailable', renderer: 'live_zero_events' },
+        categories: { schemaVersion: 2, localPreparation: { inspectMs: null, inspectFailed: 0 },
+          queueWait: { schedulerAcquireCalls: 0, schedulerAdmitted: 0, schedulerRejected: 0,
+            schedulerAdmittedWaitMs: null, schedulerRejectedWaitMs: 0, schedulerQueueSamples: null },
+          modelExecution: { providerMs: null, physicalRequests: 0 }, parsingComputation: { parseMs: null },
+          persistenceSave: { saveMs: 0 }, provenance: { corpusHash: 'a'.repeat(64), sampleChapters: 10,
+            sampleBooks: 1, attempted: 1, failed: 1, multiBookStatus: [{ books: 2, status: 'not_executed' }] } } } } } }, '/out')
+  assert.equal(result.measured.importedChapters, null)
+  assert.equal(result.measured.blueprintChapters, 0)
+  assert.equal(result.measured.measurements.main, null)
+  const costs = result.measured.measurements.costAttribution.categories
+  assert.deepEqual(costs.localPreparation, { inspectMs: null, inspectFailed: 0 })
+  assert.deepEqual(costs.queueWait, { schedulerAcquireCalls: 0, schedulerAdmitted: 0, schedulerRejected: 0,
+    schedulerAdmittedWaitMs: null, schedulerRejectedWaitMs: 0, schedulerQueueSamples: null })
+  assert.equal(costs.modelExecution.physicalRequests, 0)
+  assert.equal(costs.modelExecution.providerMs, null)
+  assert.equal(result.measured.fixtureParameters.groups[0].model, `opaque:${'a'.repeat(64)}`)
+  assert.deepEqual(result.measured.fixtureParameters.items[0], { model: null, maxTokens: null, temperature: 0 })
+  assert.equal(result.measured.fixtureParameters.omitted, 8)
+  assert.equal(result.measured.fixtureParameters.overflow, 0)
+  assert.equal(result.measured.diagnostics.generation.omitted, 8)
+  assert.equal(result.measured.diagnostics.generation.runs[0].attempts.omitted, 3)
+  assert.deepEqual(result.measured.diagnostics.generation.operationCounts, [{ operation: 'import-blueprints', count: 40 }])
+  for (const coverage of ['not_available_http429', 'not_applicable_embedding']) {
+    const fixtureParameters = { coverage, observed: null, retained: 0, omitted: null, grouped: null,
+      overflow: null, groupLimit: 32, groups: [], items: [] }
+    assert.deepEqual(projectPerformanceResult({ measured: { fixtureParameters } }, '/out').measured.fixtureParameters, fixtureParameters)
+  }
+})
+
+it('retains every fixed metric name without granting authority to arbitrary hashed or familiar keys', () => {
+  const summary = { count: 1, sum: 0, min: 0, max: 0, p50UpperBound: 0, p95UpperBound: 0 }
+  const metrics = Object.fromEntries(PERFORMANCE_METRICS.map(name => [name, summary]))
+  const result = projectPerformanceResult({ measured: { measurements: {
+    main: { metrics: { schemaVersion: 1, quantiles: 'fixed-histogram-upper-bounds', metrics } }, renderer: { metrics },
+  } } }, '/out')
+  assert.deepEqual(result.measured.measurements.main.metrics.metrics, metrics)
+  assert.deepEqual(result.measured.measurements.renderer.metrics, metrics)
+})
+
+for (const scenario of ['perf-import-10', 'perf-import-100', 'perf-import-1000', 'perf-long-stream', 'perf-slow-embedding', 'perf-rate-limit']) {
+  it(`retains the declared evidence and actual contained assets for ${scenario}`, () => {
+    const raw = { scenario, session: scenario, theme: 'light', shell: 'stage',
+      screenshot: 'C:\\out\\scene.failure.png', failureScreenshot: 'C:\\out\\session.failure.png',
+      video: 'C:\\out\\scene.webm', isolationRoot: 'C:\\private',
+      error: 'PERFORMANCE_FAILURE:scenario:workflow:TimeoutError:TIMEOUT',
+      measured: { scenario, attempted: 1, failed: 1, success: false, failureStage: 'workflow',
+        cleanupFailures: 0, stopFailures: 0, importedChapters: null, blueprintChapters: null,
+        corpusSha256: 'a'.repeat(64), elapsedMs: 0, fixtureAcceptedRequests: 0, finalFixtureAcceptedRequests: 0,
+        fixture: { kind: 'local-openai-compatible-fiction', protocol: 'openai', model: 'gpt-4.1', temperature: 0,
+          configuredMaxTokens: 0, skill: 'isolated-fixture-default-no-custom-install', corpusSha256: 'b'.repeat(64) },
+        requestSummary: { coverage: 'unavailable', byRoute: { '/v1/chat/completions': { count: 0, failed: 0, http429: 0, totalMs: 0, maxMs: 0 } } },
+        finalRequestSummary: null, requestSummaryCutoff: 'before_quit', requestsAfterMeasurement: 0,
+        drain: { status: 'drained', cancellationRequested: true },
+        failureDiagnostics: [{ source: 'scenario', stage: 'workflow', errorClass: 'TimeoutError', code: 'TIMEOUT' }],
+        concurrency: { 1: 'executed', 2: 'unsupported_not_executed', 4: 'unsupported_not_executed' } },
+      externalRequests: null, externalRequestsCoverage: 'unavailable', externalWrites: [], externalWritesIgnored: [],
+      residualProcesses: [], modelRequests: 0, modelRequestsAfterFinalCutoff: 0, quit: { forced: true } }
+    const result = projectPerformanceResult(raw, 'C:\\out', { pathApi: path.win32, contained: () => true })
+    assert.equal(result.scenario, scenario)
+    assert.equal(result.session, scenario)
+    assert.equal(result.screenshot, 'scene.failure.png')
+    assert.equal(result.failureScreenshot, 'session.failure.png')
+    assert.equal(result.video, 'scene.webm')
+    assert.match(result.isolationRoot, /^opaque:/)
+    assert.deepEqual(result.measured, raw.measured)
+    assert.equal(result.error, 'PERFORMANCE_FAILURE:TimeoutError:TIMEOUT')
+    assert.equal(result.externalRequests, null)
+    assert.equal(result.externalRequestsCoverage, 'unavailable')
+    assert.equal(result.modelRequestsAfterFinalCutoff, 0)
+    assert.deepEqual(result.quit, { forced: true })
+  })
+}
 
 it('writes the same projection to stdout and JSON while passing real paths to session cleanup', async () => {
   const out = temporaryDirectory(), root = path.join(out, 'isolated')

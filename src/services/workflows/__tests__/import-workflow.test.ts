@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
 const ipcMocks = vi.hoisted(() => ({ invoke: vi.fn() }))
 const characterSyncMocks = vi.hoisted(() => ({ retry: vi.fn() }))
@@ -45,6 +45,7 @@ vi.mock('../commands/analyze-style.command', () => ({
 }))
 
 import { createImportWorkflow, estimateImportCost, loadAuthorImportChapterNumbers } from '../import-workflow'
+import { ImportRunOrchestrator } from '../import-run-orchestrator'
 import {
   IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
   type ImportRunEffectReceipt,
@@ -738,12 +739,20 @@ describe('作者在一批参照章节导入途中取消（#587）', () => {
     })
     vi.stubGlobal('window', { aiNovelAPI: { invoke: vi.fn(async (channel: string) => channel === 'skills:list-user' ? [] : false), on: vi.fn(() => () => {}), once: vi.fn() } })
     useWorkflowStore.setState({ activeRuns: [], history: [], globalLogs: [], waitingRuns: {} })
+    const performanceKey = Symbol.for('pagekin.performance-baseline.renderer')
+    const previousProbe = Object.getOwnPropertyDescriptor(globalThis, performanceKey)
+    const record = vi.fn()
+    Object.defineProperty(globalThis, performanceKey, { value: { now: () => performance.now(), record }, configurable: true })
     try {
       await useWorkflowStore.getState().startWorkflow(createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner }))
     } finally {
       vi.unstubAllGlobals()
+      if (previousProbe) Object.defineProperty(globalThis, performanceKey, previousProbe)
+      else delete (globalThis as Record<symbol, unknown>)[performanceKey]
     }
     const channels = ipcMocks.invoke.mock.calls.map(call => call[1])
+    expect(record).toHaveBeenCalledExactlyOnceWith('workflow.import.knowledge.ms', expect.any(Number))
+    expect(record.mock.calls[0]![1]).toBeGreaterThanOrEqual(0)
     return { ended: useWorkflowStore.getState().history[0]!, channels }
   }
 
@@ -764,4 +773,108 @@ describe('作者在一批参照章节导入途中取消（#587）', () => {
     expect(channels).toContain('db:import-run-fail')
     expect(channels).not.toContain('db:import-run-cancel-at-boundary')
   })
+})
+
+describe('import stage performance observation', () => {
+  const key = Symbol.for('pagekin.performance-baseline.renderer')
+  let previous: PropertyDescriptor | undefined
+  let execute: MockInstance<ImportRunOrchestrator['executeStage']>
+  const stages = [
+    ['knowledge', false, 0], ['global', false, 1], ['style', false, 2], ['blueprints', false, 3],
+    ['author-commit', true, 0], ['author-publish', true, 1], ['author-postprocess', true, 2], ['refresh', false, 4],
+  ] as const
+
+  function install(sink: unknown): void {
+    Object.defineProperty(globalThis, key, { value: sink, configurable: true, writable: true })
+  }
+
+  function step(stage: typeof stages[number][0], author: boolean, index: number) {
+    const snapshot = run({
+      stage, purpose: author ? 'author-manuscript' : 'reference',
+      effectNamespace: `import:${author ? 'author-manuscript' : 'reference'}:import-run-1`,
+    })
+    return createImportWorkflow({
+      projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner,
+      ...(author ? { authorChapterNumbers: [1] } : {}),
+    }).steps[index]!
+  }
+
+  beforeEach(() => {
+    previous = Object.getOwnPropertyDescriptor(globalThis, key)
+    delete (globalThis as Record<symbol, unknown>)[key]
+    execute = vi.spyOn(ImportRunOrchestrator.prototype, 'executeStage').mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    execute.mockRestore()
+    if (previous) Object.defineProperty(globalThis, key, previous)
+    else delete (globalThis as Record<symbol, unknown>)[key]
+  })
+
+  it.each(stages)('records the real %s step executor only when invoked', async (stage, author, index) => {
+    const sink = { now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(35), record: vi.fn() }
+    install(sink)
+    const entered = step(stage, author, index)
+    expect(sink.now).not.toHaveBeenCalled()
+    expect(sink.record).not.toHaveBeenCalled()
+    const ctx = context()
+    await entered.executor({} as never, ctx, callbacks)
+    expect(execute).toHaveBeenCalledExactlyOnceWith('import-run-1', stage, executionOwner, ctx, callbacks)
+    expect(sink.record).toHaveBeenCalledExactlyOnceWith(`workflow.import.${stage}.ms`, 25)
+  })
+
+  it.each(['failed', 'cancelled'] as const)('preserves the original %s result and records elapsed stage time once', async outcome => {
+    const original = Object.assign(new Error('private-stage-error'), { code: outcome === 'cancelled' ? 'WORKFLOW_CANCELLED' : 'FICTIONAL_STAGE_FAILED' })
+    execute.mockRejectedValue(original)
+    const sink = { now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(40), record: vi.fn() }
+    install(sink)
+    const ctx = context()
+    ctx.cancelled = outcome === 'cancelled'
+    await expect(step('knowledge', false, 0).executor({} as never, ctx, callbacks)).rejects.toBe(original)
+    expect(sink.record).toHaveBeenCalledExactlyOnceWith('workflow.import.knowledge.ms', 40)
+    expect(JSON.stringify(sink.record.mock.calls)).not.toContain('private-stage-error')
+  })
+
+  it('keeps zero elapsed time and samples only after the actual executor settles', async () => {
+    let resolve!: () => void
+    const gate = new Promise<void>(done => { resolve = done })
+    execute.mockReturnValue(gate)
+    const sink = { now: vi.fn(() => 5), record: vi.fn() }
+    install(sink)
+    const pending = step('knowledge', false, 0).executor({} as never, context(), callbacks)
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(sink.record).not.toHaveBeenCalled()
+    resolve()
+    await pending
+    expect(sink.record).toHaveBeenCalledExactlyOnceWith('workflow.import.knowledge.ms', 0)
+  })
+
+  it('executes without observation when no opt-in probe is installed', async () => {
+    await expect(step('knowledge', false, 0).executor({} as never, context(), callbacks)).resolves.toBeUndefined()
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(Object.getOwnPropertyDescriptor(globalThis, key)).toBeUndefined()
+  })
+
+  it.each(['missing-record', 'missing-clock', 'start-throws', 'end-throws', 'invalid-start', 'invalid-end', 'sink-throws'] as const)(
+    'keeps success and original failure unchanged when observation %s', async fault => {
+      for (const fails of [false, true]) {
+        const original = new Error('private-original-stage-error')
+        if (fails) execute.mockRejectedValue(original)
+        else execute.mockResolvedValue(undefined)
+        const now = vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(30)
+        const record = vi.fn()
+        if (fault === 'start-throws') now.mockReset().mockImplementation(() => { throw new Error('private-start-clock') })
+        if (fault === 'end-throws') now.mockReset().mockReturnValueOnce(10).mockImplementation(() => { throw new Error('private-end-clock') })
+        if (fault === 'invalid-start') now.mockReset().mockReturnValue(NaN)
+        if (fault === 'invalid-end') now.mockReset().mockReturnValueOnce(10).mockReturnValueOnce(-1)
+        if (fault === 'sink-throws') record.mockImplementation(() => { throw new Error('private-sink-error') })
+        install({ ...(fault === 'missing-clock' ? {} : { now }), ...(fault === 'missing-record' ? {} : { record }) })
+        const pending = step('knowledge', false, 0).executor({} as never, context(), callbacks)
+        if (fails) await expect(pending).rejects.toBe(original)
+        else await expect(pending).resolves.toBeUndefined()
+        expect(record).toHaveBeenCalledTimes(fault === 'sink-throws' ? 1 : 0)
+        if (fault === 'missing-record') expect(now).not.toHaveBeenCalled()
+      }
+    },
+  )
 })

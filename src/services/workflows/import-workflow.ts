@@ -27,6 +27,7 @@ import { retryDirectoryCharacterSync } from './directory-character-sync-recovery
 import type { WritingLanguage } from '../../shared/writing-language'
 import { countDraftUnits } from '../../shared/draft-units'
 import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
+import type { PerformanceMetric } from '../../shared/performance-baseline'
 
 export interface ImportWorkflowParams {
   projectPath: string
@@ -466,10 +467,31 @@ function productionDependencies(
   }
 }
 
+type ImportWorkflowStage = Exclude<ImportRunStage, 'parsing' | 'prepared' | 'completed'>
+
+/** Executor wall time includes admission/checkpoint reads, not proof of a new stage effect. */
+function importStageObservation(stage: ImportWorkflowStage): (() => void) | undefined {
+  try {
+    const sink = (globalThis as Record<symbol, unknown>)[Symbol.for('pagekin.performance-baseline.renderer')] as {
+      now(): number
+      record(name: Extract<PerformanceMetric, `workflow.import.${string}`>, value: number): void
+    } | undefined
+    if (!sink || typeof sink.now !== 'function' || typeof sink.record !== 'function') return undefined
+    const started = sink.now()
+    if (!Number.isFinite(started) || started < 0) return undefined
+    return () => {
+      try {
+        const ended = sink.now()
+        if (Number.isFinite(ended) && ended >= 0) sink.record(`workflow.import.${stage}.ms`, Math.max(0, ended - started))
+      } catch { /* Stage diagnostics cannot change workflow outcomes. */ }
+    }
+  } catch { return undefined }
+}
+
 function importStep(
   run: ImportRunSnapshot,
   executionOwner: string,
-  stage: Exclude<ImportRunStage, 'completed'>,
+  stage: ImportWorkflowStage,
   name: [string, string],
   description: [string, string],
 ) {
@@ -477,8 +499,11 @@ function importStep(
     name: textForLocale(run.locale, ...name),
     description: textForLocale(run.locale, ...description),
     executor: async (_step: WorkflowStep, context: WorkflowContext, callbacks: StepCallbacks) => {
-      await new ImportRunOrchestrator(productionDependencies(context, callbacks))
-        .executeStage(run.id, stage, executionOwner, context, callbacks)
+      const observe = importStageObservation(stage)
+      try {
+        await new ImportRunOrchestrator(productionDependencies(context, callbacks))
+          .executeStage(run.id, stage, executionOwner, context, callbacks)
+      } finally { observe?.() }
     },
   }
 }

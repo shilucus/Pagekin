@@ -157,8 +157,8 @@
         "deterministic",
         "performance"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -255,6 +255,30 @@
           "environment": "Windows x64; Electron 44.9.3; fictional loopback provider; 1440x900 light; sourceSha null with frozen source/build/report identities",
           "result": "Serial import/long-stream exit 0: actual endpoint/style/blueprint selections and writing material receipt retained; 32/2 requests, normal quit, zero cutoff/external writes/residual processes. Screenshots inspected; original six baseline reports unchanged.",
           "limitations": "One-book individual observations only; no workflow p95, real billing/model quality, visual fidelity or three-target qualification. Two/four books and original failed 1000-chapter coverage are not relabeled."
+        },
+        {
+          "type": "static",
+          "sourceSha": "2446a1ca107030db816af57c2f16b4aeb7801040 + stage-47-evidence.md frozen source identities",
+          "artifactOrReceipt": "stage-47-evidence.md#frozen-source-and-build-identities; review-record.md",
+          "environment": "Windows x64; sixteen frozen source/test/ADR paths; independent source, privacy/lifecycle and final artifact/AC review",
+          "result": "Actual numeric scheduler/stage observation, fixed-owner five-category cost consumer, bounded representative diagnostics and closed safe report export accepted. Both independent reviewers accept the three PERF-001 AC; 33/33 source/build/report/image/test identities match.",
+          "limitations": "Accepts a trustworthy baseline with true failures, not a promise of successful 1000-chapter workflows. No new persistence, authority, UI, multi-book activation or platform qualification."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "2446a1ca107030db816af57c2f16b4aeb7801040 + stage-47-evidence.md frozen source identities",
+          "artifactOrReceipt": "stage-47-evidence.md#final-focused-execution; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage47/focused-tests-final.json",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; isolated fictional fixtures",
+          "result": "Final complete focused package twenty files, seventy-one nested suites, 889/889, zero failed/pending; typecheck/lint/color/i18n and serial build exit 0. Initial 875/889 and lint failure retained, one-line mapping fix re-reviewed, all fourteen former failures pass once.",
+          "limitations": "Focused deterministic and source-build evidence only, not full-suite, browser interaction, model quality or packaged-platform qualification."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "2446a1ca107030db816af57c2f16b4aeb7801040 + stage-47-evidence.md frozen source and build identities",
+          "artifactOrReceipt": "stage-47-evidence.md#actual-six-scene-matrix; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage47/",
+          "environment": "Same frozen Windows x64 build; Electron 44.9.3 / Node 24.22.0 / Chrome 152.0.7977.167; 1440x900 light; controlled loopback fictional provider; uncontrolled cache",
+          "result": "Six actual single-book samples: five scene assertions pass; 1000 chapters retain TIMEOUT, attempted1/failed1, cancellation drained, forced quit and unavailable final counts. All probes live, slow-embedding live_zero_events; no cleanup/stop/cutoff/external writes/requests/residual failures. Actual source/parameter omission denominators and six inspected image/report hashes retained; original six reports unchanged.",
+          "limitations": "Two/four books unsupported_not_executed. The 1000-chapter sample has no renderer snapshot observation and a 732.954623ms main event-loop maximum; targets remain candidate-only. HTTP429 is one unknown/no resend, not generation success. Single observations are not workflow/interaction p95, real billing, literary quality or platform qualification."
         }
       ]
     },

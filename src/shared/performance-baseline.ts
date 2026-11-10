@@ -5,6 +5,10 @@ export const PERFORMANCE_METRICS = [
   'source.read.ms', 'source.read.chapters', 'source.read.utf8_bytes',
   'source.select.ms', 'source.validate.ms', 'source.selected.utf8_bytes',
   'source.selected.global.chapters', 'source.selected.style.chapters', 'source.selected.blueprints.chapters',
+  'scheduler.acquire.calls', 'scheduler.acquire.admitted', 'scheduler.acquire.rejected',
+  'scheduler.queue', 'scheduler.wait.admitted_ms', 'scheduler.wait.rejected_ms',
+  'workflow.import.knowledge.ms', 'workflow.import.global.ms', 'workflow.import.style.ms', 'workflow.import.blueprints.ms',
+  'workflow.import.author-commit.ms', 'workflow.import.author-publish.ms', 'workflow.import.author-postprocess.ms', 'workflow.import.refresh.ms',
   'generation.execute.calls', 'generation.execute.ms', 'generation.pending',
   'generation.dispatch.calls', 'generation.provider.ms', 'generation.provider.failed',
   'generation.notify.calls', 'generation.notify.durable_utf8_bytes',
@@ -125,6 +129,12 @@ export interface CreationCostAttribution {
     snapshotQueueMs: number | null
     pendingSamples: PerformanceMetricSummary | null
     snapshotQueueSamples: PerformanceMetricSummary | null
+    schedulerAcquireCalls: number | null
+    schedulerAdmitted: number | null
+    schedulerRejected: number | null
+    schedulerAdmittedWaitMs: number | null
+    schedulerRejectedWaitMs: number | null
+    schedulerQueueSamples: PerformanceMetricSummary | null
   }
   modelExecution: {
     providerMs: number | null
@@ -187,6 +197,12 @@ export function computeCreationCostAttribution(
       snapshotQueueMs: getSum('renderer.snapshot.queue_ms'),
       pendingSamples: snapshot.metrics['generation.pending'] ?? null,
       snapshotQueueSamples: snapshot.metrics['renderer.snapshot.queue'] ?? null,
+      schedulerAcquireCalls: getSum('scheduler.acquire.calls'),
+      schedulerAdmitted: getSum('scheduler.acquire.admitted'),
+      schedulerRejected: getSum('scheduler.acquire.rejected'),
+      schedulerAdmittedWaitMs: getSum('scheduler.wait.admitted_ms'),
+      schedulerRejectedWaitMs: getSum('scheduler.wait.rejected_ms'),
+      schedulerQueueSamples: snapshot.metrics['scheduler.queue'] ?? null,
     }),
     modelExecution: Object.freeze({
       providerMs: getSum('generation.provider.ms'),

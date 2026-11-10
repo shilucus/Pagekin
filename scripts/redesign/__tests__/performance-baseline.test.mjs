@@ -116,7 +116,7 @@ describe('performance baseline contract', () => {
     expect(result.sampleEndedAt).toBeGreaterThanOrEqual(result.sampleStartedAt)
     const parameters = summarizeFixtureChats(Array.from({ length: 33 }, () => ({ maxTokens: 42, temperature: 0, messages: 'private-prompt' })))
     expect(parameters).toMatchObject({ observed: 33, retained: 32 })
-    expect(parameters.items[0]).toEqual({ maxTokens: 42, temperature: 0 })
+    expect(parameters.items[0]).toEqual({ model: null, maxTokens: 42, temperature: 0 })
     expect(JSON.stringify(parameters)).not.toContain('private-prompt')
   })
 
@@ -163,6 +163,63 @@ describe('performance baseline contract', () => {
     const result = await pending
     expect(result.generation).toMatchObject({ observed: 33, retained: 2, cutoff: true, coverage: 'partial' })
     expect(invoke).toHaveBeenCalledTimes(3)
+    expect(result.generation.omitted).toBe(31)
+  })
+
+  it('samples actual operation heads, tails and failures without losing the lightweight denominator', async () => {
+    const runs = Array.from({ length: 60 }, (_, index) => ({ handle: { runId: `g-${index}` },
+      operation: index < 40 ? 'finalized-character-state' : index < 58 ? 'import-blueprints' : 'analyze-writing-style',
+      status: index === 16 ? 'failed' : 'completed' }))
+    runs.push({ handle: { runId: 'private-operation-run' }, operation: 'private-operation', status: 'completed' })
+    const invoke = vi.fn(async (_page, channel, argument) => {
+      if (channel === 'generation:list') return runs
+      const run = runs.find(item => item.handle.runId === argument.handle.runId)
+      return { schemaVersion: 1, handle: run.handle, operation: run.operation, status: run.status,
+        parametersCoverage: 'not_recorded', attempts: Array.from({ length: 34 }, () => ({ status: 'unknown' })) }
+    })
+    const result = await readPerformanceRunDiagnostics({ page: {}, invoke }, { leaseId: 'lease' }, true)
+    const sampled = invoke.mock.calls.filter(call => call[1] === 'generation:read-diagnostics')
+      .map(call => call[2].handle.runId)
+    expect(sampled).toHaveLength(32)
+    expect(new Set(sampled).size).toBe(32)
+    expect(sampled).toEqual(expect.arrayContaining(['g-0', 'g-39', 'g-16', 'g-40', 'g-57', 'g-58', 'g-59']))
+    expect(result.generation).toMatchObject({ observed: 61, retained: 32, omitted: 29,
+      samplingRule: 'operation-head-tail-failed-v1', cutoff: true, coverage: 'partial',
+      operationCounts: [{ operation: 'import-blueprints', count: 18 }, { operation: 'analyze-writing-style', count: 2 },
+        { operation: 'finalized-character-state', count: 40 }, { operation: 'unknown', count: 1 }] })
+    expect(result.generation.runs.every(run => run.attempts.observed === 34
+      && run.attempts.retained === 32 && run.attempts.omitted === 2)).toBe(true)
+    expect(result.generation.runs.find(run => run.runId === 'private-operation-run').operation).toBe('unknown')
+    expect(JSON.stringify(result.generation.operationCounts)).not.toContain('private-operation')
+    expect(invoke.mock.calls.every(call => ['generation:list', 'generation:read-diagnostics'].includes(call[1]))).toBe(true)
+  })
+
+  it('keeps complete parameter group counts with bounded groups, representatives and explicit overflow', () => {
+    const chats = Array.from({ length: 40 }, (_, maxTokens) => ({ model: 'gpt-4.1', maxTokens, temperature: 0,
+      messages: 'private-prompt', apiKey: 'private-key' }))
+    chats.push({ model: 'gpt-4.1', maxTokens: 0, temperature: 0 }, { model: 'gpt-4.1', maxTokens: 0, temperature: 0 })
+    const result = summarizeFixtureChats(chats)
+    expect(result).toMatchObject({ coverage: 'observed_http_requests', observed: 42, retained: 32, omitted: 10,
+      groupLimit: 32, grouped: 34, overflow: 8 })
+    expect(result.groups).toHaveLength(32)
+    expect(result.groups[0]).toEqual({ model: 'gpt-4.1', maxTokens: 0, temperature: 0, count: 3 })
+    expect(result.groups.reduce((sum, group) => sum + group.count, 0) + result.overflow).toBe(result.observed)
+    expect(result.items.at(-1)).toEqual({ model: 'gpt-4.1', maxTokens: 0, temperature: 0 })
+    expect(JSON.stringify(result)).not.toMatch(/private-|messages|apiKey/u)
+  })
+
+  it('distinguishes missing, empty, invalid and zero parameters without exposing private model names', () => {
+    expect(summarizeFixtureChats(null)).toEqual({ coverage: 'unavailable', observed: null, retained: 0,
+      omitted: null, groupLimit: 32, grouped: null, overflow: null, groups: [], items: [] })
+    expect(summarizeFixtureChats([])).toMatchObject({ observed: 0, retained: 0, omitted: 0, grouped: 0, overflow: 0 })
+    const result = summarizeFixtureChats([null, { model: 'private-model', maxTokens: -1, temperature: NaN },
+      { model: 'opaque:' + 'a'.repeat(64), maxTokens: 0, temperature: 0 }, {}])
+    expect(result.items[0]).toEqual({ model: null, maxTokens: null, temperature: null })
+    expect(result.items[1]).toEqual({ model: expect.stringMatching(/^opaque:[a-f0-9]{64}$/u), maxTokens: null, temperature: null })
+    expect(result.items[2]).toEqual({ model: 'opaque:' + 'a'.repeat(64), maxTokens: 0, temperature: 0 })
+    expect(result.groups[0]).toEqual({ model: null, maxTokens: null, temperature: null, count: 2 })
+    expect(result.grouped).toBe(4)
+    expect(JSON.stringify(result)).not.toContain('private-model')
   })
   it('exposes three isolated single-book scenarios and deterministic synthetic corpora', () => {
     expect(Object.keys(PERFORMANCE_SCENARIOS)).toEqual(['perf-import-10', 'perf-import-100', 'perf-import-1000'])
@@ -253,6 +310,59 @@ describe('performance baseline contract', () => {
     expect(globalThis[mainKey]).toBeUndefined()
     expect(globalThis[rendererKey]).toBeUndefined()
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('derives schema-2 nonexclusive costs from valid owner-side summaries without mutating raw measurements', async () => {
+    const summary = sum => ({ count: 1, sum, min: sum, max: sum, p50UpperBound: sum, p95UpperBound: sum })
+    const main = { metrics: { schemaVersion: 1, quantiles: 'fixed-histogram-upper-bounds', metrics: {
+      'import.read.ms': summary(0), 'generation.provider.ms': summary(10), 'transport.requests': summary(2),
+      'generation.dispatch.calls': summary(99), 'transport.visible.events': summary(3), 'generation.visible.events': summary(4),
+      'renderer.snapshot.queue_ms': summary(999), 'source.capture.ms': { ...summary(1), sum: NaN },
+      'scheduler.acquire.calls': summary(3), 'scheduler.acquire.admitted': summary(2), 'scheduler.acquire.rejected': summary(1),
+      'scheduler.wait.admitted_ms': summary(0), 'scheduler.wait.rejected_ms': summary(4), 'scheduler.queue': summary(1),
+    } }, memory: { rssSamples: 1, rssMax: 1024 }, eventLoop: { count: 1 } }
+    const renderer = { metrics: { 'renderer.snapshot.queue_ms': summary(0), 'renderer.snapshot.processing_ms': summary(5),
+      'source.read.ms': summary(999), 'generation.provider.ms': summary(999), 'workflow.import.refresh.ms': summary(7) },
+    heartbeat: { intervalMs: 100, count: 1, sumDelayMs: 0, maxDelayMs: 0 } }
+    const before = structuredClone({ main, renderer })
+    const result = await stopPerformanceBaseline({ evaluate: async () => main }, { evaluate: async () => renderer })
+    expect(result.costAttribution).toMatchObject({ coverage: { main: 'observed_metrics', renderer: 'observed_metrics' },
+      ownership: 'main-plus-renderer-owned-metrics', categories: { schemaVersion: 2,
+        localPreparation: { importReadMs: 0, sourceReadMs: null, sourceCaptureMs: null },
+        queueWait: { snapshotQueueMs: 0, schedulerAcquireCalls: 3, schedulerAdmitted: 2, schedulerRejected: 1,
+          schedulerAdmittedWaitMs: 0, schedulerRejectedWaitMs: 4, schedulerQueueSamples: summary(1) },
+        modelExecution: { providerMs: 10, physicalRequests: 2,
+          transportVisibleEvents: 3, generationVisibleEvents: 4 },
+        parsingComputation: { rendererSnapshotProcessingMs: 5 }, persistenceSave: { saveMs: null } } })
+    expect(result.costAttribution.categories).not.toHaveProperty('totalMs')
+    expect(result.costAttribution.categories).not.toHaveProperty('phaseWallTimes')
+    expect(result.renderer.metrics['workflow.import.refresh.ms'].sum).toBe(7)
+    expect({ main: result.main, renderer: result.renderer }).toEqual(before)
+  })
+
+  it.each(['main', 'renderer'])('keeps unavailable %s cost observations null rather than borrowing the other side', async missing => {
+    const summary = { count: 1, sum: 0, min: 0, max: 0, p50UpperBound: 0, p95UpperBound: 0 }
+    const main = { metrics: { schemaVersion: 1, quantiles: 'fixed-histogram-upper-bounds', metrics: {
+      'import.read.ms': summary, 'renderer.snapshot.queue_ms': summary,
+    } }, memory: { rssSamples: 1, rssMax: 1024 }, eventLoop: { count: 1 } }
+    const renderer = { metrics: { 'renderer.snapshot.queue_ms': summary, 'import.read.ms': summary },
+      heartbeat: { intervalMs: 100, count: 1, sumDelayMs: 0, maxDelayMs: 0 } }
+    const result = await stopPerformanceBaseline({ evaluate: async () => missing === 'main' ? null : main },
+      { evaluate: async () => missing === 'renderer' ? null : renderer })
+    expect(result.costAttribution.coverage[missing]).toBe('unavailable')
+    expect(result.costAttribution.categories.localPreparation.importReadMs).toBe(missing === 'main' ? null : 0)
+    expect(result.costAttribution.categories.queueWait.snapshotQueueMs).toBe(missing === 'renderer' ? null : 0)
+    expect(result.stopFailures[missing]).toBe(1)
+  })
+
+  it('reports probe errors without derived zero costs or retained raw error data', async () => {
+    const fail = async () => { throw new Error('private-probe-error') }
+    const result = await stopPerformanceBaseline({ evaluate: fail }, { evaluate: fail })
+    expect(result.costAttribution.coverage).toEqual({ main: 'unavailable', renderer: 'unavailable' })
+    expect(result.costAttribution.categories.localPreparation.importReadMs).toBeNull()
+    expect(result.costAttribution.categories.queueWait.snapshotQueueMs).toBeNull()
+    expect(result.costAttribution.categories.modelExecution.physicalRequests).toBeNull()
+    expect(JSON.stringify(result)).not.toContain('private-probe-error')
   })
 
   it('cleans the main probe and counts a renderer stop failure', async () => {
@@ -516,8 +626,14 @@ describe('performance import failure evidence', () => {
 
   it('rejects requests arriving between probe stop and the driver final cutoff', async () => {
     const f = importFixture()
+    f.context.fake.chats = [{ model: 'gpt-4.1', maxTokens: 0, temperature: 0, messages: 'private-prompt' }]
     const report = await runPerformanceImportScenario(10, f.context, f.dependencies)
     expect(report.success).toBe(true)
+    expect(report.fixture).toEqual({ kind: 'local-openai-compatible-fiction', protocol: 'openai', model: 'gpt-4.1',
+      temperature: 0.7, configuredMaxTokens: 4096, skill: 'isolated-fixture-default-no-custom-install' })
+    expect(report.fixtureParameters).toMatchObject({ observed: 1, retained: 1, grouped: 1, overflow: 0,
+      groups: [{ model: 'gpt-4.1', maxTokens: 0, temperature: 0, count: 1 }] })
+    expect(JSON.stringify(report)).not.toContain('private-prompt')
     expect(report.diagnostics.importRun.runs[0]).toMatchObject({ id: 'import-1', checkpointCounts: { global: 1 } })
     expect(f.handlers.get('db:import-run-prepare-inspection')).toBe(f.original)
     expect(f.dependencies.cancelImport).not.toHaveBeenCalled()

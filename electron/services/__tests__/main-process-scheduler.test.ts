@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import {
   MainProcessScheduler,
@@ -8,6 +8,8 @@ import {
 } from '../main-process-scheduler'
 import { MainResourceClaimRegistry } from '../main-resource-claims'
 import { SchedulerNetworkSubjectRegistry } from '../scheduler-network-subject'
+import { readPerformanceDiagnostics } from '../performance-diagnostics'
+import type { PerformanceMetric } from '../../../src/shared/performance-baseline'
 
 const basePolicy: MainProcessSchedulerPolicy = {
   global: 8, provider: 8, credential: 8, model: 8, project: 8,
@@ -495,5 +497,149 @@ describe('main process scheduler', () => {
     expect(JSON.stringify(stats)).not.toMatch(/fictional|provider|credential|model|project|body|reason/u)
     expect(waiting.result.code).toBe('SCHEDULER_CANCELLED')
     first.finish()
+  })
+})
+
+describe('scheduler performance observation', () => {
+  let now = 10
+  let previousFlag: string | undefined
+  let before: ReturnType<typeof readPerformanceDiagnostics>
+  const sum = (name: PerformanceMetric) => (readPerformanceDiagnostics().metrics[name]?.sum ?? 0) - (before.metrics[name]?.sum ?? 0)
+  const count = (name: PerformanceMetric) => (readPerformanceDiagnostics().metrics[name]?.count ?? 0) - (before.metrics[name]?.count ?? 0)
+
+  beforeEach(() => {
+    previousFlag = process.env.PAGEKIN_PERFORMANCE_BASELINE
+    process.env.PAGEKIN_PERFORMANCE_BASELINE = '1'
+    before = readPerformanceDiagnostics()
+    now = 10
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+  })
+
+  afterEach(() => {
+    if (previousFlag === undefined) delete process.env.PAGEKIN_PERFORMANCE_BASELINE
+    else process.env.PAGEKIN_PERFORMANCE_BASELINE = previousFlag
+    vi.restoreAllMocks()
+  })
+
+  it('samples immediate and queued admission once, never physical finish or quarantine', async () => {
+    const f = fixture({ global: 1 })
+    const abort = new AbortController()
+    const first = await f.scheduler.acquire(f.request({ signal: abort.signal }))
+    const waiting = observed(f.scheduler.acquire(f.request()))
+    now = 45
+    first.finish()
+    await waiting.settled
+    expect(sum('scheduler.acquire.calls')).toBe(2)
+    expect(sum('scheduler.acquire.admitted')).toBe(2)
+    expect(sum('scheduler.acquire.rejected')).toBe(0)
+    expect(count('scheduler.wait.admitted_ms')).toBe(2)
+    expect(sum('scheduler.wait.admitted_ms')).toBe(35)
+    expect(count('scheduler.wait.rejected_ms')).toBe(0)
+    expect(count('scheduler.queue')).toBe(4)
+    expect(sum('scheduler.queue')).toBe(2)
+    const settled = readPerformanceDiagnostics()
+    now = 1000
+    abort.abort('private-abort-reason')
+    first.finish()
+    expect(waiting.result.permit!.quarantine()).toBe(true)
+    expect(f.scheduler.getStats()).toMatchObject({ occupied: 1, quarantined: 1 })
+    waiting.result.permit!.finish()
+    waiting.result.permit!.finish()
+    f.scheduler.resetCredential(f.standard.subject.credential)
+    f.scheduler.close()
+    expect(readPerformanceDiagnostics()).toEqual(settled)
+    expect(f.resources.getStats().active).toBe(0)
+  })
+
+  it.each(['cancel', 'project-cancel', 'close', 'full'] as const)('observes %s rejection once without changing active work', async action => {
+    const f = fixture({ global: 1, maxQueued: 1 })
+    const first = await f.scheduler.acquire(f.request())
+    now = 20
+    const abort = new AbortController()
+    const waiting = observed(f.scheduler.acquire(f.request({ signal: abort.signal })))
+    now = 50
+    if (action === 'full') {
+      await expect(f.scheduler.acquire(f.request())).rejects.toMatchObject({ code: 'SCHEDULER_QUEUE_FULL' })
+      expect(f.scheduler.getStats()).toMatchObject({ occupied: 1, queued: 1 })
+      now = 60
+      abort.abort()
+    } else if (action === 'cancel') abort.abort()
+    else if (action === 'project-cancel') expect(f.scheduler.cancelProject('fictional-a')).toBe(1)
+    else f.scheduler.close()
+    await waiting.settled
+    expect(waiting.result.code).toBe(action === 'close' ? 'SCHEDULER_CLOSED' : 'SCHEDULER_CANCELLED')
+    expect(sum('scheduler.acquire.calls')).toBe(action === 'full' ? 3 : 2)
+    expect(sum('scheduler.acquire.admitted')).toBe(1)
+    expect(sum('scheduler.acquire.rejected')).toBe(action === 'full' ? 2 : 1)
+    expect(count('scheduler.wait.rejected_ms')).toBe(action === 'full' ? 2 : 1)
+    expect(sum('scheduler.wait.rejected_ms')).toBe(action === 'full' ? 40 : 30)
+    expect(f.scheduler.getStats()).toMatchObject({ occupied: 1, queued: 0 })
+    const settled = readPerformanceDiagnostics()
+    abort.abort()
+    f.scheduler.cancelProject('fictional-a')
+    f.scheduler.close()
+    first.finish()
+    first.finish()
+    expect(readPerformanceDiagnostics()).toEqual(settled)
+    expect(f.resources.getStats().active).toBe(0)
+  })
+
+  it('counts pre-queue rejection without inventing queue depth or wait samples and preserves original claim errors', async () => {
+    const f = fixture()
+    const abort = new AbortController()
+    abort.abort()
+    await expect(f.scheduler.acquire(f.request({ signal: abort.signal }))).rejects.toMatchObject({ code: 'SCHEDULER_CANCELLED' })
+    await expect(f.scheduler.acquire(f.request({ subject: { ...f.standard.subject } }))).rejects.toMatchObject({ code: 'SCHEDULER_SUBJECT_INVALID' })
+    const original = new Error('private-claim-error')
+    const claims = { get resourceKeys(): string[] { throw original } }
+    await expect(f.scheduler.acquire(f.request({ claims }))).rejects.toBe(original)
+    f.scheduler.close()
+    await expect(f.scheduler.acquire(f.request())).rejects.toMatchObject({ code: 'SCHEDULER_CLOSED' })
+    expect(sum('scheduler.acquire.calls')).toBe(4)
+    expect(sum('scheduler.acquire.rejected')).toBe(4)
+    expect(count('scheduler.queue')).toBe(0)
+    expect(count('scheduler.wait.admitted_ms')).toBe(0)
+    expect(count('scheduler.wait.rejected_ms')).toBe(0)
+    expect(f.scheduler.getStats()).toMatchObject({ occupied: 0, queued: 0 })
+    expect(JSON.stringify(readPerformanceDiagnostics())).not.toContain('private-claim-error')
+  })
+
+  it('does no timing or recording when diagnostics are disabled', async () => {
+    process.env.PAGEKIN_PERFORMANCE_BASELINE = '0'
+    const f = fixture({ global: 1 })
+    const first = await f.scheduler.acquire(f.request())
+    const waiting = observed(f.scheduler.acquire(f.request()))
+    f.scheduler.close()
+    await waiting.settled
+    first.finish()
+    expect(performance.now).not.toHaveBeenCalled()
+    expect(readPerformanceDiagnostics()).toEqual(before)
+  })
+
+  it.each(['clock', 'sink'] as const)('keeps admission, cancellation and physical claims intact after a diagnostic %s failure', async failure => {
+    if (failure === 'clock') vi.mocked(performance.now).mockImplementation(() => { throw new Error('private-clock-error') })
+    else vi.spyOn(Number, 'isFinite').mockImplementation(() => { throw new Error('private-sink-error') })
+    const f = fixture({ global: 1 })
+    const first = await f.scheduler.acquire(f.request({ claims: { resourceKeys: ['chapter:1'] } }))
+    const abort = new AbortController()
+    const waiting = observed(f.scheduler.acquire(f.request({ signal: abort.signal })))
+    abort.abort()
+    await waiting.settled
+    const quarantined = first.quarantine()
+    const stats = f.scheduler.getStats()
+    const heldClaims = f.resources.getStats().active
+    first.finish()
+    f.scheduler.resetCredential(f.standard.subject.credential)
+    vi.restoreAllMocks()
+    expect(waiting.result.code).toBe('SCHEDULER_CANCELLED')
+    expect(quarantined).toBe(true)
+    expect(stats).toMatchObject({ occupied: 1, quarantined: 1, queued: 0 })
+    expect(heldClaims).toBe(1)
+    expect(f.resources.getStats().active).toBe(0)
+    expect(count('scheduler.wait.admitted_ms')).toBe(0)
+    expect(count('scheduler.wait.rejected_ms')).toBe(0)
+    if (failure === 'sink') expect(readPerformanceDiagnostics()).toEqual(before)
+    else expect(sum('scheduler.acquire.rejected')).toBe(1)
+    expect(JSON.stringify(readPerformanceDiagnostics())).not.toMatch(/private-(?:clock|sink)-error/u)
   })
 })

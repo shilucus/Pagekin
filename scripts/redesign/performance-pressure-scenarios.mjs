@@ -333,6 +333,9 @@ export async function runPerformancePressureScenario(kind, context, dependencies
     messagesSha256: sha256(JSON.stringify(chat.messages)),
   }))
   const httpParameters = summarizeFixtureChats(context.fake.chats)
+  report.fixtureParameters = kind === 'perf-rate-limit' || kind === 'perf-slow-embedding'
+    ? { ...summarizeFixtureChats(null), coverage: kind === 'perf-rate-limit' ? 'not_available_http429' : 'not_applicable_embedding' }
+    : httpParameters
   report.fixture.dispatchedParametersObserved = httpParameters.observed
   report.fixture.dispatchedParametersRetained = httpParameters.retained
   report.fixture.dispatchedParametersCoverage = kind === 'perf-rate-limit' ? 'not_available_http429'

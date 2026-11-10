@@ -226,8 +226,14 @@ export function launchArgs(roots) {
 /** 失败现场：截图、DOM 与无障碍树。取证本身失败不能盖掉原来的错误。 */
 export async function captureFailure(page, base) {
   if (!page || page.isClosed()) return
-  await page.screenshot({ path: `${base}.failure.png` }).catch(() => {})
+  const screenshot = `${base}.failure.png`
+  let saved
+  try {
+    await page.screenshot({ path: screenshot })
+    if (fs.statSync(screenshot).isFile()) saved = screenshot
+  } catch { /* An old file is not evidence that this capture succeeded. */ }
   await dumpDom(page, base).catch(() => {})
+  return saved
 }
 
 /** 应用入口是构建产物；没构建就启动，Electron 会在桌面上弹出找不到应用的对话框，所以启动前先查。 */
@@ -241,7 +247,7 @@ export function sessionIsClean({ failedAt, sessionErrors, residualProcesses, ext
   return failedAt === null && sessionErrors.length === 0 && residualProcesses?.length === 0 && externalWrites?.length === 0
 }
 
-async function launch({ roots, appRoot, fetchPolicy = { fakePort: null, realOrigin: null }, diagnostics, failureBase, shelfBooks = 0, renderTiming = false, performanceBaseline = false }) {
+export async function launch({ roots, appRoot, fetchPolicy = { fakePort: null, realOrigin: null }, diagnostics, failureBase, failureEvidence, shelfBooks = 0, renderTiming = false, performanceBaseline = false }) {
   assertBuilt(appRoot)
   const launchedAt = Date.now()
   const env = { ...isolatedEnvironment(roots), ...(renderTiming ? { DRIVE_RENDER_TIMING: String(shelfBooks || 1) } : {}),
@@ -292,7 +298,8 @@ async function launch({ roots, appRoot, fetchPolicy = { fakePort: null, realOrig
     return { app, page, timing }
   } catch (error) {
     // 启动失败时调用方拿不到 page，只能在退出前就地取证
-    await captureFailure(page, failureBase)
+    const screenshot = await captureFailure(page, failureBase)
+    if (screenshot) failureEvidence?.push(screenshot)
     await quit(app)
     throw error
   }
@@ -370,8 +377,8 @@ async function applyAppearance(page, appearance) {
  * 启动计时量的是同一配置目录里的第二次冷启动：先启动一次写好主题（与外壳偏好）再退出，两侧都这样做。
  * 首次启动还要迁移旧配置、建库，与之后的启动不可比。
  */
-async function prepareProfile({ roots, appRoot, diagnostics, failureBase }, appearance, shelfBooks = 0) {
-  const prepared = await launch({ roots, appRoot, diagnostics, failureBase })
+async function prepareProfile({ roots, appRoot, diagnostics, failureBase, failureEvidence }, appearance, shelfBooks = 0) {
+  const prepared = await launch({ roots, appRoot, diagnostics, failureBase, failureEvidence })
   try {
     await applyAppearance(prepared.page, appearance)
     if (shelfBooks > 0) await seedShelf(prepared, roots, shelfBooks)
@@ -563,14 +570,15 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
   let context
   const restartRequests = []
   const modelLog = []
+  const failureEvidence = []
   const fetchPolicy = () => ({ fakePort: fake?.port ?? null, realOrigin: realKey ? REAL_ORIGIN : null })
   let currentAppRoot = options.appRoot
   const shell = names.map(name => SCENARIOS[name]?.shell).find(Boolean) ?? options.shell
   try {
     const shelfBooks = sessionName === 'library-timing' ? SHELF_BOOKS : 0
     const failureBase = base(sessionName)
-    if (PREPARED_SESSIONS.has(sessionName)) await prepareProfile({ roots, appRoot: options.appRoot, diagnostics, failureBase }, { theme: options.theme, shell }, shelfBooks)
-    launched = await launch({ roots, appRoot: options.appRoot, fetchPolicy: fetchPolicy(), diagnostics, failureBase, shelfBooks, renderTiming: TIMED_SESSIONS.has(sessionName), performanceBaseline })
+    if (PREPARED_SESSIONS.has(sessionName)) await prepareProfile({ roots, appRoot: options.appRoot, diagnostics, failureBase, failureEvidence }, { theme: options.theme, shell }, shelfBooks)
+    launched = await launch({ roots, appRoot: options.appRoot, fetchPolicy: fetchPolicy(), diagnostics, failureBase, failureEvidence, shelfBooks, renderTiming: TIMED_SESSIONS.has(sessionName), performanceBaseline })
     shared.timing = launched.timing
     const shellShown = page => page.locator('[data-shell-presentation]').first().getAttribute('data-shell-presentation')
     if (PREPARED_SESSIONS.has(sessionName)) {
@@ -595,7 +603,7 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
           if (killed) await kill(launched.app)
           else assert.equal((await quit(launched.app)).forced, false, '重启前应用没有正常退出')
           await beforeLaunch?.()
-          launched = await launch({ roots, appRoot, fetchPolicy: fetchPolicy(), diagnostics, failureBase, performanceBaseline })
+          launched = await launch({ roots, appRoot, fetchPolicy: fetchPolicy(), diagnostics, failureBase, failureEvidence, performanceBaseline })
           currentAppRoot = appRoot
           Object.assign(context, launched)
           await recording?.resume(context.page)
@@ -615,13 +623,14 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
       await SCENARIOS[names[0]].setup?.(context)
       for (const [index, name] of names.entries()) {
         current = index
-        results[index].screenshot = `${base(name)}.png`
+        const screenshot = `${base(name)}.png`
         recording = options.video ? await startScreencast(context.page) : null
         const measured = await SCENARIOS[name].run(context)
         if (recording) results[index].video = await recording.stop(`${base(name)}.mp4`, roots.temp)
         recording = null
         if (measured) results[index].measured = measured
-        await shoot(context.page, results[index].screenshot)
+        await shoot(context.page, screenshot)
+        results[index].screenshot = screenshot
         if (options.dumpDom) await dumpDom(context.page, base(name))
         await SCENARIOS[name].after?.(context)
       }
@@ -636,7 +645,12 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
       results[current].error = errorMessage
       if (performanceBaseline && error?.performanceBaseline) results[current].measured = error.performanceBaseline
     }
-    await captureFailure(launched?.page, base(current === null ? sessionName : names[current]))
+    const screenshot = await captureFailure(launched?.page, base(current === null ? sessionName : names[current]))
+      ?? failureEvidence.at(-1)
+    if (screenshot) {
+      if (current === null) shared.failureScreenshot = screenshot
+      else results[current].screenshot = screenshot
+    }
     options = { ...options, console: true }
   } finally {
     // 场景在 hold 与 release 之间抛错时门还关着：卡住的请求让运行一直进行，应用拒绝关闭，quit 要等满 10 秒再强杀

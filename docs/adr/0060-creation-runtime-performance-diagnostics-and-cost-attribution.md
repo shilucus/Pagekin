@@ -1,7 +1,7 @@
 # ADR-0060: 创作运行时性能诊断基线与成本归因契约
 
 ## 状态
-已接受 (Accepted) - 对应 `PERF-001` 特性的内部统计合同。2026-11-10 的 Stage 35 更正聚合指标的推断边界；ADR 本身不授予功能或运行资格。
+已接受 (Accepted) - 对应 `PERF-001` 特性的内部统计合同。2026-11-10 的 Stage 35 更正聚合指标的推断边界；2026-11-11 的 Stage 47 补齐实际报告消费和闭合导出。ADR 本身不授予功能或运行资格。
 
 ## 背景与问题
 在小说创作与分析的长链路中（含原稿拆解、大纲抽取、风格分析、正文分批生成与多轮审修），耗时分布复杂，涵盖本地准备、事件排队、模型远端推理、内容校验解析与 SQLite 持久化事务等多重阶段：
@@ -20,13 +20,13 @@
 1. **分段成本归因模型 (Creation Cost Attribution)**:
    - 在 `src/shared/performance-baseline.ts` 定义 `CreationCostAttribution` 契约，将实际观测分为以下 5 类；它们不是互斥的独占耗时，不能相加为全链路时长：
      - **本地准备 (localPreparation)**: 原稿检验、读取字节数、样本抽取与合法性校验耗时；
-     - **队列等待 (queueWait)**: renderer 快照队列等待与任务队列深度的历史样本；没有分发等待计时则不伪造；
+     - **队列等待 (queueWait)**: renderer 快照队列等待、scheduler 实际准入/拒绝等待及队列深度的各自历史样本；历史没有分发等待计时则不伪造；
      - **模型执行 (modelExecution)**: provider 调用累计耗时、物理请求计数、首响应/首思考/首可见样本、已知 Token 用量与 HTTP 429 频次；不把 provider 调用时长等同纯模型推理时间；
      - **解析计算 (parsingComputation)**: 章节解析、导入哈希及 renderer 快照哈希/处理的各自累计耗时；
      - **持久化相关 (persistenceSave)**: 导入保存、生成快照写入、权威收据回读的各自耗时，以及快照/发布字节数；发布字节数不是定稿 outbox 投递耗时。
    - `import.inspect.ms` 包含读取、解析、哈希及保存等子过程；`source.capture.ms` 包含读取、选择及校验。分别保留观测，不叠加父子计时，也不从重叠统计倒推出独占成本。
    - `transport.*.events` 与 `generation.*.events` 是不同层的观察，分别报告，不相加。首响应/首思考/首可见的分布跨多个请求，不是同一请求的时间线；队列深度样本之和不是当前 pending 数。
-   - 原始 `PerformanceBaselineSnapshot` 保持 schema 1。内部派生 `CreationCostAttribution` 使用 schema 2，去除伪总时长、当前 pending 数和合并事件字段，首响应等字段明确为跨样本最小值；缺失指标为 `null`。除聚焦单测外未发现派生函数/类型的生产消费者，不添加旧错误语义的兼容 fallback。
+   - 原始 `PerformanceBaselineSnapshot` 保持 schema 1。内部派生 `CreationCostAttribution` 使用 schema 2，去除伪总时长、当前 pending 数和合并事件字段，首响应等字段明确为跨样本最小值；缺失指标为 `null`。Stage 47 的真实驱动报告复用该函数，按 main 与 renderer 的固定指标所有权组合有效观测，并保留两侧 coverage；不能盲目相加或覆盖同名指标，不添加旧错误语义的兼容 fallback。
 
 2. **区分网络等待与 UI 卡死 (Network Waiting vs UI Freezing)**:
    - `isNetworkWaitingVsUiFreeze` 不得从累计聚合数据作实时断言：请求总数大于零、没有首字/思考样本，不证明请求仍在途；网络等待也不能排除同时发生的客户端停顿。
@@ -53,6 +53,14 @@
    - 来源引用只返回固定 namespace 分类的计数，未知来源归 `unknown`，不透传可携带作者私有标签的 sourceId。已有 material-decision 逐字段返回容量、覆盖、纳入/遗漏列表及闭集原因；来源 ID 继续限定于现有 `MATERIAL_DECISION_SOURCE_ID`，额外字段不外泄。
    - 导入只返回冻结 manifest 指纹/总量、实际有序选中章号、内容 hash、字数及已解析的蓝图 checkpoint range。章号列表可有缺口，不能以首尾或总章数冒充实际选择。不得返回 title/content/core/prompts，也不从当前导入记录补历史 purpose。
    - 历史缺项为 `not_recorded/null`。未保存的完整 context ledger、template/Skill 具体选择或有效物理参数不能事后重建。该投影解释已记录的选择裁决，不证明文学事实正确或质量不退化。
+
+7. **单书基线的观测与闭合报告 (Stage 47)**:
+   - 仅在现有 opt-in 数值观测开启时记录 scheduler acquire 次数、准入/拒绝次数、队列深度及各自等待时间。等待以本次 acquire 的逻辑准入或拒绝为截止，每次恰好结算一次；不延续到 permit release、quarantine 或物理结束，也不改变队列、公平性、取消及资源占用。
+   - 在真实 import stage executor 外围记录固定 `workflow.import.<stage>.ms` wall time，包含作者提交、实体发布、后处理及实际分析/刷新阶段。未进入的阶段不补零；失败/取消仍保留其已发生耗时。它与已有准备/provider/save 等观测重叠，不是 CPU 时间或可求和的独占流水线。关闭诊断、时钟或 sink 失败不得改变业务结果。
+   - 收据详情保持 32-run/32-attempt 上限与总读取 deadline。轻量列表按实际 operation 分类，保留真实总数、代表性首尾/失败采样规则及遗漏分母；不以详情前缀冒充全流程覆盖。物理参数只从受控 HTTP 夹具的实际请求统计，有限分组与溢出分母均明确；固定配置、实际已观测参数、历史缺项是不同证据。
+   - 最终安全副本按六个现有性能场景的已知结构、固定 metric 名、限定枚举和数值字段逐项投影，未知对象键及未知文本/数值/布尔字段不输出；仅有字符串过滤或 ASCII key 白名单不满足合同。原始对象不变，stdout 与 JSON 同源，内部清理和失败判定继续使用原始事实。语料、来源和收据 hash 不携带正文或秘密；不为缺失值编造覆盖。
+   - 截图引用只登记本次成功写出的实际文件；不能认领旧目录中的同名文件。正常截图失败或启动/场景失败时，保留原始失败并仅在取证成功后引用 failure screenshot。输出继续核对 lexical/real containment，不将 DOM、ARIA 或日志自动并入安全报告。
+   - 同一冻结源码与构建下采集三档单书及三个压力场景。两/四书未支持时显式未执行，1000 章工作流超时可作为真实失败样本，不能抹去失败或改成成功；探针、隔离、收尾失效单独记录。历史原始报告保持不变，不将不同版本拼作同一统计分布。单次 workflow elapsed 不是 workflow p95，直方图只报告相应事件的 upper bounds。
 
 ## 效果与保证
 - 本 ADR 只定义可信观测与未知边界。`PERF-001` 是否满足采样、来源和诊断验收，由实际记录、源码和独立 review 决定，不从 ADR 的存在推导完成。

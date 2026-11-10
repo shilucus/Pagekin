@@ -1,6 +1,7 @@
 import type { WorkflowResourceClaims } from '../../src/shared/workflow-resource-claims'
 import { MainResourceClaimRegistry, normalizeMainResourceClaims, type MainResourceClaimLease } from './main-resource-claims'
 import type { SchedulerNetworkSubject } from './scheduler-network-subject'
+import { performanceStarted, recordPerformanceCount, recordPerformanceDuration, recordPerformanceMetric } from './performance-diagnostics'
 
 export interface MainProcessSchedulerPolicy {
   readonly global: number
@@ -64,6 +65,8 @@ interface QueueEntry {
   readonly signal?: AbortSignal
   readonly resolve: (permit: MainProcessSchedulerPermit) => void
   readonly reject: (error: SchedulerAdmissionError) => void
+  /** Queued admission only; pre-queue rejection and physical lifetime have no wait sample. */
+  readonly waitStarted: number | null
   onAbort?: () => void
   queued: boolean
 }
@@ -122,21 +125,28 @@ export class MainProcessScheduler {
   }
 
   acquire(request: SchedulerAcquireRequest): Promise<MainProcessSchedulerPermit> {
-    if (this.closed) return Promise.reject(new SchedulerAdmissionError('SCHEDULER_CLOSED'))
-    if (request.signal?.aborted) return Promise.reject(new SchedulerAdmissionError('SCHEDULER_CANCELLED'))
+    recordPerformanceCount('scheduler.acquire.calls')
+    if (this.closed || request.signal?.aborted) {
+      recordPerformanceCount('scheduler.acquire.rejected')
+      return Promise.reject(new SchedulerAdmissionError(this.closed ? 'SCHEDULER_CLOSED' : 'SCHEDULER_CANCELLED'))
+    }
 
     return new Promise((resolve, reject) => {
-      const claims = normalizeMainResourceClaims(request.claims)
+      let claims: WorkflowResourceClaims
+      try { claims = normalizeMainResourceClaims(request.claims) }
+      catch (error) { recordPerformanceCount('scheduler.acquire.rejected'); reject(error); return }
       let releaseSubject: () => void
       try {
         releaseSubject = this.retainSubject(request.subject)
       } catch {
+        recordPerformanceCount('scheduler.acquire.rejected')
         reject(new SchedulerAdmissionError('SCHEDULER_SUBJECT_INVALID'))
         return
       }
       const entry: QueueEntry = {
         projectKey: request.projectKey, subject: request.subject, releaseSubject,
         lane: request.lane, claims, signal: request.signal, resolve, reject, queued: true,
+        waitStarted: performanceStarted(),
       }
       let project = this.projects.find(value => value.projectKey === entry.projectKey)
       if (!project) {
@@ -145,6 +155,7 @@ export class MainProcessScheduler {
       }
       project[entry.lane].push(entry)
       this.queued += 1
+      recordPerformanceMetric('scheduler.queue', this.queued)
       entry.onAbort = () => {
         if (!entry.queued) return
         this.rejectQueued(entry, 'SCHEDULER_CANCELLED')
@@ -207,6 +218,9 @@ export class MainProcessScheduler {
 
   private rejectQueued(entry: QueueEntry, code: SchedulerAdmissionErrorCode): void {
     this.removeQueued(entry)
+    recordPerformanceMetric('scheduler.queue', this.queued)
+    recordPerformanceCount('scheduler.acquire.rejected')
+    recordPerformanceDuration('scheduler.wait.rejected_ms', entry.waitStarted)
     entry.releaseSubject()
     entry.reject(new SchedulerAdmissionError(code))
   }
@@ -254,6 +268,9 @@ export class MainProcessScheduler {
       this.interactiveStreak = lane === 'interactive'
         ? Math.min(this.policy.interactiveBurst, this.interactiveStreak + 1)
         : 0
+      recordPerformanceMetric('scheduler.queue', this.queued)
+      recordPerformanceCount('scheduler.acquire.admitted')
+      recordPerformanceDuration('scheduler.wait.admitted_ms', entry.waitStarted)
       entry.resolve(Object.freeze({ finish: () => { this.finish(flight) }, quarantine: () => this.quarantine(flight) }))
       return true
     }

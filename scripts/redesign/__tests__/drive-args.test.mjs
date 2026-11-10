@@ -5,7 +5,8 @@ import path from 'node:path'
 import process from 'node:process'
 import { afterEach, it, vi } from 'vitest'
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { appearanceWrite, assertBuilt, captureFailure, driveSessions, finalizeSessionObservations, finishRealSession, harvestModelLog, idleMemory, createIsolatedRoots, isolatedEnvironment, launchArgs, parseArgs,
+import { _electron as electron } from 'playwright'
+import { appearanceWrite, assertBuilt, captureFailure, driveSessions, finalizeSessionObservations, finishRealSession, harvestModelLog, idleMemory, createIsolatedRoots, isolatedEnvironment, launch, launchArgs, parseArgs,
   releaseSessionRoot, scanRunForSecret, sessionIsClean, writeConsoleLog } from '../drive.mjs'
 import { fileStamps } from '../real-model.mjs'
 import { BASELINE_SESSIONS, EXTRA_SCENARIOS, SCENARIOS } from '../scenarios.mjs'
@@ -190,10 +191,47 @@ it('启动失败的取证：截图失败也照样写 DOM 与无障碍树，且�
     content: async () => '<html><body>启动卡住</body></html>',
     locator: () => ({ ariaSnapshot: async () => '- text: 启动卡住' }),
   }
-  await captureFailure(page, base)
+  assert.equal(await captureFailure(page, base), undefined)
   assert.equal(fs.readFileSync(`${base}.dom.html`, 'utf8'), '<html><body>启动卡住</body></html>')
   assert.equal(fs.readFileSync(`${base}.aria.yml`, 'utf8'), '- text: 启动卡住')
-  await captureFailure(undefined, base)
+  assert.equal(await captureFailure(undefined, base), undefined)
+})
+
+it('failure evidence returns only this successful screenshot, not a stale file', async () => {
+  const base = path.join(tempParent(), 'perf-import-1000-light')
+  const screenshot = `${base}.failure.png`
+  fs.writeFileSync(screenshot, 'old image')
+  const page = { isClosed: () => false, content: async () => '<html></html>',
+    locator: () => ({ ariaSnapshot: async () => '' }),
+    screenshot: vi.fn(async () => { throw new Error('capture failed') }) }
+  assert.equal(await captureFailure(page, base), undefined)
+  assert.equal(fs.readFileSync(screenshot, 'utf8'), 'old image')
+  page.screenshot.mockImplementationOnce(async ({ path: file }) => { fs.writeFileSync(file, 'current image') })
+  assert.equal(await captureFailure(page, base), screenshot)
+  assert.equal(fs.readFileSync(screenshot, 'utf8'), 'current image')
+  page.isClosed = () => true
+  assert.equal(await captureFailure(page, base), undefined)
+})
+
+it('launch failure retains the actual saved screenshot before closing without replacing its cause', async () => {
+  const appRoot = tempParent(), failureBase = path.join(appRoot, 'launch')
+  fs.mkdirSync(path.join(appRoot, 'dist-electron'))
+  fs.writeFileSync(path.join(appRoot, 'dist-electron', 'main.js'), '')
+  const original = new Error('fixture startup failed'), order = [], failureEvidence = []
+  const page = { isClosed: () => false,
+    getByRole: () => ({ waitFor: async () => { throw original } }),
+    screenshot: async ({ path: file }) => { order.push('capture'); fs.writeFileSync(file, 'fixture image') },
+    content: async () => '<html></html>', locator: () => ({ ariaSnapshot: async () => '' }) }
+  const app = { evaluate: async () => {}, firstWindow: async () => page, process: () => ({}),
+    close: async () => { order.push('close') } }
+  const mock = vi.spyOn(electron, 'launch').mockResolvedValueOnce(app)
+  try {
+    await assert.rejects(launch({ roots: { userData: path.join(appRoot, 'profile') }, appRoot,
+      diagnostics: [], failureBase, failureEvidence, performanceBaseline: true }), error => error === original)
+  } finally { mock.mockRestore() }
+  assert.deepEqual(order, ['capture', 'close'])
+  assert.deepEqual(failureEvidence, [`${failureBase}.failure.png`])
+  assert.equal(fs.existsSync(failureEvidence[0]), true)
 })
 
 it('外观写入跟着被测构建走：head 只有 v3 键，只改主题；trunk 只有旧键，照旧写外壳偏好与 v1、v2', () => {

@@ -71,6 +71,8 @@ describe('performance pressure driver orchestration (not Electron qualification)
       expect(result.fixture.dispatchedParameters).toEqual([])
       expect(result.fixture.dispatchedParametersCoverage).toBe('not_available_http429')
       expect(result.fixture.usage).toBe('not_available_http429')
+      expect(result.fixtureParameters).toMatchObject({ coverage: 'not_available_http429', observed: null,
+        grouped: null, overflow: null, groups: [], items: [] })
     }
   })
 
@@ -81,6 +83,22 @@ describe('performance pressure driver orchestration (not Electron qualification)
     expect(result.measurements.renderer.metrics).toEqual({})
     expect(result.measurements.stopFailures).toEqual({ main: 0, renderer: 0 })
     expect(result.notApplicable).toContain('renderer-snapshot-queue')
+    expect(result.fixtureParameters).toMatchObject({ coverage: 'not_applicable_embedding', observed: null,
+      grouped: null, overflow: null, groups: [], items: [] })
+  })
+
+  it('consumes bounded full HTTP parameter summaries separately from configured pressure fixture settings', async () => {
+    const f = fixture('perf-long-stream')
+    f.context.fake.chats = Array.from({ length: 40 }, (_, index) => ({ model: 'gpt-4.1', maxTokens: index % 2,
+      temperature: 0, messages: 'private-prompt', apiKey: 'private-key' }))
+    const result = await runPerformancePressureScenario('perf-long-stream', f.context, f.dependencies)
+    expect(result.fixture.configuredMaxTokens).toBe(32768)
+    expect(result.fixtureParameters).toMatchObject({ observed: 40, retained: 32, omitted: 8, grouped: 40, overflow: 0,
+      groups: [{ model: 'gpt-4.1', maxTokens: 0, temperature: 0, count: 20 },
+        { model: 'gpt-4.1', maxTokens: 1, temperature: 0, count: 20 }] })
+    expect(result.fixture.dispatchedParametersObserved).toBe(40)
+    expect(JSON.stringify(result)).not.toMatch(/private-|apiKey/u)
+    expect(f.dependencies.stop).toHaveBeenCalledOnce()
   })
 
   it.each([['perf-long-stream', null], ['perf-long-stream', 'missing-purpose'], ['perf-rate-limit', null], ['perf-rate-limit', 'settled'],
