@@ -876,3 +876,13 @@ Actual execution retained initial type/lint failures and the first native report
 This package accepts only the internal persistence kernel. Dedicated v3 IPC/client, visible author workflow and the rest of FEEDBACK-003 remain incomplete; no real model, real project, trusted approval, literary-quality or platform qualification is inferred.
 
 Final artifact reviewer feedback_audit independently matched all forty-two recorded identities (36 frozen source/test/ADR, three reports, three built entries), raw final per-file denominators and all four originally failed cases now passed exactly once. The exact forty owned paths, empty index, retained initial failures and original file/report exclusions were checked. No narrow-scope blocker remains; this was artifact inspection, not an independent command rerun.
+
+## 2026-11-10 - Stage 43 Dedicated Desktop Blueprint Feedback v3
+
+Independent source reviewers baseline_audit and feedback_audit inspected the dedicated closed shared/client contract, actual registered controller-to-owner-to-SQLite path, strict durable context/task guards, six-way version isolation, writer/replay/CAS, cancellation/unknown and original/portable recovery. A static fixture type issue was corrected before execution. The evidence reviewer initially missed the pending character-sync work-item assertion and explicitly withdrew that conclusion; it is not retained as acceptance.
+
+Root retained initial TS2345 and native 1262/1264 failures. Three test-only corrections preserve correlated channel typing, distinguish legitimate pending sync work from actual identity writes, and require exactly one existing physical-completion llm_calls diagnostic while all logical/business rows stay unchanged. Both independent reviewers re-read the final twelve code/test/ADR paths and found no narrow-scope correctness blocker or required missing case.
+
+Root actually reran all twenty files: 1264/1264, zero failed/pending; final typecheck/lint/i18n/build each exit 0. [Stage 43 evidence](stage-43-evidence.md) records exact source, both reports, built entry identities and limitations. Final artifact review follows; no reviewer command rerun, UI acceptance, whole-feature completion, real-model quality or platform qualification is inferred.
+
+Final artifact reviewer feedback_audit matched all seventeen identities and identical raw denominators, including both previously failed cases now passed exactly once. No evidence blocker remains. Root separately verified the exact sixteen owned paths, empty index and Git hook/exclusion boundaries; the artifact reviewer did not run Git. This accepts only the narrow v3 desktop increment.

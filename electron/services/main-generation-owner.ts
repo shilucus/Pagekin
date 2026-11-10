@@ -14,10 +14,11 @@ import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOut
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
 import { GenerationRecoveryTailRepository } from '../repositories/generation-recovery-tail-repository'
 import { PlanningFeedbackService, type PlanningFeedbackGenerationInput } from './planning-feedback-service'
-import { readPlanningFeedbackTask } from './planning-feedback-generation'
+import { buildPlanningFeedbackContext, readPlanningFeedbackTask } from './planning-feedback-generation'
 import { assertPlanningFeedbackObject, assertPlanningFeedbackId, assertPlanningFeedbackInstructions, parsePlanningFeedbackScope, type AdoptPlanningFeedbackCandidate, type PlanningFeedbackCaptureTarget, type RelineagePlanningFeedbackCandidate, type StagePlanningFeedbackCandidate } from '../../src/shared/planning-feedback'
-import type { PlanningFeedbackCoreTarget } from '../../src/shared/planning-feedback'
-import type { PlanningFeedbackRunRecovery, PlanningFeedbackRangeScope, PlanningFeedbackRangeHistory, PlanningFeedbackRangeRunRecovery } from '../../src/shared/planning-feedback-ipc'
+import type { PlanningFeedbackBlueprintScope, PlanningFeedbackCoreTarget } from '../../src/shared/planning-feedback'
+import type { PlanningFeedbackRunRecovery, PlanningFeedbackRangeScope, PlanningFeedbackRangeHistory, PlanningFeedbackRangeRunRecovery,
+  PlanningFeedbackBlueprintHistory, PlanningFeedbackBlueprintRunRecovery } from '../../src/shared/planning-feedback-ipc'
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
 import { createGenerationRunService, GENERATION_STOPPED, type GenerationRunServiceDependencies } from './generation-run-service'
 import type { GenerationSchedulingAdmission } from './generation-scheduler'
@@ -1206,6 +1207,39 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     readPlanningFeedbackTask(run)
     return { run, input }
   }
+  const blueprintFeedbackBase = (baseId: string) => {
+    const base = planningFeedback().getBase(baseId)
+    if (base.schemaVersion !== 3 || base.target !== 'blueprintFields') throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
+    const scope = parsePlanningFeedbackScope(base.scope)
+    if (scope.kind !== 'blueprint-fields' || !isDeepStrictEqual(scope, base.scope)) throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
+    if (base.projectId !== deps.projectId && !runtimeFreeze.isFrozen('planning_feedback_bases', base.baseId))
+      throw new Error('PLANNING_FEEDBACK_HISTORY_FROZEN')
+    return base
+  }
+  const blueprintFeedbackCandidate = (candidateId: string) => {
+    const candidate = planningFeedback().getCandidate(candidateId)
+    blueprintFeedbackBase(candidate.baseId)
+    if (candidate.schemaVersion !== 3) throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
+    return candidate
+  }
+  const blueprintFeedbackRun = (handle: MainGenerationRunHandle) => {
+    const run = requireRun(handle), manifest = run.binding.sourceManifest
+    if (manifest.operation !== 'planning-feedback') throw new Error('GENERATION_FEEDBACK_ADMISSION_REQUIRED')
+    const input = manifest.planningFeedbackInput as PlanningFeedbackGenerationInput
+    assertPlanningFeedbackObject(input, ['baseId', 'feedback', 'constraints'], ['parentCandidateId'])
+    assertPlanningFeedbackId(input.baseId)
+    if (input.parentCandidateId != null) assertPlanningFeedbackId(input.parentCandidateId)
+    assertPlanningFeedbackInstructions(input.feedback, input.constraints)
+    const base = blueprintFeedbackBase(input.baseId)
+    const parent = input.parentCandidateId == null ? null : blueprintFeedbackCandidate(input.parentCandidateId)
+    const context = manifest.planningFeedbackContext as { schemaVersion?: unknown } | undefined
+    if (context?.schemaVersion !== 3) throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
+    if (!isDeepStrictEqual(manifest.promptKeys, ['planning-feedback-v3'])
+      || !isDeepStrictEqual(context, buildPlanningFeedbackContext(base, parent, input.feedback, input.constraints)))
+      throw new Error('PLANNING_FEEDBACK_GENERATION_UNPROVEN')
+    readPlanningFeedbackTask(run)
+    return { run, input }
+  }
   const plotOutlineTargetCurrent = (run: DurableGenerationRun, outline: PlotOutlineProgress, target: string): boolean => {
     const raw = deps.database.prepare("SELECT * FROM project_core WHERE id='main'").get() as Record<string, unknown> | undefined
     if (!raw || raw.synopsis !== target) return false
@@ -1951,6 +1985,82 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     adoptRangeFeedback: (request: AdoptPlanningFeedbackCandidate) => {
       rangeFeedbackCandidate(request.candidateId)
+      return planningFeedback().adopt(request)
+    },
+    captureBlueprintFeedback: (target: PlanningFeedbackBlueprintScope) => {
+      const scope = parsePlanningFeedbackScope(target)
+      if (scope.kind !== 'blueprint-fields') throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
+      const base = planningFeedback().captureBase(scope)
+      if (base.schemaVersion !== 3) throw new Error('PLANNING_FEEDBACK_TARGET_INVALID')
+      return base
+    },
+    listBlueprintFeedbackBases: (target: PlanningFeedbackBlueprintScope) => planningFeedback().listBlueprintBases(target),
+    readBlueprintFeedbackHistory: (baseId: string): PlanningFeedbackBlueprintHistory => {
+      const base = blueprintFeedbackBase(baseId), feedback = planningFeedback()
+      return { base, candidates: feedback.listCandidates(baseId).map(candidate => ({ candidate, state: feedback.candidateState(candidate.candidateId) })),
+        adoptions: feedback.listAdoptions(baseId) }
+    },
+    beginBlueprintFeedback: (request: { input: PlanningFeedbackGenerationInput; modelId: string; uiActionNonce: string }) => {
+      blueprintFeedbackBase(request.input.baseId)
+      if (request.input.parentCandidateId) blueprintFeedbackCandidate(request.input.parentCandidateId)
+      const { parentCandidateId, ...input } = request.input
+      const view = beginPlanningFeedbackRun({ ...request, input: { ...input, ...(parentCandidateId !== undefined ? { parentCandidateId } : {}) } })
+      blueprintFeedbackRun(view.handle)
+      return view
+    },
+    readBlueprintFeedbackRun: (handle: MainGenerationRunHandle): PlanningFeedbackBlueprintRunRecovery => {
+      const { run, input } = blueprintFeedbackRun(handle)
+      let sourceStatus: 'current' | 'conflict' = 'current'
+      try {
+        planningFeedback().prepare(input)
+        if (!compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding)))) sourceStatus = 'conflict'
+      } catch (error) {
+        if (error instanceof Error && (['PLANNING_FEEDBACK_SOURCE_CONFLICT', 'PLANNING_FEEDBACK_PARENT_CONFLICT',
+          'PLANNING_FEEDBACK_HISTORY_FROZEN', 'GENERATION_MODEL_CHANGED', 'GENERATION_MODEL_MISSING',
+          'GENERATION_SKILL_BINDINGS_INVALID', 'GENERATION_SKILL_ID_INVALID', 'GENERATION_SKILL_MISSING',
+          'GENERATION_SKILL_BUNDLE_DAMAGED', 'GENERATION_SKILL_INCOMPATIBLE', 'GENERATION_SOURCE_CHANGED',
+          'GENERATION_ASSET_CHANGED_DURING_SNAPSHOT', 'GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT'].includes(error.message)
+          || (error as NodeJS.ErrnoException).code === 'ENOENT')) sourceStatus = 'conflict'
+        else throw error
+      }
+      return { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, input: structuredClone(input), sourceStatus }
+    },
+    listBlueprintFeedbackRuns: (baseId: string) => {
+      blueprintFeedbackBase(baseId)
+      const ids = new Set((deps.database.prepare(`SELECT run_id FROM generation_runs WHERE
+        json_extract(binding_json,'$.sourceManifest.operation')='planning-feedback'
+        AND json_extract(binding_json,'$.sourceManifest.planningFeedbackInput.baseId')=?
+        AND json_extract(binding_json,'$.sourceManifest.planningFeedbackContext.schemaVersion')=3`).all(baseId) as { run_id: string }[]).map(row => row.run_id))
+      return runSummaries().filter(item => ids.has(item.handle.runId)).map(({ handle, status, operation }) => {
+        blueprintFeedbackRun(handle)
+        return { handle, status, operation }
+      })
+    },
+    executeBlueprintFeedback: (handle: MainGenerationRunHandle) => {
+      const { run } = blueprintFeedbackRun(handle)
+      if (runtimeFreeze.isFrozen('generation_runs', run.runId)) throw new Error('PLANNING_FEEDBACK_HISTORY_FROZEN')
+      return executePlanningFeedbackRun(handle)
+    },
+    cancelBlueprintFeedback: (handle: MainGenerationRunHandle) => {
+      const { run } = blueprintFeedbackRun(handle)
+      if (runtimeFreeze.isFrozen('generation_runs', run.runId)) throw new Error('PLANNING_FEEDBACK_HISTORY_FROZEN')
+      service.cancel(run.rootActionId)
+      return viewOf(repository.get(run.runId))
+    },
+    stageBlueprintFeedback: (request: StagePlanningFeedbackCandidate) => {
+      blueprintFeedbackBase(request.baseId)
+      if (request.parentCandidateId) blueprintFeedbackCandidate(request.parentCandidateId)
+      const { input } = blueprintFeedbackRun(handleOf(repository.get(request.runId)))
+      if (input.baseId !== request.baseId) throw new Error('PLANNING_FEEDBACK_GENERATION_UNPROVEN')
+      return planningFeedback().stage(request)
+    },
+    relineageBlueprintFeedback: (request: RelineagePlanningFeedbackCandidate) => {
+      blueprintFeedbackBase(request.baseId); blueprintFeedbackCandidate(request.sourceCandidateId)
+      return planningFeedback().relineage(request)
+    },
+    adoptBlueprintFeedback: (request: Omit<AdoptPlanningFeedbackCandidate, 'adoptedRange'>) => {
+      assertPlanningFeedbackObject(request, ['candidateId', 'idempotencyKey', 'decision', 'text'])
+      blueprintFeedbackCandidate(request.candidateId)
       return planningFeedback().adopt(request)
     },
     capturePlanningFeedbackBase: (target: PlanningFeedbackCaptureTarget) => planningFeedback().captureBase(target),

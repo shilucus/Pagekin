@@ -1528,6 +1528,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, isolated fictional SQLite/archives and deterministic provider",
           "result": "Internal schema3 single-chapter blueprint field feedback now persists F0-C1-C2, exact author-selected JSON adoption, durable replay and ABA fences through the existing writer. Actual central M15 backup/upgrade and two archive/restore cycles covered. Final 32 files 1415/1415; typecheck/lint/i18n/build exit 0; independent frozen-source re-review accepted the narrow increment.",
           "limitations": "Initial type/lint and 1347/1351 native failures retained with test-only corrections. Dedicated v3 desktop entry follows separately; no UI, auxiliary character identity/relationship writes, trusted human capability, real-model quality or platform qualification. Whole FEEDBACK-003 remains in_progress/passes=false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "c591a255ecd76a6606e13d45f1c158ae4cffe425 + stage-43-evidence.md final source hashes",
+          "artifactOrReceipt": "stage-43-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage43/focused-tests-final.json",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, isolated fictional SQLite/archives and deterministic provider",
+          "result": "Eleven dedicated desktop blueprint-v3 commands connect the closed client and actual registered controller to durable schema3 main-owner execution/adoption. Six-way target isolation, exact stored context/task, selected-field adoption/replay, CAS/ABA, original reopen, portable frozen history, unknown-no-resend and physical-tail cancellation covered. Final 20 files 1264/1264; typecheck/lint/i18n/build exit 0; two independent final source reviews accepted the narrow increment.",
+          "limitations": "Initial TS2345 and 1262/1264 native failures retained with test-only corrections and fresh full reruns. No visible author workflow, trusted approval, real-model quality or platform qualification. Whole FEEDBACK-003 and its dependencies remain incomplete."
         }
       ]
     },

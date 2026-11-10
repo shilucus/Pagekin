@@ -5,6 +5,8 @@ import {
 } from '../../shared/project-session-context'
 import { ipc } from '../ipc-client'
 import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../shared/project-runtime-contract'
+import type { AllInvokeChannels, ProjectSessionContext } from '../../shared/ipc-channels'
+import type { PlanningFeedbackBlueprintChannel } from '../../shared/planning-feedback-ipc'
 
 const invoke = vi.fn()
 
@@ -126,6 +128,46 @@ describe('project-scoped IPC session transport', () => {
     invoke.mockResolvedValue([])
     await ipc.invokeWithProjectSession(frozen, 'planning-feedback:v2:list-bases', request)
     expect(invoke).toHaveBeenCalledExactlyOnceWith('planning-feedback:v2:list-bases', request, frozen)
+  })
+
+  it('requires a session for all v3 blueprint verbs and keeps an explicit capture instead of borrowing another active project', async () => {
+    const target = { kind: 'blueprint-fields' as const, chapterNumber: 3, fields: ['title', 'notes'] as const }
+    const handle = { projectId: 'project-A', epoch: 'lease-A', rootActionId: 'blueprint-root', runId: 'blueprint-run' }
+    const input = { baseId: 'blueprint-base', feedback: 'Keep F0', constraints: ['Keep the lead'] }
+    const requestFor = <C extends PlanningFeedbackBlueprintChannel>(channel: C, ...args: AllInvokeChannels[C]['args']) => ({
+      channel,
+      args,
+      invoke: () => ipc.invoke(channel, ...args),
+      invokeCaptured: (session: ProjectSessionContext) => ipc.invokeWithProjectSession(session, channel, ...args),
+    })
+    const requests = [
+      requestFor('planning-feedback:v3:capture', { target }), requestFor('planning-feedback:v3:list-bases', { target }),
+      requestFor('planning-feedback:v3:read-history', { baseId: input.baseId }),
+      requestFor('planning-feedback:v3:begin', { input, modelId: 'fixture-model', uiActionNonce: 'fixture-nonce' }),
+      requestFor('planning-feedback:v3:execute', { handle }), requestFor('planning-feedback:v3:read-run', { handle }),
+      requestFor('planning-feedback:v3:list-runs', { baseId: input.baseId }), requestFor('planning-feedback:v3:cancel', { handle }),
+      requestFor('planning-feedback:v3:stage', { ...input, runId: handle.runId, attemptId: 'fixture-attempt', artifactId: 'fixture-artifact' }),
+      requestFor('planning-feedback:v3:relineage', { baseId: input.baseId, sourceCandidateId: 'old-candidate', feedback: 'Fresh author choice', constraints: [] }),
+      requestFor('planning-feedback:v3:adopt', { candidateId: 'blueprint-candidate', idempotencyKey: 'author-nonce', decision: 'partial', text: '{"notes":""}' }),
+    ]
+    setActiveProjectSessionContext(null)
+    for (const request of requests) {
+      await expect(request.invoke()).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    }
+    expect(invoke).not.toHaveBeenCalled()
+    const frozen = Object.freeze({ projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' })
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    invoke.mockResolvedValue([])
+    for (const request of requests) {
+      await request.invokeCaptured(frozen)
+      expect(invoke).toHaveBeenLastCalledWith(request.channel, ...request.args, frozen)
+      expect(invoke.mock.lastCall?.[2]).toBe(frozen)
+    }
+    expect(invoke).toHaveBeenCalledTimes(11)
+    setActiveProjectSessionContext(null)
+    await ipc.invokeWithProjectSession(frozen, 'planning-feedback:v3:list-bases', { target })
+    expect(invoke).toHaveBeenLastCalledWith('planning-feedback:v3:list-bases', { target }, frozen)
+    expect(invoke).toHaveBeenCalledTimes(12)
   })
 
   it('keeps diagnostic reads bound to the captured project and rejects a missing session', async () => {

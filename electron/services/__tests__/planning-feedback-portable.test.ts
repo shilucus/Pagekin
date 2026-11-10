@@ -3,11 +3,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type Sqlite from 'better-sqlite3'
 import { closeProjectDatabase, createProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
 import type { PlanningFeedbackBase } from '../../../src/shared/planning-feedback'
+import type { ModelProfile } from '../../../src/shared/ipc-channels'
+import { generationOutputContract } from '../../../src/shared/generation-owner-contract'
 import { PlanningFeedbackRepository } from '../../repositories/planning-feedback-repository'
 import { GenerationRunRepository } from '../../repositories/generation-run-repository'
 import { PlanningFeedbackService } from '../planning-feedback-service'
@@ -22,9 +24,15 @@ import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 import { createPortableTransferAuthority, serializePortableTransferAuthority } from '../portable-transfer-authority'
 import { writePortableProjectArchive } from '../portable-project-archive'
 import type { PortableProjectManifestEntry } from '../portable-project-format'
+import { createMainGenerationOwner } from '../main-generation-owner'
+import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
+import { readMainGenerationPolicy } from '../main-generation-plan'
+import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
+import type { GenerationRunServiceDependencies } from '../generation-run-service'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof Sqlite
 const roots: string[] = []
+const feedbackOwners: ReturnType<typeof createMainGenerationOwner>[] = []
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 const modelHash = 'a'.repeat(64), skillHash = 'b'.repeat(64), contextHash = 'c'.repeat(64)
 const originalNonce = 'private-original-adoption-nonce'
@@ -39,6 +47,7 @@ const outlineBody = (from: number, to: number, label = 'F0') => Array.from({ len
   (_, index) => outlineEntry(from + index, label)).join('\n\n')
 
 afterEach(() => {
+  for (const owner of feedbackOwners.splice(0)) owner.suspendForProjectClose()
   closeProjectDatabase()
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
@@ -61,6 +70,33 @@ function repository(root: string, projectId: string): PlanningFeedbackRepository
   const guard = readPortableRuntimeFreeze(root)
   return new PlanningFeedbackRepository(getProjectDb()!, { projectId, assertCurrent: () => undefined,
     isFrozen: (table, id) => guard.isFrozen(table, id), assertGenerationCurrent: () => undefined, now: () => 100 })
+}
+
+function desktopOwner(root: string, projectId: string, output: string) {
+  const db = getProjectDb()!, storage = path.join(root, '.ai-novel'), epoch = randomUUID()
+  const skillPath = path.join(storage, 'skills', 'portable-fiction', 'SKILL.md')
+  fs.mkdirSync(path.dirname(skillPath), { recursive: true })
+  fs.writeFileSync(skillPath, '---\nname: portable-fiction\nlanguage: bilingual\nstage: planning\n---\nKeep the fictional author facts.')
+  fs.writeFileSync(path.join(storage, 'writing-skills.json'), JSON.stringify({ version: 1, bindings: { planning: 'project:portable-fiction' } }))
+  const model: ModelProfile = { id: 'portable-model', name: 'Fictional planning model', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
+    apiKey: 'synthetic-key', baseUrl: 'https://fictional.invalid/v1', temperature: 0.7, maxTokens: 2048,
+    purposes: ['generation'], capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: false, usage: true } }
+  const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+    options.onVisible({ kind: 'delta', text: output })
+    return { finishReason: 'stop', usage: { promptTokens: 50, completionTokens: 20, totalTokens: 70, reasoningTokens: 0,
+      accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } }
+  })
+  const sourceDeps = { db, projectStorageRoot: storage, globalDataRoot: root,
+    readBuiltinPrompt: () => { throw new Error('UNEXPECTED_BUILTIN_PROMPT') } }
+  const owner = createMainGenerationOwner({ database: db, projectId, projectPath: root, epoch,
+    assertCurrent: () => { if (getProjectDb() !== db) throw new Error('GENERATION_EPOCH_STALE') },
+    leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch,
+    buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDeps,
+      { ...selection, projectId, epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+    rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDeps, previous, epoch,
+      modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding })
+  feedbackOwners.push(owner)
+  return { owner, dispatch, epoch }
 }
 
 function candidate(db: Sqlite.Database, base: PlanningFeedbackBase, id: string, text: string,
@@ -298,6 +334,120 @@ describe('planning feedback portable history', () => {
       sourceRoot = target
       sourceProjectId = restored.targetProjectId
     }
+  })
+
+  it('keeps actual v3 owner history read-only after transfer and permits only explicit new F0 lineage to adopt a selected subset', async () => {
+    const f = fixture(), db = getProjectDb()!
+    db.prepare('INSERT INTO characters(character_id,name,role) VALUES(?,?,?)').run(randomUUID(), 'Fictional lead', 'protagonist')
+    db.prepare(`INSERT INTO blueprints(chapter_number,title,role,purpose,key_events,characters,suspense_hook,user_guidance,notes,notes_updated_at)
+      VALUES(3,'F0 title','turn','Author purpose','Author events','["Fictional lead"]','Author hook','Author guidance','Author notes','old-notes-time')`).run()
+    db.prepare("INSERT INTO blueprints(chapter_number,title,notes) VALUES(8,'Unrelated chapter','Unrelated notes')").run()
+    const scope = { kind: 'blueprint-fields', chapterNumber: 3, fields: ['title', 'userGuidance', 'notes'] } as const
+    const output = JSON.stringify({ title: 'Generated title', userGuidance: 'Generated guidance', notes: 'Generated notes' })
+    const source = desktopOwner(f.root, f.projectId, output), base = source.owner.captureBlueprintFeedback(scope)
+    const input = { baseId: base.baseId, feedback: 'Keep the lead and chapter role', constraints: ['Keep F0'] }
+    const run = source.owner.beginBlueprintFeedback({ input, modelId: 'portable-model', uiActionNonce: 'portable-blueprint-author-nonce' })
+    const executed = await source.owner.executeBlueprintFeedback(run.handle)
+    expect(executed.outcome.status).toBe('completed')
+    const artifact = executed.outcome.receipt.visibleArtifact!
+    const stageRequest = { ...input, runId: run.handle.runId, attemptId: artifact.attemptId, artifactId: artifact.artifactId }
+    const staged = source.owner.stageBlueprintFeedback(stageRequest)
+    expect(source.owner.listBlueprintFeedbackRuns(base.baseId).map(item => item.handle.runId)).toEqual([run.handle.runId])
+    const adopted = source.owner.adoptBlueprintFeedback({ candidateId: staged.candidateId, idempotencyKey: originalNonce,
+      decision: 'partial', text: JSON.stringify({ title: 'Generated title' }) })
+    expect(source.dispatch).toHaveBeenCalledTimes(1)
+    source.owner.suspendForProjectClose()
+    closeProjectDatabase()
+    const originalBytes = fs.readFileSync(f.databasePath)
+    const archivePath = await archive(f.base, f.root, f.projectId, 'blueprint-owner-history')
+    expect(fs.readFileSync(f.databasePath)).toEqual(originalBytes)
+    const target = path.join(f.base, 'blueprint-owner-restored')
+    const restored = await restorePortableProject({ archivePath, targetProjectRoot: target })
+    initProjectDatabase(target)
+    const copiedDb = getProjectDb()!, copied = desktopOwner(target, restored.targetProjectId, output)
+    const identityTables = ['characters', 'character_identity_origins', 'character_aliases', 'character_identity_proposals',
+      'character_identity_approvals', 'character_relationships', 'character_identity_meta']
+    const outsideFacts = () => ({
+      core: copiedDb.prepare('SELECT * FROM project_core').all(),
+      otherChapter: copiedDb.prepare('SELECT * FROM blueprints WHERE chapter_number=8').all(),
+      identities: Object.fromEntries(identityTables.map(table => [table, copiedDb.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])),
+    })
+    const outsideBefore = outsideFacts()
+    const syncRows = () => copiedDb.prepare('SELECT * FROM blueprint_character_sync_operations ORDER BY rowid').all() as (Record<string, unknown> & { operation_id: string })[]
+    const syncBefore = syncRows(), oldSyncIds = new Set(syncBefore.map(row => row.operation_id))
+    const historyRows = () => Object.fromEntries(['planning_feedback_bases', 'planning_feedback_candidates', 'planning_feedback_adoptions',
+      'planning_feedback_blueprint_revisions', 'generation_roots', 'generation_runs', 'generation_attempts', 'generation_artifacts']
+      .map(table => [table, copiedDb.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]))
+    const historyBefore = historyRows()
+    expect(copiedDb.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(run.handle.runId)).toBe('{}')
+    expect(copiedDb.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(artifact.attemptId)).toBeNull()
+    const summaries = copied.owner.listBlueprintFeedbackBases(scope)
+    expect(summaries).toEqual([{ baseId: base.baseId, projectId: f.projectId, target: 'blueprintFields', scope,
+      createdAt: base.createdAt, closedAt: adopted.createdAt, closedByAdoptionId: adopted.adoptionId }])
+    expect(Object.keys(summaries[0]!).sort()).toEqual(['baseId', 'projectId', 'target', 'scope', 'createdAt', 'closedAt', 'closedByAdoptionId'].sort())
+    expect(copied.owner.listBlueprintFeedbackBases({ ...scope, chapterNumber: 8 })).toEqual([])
+    expect(copied.owner.listBlueprintFeedbackBases({ ...scope, fields: ['notes'] })).toEqual([])
+    const history = copied.owner.readBlueprintFeedbackHistory(base.baseId)
+    expect(history.base).toEqual({ ...base, closedAt: adopted.createdAt, closedByAdoptionId: adopted.adoptionId })
+    expect(history.candidates).toEqual([{ candidate: expect.objectContaining({ candidateId: staged.candidateId, schemaVersion: 3,
+      text: output, origin: expect.objectContaining({ kind: 'portable-history', sourceKind: 'generated' }) }), state: 'frozen' }])
+    expect(history.adoptions[0]).toMatchObject({ adoptionId: adopted.adoptionId, schemaVersion: 3, adoptedScope: adopted.adoptedScope,
+      text: adopted.text, beforeValue: base.value, decisionSource: 'author-action' })
+    expect(copied.owner.listBlueprintFeedbackRuns(base.baseId)).toEqual([])
+    expect(copied.owner.list()).toEqual([])
+    for (const handle of [run.handle, { ...run.handle, projectId: restored.targetProjectId, epoch: copied.epoch }]) {
+      expect(() => copied.owner.readBlueprintFeedbackRun(handle)).toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
+      expect(() => copied.owner.executeBlueprintFeedback(handle)).toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
+      expect(() => copied.owner.cancelBlueprintFeedback(handle)).toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
+    }
+    expect(() => copied.owner.stageBlueprintFeedback(stageRequest)).toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
+    expect(() => copied.owner.beginBlueprintFeedback({ input, modelId: 'portable-model', uiActionNonce: 'cannot-rebind-history' }))
+      .toThrow('PLANNING_FEEDBACK_HISTORY_FROZEN')
+    expect(() => copied.owner.adoptBlueprintFeedback({ candidateId: staged.candidateId, idempotencyKey: 'cannot-adopt-history', decision: 'full', text: output }))
+      .toThrow('PLANNING_FEEDBACK_HISTORY_FROZEN')
+    expect(() => copied.owner.relineageBlueprintFeedback({ baseId: base.baseId, sourceCandidateId: staged.candidateId, feedback: 'Not a fresh F0', constraints: [] }))
+      .toThrow('PLANNING_FEEDBACK_HISTORY_FROZEN')
+    expect(historyRows()).toEqual(historyBefore)
+    expect(outsideFacts()).toEqual(outsideBefore)
+    expect(syncRows()).toEqual(syncBefore)
+    expect(copied.dispatch).not.toHaveBeenCalled()
+    const fresh = copied.owner.captureBlueprintFeedback(scope)
+    expect(fresh.projectId).toBe(restored.targetProjectId)
+    expect(fresh.baseId).not.toBe(base.baseId)
+    expect(() => copied.owner.stageBlueprintFeedback({ ...stageRequest, baseId: fresh.baseId })).toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
+    const next = copied.owner.relineageBlueprintFeedback({ baseId: fresh.baseId, sourceCandidateId: staged.candidateId,
+      feedback: 'Fresh explicit author choice', constraints: [] })
+    expect(next).toMatchObject({ schemaVersion: 3, projectId: restored.targetProjectId, baseId: fresh.baseId,
+      generationParentHash: fresh.valueHash, origin: { kind: 'copied', sourceCandidateId: staged.candidateId, originProjectId: f.projectId } })
+    expect(next.candidateId).not.toBe(staged.candidateId)
+    expect(syncRows()).toEqual(syncBefore)
+    const request = { candidateId: next.candidateId, idempotencyKey: 'fresh-owner-blueprint-adopt', decision: 'partial' as const, text: JSON.stringify({ notes: '' }) }
+    const receipt = copied.owner.adoptBlueprintFeedback(request)
+    expect(receipt.adoptedScope).toEqual({ kind: 'blueprint-fields', chapterNumber: 3, fields: ['notes'] })
+    const commitOperationId = `planning-feedback:${receipt.adoptionId}`
+    const commit = copiedDb.prepare('SELECT * FROM blueprint_commit_operations WHERE operation_id=?').get(commitOperationId) as { payload_hash: string; character_sync_input: string }
+    const expectedSyncInput = JSON.stringify([{ chapterNumber: 3, title: 'Generated title', role: 'turn', purpose: 'Author purpose',
+      keyEvents: 'Author events', characters: ['Fictional lead'], suspenseHook: 'Author hook', userGuidance: 'Author guidance', notes: '', notesUpdatedAt: 'old-notes-time' }])
+    expect(commit).toMatchObject({ operation_id: commitOperationId, mode: 'replace-range', start_chapter: 3, end_chapter: 3,
+      character_sync_input: expectedSyncInput })
+    expect(commit.payload_hash).toMatch(/^[a-f0-9]{64}$/)
+    const syncAfterAdoption = syncRows()
+    expect(syncAfterAdoption).toHaveLength(syncBefore.length + 1)
+    expect(syncAfterAdoption.filter(row => oldSyncIds.has(row.operation_id))).toEqual(syncBefore)
+    expect(syncAfterAdoption.filter(row => !oldSyncIds.has(row.operation_id))).toEqual([expect.objectContaining({
+      operation_id: `blueprint-sync-${commitOperationId}`, blueprint_commit_operation_id: commitOperationId,
+      blueprint_commit_payload_hash: commit.payload_hash, status: 'pending', start_chapter: 3, end_chapter: 3,
+      character_sync_input: expectedSyncInput, completion_receipt: null, completed_at: null,
+    })])
+    expect(copied.owner.adoptBlueprintFeedback(request)).toEqual(receipt)
+    expect(syncRows()).toEqual(syncAfterAdoption)
+    expect(copiedDb.prepare('SELECT title,role,purpose,key_events,characters,suspense_hook,user_guidance,notes FROM blueprints WHERE chapter_number=3').get())
+      .toEqual({ title: 'Generated title', role: 'turn', purpose: 'Author purpose', key_events: 'Author events', characters: '["Fictional lead"]',
+        suspense_hook: 'Author hook', user_guidance: 'Author guidance', notes: '' })
+    expect(outsideFacts()).toEqual(outsideBefore)
+    expect(copied.owner.readBlueprintFeedbackHistory(base.baseId)).toEqual(history)
+    expect(copied.owner.listBlueprintFeedbackRuns(fresh.baseId)).toEqual([])
+    expect(copied.dispatch).not.toHaveBeenCalled()
   })
 
   it('moves two real adoption nonces through disjoint temporary keys when one occupies another final history label', async () => {

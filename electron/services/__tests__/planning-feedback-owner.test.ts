@@ -15,10 +15,11 @@ import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import { M10_RUNTIME_FEEDBACK_GRANTS_SQL } from '../../migrations/m10-runtime-feedback-grants'
 import { RuntimeFeedbackGrantRepository } from '../../repositories/runtime-feedback-grant-repository'
-import { textHash } from '../../repositories/generation-run-repository'
+import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
 import type { MainGenerationOwnerDependencies } from '../main-generation-owner'
 import type { MainGenerationRunHandle } from '../../../src/services/generation/generation-runtime'
 import { BlueprintRepository, type BlueprintData } from '../../repositories/blueprint-repository'
+import { buildPlanningFeedbackTask, readPlanningFeedbackTask } from '../planning-feedback-generation'
 
 vi.mock('../../database', async original => ({ ...await original<typeof import('../../database')>(),
   getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn() }))
@@ -623,6 +624,66 @@ function seedFeedbackBlueprints(f: ReturnType<typeof fixture>) {
   BlueprintRepository.upsert({ ...originalBlueprint, chapterNumber: 2, title: 'Outside scope' }, f.db)
 }
 
+async function generateBlueprint(owner: Owner, baseId: string, nonce: string, parentCandidateId?: string) {
+  const input = { baseId, ...(parentCandidateId ? { parentCandidateId } : {}), feedback: 'Make it vivid', constraints: ['Keep F0'] }
+  const view = owner.beginBlueprintFeedback({ input, modelId: 'model', uiActionNonce: nonce })
+  const executed = await owner.executeBlueprintFeedback(view.handle)
+  const artifact = executed.outcome.receipt.visibleArtifact!
+  return { input, view, executed, stage: () => owner.stageBlueprintFeedback({ ...input, runId: view.handle.runId,
+    attemptId: artifact.attemptId, artifactId: artifact.artifactId }) }
+}
+
+it('executes all eleven dedicated blueprint facades with actual F0-C1-C2, reopen, subset adoption, explicit relineage and cancellation', async () => {
+  let sequence = 0
+  const f = fixture(async (_request, options) => {
+    options.onVisible({ kind: 'delta', text: JSON.stringify({ title: `Dedicated candidate ${++sequence}`, userGuidance: '', notes: '' }) })
+    return { finishReason: 'stop', usage }
+  })
+  seedFeedbackBlueprints(f)
+  const original = BlueprintRepository.getAll(f.db), characters = f.db.prepare('SELECT * FROM characters').all()
+  const base = f.owner.captureBlueprintFeedback({ ...blueprintScope, fields: ['notes', 'title', 'userGuidance'] })
+  expect(base.schemaVersion).toBe(3)
+  expect(base.scope).toEqual(blueprintScope)
+  expect(f.owner.listBlueprintFeedbackBases(blueprintScope)).toEqual([{ baseId: base.baseId, projectId: f.projectId,
+    target: 'blueprintFields', scope: blueprintScope, createdAt: base.createdAt, closedAt: null, closedByAdoptionId: null }])
+  const one = await generateBlueprint(f.owner, base.baseId, 'dedicated-blueprint-c1'), c1 = one.stage()
+  const two = await generateBlueprint(f.owner, base.baseId, 'dedicated-blueprint-c2', c1.candidateId)
+  expect(f.owner.listBlueprintFeedbackRuns(base.baseId).map(item => item.handle.runId).sort())
+    .toEqual([one.view.handle.runId, two.view.handle.runId].sort())
+  expect(f.owner.readBlueprintFeedbackRun(two.view.handle)).toMatchObject({ input: two.input, sourceStatus: 'current' })
+  expect(f.owner.readBlueprintFeedbackHistory(base.baseId).candidates).toEqual([{ candidate: c1, state: 'ready' }])
+  const task = (f.spy.mock.calls[1]![0] as { task: GenerationTask }).task
+  expect(JSON.parse(task.messages.find(message => message.role === 'user')!.content)).toMatchObject({ schemaVersion: 3,
+    target: 'blueprintFields', scope: blueprintScope, baseId: base.baseId, parentCandidateId: c1.candidateId,
+    parentText: c1.text, source: { blueprint: originalBlueprint } })
+  expect(BlueprintRepository.getAll(f.db)).toEqual(original)
+  const artifact = two.executed.outcome.receipt.visibleArtifact!, reopened = f.reopen()
+  expect(() => f.owner.captureBlueprintFeedback(blueprintScope)).toThrow('GENERATION_OWNER_CLOSED')
+  const c2 = reopened.stageBlueprintFeedback({ ...two.input, runId: two.view.handle.runId,
+    attemptId: artifact.attemptId, artifactId: artifact.artifactId })
+  const request = { candidateId: c2.candidateId, idempotencyKey: 'dedicated-blueprint-adopt', decision: 'partial' as const, text: '{"notes":""}' }
+  const receipt = reopened.adoptBlueprintFeedback(request)
+  expect(receipt.adoptedScope).toEqual({ kind: 'blueprint-fields', chapterNumber: 1, fields: ['notes'] })
+  const changes = f.db.prepare('SELECT total_changes()').pluck().get()
+  expect(reopened.adoptBlueprintFeedback(request)).toEqual(receipt)
+  expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+  expect(reopened.readBlueprintFeedbackRun(two.view.handle).sourceStatus).toBe('conflict')
+  expect(reopened.readBlueprintFeedbackHistory(base.baseId).adoptions).toEqual([receipt])
+  expect(BlueprintRepository.getAll(f.db)).toEqual([{ ...originalBlueprint, notes: '' }, original[1]])
+  expect(f.db.prepare('SELECT * FROM characters').all()).toEqual(characters)
+  expect(BlueprintRepository.listPendingCharacterSyncOperations(f.db)).toHaveLength(1)
+  const fresh = reopened.captureBlueprintFeedback(blueprintScope)
+  const copied = reopened.relineageBlueprintFeedback({ baseId: fresh.baseId, sourceCandidateId: c1.candidateId,
+    feedback: 'Explicit fresh lineage', constraints: [] })
+  expect(copied).toMatchObject({ baseId: fresh.baseId, parentCandidateId: null, origin: { kind: 'copied', sourceCandidateId: c1.candidateId } })
+  const pending = reopened.beginBlueprintFeedback({ input: { baseId: fresh.baseId, parentCandidateId: copied.candidateId, feedback: '', constraints: [] },
+    modelId: 'model', uiActionNonce: 'dedicated-blueprint-cancel' })
+  expect(reopened.cancelBlueprintFeedback(pending.handle).status).toBe('cancelled')
+  await expect(reopened.executeBlueprintFeedback(pending.handle)).rejects.toThrow()
+  expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(pending.handle.runId)).toBe(0)
+  expect(f.spy).toHaveBeenCalledTimes(2)
+})
+
 it('runs persistent blueprint F0-C1-C2 through the actual owner and adopts only the explicit field subset', async () => {
   let sequence = 0
   const f = fixture(async (_request, options) => {
@@ -669,8 +730,8 @@ it('runs persistent blueprint F0-C1-C2 through the actual owner and adopts only 
 it.each(['target-aba', 'upstream-aba', 'skill', 'model'] as const)('rejects blueprint %s before physical dispatch', async change => {
   const f = fixture()
   seedFeedbackBlueprints(f)
-  const base = f.owner.capturePlanningFeedbackBase(blueprintScope)
-  const view = f.owner.beginPlanningFeedback({ input: { baseId: base.baseId, feedback: 'Revise', constraints: [] },
+  const base = f.owner.captureBlueprintFeedback(blueprintScope)
+  const view = f.owner.beginBlueprintFeedback({ input: { baseId: base.baseId, feedback: 'Revise', constraints: [] },
     modelId: 'model', uiActionNonce: `blueprint-changed-${change}` })
   if (change === 'target-aba') {
     f.db.exec("UPDATE blueprints SET title='Changed' WHERE chapter_number=1")
@@ -680,7 +741,8 @@ it.each(['target-aba', 'upstream-aba', 'skill', 'model'] as const)('rejects blue
     f.db.exec("UPDATE project_core SET core_outline='F0 outline' WHERE id='main'")
   } else if (change === 'skill') f.writeSkill('Changed planning Skill')
   else f.model.modelName = 'changed-model'
-  await expect(f.owner.executePlanningFeedback(view.handle)).rejects.toThrow()
+  expect(f.owner.readBlueprintFeedbackRun(view.handle).sourceStatus).toBe('conflict')
+  await expect(f.owner.executeBlueprintFeedback(view.handle)).rejects.toThrow()
   expect(f.spy).not.toHaveBeenCalled()
   expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(view.handle.runId)).toBe(0)
   expect(BlueprintRepository.getByChapter(1, f.db)).toEqual(originalBlueprint)
@@ -697,8 +759,8 @@ it.each([
     return { finishReason: 'stop', usage }
   })
   seedFeedbackBlueprints(f)
-  const base = f.owner.capturePlanningFeedbackBase(blueprintScope)
-  const result = await generate(f.owner, base.baseId, 'blueprint-invalid-json')
+  const base = f.owner.captureBlueprintFeedback(blueprintScope)
+  const result = await generateBlueprint(f.owner, base.baseId, 'blueprint-invalid-json')
   expect(f.db.prepare("SELECT json_extract(artifact_json,'$.text') FROM generation_artifacts WHERE artifact_id=?")
     .pluck().get(result.executed.outcome.receipt.visibleArtifact!.artifactId)).toBe(content)
   expect(() => result.stage()).toThrow()
@@ -710,14 +772,14 @@ it.each([
 it('keeps delivery-unknown blueprint execution frozen across reopen without resending', async () => {
   const f = fixture(async () => { throw new Error('Synthetic delivery unknown') })
   seedFeedbackBlueprints(f)
-  const base = f.owner.capturePlanningFeedbackBase(blueprintScope)
-  const view = f.owner.beginPlanningFeedback({ input: { baseId: base.baseId, feedback: 'Revise', constraints: [] },
+  const base = f.owner.captureBlueprintFeedback(blueprintScope)
+  const view = f.owner.beginBlueprintFeedback({ input: { baseId: base.baseId, feedback: 'Revise', constraints: [] },
     modelId: 'model', uiActionNonce: 'blueprint-unknown' })
-  const result = await f.owner.executePlanningFeedback(view.handle)
+  const result = await f.owner.executeBlueprintFeedback(view.handle)
   expect(result.outcome.status).toBe('incomplete')
   const rows = () => f.db.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts WHERE run_id=?').all(view.handle.runId)
   const before = rows(), reopened = f.reopen()
-  expect((await reopened.executePlanningFeedback(view.handle)).outcome.status).toBe('incomplete')
+  expect((await reopened.executeBlueprintFeedback(view.handle)).outcome.status).toBe('incomplete')
   expect(rows()).toEqual(before)
   expect(f.spy).toHaveBeenCalledTimes(1)
   expect(BlueprintRepository.getByChapter(1, f.db)).toEqual(originalBlueprint)
@@ -731,15 +793,15 @@ it('stages complete blueprint stop despite unknown usage accounting without redi
     return { finishReason: 'stop', usage: null }
   })
   seedFeedbackBlueprints(f)
-  const base = f.owner.capturePlanningFeedbackBase(blueprintScope)
-  const result = await generate(f.owner, base.baseId, 'blueprint-stop-unknown-usage')
+  const base = f.owner.captureBlueprintFeedback(blueprintScope)
+  const result = await generateBlueprint(f.owner, base.baseId, 'blueprint-stop-unknown-usage')
   expect(result.executed.outcome.status).toBe('completed')
   const artifact = result.executed.outcome.receipt.visibleArtifact!
   const rows = () => f.db.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts WHERE attempt_id=?').get(artifact.attemptId)
   const before = rows() as { attempt_json: string }
   expect(JSON.parse(before.attempt_json).status).toBe('unknown')
   const reopened = f.reopen()
-  const candidate = reopened.stagePlanningFeedback({ ...result.input, runId: result.view.handle.runId,
+  const candidate = reopened.stageBlueprintFeedback({ ...result.input, runId: result.view.handle.runId,
     attemptId: artifact.attemptId, artifactId: artifact.artifactId })
   expect(candidate.text).toBe(content)
   expect(rows()).toEqual(before)
@@ -783,4 +845,158 @@ it('does not grant blueprint IDs or runs to the existing field and outline-range
   expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
   expect(BlueprintRepository.getByChapter(1, f.db)).toEqual(originalBlueprint)
   expect(f.spy).toHaveBeenCalledTimes(1)
+})
+
+it.each([[1, 2], [1, 3], [2, 1], [2, 3], [3, 1], [3, 2]] as const)('rejects v%s identities at every v%s facade before any durable or dispatch effect', async (from, to) => {
+  const text = from === 1 ? 'Field candidate' : from === 2 ? '## 第3章：新三\n新三正文\n\n## 第4章：新四\n新四正文'
+    : JSON.stringify({ title: 'Blueprint candidate', userGuidance: '', notes: '' })
+  const f = fixture(async (_request, options) => { options.onVisible({ kind: 'delta', text }); return { finishReason: 'stop', usage } })
+  seedFeedbackBlueprints(f)
+  f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
+  const facades = {
+    1: { base: f.owner.captureFieldFeedback('coreOutline'), begin: f.owner.beginFieldFeedback, history: f.owner.readFieldFeedbackHistory,
+      runs: f.owner.listFieldFeedbackRuns, read: f.owner.readFieldFeedbackRun, execute: f.owner.executeFieldFeedback,
+      cancel: f.owner.cancelFieldFeedback, stage: f.owner.stageFieldFeedback, relineage: f.owner.relineageFieldFeedback, adopt: f.owner.adoptFieldFeedback },
+    2: { base: f.owner.captureRangeFeedback({ kind: 'plot-outline-range', from: 3, to: 4 }), begin: f.owner.beginRangeFeedback, history: f.owner.readRangeFeedbackHistory,
+      runs: f.owner.listRangeFeedbackRuns, read: f.owner.readRangeFeedbackRun, execute: f.owner.executeRangeFeedback,
+      cancel: f.owner.cancelRangeFeedback, stage: f.owner.stageRangeFeedback, relineage: f.owner.relineageRangeFeedback, adopt: f.owner.adoptRangeFeedback },
+    3: { base: f.owner.captureBlueprintFeedback(blueprintScope), begin: f.owner.beginBlueprintFeedback, history: f.owner.readBlueprintFeedbackHistory,
+      runs: f.owner.listBlueprintFeedbackRuns, read: f.owner.readBlueprintFeedbackRun, execute: f.owner.executeBlueprintFeedback,
+      cancel: f.owner.cancelBlueprintFeedback, stage: f.owner.stageBlueprintFeedback, relineage: f.owner.relineageBlueprintFeedback, adopt: f.owner.adoptBlueprintFeedback },
+  }
+  const source = facades[from], target = facades[to], input = { baseId: source.base.baseId, feedback: 'Revision', constraints: [] }
+  const view = source.begin({ input, modelId: 'model', uiActionNonce: 'cross-version-source' })
+  const executed = await source.execute(view.handle), artifact = executed.outcome.receipt.visibleArtifact!
+  const request = { ...input, runId: view.handle.runId, attemptId: artifact.attemptId, artifactId: artifact.artifactId }
+  const candidate = source.stage(request), changes = f.db.prepare('SELECT total_changes()').pluck().get()
+  expect(() => target.history(source.base.baseId)).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => target.runs(source.base.baseId)).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => target.begin({ input, modelId: 'model', uiActionNonce: 'cross-version-base' })).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => target.begin({ input: { ...input, baseId: target.base.baseId, parentCandidateId: candidate.candidateId },
+    modelId: 'model', uiActionNonce: 'cross-version-parent' })).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => target.read(view.handle)).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => target.execute(view.handle)).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => target.cancel(view.handle)).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => target.stage(request)).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => target.stage({ ...request, baseId: target.base.baseId })).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => target.stage({ ...request, baseId: target.base.baseId, parentCandidateId: candidate.candidateId }))
+    .toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  for (const baseId of [source.base.baseId, target.base.baseId]) {
+    expect(() => target.relineage({ baseId, sourceCandidateId: candidate.candidateId, feedback: 'Copy', constraints: [] }))
+      .toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  }
+  expect(() => target.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'cross-version-adopt', decision: 'full', text: candidate.text }))
+    .toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+  expect(f.spy).toHaveBeenCalledTimes(1)
+})
+
+it.each(['source', 'revision', 'parent-text', 'scope-order', 'scope-extra', 'input-feedback', 'input-constraints', 'input-extra',
+  'task', 'prompt-version', 'foreign-operation', 'schema', 'redacted'] as const)('rejects blueprint frozen identity tampering %s before read/execute/cancel/stage effects', async kind => {
+  const text = JSON.stringify({ title: 'Actual candidate', userGuidance: '', notes: '' })
+  const f = fixture(async (_request, options) => { options.onVisible({ kind: 'delta', text }); return { finishReason: 'stop', usage } })
+  seedFeedbackBlueprints(f)
+  const base = f.owner.captureBlueprintFeedback(blueprintScope), first = await generateBlueprint(f.owner, base.baseId, 'identity-parent'), parent = first.stage()
+  const input = { baseId: base.baseId, parentCandidateId: parent.candidateId, feedback: 'Actual feedback', constraints: ['Actual constraint'] }
+  const view = f.owner.beginBlueprintFeedback({ input, modelId: 'model', uiActionNonce: `identity-${kind}` })
+  const binding = JSON.parse(f.db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(view.handle.runId) as string)
+  const manifest = binding.sourceManifest, context = manifest.planningFeedbackContext
+  if (kind === 'source') { context.source.blueprint.role = 'Forged frozen fact'; context.sourceHash = textHash(JSON.stringify(context.source)) }
+  if (kind === 'revision') context.sourceRevision++
+  if (kind === 'parent-text') { context.parentText = JSON.stringify({ title: 'Forged parent', userGuidance: '', notes: '' }); context.parentTextHash = textHash(context.parentText) }
+  // These three forgeries remain task/context/hash self-consistent; only the actual durable F0/parent comparison rejects them.
+  if (kind === 'source' || kind === 'revision' || kind === 'parent-text') {
+    manifest.planningFeedbackContextHash = textHash(JSON.stringify(context))
+    manifest.planningFeedbackTask = buildPlanningFeedbackTask(context, manifest.planningFeedbackSkillText)
+    manifest.planningFeedbackTaskHash = textHash(JSON.stringify(manifest.planningFeedbackTask))
+  }
+  if (kind === 'scope-order') context.scope.fields.reverse()
+  if (kind === 'scope-extra') context.scope.extra = true
+  if (kind === 'input-feedback') manifest.planningFeedbackInput.feedback = 'Forged input feedback'
+  if (kind === 'input-constraints') manifest.planningFeedbackInput.constraints = ['Forged input constraint']
+  if (kind === 'input-extra') manifest.planningFeedbackInput.proof = 'caller-supplied'
+  if (kind === 'task') { manifest.planningFeedbackTask.messages[0].content = 'Forged fixed task'; manifest.planningFeedbackTaskHash = textHash(JSON.stringify(manifest.planningFeedbackTask)) }
+  if (kind === 'prompt-version') manifest.promptKeys = ['planning-feedback-v2']
+  if (kind === 'foreign-operation') manifest.operation = 'chapter-draft'
+  if (kind === 'schema') context.schemaVersion = 2
+  if (kind === 'redacted') { delete manifest.planningFeedbackInput; delete manifest.planningFeedbackContext; delete manifest.planningFeedbackTask }
+  f.db.prepare('UPDATE generation_runs SET binding_json=? WHERE run_id=?').run(JSON.stringify(binding), view.handle.runId)
+  if (kind === 'source' || kind === 'revision' || kind === 'parent-text') {
+    expect(readPlanningFeedbackTask(new GenerationRunRepository(() => f.db).get(view.handle.runId))).toEqual(manifest.planningFeedbackTask)
+  }
+  const changes = f.db.prepare('SELECT total_changes()').pluck().get(), original = BlueprintRepository.getAll(f.db)
+  expect(() => f.owner.readBlueprintFeedbackRun(view.handle)).toThrow()
+  expect(() => f.owner.executeBlueprintFeedback(view.handle)).toThrow()
+  expect(() => f.owner.cancelBlueprintFeedback(view.handle)).toThrow()
+  expect(() => f.owner.stageBlueprintFeedback({ ...input, runId: view.handle.runId, attemptId: 'not-issued', artifactId: 'not-issued' })).toThrow()
+  if (kind === 'redacted' || kind === 'foreign-operation' || kind === 'schema') {
+    expect(f.owner.listBlueprintFeedbackRuns(base.baseId).map(item => item.handle.runId)).toEqual([first.view.handle.runId])
+  } else expect(() => f.owner.listBlueprintFeedbackRuns(base.baseId)).toThrow()
+  expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+  expect(BlueprintRepository.getAll(f.db)).toEqual(original)
+  expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(view.handle.runId)).toBe(0)
+  expect(f.spy).toHaveBeenCalledTimes(1)
+})
+
+it('retains the physical permit and ignores late provider effects after dedicated blueprint cancellation', async () => {
+  let started!: () => void, finish!: (result: { finishReason: string; usage: typeof usage }) => void, lateVisible!: () => void
+  const dispatched = new Promise<void>(resolve => { started = resolve })
+  const f = fixture(async (_request, options) => {
+    options.onVisible({ kind: 'delta', text: '{"title":"Partial' })
+    lateVisible = () => options.onVisible({ kind: 'delta', text: ' late","userGuidance":"","notes":""}' })
+    started()
+    return await new Promise(resolve => { finish = resolve })
+  })
+  seedFeedbackBlueprints(f)
+  const base = f.owner.captureBlueprintFeedback(blueprintScope), input = { baseId: base.baseId, feedback: '', constraints: [] }
+  const view = f.owner.beginBlueprintFeedback({ input, modelId: 'model', uiActionNonce: 'dedicated-cancel-tail' })
+  const running = f.owner.executeBlueprintFeedback(view.handle)
+  await dispatched
+  expect(f.owner.cancelBlueprintFeedback(view.handle).status).toBe('cancelled')
+  const stopped = await running
+  expect(stopped.outcome.status).toBe('incomplete')
+  const rows = () => f.db.prepare(`SELECT a.attempt_id,a.attempt_json,a.usage_receipt_json,b.artifact_id,b.artifact_json
+    FROM generation_attempts a JOIN generation_artifacts b ON b.attempt_id=a.attempt_id WHERE a.run_id=?`).get(view.handle.runId) as
+    { attempt_id: string; attempt_json: string; usage_receipt_json: string; artifact_id: string; artifact_json: string }
+  const businessRows = () => Object.fromEntries((f.db.prepare(`SELECT name FROM sqlite_master
+    WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'llm_calls' ORDER BY name`).pluck().all() as string[])
+    .map(name => [name, f.db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all()]))
+  const before = rows(), businessBefore = businessRows(), changes = f.db.prepare('SELECT total_changes()').pluck().get() as number
+  expect(f.db.prepare('SELECT * FROM llm_calls').all()).toEqual([])
+  let physicalIdle = false
+  const drained = f.owner.whenPhysicalIdle().then(() => { physicalIdle = true })
+  await Promise.resolve()
+  expect(physicalIdle).toBe(false)
+  lateVisible()
+  expect(rows()).toEqual(before)
+  expect(businessRows()).toEqual(businessBefore)
+  expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+  finish({ finishReason: 'stop', usage })
+  await drained
+  expect(rows()).toEqual(before)
+  expect(businessRows()).toEqual(businessBefore)
+  // Physical completion may record its diagnostic, but cannot rewrite logical cancellation or domain facts.
+  expect(f.db.prepare('SELECT * FROM llm_calls').all()).toEqual([expect.objectContaining({ model_id: 'model',
+    purpose: 'planning-feedback', prompt_tokens: 50, completion_tokens: 20, total_tokens: 70, success: 1, error_message: '' })])
+  expect(() => f.owner.stageBlueprintFeedback({ ...input, runId: view.handle.runId, attemptId: before.attempt_id, artifactId: before.artifact_id })).toThrow()
+  expect(businessRows()).toEqual(businessBefore)
+  expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes + 1)
+  expect(BlueprintRepository.getByChapter(1, f.db)).toEqual(originalBlueprint)
+  expect(f.spy).toHaveBeenCalledTimes(1)
+})
+
+it('accepts only the four fixed author-adoption fields at the blueprint facade without inferring scope or proof', async () => {
+  const text = JSON.stringify({ title: 'Candidate', userGuidance: '', notes: '' })
+  const f = fixture(async (_request, options) => { options.onVisible({ kind: 'delta', text }); return { finishReason: 'stop', usage } })
+  seedFeedbackBlueprints(f)
+  const base = f.owner.captureBlueprintFeedback(blueprintScope), generated = await generateBlueprint(f.owner, base.baseId, 'closed-adoption'), candidate = generated.stage()
+  const request = { candidateId: candidate.candidateId, idempotencyKey: 'closed-adoption', decision: 'full' as const, text: candidate.text }
+  const changes = f.db.prepare('SELECT total_changes()').pluck().get()
+  for (const key of ['adoptedRange', 'adoptedFields', 'scope', 'proof', 'output', 'decisionSource']) {
+    expect(() => f.owner.adoptBlueprintFeedback({ ...request, [key]: 'not-authorized' })).toThrow('PLANNING_FEEDBACK_PAYLOAD_INVALID')
+  }
+  expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+  const receipt = f.owner.adoptBlueprintFeedback(request)
+  expect(receipt.decisionSource).toBe('author-action')
+  expect(BlueprintRepository.getByChapter(1, f.db)).toEqual({ ...originalBlueprint, title: 'Candidate', userGuidance: '', notes: '' })
 })

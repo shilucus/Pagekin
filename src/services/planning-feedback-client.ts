@@ -8,7 +8,7 @@ import type { MainGenerationRunHandle } from './generation/generation-runtime'
 
 type Request<C extends PlanningFeedbackChannel> = PlanningFeedbackChannels[C]['args'][0]
 type Command = PlanningFeedbackFieldChannel extends `planning-feedback:v1:${infer Value}` ? Value : never
-type VersionedChannel<V extends 1 | 2, C extends Command> = Extract<PlanningFeedbackChannel, `planning-feedback:v${V}:${C}`>
+type VersionedChannel<V extends 1 | 2 | 3, C extends Command> = Extract<PlanningFeedbackChannel, `planning-feedback:v${V}:${C}`>
 
 /** The caller resolves author intent and unsaved buffers before constructing this project-bound client. */
 export function createPlanningFeedbackClient(sessionInput: ProjectSessionContext) {
@@ -19,7 +19,11 @@ export function createPlanningFeedbackRangeClient(sessionInput: ProjectSessionCo
   return createProjectPlanningFeedbackClient(sessionInput, 2)
 }
 
-function createProjectPlanningFeedbackClient<V extends 1 | 2>(sessionInput: ProjectSessionContext, version: V) {
+export function createPlanningFeedbackBlueprintClient(sessionInput: ProjectSessionContext) {
+  return createProjectPlanningFeedbackClient(sessionInput, 3)
+}
+
+function createProjectPlanningFeedbackClient<V extends 1 | 2 | 3>(sessionInput: ProjectSessionContext, version: V) {
   if (!isProjectSessionContext(sessionInput)
     || ![sessionInput.projectId, sessionInput.leaseId, sessionInput.projectPath].every(value => value.trim())) {
     throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
@@ -59,13 +63,13 @@ function createProjectPlanningFeedbackClient<V extends 1 | 2>(sessionInput: Proj
     listBases: (request: Request<VersionedChannel<V, 'list-bases'>>) => invoke(channel('list-bases'), request),
     readHistory: (request: Request<VersionedChannel<V, 'read-history'>>) => invoke(channel('read-history'), request),
     async begin(request: BeginPlanningFeedbackRequest) {
-      const view = await invoke<VersionedChannel<1 | 2, 'begin'>>(channel('begin'), request)
+      const view = await invoke<VersionedChannel<1 | 2 | 3, 'begin'>>(channel('begin'), request)
       assertRun(view.handle)
       return view
     },
-    async execute(request: Request<VersionedChannel<1 | 2, 'execute'>>) {
+    async execute(request: Request<VersionedChannel<1 | 2 | 3, 'execute'>>) {
       const frozen = structuredClone(request)
-      const receipt = await invoke<VersionedChannel<1 | 2, 'execute'>>(channel('execute'), frozen)
+      const receipt = await invoke<VersionedChannel<1 | 2 | 3, 'execute'>>(channel('execute'), frozen)
       assertRun(receipt.run.handle, frozen.handle)
       return receipt
     },
@@ -82,7 +86,7 @@ function createProjectPlanningFeedbackClient<V extends 1 | 2>(sessionInput: Proj
       assertRun(view.handle, frozen.handle)
       return view
     },
-    stage: (request: Request<VersionedChannel<1 | 2, 'stage'>>) => invoke<VersionedChannel<1 | 2, 'stage'>>(channel('stage'), request),
+    stage: (request: Request<VersionedChannel<1 | 2 | 3, 'stage'>>) => invoke<VersionedChannel<1 | 2 | 3, 'stage'>>(channel('stage'), request),
     relineage: (request: Request<VersionedChannel<V, 'relineage'>>) => invoke(channel('relineage'), request),
     adopt: (request: Request<VersionedChannel<V, 'adopt'>>) => invoke(channel('adopt'), request),
     async generateCandidate(request: BeginPlanningFeedbackRequest): Promise<PlanningFeedbackCandidate> {
@@ -104,3 +108,4 @@ function createProjectPlanningFeedbackClient<V extends 1 | 2>(sessionInput: Proj
 
 export type PlanningFeedbackClient = ReturnType<typeof createPlanningFeedbackClient>
 export type PlanningFeedbackRangeClient = ReturnType<typeof createPlanningFeedbackRangeClient>
+export type PlanningFeedbackBlueprintClient = ReturnType<typeof createPlanningFeedbackBlueprintClient>

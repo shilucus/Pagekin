@@ -52,6 +52,36 @@ describe('桌面预加载接口', () => {
     expect(request).toEqual({ target: { kind: 'plot-outline-range', from: 3, to: 4 } })
     expect(Object.keys(session)).toEqual(['projectId', 'leaseId', 'projectPath'])
   })
+  it('forwards all eleven v3 blueprint verbs and their captured session without adding author approval or field authority', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const target = Object.freeze({ kind: 'blueprint-fields' as const, chapterNumber: 3, fields: Object.freeze(['title', 'notes'] as const) })
+    const session = Object.freeze({ projectId: 'blueprint-project', leaseId: 'blueprint-lease', projectPath: 'C:/fictional-blueprint' })
+    const handle = Object.freeze({ projectId: session.projectId, epoch: session.leaseId, rootActionId: 'blueprint-root', runId: 'blueprint-run' })
+    const input = Object.freeze({ baseId: 'blueprint-base', feedback: 'Retain F0', constraints: Object.freeze(['Keep the lead']) })
+    const adopt = Object.freeze({ candidateId: 'blueprint-candidate', idempotencyKey: 'author-nonce', decision: 'partial' as const, text: '{"notes":""}' })
+    const requests = [
+      ['planning-feedback:v3:capture', { target }], ['planning-feedback:v3:list-bases', { target }],
+      ['planning-feedback:v3:read-history', { baseId: input.baseId }],
+      ['planning-feedback:v3:begin', { input, modelId: 'fixture-model', uiActionNonce: 'fixture-nonce' }],
+      ['planning-feedback:v3:execute', { handle }], ['planning-feedback:v3:read-run', { handle }],
+      ['planning-feedback:v3:list-runs', { baseId: input.baseId }], ['planning-feedback:v3:cancel', { handle }],
+      ['planning-feedback:v3:stage', { ...input, runId: handle.runId, attemptId: 'fixture-attempt', artifactId: 'fixture-artifact' }],
+      ['planning-feedback:v3:relineage', { baseId: input.baseId, sourceCandidateId: 'old-candidate', feedback: 'Fresh author choice', constraints: [] }],
+      ['planning-feedback:v3:adopt', adopt],
+    ] as const
+    const before = electron.ipcRenderer.invoke.mock.calls.length
+    for (const [channel, request] of requests) {
+      const result = { channel }
+      electron.ipcRenderer.invoke.mockResolvedValueOnce(result)
+      await expect(bridge.invoke(channel, request, session)).resolves.toBe(result)
+      expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, request, session)
+      expect(electron.ipcRenderer.invoke.mock.lastCall?.[1]).toBe(request)
+    }
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(before + 11)
+    expect(target.fields).toEqual(['title', 'notes'])
+    expect(Object.keys(adopt)).toEqual(['candidateId', 'idempotencyKey', 'decision', 'text'])
+    expect(Object.keys(session)).toEqual(['projectId', 'leaseId', 'projectPath'])
+  })
   it('forwards only the literal retained-view entry without manufacturing a project lease', async () => {
     const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
     const target = { grantId: 'fictional-open-grant' }

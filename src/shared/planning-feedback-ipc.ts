@@ -10,12 +10,17 @@ import {
 /** Wire version is part of each channel name; persisted candidate/task versions are independent. */
 export const PLANNING_FEEDBACK_IPC_VERSION = 1 as const
 export const PLANNING_FEEDBACK_RANGE_IPC_VERSION = 2 as const
+export const PLANNING_FEEDBACK_BLUEPRINT_IPC_VERSION = 3 as const
 export type PlanningFeedbackFieldBase = Extract<PlanningFeedbackBase, { schemaVersion: 1 }>
 export type PlanningFeedbackRangeScope = Extract<PlanningFeedbackScope, { kind: 'plot-outline-range' }>
 export type PlanningFeedbackRangeBase = Extract<PlanningFeedbackBase, { schemaVersion: 2 }>
+export type PlanningFeedbackBlueprintScope = Extract<PlanningFeedbackScope, { kind: 'blueprint-fields' }>
+export type PlanningFeedbackBlueprintBase = Extract<PlanningFeedbackBase, { schemaVersion: 3 }>
 export type PlanningFeedbackBaseSummary = Pick<PlanningFeedbackFieldBase,
   'baseId' | 'projectId' | 'target' | 'createdAt' | 'closedAt' | 'closedByAdoptionId'>
 export type PlanningFeedbackRangeBaseSummary = Pick<PlanningFeedbackRangeBase,
+  'baseId' | 'projectId' | 'target' | 'scope' | 'createdAt' | 'closedAt' | 'closedByAdoptionId'>
+export type PlanningFeedbackBlueprintBaseSummary = Pick<PlanningFeedbackBlueprintBase,
   'baseId' | 'projectId' | 'target' | 'scope' | 'createdAt' | 'closedAt' | 'closedByAdoptionId'>
 export type PlanningFeedbackCandidateState = 'ready' | 'conflict' | 'frozen' | 'adopted'
 export interface BeginPlanningFeedbackRequest {
@@ -38,6 +43,10 @@ export interface PlanningFeedbackRangeHistory extends Omit<PlanningFeedbackHisto
   base: PlanningFeedbackRangeBase
 }
 export type PlanningFeedbackRangeRunRecovery = PlanningFeedbackRunRecovery
+export interface PlanningFeedbackBlueprintHistory extends Omit<PlanningFeedbackHistory, 'base'> {
+  base: PlanningFeedbackBlueprintBase
+}
+export type PlanningFeedbackBlueprintRunRecovery = PlanningFeedbackRunRecovery
 
 /** Desktop project-session channels, not an automation or human-approval capability. */
 export interface PlanningFeedbackFieldChannels {
@@ -69,9 +78,25 @@ export interface PlanningFeedbackRangeChannels {
   'planning-feedback:v2:adopt': { args: [AdoptPlanningFeedbackCandidate]; return: PlanningFeedbackAdoption }
 }
 
+/** Blueprint revisions do not expose range adoption or a second caller-supplied field selection. */
+export interface PlanningFeedbackBlueprintChannels {
+  'planning-feedback:v3:capture': { args: [{ target: PlanningFeedbackBlueprintScope }]; return: PlanningFeedbackBlueprintBase }
+  'planning-feedback:v3:list-bases': { args: [{ target: PlanningFeedbackBlueprintScope }]; return: PlanningFeedbackBlueprintBaseSummary[] }
+  'planning-feedback:v3:read-history': { args: [{ baseId: string }]; return: PlanningFeedbackBlueprintHistory }
+  'planning-feedback:v3:begin': { args: [BeginPlanningFeedbackRequest]; return: MainGenerationRunView }
+  'planning-feedback:v3:execute': { args: [{ handle: MainGenerationRunHandle }]; return: MainGenerationExecuteReceipt }
+  'planning-feedback:v3:read-run': { args: [{ handle: MainGenerationRunHandle }]; return: PlanningFeedbackBlueprintRunRecovery }
+  'planning-feedback:v3:list-runs': { args: [{ baseId: string }]; return: MainGenerationRunSummary[] }
+  'planning-feedback:v3:cancel': { args: [{ handle: MainGenerationRunHandle }]; return: MainGenerationRunView }
+  'planning-feedback:v3:stage': { args: [StagePlanningFeedbackCandidate]; return: PlanningFeedbackCandidate }
+  'planning-feedback:v3:relineage': { args: [RelineagePlanningFeedbackCandidate]; return: PlanningFeedbackCandidate }
+  'planning-feedback:v3:adopt': { args: [Omit<AdoptPlanningFeedbackCandidate, 'adoptedRange'>]; return: PlanningFeedbackAdoption }
+}
+
 export type PlanningFeedbackFieldChannel = keyof PlanningFeedbackFieldChannels
 export type PlanningFeedbackRangeChannel = keyof PlanningFeedbackRangeChannels
-export type PlanningFeedbackChannels = PlanningFeedbackFieldChannels & PlanningFeedbackRangeChannels
+export type PlanningFeedbackBlueprintChannel = keyof PlanningFeedbackBlueprintChannels
+export type PlanningFeedbackChannels = PlanningFeedbackFieldChannels & PlanningFeedbackRangeChannels & PlanningFeedbackBlueprintChannels
 export type PlanningFeedbackChannel = keyof PlanningFeedbackChannels
 type Request<C extends PlanningFeedbackChannel> = PlanningFeedbackChannels[C]['args'][0]
 
@@ -93,15 +118,23 @@ export function assertPlanningFeedbackRequest<C extends PlanningFeedbackChannel>
       assertPlanningFeedbackObject(value, ['target'])
       if (parsePlanningFeedbackScope(value.target).kind !== 'plot-outline-range') throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
       return
+    case 'planning-feedback:v3:capture':
+    case 'planning-feedback:v3:list-bases':
+      assertPlanningFeedbackObject(value, ['target'])
+      if (parsePlanningFeedbackScope(value.target).kind !== 'blueprint-fields') throw new Error('PLANNING_FEEDBACK_SCOPE_INVALID')
+      return
     case 'planning-feedback:v1:read-history':
     case 'planning-feedback:v1:list-runs':
     case 'planning-feedback:v2:read-history':
     case 'planning-feedback:v2:list-runs':
+    case 'planning-feedback:v3:read-history':
+    case 'planning-feedback:v3:list-runs':
       assertPlanningFeedbackObject(value, ['baseId'])
       assertPlanningFeedbackId(value.baseId)
       return
     case 'planning-feedback:v1:begin':
     case 'planning-feedback:v2:begin':
+    case 'planning-feedback:v3:begin':
       assertPlanningFeedbackObject(value, ['input', 'modelId', 'uiActionNonce'])
       assertPlanningFeedbackObject(value.input, ['baseId', 'feedback', 'constraints'], ['parentCandidateId'])
       assertPlanningFeedbackId(value.input.baseId)
@@ -118,11 +151,15 @@ export function assertPlanningFeedbackRequest<C extends PlanningFeedbackChannel>
     case 'planning-feedback:v2:execute':
     case 'planning-feedback:v2:read-run':
     case 'planning-feedback:v2:cancel':
+    case 'planning-feedback:v3:execute':
+    case 'planning-feedback:v3:read-run':
+    case 'planning-feedback:v3:cancel':
       assertPlanningFeedbackObject(value, ['handle'])
       assertHandle(value.handle)
       return
     case 'planning-feedback:v1:stage':
     case 'planning-feedback:v2:stage':
+    case 'planning-feedback:v3:stage':
       assertPlanningFeedbackObject(value, ['baseId', 'feedback', 'constraints', 'runId', 'attemptId', 'artifactId'], ['parentCandidateId'])
       for (const key of ['baseId', 'runId', 'attemptId', 'artifactId']) assertPlanningFeedbackId(value[key])
       if (value.parentCandidateId != null) assertPlanningFeedbackId(value.parentCandidateId)
@@ -130,12 +167,14 @@ export function assertPlanningFeedbackRequest<C extends PlanningFeedbackChannel>
       return
     case 'planning-feedback:v1:relineage':
     case 'planning-feedback:v2:relineage':
+    case 'planning-feedback:v3:relineage':
       assertPlanningFeedbackObject(value, ['baseId', 'sourceCandidateId', 'feedback', 'constraints'])
       assertPlanningFeedbackId(value.baseId)
       assertPlanningFeedbackId(value.sourceCandidateId)
       assertPlanningFeedbackInstructions(value.feedback, value.constraints)
       return
     case 'planning-feedback:v1:adopt':
+    case 'planning-feedback:v3:adopt':
       assertPlanningFeedbackObject(value, ['candidateId', 'idempotencyKey', 'decision', 'text'])
       assertPlanningFeedbackAdoption(value)
       return

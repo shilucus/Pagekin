@@ -686,6 +686,17 @@ export function registerGenerationController(options: {
   register('planning-feedback:v2:stage', 1, (owner, request) => owner.stageRangeFeedback(request))
   register('planning-feedback:v2:relineage', 1, (owner, request) => owner.relineageRangeFeedback(request))
   register('planning-feedback:v2:adopt', 1, (owner, request) => owner.adoptRangeFeedback(request))
+  register('planning-feedback:v3:capture', 1, (owner, request) => owner.captureBlueprintFeedback(request.target))
+  register('planning-feedback:v3:list-bases', 1, (owner, request) => owner.listBlueprintFeedbackBases(request.target))
+  register('planning-feedback:v3:read-history', 1, (owner, request) => owner.readBlueprintFeedbackHistory(request.baseId))
+  register('planning-feedback:v3:begin', 1, (owner, request) => owner.beginBlueprintFeedback(request))
+  register('planning-feedback:v3:execute', 1, (owner, request) => owner.executeBlueprintFeedback(request.handle))
+  register('planning-feedback:v3:read-run', 1, (owner, request) => owner.readBlueprintFeedbackRun(request.handle))
+  register('planning-feedback:v3:list-runs', 1, (owner, request) => owner.listBlueprintFeedbackRuns(request.baseId))
+  register('planning-feedback:v3:cancel', 1, (owner, request) => owner.cancelBlueprintFeedback(request.handle))
+  register('planning-feedback:v3:stage', 1, (owner, request) => owner.stageBlueprintFeedback(request))
+  register('planning-feedback:v3:relineage', 1, (owner, request) => owner.relineageBlueprintFeedback(request))
+  register('planning-feedback:v3:adopt', 1, (owner, request) => owner.adoptBlueprintFeedback(request))
   // 补写中间章时，本章及以后章节的定稿正文不能进取材，否则模型会提前写出或照抄后文。
   const laterFinalizedDocuments = (owner: Owner, chapterNumber: number) => new Set([...FinalizationRepository.knowledgeDocumentChapters(ownerRuntimes.get(owner)!.database)]
     .filter(([, finalizedChapter]) => finalizedChapter >= chapterNumber).map(([documentId]) => documentId))
