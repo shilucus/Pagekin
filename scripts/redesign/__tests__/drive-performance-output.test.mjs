@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, it, vi } from 'vitest'
 import { performanceArtifactPath, performanceError, projectPerformanceResult } from '../drive-performance-output.mjs'
+import { MATERIAL_DECISION_OMISSION_REASONS } from '../../../src/shared/generation-owner-contract.ts'
 
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
 import { driveSessions, releaseSessionRoot } from '../drive.mjs'
@@ -13,6 +14,24 @@ function temporaryDirectory() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'drive-output-test-'))
   directories.push(directory)
   return directory
+}
+function frozenSelection() {
+  const hash = 'a'.repeat(64)
+  return {
+    secret: 'draft',
+    sourceRefs: { coverage: 'recorded', counts: [{ kind: 'import', count: 3, secretCount: 17 }] },
+    materialDecision: { coverage: 'recorded', receipt: { version: 1, verdict: 'admitted', promptHash: hash,
+      capacity: { maxInputUnits: 100, methodVersion: 'utf8-bytes-v1', admittedUnits: 20, secret: 'private-capacity' },
+      coverage: { required: 1, included: 1, complete: true },
+      included: [{ sourceId: 'finalized:2', revision: 3, contentHash: hash, category: 'finalized-history', required: true, units: 20,
+        content: 'private-content' }],
+      omitted: MATERIAL_DECISION_OMISSION_REASONS.map((reason, index) => ({ sourceId: `reference:${index}`, revision: 0,
+        contentHash: hash, category: 'reference', required: false, reason, title: 'private-title' })),
+      promptText: 'private-prompt' } },
+    import: { coverage: 'recorded', source: { kind: 'import', manifestFingerprint: hash, totalChapters: 100, totalWords: 1000,
+      selectedChapters: [1, 3, 99].map(number => ({ number, contentHash: hash, wordCount: number, title: 'private-title' })),
+      checkpointRange: { startChapter: 1, endChapter: 100, secretCount: 7 }, path: 'private-path' } },
+  }
 }
 afterEach(() => {
   vi.restoreAllMocks()
@@ -74,6 +93,42 @@ it('preserves bounded receipt hashes, statuses, coverage and attempt totals', ()
   assert.match(run.attempts.items[0].attemptId, /^opaque:/)
 })
 
+it('projects only frozen selection fields at the final export boundary', () => {
+  const raw = { measured: { attempted: 2, failed: 1, diagnostics: { generation: { runs: [{ selection: frozenSelection() }] } } } }
+  const before = structuredClone(raw)
+  const result = projectPerformanceResult(raw, '/out')
+  const selection = result.measured.diagnostics.generation.runs[0].selection
+  assert.deepEqual(raw, before)
+  assert.deepEqual(selection.sourceRefs, { coverage: 'recorded', counts: [{ kind: 'import', count: 3 }] })
+  assert.deepEqual(selection.materialDecision.receipt.included[0], { sourceId: 'finalized:2', revision: 3,
+    contentHash: 'a'.repeat(64), category: 'finalized-history', required: true, units: 20 })
+  assert.deepEqual(selection.materialDecision.receipt.omitted.map(item => item.reason), MATERIAL_DECISION_OMISSION_REASONS)
+  assert.deepEqual(selection.materialDecision.receipt.omitted.map(item => item.sourceId),
+    MATERIAL_DECISION_OMISSION_REASONS.map((_, index) => `reference:${index}`))
+  assert.deepEqual(selection.import.source, { kind: 'import', manifestFingerprint: 'a'.repeat(64), totalChapters: 100, totalWords: 1000,
+    selectedChapters: [1, 3, 99].map(number => ({ number, contentHash: 'a'.repeat(64), wordCount: number })),
+    checkpointRange: { startChapter: 1, endChapter: 100 } })
+  assert.deepEqual(Object.keys(selection), ['sourceRefs', 'materialDecision', 'import'])
+  assert.equal(JSON.stringify(selection).includes('private-'), false)
+  assert.equal(JSON.stringify(selection).includes('secret'), false)
+  assert.equal(JSON.stringify(selection).includes('promptText'), false)
+  assert.equal(result.measured.attempted, 2)
+  assert.equal(result.measured.failed, 1)
+})
+
+it('contains unknown source IDs and reasons in the final export even without the consumer', () => {
+  const selection = frozenSelection()
+  Object.assign(selection.materialDecision.receipt.omitted[0], { sourceId: 'reference:private-source', reason: 'private-reason' })
+  Object.assign(selection.sourceRefs.counts[0], { kind: 'private-kind' })
+  const result = projectPerformanceResult({ selection }, '/out').selection
+  const item = result.materialDecision.receipt.omitted[0]
+  assert.match(item.sourceId, /^opaque:[a-f0-9]{64}$/)
+  assert.equal(item.reason, null)
+  assert.equal(result.sourceRefs.counts[0].kind, 'unknown')
+  assert.equal(JSON.stringify(result).includes('private-'), false)
+  assert.deepEqual(projectPerformanceResult({ selection: result }, '/out').selection, result)
+})
+
 it('writes the same projection to stdout and JSON while passing real paths to session cleanup', async () => {
   const out = temporaryDirectory(), root = path.join(out, 'isolated')
   fs.mkdirSync(root)
@@ -91,6 +146,7 @@ it('writes the same projection to stdout and JSON while passing real paths to se
       return [{ scenario: 'perf-import-10', isolationRoot: roots.root, screenshot: artifact,
         externalWrites: [], externalWritesIgnored: [], residualProcesses: [], measured: { diagnostics: { generation: {
           scope: 'isolated_project', coverage: 'partial', observed: 2, retained: 2, runs: [{ runId: 'linked-run', status: 'failed', operation: 'finalized-chapter-notes',
+            selection: frozenSelection(),
             source: { fingerprint: { skillSnapshotHash: 'b'.repeat(64) } }, initialDraftTaskHash: 'c'.repeat(64),
             parametersCoverage: 'not_recorded', importSlot: { runId: 'linked-run', stage: 'global' },
             attempts: { observed: 5, retained: 5, items: ['HTTP_ERROR', 'RESPONSE_BODY_MISSING', 'PROVIDER_STREAM_ERROR', 'STREAM_INVALID', 'STREAM_INCOMPLETE']
@@ -115,6 +171,11 @@ it('writes the same projection to stdout and JSON while passing real paths to se
   assert.equal(generation.runs[1].operation, 'finalized-character-state')
   assert.equal(generation.runs[1].finalizationSlot.stepKey, 'character_cards')
   assert.equal(run.parametersCoverage, 'not_recorded')
+  assert.deepEqual(run.selection.sourceRefs, { coverage: 'recorded', counts: [{ kind: 'import', count: 3 }] })
+  assert.deepEqual(run.selection.import.source.selectedChapters.map(item => item.number), [1, 3, 99])
+  assert.deepEqual(run.selection.materialDecision.receipt.omitted.map(item => item.reason), MATERIAL_DECISION_OMISSION_REASONS)
+  assert.equal(JSON.stringify(run.selection).includes('private-'), false)
+  assert.equal(JSON.stringify(run.selection).includes('secret'), false)
   assert.equal(run.importSlot.stage, 'global')
   assert.equal(run.attempts.items[0].purpose, 'chapter-draft-short-outline')
   assert.deepEqual(run.attempts.items.map(item => item.transport.errorCode),

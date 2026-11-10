@@ -139,6 +139,35 @@ export interface GenerationDraftCommitRequest {
   batchId?: string
 }
 export type ShortOutlineRetry = { kind: 'available'; failedAttemptId: string } | { kind: 'unavailable' }
+export const GENERATION_DIAGNOSTIC_SOURCE_KINDS = [
+  'project-core', 'author-input', 'planning-feedback', 'legacy-roster', 'graph', 'agent-blueprints',
+  'review-revision', 'characters', 'relationships', 'narrative-thread', 'draft-target',
+  'continuity-catalog', 'continuity-locators', 'blueprint', 'finalized', 'draft', 'project-guidance',
+  'knowledge-selection', 'knowledge-chunk', 'plot-outline', 'finalization', 'editor-inline', 'import', 'agent', 'unknown',
+] as const
+export type GenerationDiagnosticSourceKind = typeof GENERATION_DIAGNOSTIC_SOURCE_KINDS[number]
+/** Existing frozen selection evidence only; missing historical evidence is never reconstructed. */
+export interface GenerationSourceSelectionDiagnostics {
+  sourceRefs: {
+    coverage: 'recorded' | 'not_recorded'
+    counts: readonly { kind: GenerationDiagnosticSourceKind; count: number }[] | null
+  }
+  materialDecision: {
+    coverage: 'recorded' | 'not_recorded'
+    receipt: Pick<MaterialDecisionReceipt, 'version' | 'verdict' | 'promptHash' | 'capacity' | 'coverage' | 'included' | 'omitted'> | null
+  }
+  import: {
+    coverage: 'recorded' | 'not_recorded'
+    source: {
+      kind: 'import'
+      manifestFingerprint: string
+      totalChapters: number
+      totalWords: number
+      selectedChapters: readonly { number: number; contentHash: string; wordCount: number }[]
+      checkpointRange: { startChapter: number; endChapter: number } | null
+    } | null
+  }
+}
 /** Read-only receipt projection. Never expand a task, manifest, manuscript or raw error here. */
 export interface GenerationRunDiagnostics {
   schemaVersion: 1
@@ -150,6 +179,7 @@ export interface GenerationRunDiagnostics {
     modelReceiptHash: string | null
     fingerprint: FrozenInputFingerprint
   }
+  selection: GenerationSourceSelectionDiagnostics
   importSlot: ImportGenerationSlot | null
   finalizationSlot: FinalizationGenerationSlot | null
   /** Hash of the same frozen first draft task used by short-outline recovery; no task text. */

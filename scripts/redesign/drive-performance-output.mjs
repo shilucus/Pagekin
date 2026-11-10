@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
+import { projectPerformanceSelection } from './performance-baseline.mjs'
+import { GENERATION_DIAGNOSTIC_SOURCE_KINDS, MATERIAL_DECISION_CATEGORIES,
+  MATERIAL_DECISION_OMISSION_REASONS, MATERIAL_DECISION_SOURCE_ID } from '../../src/shared/generation-owner-contract.ts'
 
 const SAFE_VALUES = new Set([
   'light', 'dark', 'writer', 'stage', 'observed', 'not_observed', 'unavailable', 'uncontrolled',
@@ -29,6 +32,7 @@ const SAFE_VALUES = new Set([
   'drain', 'probe_stop', 'probe_coverage', 'request_summary', 'event_coverage', 'final_request_summary',
   'driver_finalize', 'network_observation', 'quit', 'cleanup', 'quit_request_cutoff',
   'win32', 'darwin', 'linux', 'x64', 'arm64', 'fixed-histogram-upper-bounds',
+  'recorded', 'admitted', 'utf8-bytes-v1', ...GENERATION_DIAGNOSTIC_SOURCE_KINDS, ...MATERIAL_DECISION_CATEGORIES,
 ])
 const SAFE_CODES = new Set(['ERR_ASSERTION', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'EIO', 'ENOENT', 'EACCES', 'EPERM',
   'PERFORMANCE_OBSERVATION_TIMEOUT', 'PERFORMANCE_PROBE_COVERAGE_UNAVAILABLE', 'PERFORMANCE_PROBE_ALREADY_RUNNING',
@@ -46,7 +50,7 @@ const ERROR_CLASSES = new Set(['Error', 'TimeoutError', 'AssertionError', 'Aggre
 const SCENARIOS = new Set(['perf-import-10', 'perf-import-100', 'perf-import-1000', 'perf-long-stream', 'perf-slow-embedding', 'perf-rate-limit'])
 const HASH_FIELDS = new Set(['modelIdHash', 'modelReceiptHash', 'chapterBriefHash', 'authorGuidanceHash', 'dependencyHash',
   'contextSnapshotHash', 'templateHash', 'skillSnapshotHash', 'modelLeaseRevision', 'policyHash', 'outputContractHash',
-  'contentHash', 'initialDraftTaskHash', 'frozenInitialTaskSha256', 'corpusSha256', 'messagesSha256'])
+  'contentHash', 'promptHash', 'manifestFingerprint', 'initialDraftTaskHash', 'frozenInitialTaskSha256', 'corpusSha256', 'messagesSha256'])
 const ID_FIELDS = new Set(['projectId', 'epoch', 'rootActionId', 'runId', 'rootRunId', 'attemptId', 'batchId', 'finalizationId', 'id'])
 
 function opaque(value) {
@@ -81,6 +85,7 @@ export function performanceArtifactPath(value, out, { pathApi = path, contained 
 /** Do not expose arbitrary error messages, paths, dynamic strings or object keys from diagnostics. */
 export function projectPerformanceResult(result, out, options = {}) {
   const visit = (value, key = '') => {
+    if (key === 'selection') value = projectPerformanceSelection(value)
     if (Array.isArray(value)) return value.map(item => visit(item, key))
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([name, item]) => [
       /^[A-Za-z0-9_.-]+$/.test(name) || ['/v1/chat/completions', '/v1/embeddings', '/v1/messages'].includes(name) ? name : opaque(name),
@@ -88,6 +93,8 @@ export function projectPerformanceResult(result, out, options = {}) {
     ]))
     if (typeof value !== 'string') return value
     if (key === 'screenshot' || key === 'video') return performanceArtifactPath(value, out, options)
+    if (key === 'sourceId') return MATERIAL_DECISION_SOURCE_ID.test(value) || /^opaque:[a-f0-9]{64}$/.test(value) ? value : opaque(value)
+    if (key === 'reason' && MATERIAL_DECISION_OMISSION_REASONS.includes(value)) return value
     if (key === 'error' || key === 'reason' || key === 'stack' || key === 'message') return projectError(value)
     if (key === 'isolationRoot' || key === 'externalWrites' || key === 'externalWritesIgnored'
       || key === 'hits' || key === 'unreadable' || key === 'file') return opaque(value)

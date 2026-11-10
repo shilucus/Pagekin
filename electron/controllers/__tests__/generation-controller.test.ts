@@ -1273,6 +1273,11 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     expect(diagnostics.source.fingerprint.skillSnapshotHash).toMatch(/^[a-f0-9]{64}$/u)
     expect(diagnostics.source.modelIdHash).toBe(textHash(model.id))
     expect(diagnostics.source.modelReceiptHash).toMatch(/^[a-f0-9]{64}$/u)
+    expect(diagnostics.selection).toMatchObject({
+      sourceRefs: { coverage: 'recorded', counts: expect.arrayContaining([{ kind: 'project-core', count: 1 }]) },
+      materialDecision: { coverage: 'not_recorded', receipt: null },
+      import: { coverage: 'not_recorded', source: null },
+    })
     const encoded = JSON.stringify(diagnostics)
     for (const forbidden of ['private fictional candidate', 'private fictional prompt', model.apiKey, model.baseUrl!, session.projectPath, 'authorInputs', 'replayTask', 'sourceManifest']) {
       expect(encoded).not.toContain(forbidden)

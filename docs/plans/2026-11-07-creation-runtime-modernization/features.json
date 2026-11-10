@@ -239,6 +239,22 @@
           "environment": "Windows x64; Electron 44.9.3; local fictional provider; 1440x900 light; sourceSha null with explicit entry/blobs/build/report identities",
           "result": "Three serial Electron scenarios exit 0: 10 chapters and 32 requests with observed import checkpoints; long stream 2 settled requests and true initial-task hash; HTTP429 1 failed unknown generation with no resend. Safe exports retain source/slot/attempt evidence. All quit normally without cutoff requests/external writes/residual processes.",
           "limitations": "The 429 scene passes failure handling, not generation. Single observations are not statistical workflow p95, remote billing, literary-quality or platform evidence. Original six baseline reports and their timeout/missing coverage remain unchanged; two/four books not executed."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "ec8246f18adee3cb833aebf865275e77b046cba5 + stage-38-evidence.md source blobs",
+          "artifactOrReceipt": "stage-38-evidence.md#actual-execution",
+          "environment": "Windows x64; Node 24.13.0; pnpm 11.11.0; Vitest 4.1.12; isolated fictional SQLite",
+          "result": "Frozen source-selection production projection and actual safe report consumer: 9 files 544/544, zero failed/pending; typecheck/lint/i18n/build exit 0. Independent frozen-source review found no blocker.",
+          "limitations": "Partial PERF-001 only. Missing historical selection/parameters remain not_recorded; no new dispatch, authority, persistence or UI. Full acceptance remains open."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "ec8246f18adee3cb833aebf865275e77b046cba5 + stage-38-evidence.md source blobs",
+          "artifactOrReceipt": "stage-38-evidence.md#controlled-electron-observations",
+          "environment": "Windows x64; Electron 44.9.3; fictional loopback provider; 1440x900 light; sourceSha null with frozen source/build/report identities",
+          "result": "Serial import/long-stream exit 0: actual endpoint/style/blueprint selections and writing material receipt retained; 32/2 requests, normal quit, zero cutoff/external writes/residual processes. Screenshots inspected; original six baseline reports unchanged.",
+          "limitations": "One-book individual observations only; no workflow p95, real billing/model quality, visual fidelity or three-target qualification. Two/four books and original failed 1000-chapter coverage are not relabeled."
         }
       ]
     },

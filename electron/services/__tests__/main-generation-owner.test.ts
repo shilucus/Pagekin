@@ -177,7 +177,57 @@ describe('read-only run diagnostics', () => {
     const restored = f.reopen().readDiagnostics(run.handle)
     expect(restored.handle).toEqual(run.handle)
     expect(restored.source).toEqual(diagnostic!.source)
+    expect(restored.selection).toEqual(diagnostic!.selection)
     expect(restored.attempts).toEqual(diagnostic!.attempts)
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+  it('reads frozen selection metadata after source changes and reopening without writes or reconstruction', () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(), f = fixture(dispatch), run = f.owner.begin(f.begin)
+    const binding = new GenerationRunRepository(() => f.db).get(run.handle.runId).binding
+    const privateValue = 'Private fictional source label and content'
+    const importContext = { slot: { runId: 'fictional-import', stage: 'style', batchId: 'done' },
+      manifestFingerprint: 'a'.repeat(64), totalChapters: 100, totalWords: 5000,
+      chapters: [2, 8, 90].map(number => ({ number, contentFingerprint: 'b'.repeat(64), wordCount: number,
+        title: privateValue, content: privateValue })), core: { privateValue }, prompts: { privateValue } }
+    const modified = { ...binding, sourceRefs: [...binding.sourceRefs, { ...binding.sourceRefs[0], sourceId: privateValue }],
+      sourceManifest: { ...binding.sourceManifest, importContext } }
+    f.db.prepare('UPDATE generation_runs SET binding_json=? WHERE run_id=?').run(JSON.stringify(modified), run.handle.runId)
+    f.db.prepare("UPDATE project_core SET global_guidance='Changed live source after frozen run'").run()
+    const beforeChanges = f.db.prepare('SELECT total_changes()').pluck().get()
+    f.loadModel.mockClear()
+    f.db.pragma('query_only = ON')
+    let diagnostic: ReturnType<typeof f.owner.readDiagnostics>
+    try { diagnostic = f.owner.readDiagnostics(run.handle) }
+    finally { f.db.pragma('query_only = OFF') }
+    expect(diagnostic!.selection.sourceRefs).toMatchObject({ coverage: 'recorded', counts: expect.arrayContaining([{ kind: 'unknown', count: 1 }]) })
+    expect(diagnostic!.selection.materialDecision).toEqual({ coverage: 'not_recorded', receipt: null })
+    expect(diagnostic!.selection.import).toEqual({ coverage: 'recorded', source: { kind: 'import', manifestFingerprint: 'a'.repeat(64),
+      totalChapters: 100, totalWords: 5000, selectedChapters: [2, 8, 90].map(number => ({ number, contentHash: 'b'.repeat(64), wordCount: number })), checkpointRange: null } })
+    expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(beforeChanges)
+    expect(JSON.stringify(diagnostic!)).not.toContain(privateValue)
+    expect(JSON.stringify(diagnostic!)).not.toContain('Changed live source after frozen run')
+    expect(f.loadModel).not.toHaveBeenCalled()
+    expect(dispatch).not.toHaveBeenCalled()
+    const reopened = f.reopen()
+    f.loadModel.mockClear()
+    expect(reopened.readDiagnostics(run.handle).selection).toEqual(diagnostic!.selection)
+    expect(f.loadModel).not.toHaveBeenCalled()
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+  it('keeps absent historical selection evidence explicitly unavailable', () => {
+    const f = fixture(), run = f.owner.begin(f.begin)
+    f.db.prepare("UPDATE generation_runs SET binding_json=json_remove(binding_json,'$.sourceRefs','$.sourceManifest.materialDecision','$.sourceManifest.importContext') WHERE run_id=?").run(run.handle.runId)
+    expect(f.owner.readDiagnostics(run.handle).selection).toEqual({ sourceRefs: { coverage: 'not_recorded', counts: null },
+      materialDecision: { coverage: 'not_recorded', receipt: null }, import: { coverage: 'not_recorded', source: null } })
+  })
+  it('rejects a corrupted frozen selection without dispatching or exposing a private value', () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(), f = fixture(dispatch), run = f.owner.begin(f.begin)
+    f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.importContext',json(?)) WHERE run_id=?")
+      .run(JSON.stringify({ slot: { runId: 'fictional-import', stage: 'style', batchId: 'done' }, manifestFingerprint: 'a'.repeat(64),
+        totalChapters: 100, totalWords: 5000, chapters: [{ number: 1, contentFingerprint: 'Private fictional source text', wordCount: 20 }] }), run.handle.runId)
+    f.loadModel.mockClear()
+    expect(() => f.owner.readDiagnostics(run.handle)).toThrow(/^GENERATION_DIAGNOSTICS_INVALID$/u)
+    expect(f.loadModel).not.toHaveBeenCalled()
     expect(dispatch).not.toHaveBeenCalled()
   })
   it.each(['projectId', 'rootActionId', 'epoch'] as const)('rejects a mismatched %s before returning diagnostics', field => {
@@ -325,6 +375,9 @@ describe('read-only run diagnostics', () => {
     const recorded = JSON.parse(row.usage_receipt_json).replayTask as GenerationTask
     expect(recorded).toEqual(initialDraftTask)
     const diagnostic = f.owner.readDiagnostics(run.handle)
+    expect(diagnostic.selection.materialDecision).toEqual({ coverage: 'recorded', receipt: {
+      version: decision.version, verdict: decision.verdict, promptHash: decision.promptHash,
+      capacity: decision.capacity, coverage: decision.coverage, included: decision.included, omitted: decision.omitted } })
     expect(diagnostic.initialDraftTaskHash).toBe(textHash(JSON.stringify(recorded)))
     expect(diagnostic).not.toHaveProperty('initialDraftTask')
     expect(JSON.stringify(diagnostic)).not.toContain(recorded.messages[0].content)

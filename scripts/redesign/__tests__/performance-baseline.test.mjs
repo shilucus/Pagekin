@@ -8,6 +8,88 @@ beforeEach(() => { globalThis[collectorKey] = () => ({ schemaVersion: 1, quantil
 afterEach(() => { delete globalThis[collectorKey]; vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('performance baseline contract', () => {
+  it('projects frozen selection fields without reconstructing chapters or retaining extra source data', async () => {
+    const hash = 'a'.repeat(64), handle = { runId: 'g' }
+    const selection = {
+      sourceRefs: { coverage: 'recorded', counts: [{ kind: 'import', count: 5, secret: 'private-ref' }] },
+      materialDecision: { coverage: 'recorded', receipt: { version: 1, verdict: 'admitted', promptHash: hash,
+        capacity: { maxInputUnits: 100, methodVersion: 'utf8-bytes-v1', admittedUnits: 20, secret: 'private-capacity' },
+        coverage: { required: 1, included: 1, complete: true },
+        included: [{ sourceId: 'finalized:2', revision: 3, contentHash: hash, category: 'finalized-history', required: true, units: 20, text: 'private-text' }],
+        omitted: [{ sourceId: 'private-id', revision: 0, contentHash: hash, category: 'reference', required: false, reason: 'budget', text: 'private-omission' }],
+        private: 'private-receipt' } },
+      import: { coverage: 'recorded', source: { kind: 'import', manifestFingerprint: hash, totalChapters: 100, totalWords: 1000,
+        selectedChapters: [1, 3, 99].map(number => ({ number, contentHash: hash, wordCount: number, content: 'private-content' })),
+        checkpointRange: { startChapter: 1, endChapter: 100, extra: 'private-range' }, path: 'private-path' } },
+    }
+    const invoke = vi.fn(async (_page, channel) => channel === 'generation:list' ? [{ handle }]
+      : { schemaVersion: 1, handle, attempts: [], selection })
+    const result = await readPerformanceRunDiagnostics({ page: {}, invoke }, { leaseId: 'lease' }, true)
+    const projected = result.generation.runs[0].selection
+    expect(projected.import.source.selectedChapters.map(chapter => chapter.number)).toEqual([1, 3, 99])
+    expect(projected.import.source).toMatchObject({ totalChapters: 100, checkpointRange: { startChapter: 1, endChapter: 100 } })
+    expect(projected.sourceRefs.counts).toEqual([{ kind: 'import', count: 5 }])
+    expect(projected.materialDecision.receipt.included[0]).toEqual({ sourceId: 'finalized:2', revision: 3,
+      contentHash: hash, category: 'finalized-history', required: true, units: 20 })
+    expect(projected.materialDecision.receipt.omitted[0]).toMatchObject({ reason: 'budget', category: 'reference' })
+    expect(projected.materialDecision.receipt.omitted[0].sourceId).toMatch(/^opaque:[a-f0-9]{64}$/u)
+    expect(JSON.stringify(projected)).not.toContain('private-')
+    expect(invoke.mock.calls.map(call => call[1])).toEqual(['generation:list', 'generation:read-diagnostics'])
+  })
+
+  it.each([
+    { sourceRefs: { coverage: 'recorded', counts: null }, materialDecision: { coverage: 'recorded', receipt: null },
+      import: { coverage: 'recorded', source: null } },
+    { sourceRefs: { coverage: 'not_recorded', counts: [{ kind: 'import', count: 5 }] },
+      materialDecision: { coverage: 'not_recorded', receipt: { version: 1 } },
+      import: { coverage: 'not_recorded', source: { kind: 'import' } } },
+  ])('does not turn absent or explicitly unrecorded payloads into selection evidence', async selection => {
+    const handle = { runId: 'g' }
+    const invoke = vi.fn(async (_page, channel) => channel === 'generation:list' ? [{ handle }]
+      : { schemaVersion: 1, handle, attempts: [], selection })
+    const result = await readPerformanceRunDiagnostics({ page: {}, invoke }, { leaseId: 'lease' }, true)
+    expect(result.generation.runs[0].selection).toEqual({
+      sourceRefs: { coverage: 'not_recorded', counts: null },
+      materialDecision: { coverage: 'not_recorded', receipt: null },
+      import: { coverage: 'not_recorded', source: null },
+    })
+    expect(result.generation).toMatchObject({ coverage: 'observed', observed: 1, retained: 1 })
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('contains poisoned selection metadata at the diagnostic consumer without adding source reads', async () => {
+    const handle = { runId: 'g' }
+    const item = { sourceId: 'reference:private-id', revision: -1, contentHash: 'private-hash',
+      category: 'private-category', required: 'private-required', units: Infinity, reason: 'private-reason', content: 'private-content' }
+    const selection = {
+      private: 'private-selection',
+      sourceRefs: { coverage: 'recorded', counts: [{ kind: 'private-kind', count: 'private-count' }, null] },
+      materialDecision: { coverage: 'recorded', receipt: { version: 2, verdict: 'private-verdict', promptHash: 'private-prompt',
+        capacity: { maxInputUnits: -1, methodVersion: 'private-method', admittedUnits: Infinity },
+        coverage: { required: -1, included: 'private-count', complete: 'private-boolean' }, included: [item], omitted: [item] } },
+      import: { coverage: 'recorded', source: { kind: 'private-kind', manifestFingerprint: 'private-hash',
+        totalChapters: Number.MAX_SAFE_INTEGER + 1, totalWords: -1, selectedChapters: [null,
+          { number: 'private-number', contentHash: 'private-hash', wordCount: NaN, title: 'private-title' }],
+        checkpointRange: 'private-range', path: 'private-path' } },
+    }
+    const invoke = vi.fn(async (_page, channel) => channel === 'generation:list' ? [{ handle }]
+      : { schemaVersion: 1, handle, attempts: [], selection })
+    const result = await readPerformanceRunDiagnostics({ page: {}, invoke }, { leaseId: 'lease' }, true)
+    const projected = result.generation.runs[0].selection
+    expect(projected.sourceRefs.counts).toEqual([{ kind: 'unknown', count: null }, { kind: 'unknown', count: null }])
+    expect(projected.materialDecision.receipt).toMatchObject({ version: null, verdict: null, promptHash: null,
+      capacity: { maxInputUnits: null, methodVersion: null, admittedUnits: null },
+      coverage: { required: null, included: null, complete: null } })
+    expect(projected.materialDecision.receipt.included[0]).toEqual({ sourceId: expect.stringMatching(/^opaque:[a-f0-9]{64}$/u),
+      revision: null, contentHash: null, category: null, required: null, units: null })
+    expect(projected.materialDecision.receipt.omitted[0].reason).toBeNull()
+    expect(projected.import.source).toEqual({ kind: null, manifestFingerprint: null, totalChapters: null, totalWords: null,
+      selectedChapters: [{ number: null, contentHash: null, wordCount: null }, { number: null, contentHash: null, wordCount: null }],
+      checkpointRange: null })
+    expect(JSON.stringify(projected)).not.toContain('private-')
+    expect(invoke.mock.calls.map(call => call[1])).toEqual(['generation:list', 'generation:read-diagnostics'])
+  })
+
   it('reads bounded safe receipts and actual import slots after the probe boundary', async () => {
     const session = { leaseId: 'private-lease', projectPath: 'private-path' }
     const handle = { runId: 'generation-1', rootActionId: 'root-1' }
@@ -50,6 +132,11 @@ describe('performance baseline contract', () => {
     })
     const result = await readPerformanceRunDiagnostics(context, { leaseId: 'l' }, true)
     expect(result.importRun.runs[0].checkpointCounts).toBeNull()
+    expect(result.generation.runs[0].selection).toEqual({
+      sourceRefs: { coverage: 'not_recorded', counts: null },
+      materialDecision: { coverage: 'not_recorded', receipt: null },
+      import: { coverage: 'not_recorded', source: null },
+    })
     context.invoke.mockRejectedValue(new Error('private-error'))
     expect((await readPerformanceRunDiagnostics(context, { leaseId: 'l' }, true)).generation.coverage).toBe('unavailable')
   })

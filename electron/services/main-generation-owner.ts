@@ -34,6 +34,7 @@ import { CharacterProposalService } from './character-proposal-service'
 import { proveCharacterProposal } from './generation-character-proposal-proof'
 import { compareGenerationSourceBindings, generationModelReceiptHash, recordedModelName } from './generation-source-binding'
 import { createStreamSnapshotGuard } from './stream-snapshot-guard'
+import { projectGenerationSourceSelection } from './generation-selection-diagnostics'
 import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
 import type { PrepareDraftContextRequest, PreparedDraftContext } from '../../src/shared/generation-owner-contract'
 import { FinalizedCharacterGeneration } from './finalized-character-generation'
@@ -602,7 +603,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return { schemaVersion: 1, handle: handleOf(run), operation, status,
       source: { modelIdHash: typeof frozenModel?.modelId === 'string' ? textHash(frozenModel.modelId) : null,
         modelReceiptHash: modelReceiptProjection ? generationModelReceiptHash(modelReceiptProjection as SafeGenerationModelReceipt) : null, fingerprint },
-      importSlot, finalizationSlot, parametersCoverage: 'not_recorded',
+      selection: projectGenerationSourceSelection(run.binding), importSlot, finalizationSlot, parametersCoverage: 'not_recorded',
       initialDraftTaskHash: recordedTask ? textHash(JSON.stringify(recordedTask)) : null, attempts }
   }
   /** 本作品的全部运行，新的在前；只从库里取身份、状态与操作类型，不解析整份冻结上下文。 */

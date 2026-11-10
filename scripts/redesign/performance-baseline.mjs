@@ -1,5 +1,8 @@
 import os from 'node:os'
+import { createHash } from 'node:crypto'
 import { PERFORMANCE_METRICS } from '../../src/shared/performance-baseline.ts'
+import { GENERATION_DIAGNOSTIC_SOURCE_KINDS, MATERIAL_DECISION_CATEGORIES,
+  MATERIAL_DECISION_OMISSION_REASONS, MATERIAL_DECISION_SOURCE_ID } from '../../src/shared/generation-owner-contract.ts'
 
 export function performanceMetadata(chapters, sourceSha = process.env.PAGEKIN_PERFORMANCE_SOURCE_SHA) {
   return { platform: process.platform, arch: process.arch, cpu: os.cpus()[0]?.model ?? 'unknown',
@@ -36,6 +39,50 @@ const TRANSPORT_KEYS = ['elapsedMs', 'firstResponseMs', 'lastResponseMs', 'lastO
 const IMPORT_STAGES = ['parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'author-commit',
   'author-publish', 'author-postprocess', 'refresh', 'completed']
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => value?.[key] !== undefined).map(key => [key, value[key]]))
+const number = value => Number.isSafeInteger(value) && value >= 0 ? value : null
+const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/iu.test(value) ? value : null
+const member = (value, values) => values.includes(value) ? value : null
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+const sourceId = value => typeof value !== 'string' ? null
+  : MATERIAL_DECISION_SOURCE_ID.test(value) || /^opaque:[a-f0-9]{64}$/u.test(value) ? value
+  : `opaque:${createHash('sha256').update(value).digest('hex')}`
+
+/** Used by both diagnostic consumption and the final stdout/JSON privacy boundary. */
+export function projectPerformanceSelection(selection) {
+  const refs = selection?.sourceRefs
+  const decision = selection?.materialDecision
+  const counts = refs?.coverage === 'recorded' && Array.isArray(refs.counts) ? refs.counts : null
+  const receipt = decision?.coverage === 'recorded' && record(decision.receipt) ? decision.receipt : null
+  const imported = selection?.import
+  const source = imported?.coverage === 'recorded' && record(imported.source) ? imported.source : null
+  const projectMaterial = item => ({ sourceId: sourceId(item?.sourceId), revision: number(item?.revision),
+    contentHash: hash(item?.contentHash), category: member(item?.category, MATERIAL_DECISION_CATEGORIES),
+    required: typeof item?.required === 'boolean' ? item.required : null })
+  return {
+    sourceRefs: { coverage: counts ? 'recorded' : 'not_recorded',
+      counts: counts ? counts.map(item => ({
+        kind: member(item?.kind, GENERATION_DIAGNOSTIC_SOURCE_KINDS) ?? 'unknown', count: number(item?.count),
+      })) : null },
+    materialDecision: { coverage: receipt ? 'recorded' : 'not_recorded',
+      receipt: receipt ? { version: receipt.version === 1 ? 1 : null, verdict: member(receipt.verdict, ['admitted']),
+        promptHash: hash(receipt.promptHash),
+        capacity: record(receipt.capacity) ? { maxInputUnits: number(receipt.capacity.maxInputUnits),
+          methodVersion: member(receipt.capacity.methodVersion, ['utf8-bytes-v1']), admittedUnits: number(receipt.capacity.admittedUnits) } : null,
+        coverage: record(receipt.coverage) ? { required: number(receipt.coverage.required), included: number(receipt.coverage.included),
+          complete: typeof receipt.coverage.complete === 'boolean' ? receipt.coverage.complete : null } : null,
+        included: Array.isArray(receipt.included) ? receipt.included.map(item => ({ ...projectMaterial(item), units: number(item?.units) })) : null,
+        omitted: Array.isArray(receipt.omitted) ? receipt.omitted.map(item => ({ ...projectMaterial(item),
+          reason: member(item?.reason, MATERIAL_DECISION_OMISSION_REASONS) })) : null } : null },
+    import: { coverage: source ? 'recorded' : 'not_recorded',
+      source: source ? { kind: member(source.kind, ['import']), manifestFingerprint: hash(source.manifestFingerprint),
+        totalChapters: number(source.totalChapters), totalWords: number(source.totalWords),
+        selectedChapters: Array.isArray(source.selectedChapters) ? source.selectedChapters.map(chapter => ({
+          number: number(chapter?.number), contentHash: hash(chapter?.contentHash), wordCount: number(chapter?.wordCount),
+        })) : null,
+        checkpointRange: record(source.checkpointRange) ? { startChapter: number(source.checkpointRange.startChapter),
+          endChapter: number(source.checkpointRange.endChapter) } : null } : null },
+  }
+}
 
 /** Read existing receipts only after measurement; never retain sessions, source text or raw errors. */
 export async function readPerformanceRunDiagnostics({ page, invoke }, session, workflowEntered, preparedImportId = null) {
@@ -85,6 +132,7 @@ export async function readPerformanceRunDiagnostics({ page, invoke }, session, w
           rootActionId: diagnostic.handle.rootActionId, operation: diagnostic.operation, status: diagnostic.status,
           source: { modelIdHash: diagnostic.source?.modelIdHash ?? null, modelReceiptHash: diagnostic.source?.modelReceiptHash ?? null,
             fingerprint: pick(diagnostic.source?.fingerprint, FINGERPRINT_KEYS) },
+          selection: projectPerformanceSelection(diagnostic.selection),
           importSlot: slot ? pick(slot, ['runId', 'stage', 'batchId']) : null,
           finalizationSlot: diagnostic.finalizationSlot ? { stepKey: diagnostic.finalizationSlot.stepKey,
             source: pick(diagnostic.finalizationSlot.source, ['draftId', 'finalizationId', 'chapterNumber', 'contentHash']) } : null,
