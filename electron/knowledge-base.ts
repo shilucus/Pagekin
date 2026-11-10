@@ -49,6 +49,7 @@ import { getProjectDataRoot } from './services/project-data-locator'
 import { withKnowledgeSourceGate } from './services/knowledge-source-gate'
 import { projectRuntimeHost, type ProjectRuntime } from './services/project-runtime'
 import type { ReferenceImportKnowledgeSnapshot } from './services/reference-import-knowledge-source'
+import { assertIssuedReferenceImportAdmission, type ReferenceImportAdmission } from './services/reference-import-admission'
 
 // ===== 迁移状态跟踪 =====
 
@@ -457,6 +458,7 @@ interface ReferenceImportAuthorityRequest {
   content: string
   projectPath: string
   resources?: ReferenceImportResources
+  admission?: ReferenceImportAdmission
 }
 
 interface ReferenceImportFlight {
@@ -473,7 +475,11 @@ function referenceImportProjectIdentity(projectPath: string): string {
 }
 
 function assertReferenceImportAuthority(request: ReferenceImportAuthorityRequest): void {
-  request.resources?.assertResources()
+  if (request.admission) {
+    assertIssuedReferenceImportAdmission(request.admission)
+    if (!request.resources) throw new Error('KNOWLEDGE_BASE_REFERENCE_ADMISSION_RESOURCES_REQUIRED')
+    request.admission.assertCurrent(request.resources, request.runId)
+  } else request.resources?.assertResources()
   const binding = ImportRunRepository.resolveReferenceImportAuthority(
     request.runId,
     request.executionAuthority,
@@ -548,8 +554,18 @@ async function performReferenceTextImport(
   protocol: 'openai' | 'gemini',
   model: EmbeddingModel,
   assertAuthority: () => void,
-  resources?: ReferenceImportResources,
+  authority: ReferenceImportAuthorityRequest,
 ): Promise<ReferenceImportResult> {
+  const { resources, admission, runId } = authority
+  const withReceiptTransaction = <T>(operation: () => T): T => {
+    if (!admission) return operation()
+    assertIssuedReferenceImportAdmission(admission)
+    if (!resources) throw new Error('KNOWLEDGE_BASE_REFERENCE_ADMISSION_RESOURCES_REQUIRED')
+    return admission.withTransaction(resources, runId, () => {
+      assertAuthority()
+      return operation()
+    })
+  }
   const removeReferenceDocument = () => {
     // Cancellation revokes import authority, not the admitted cleanup's captured resources.
     resources?.assertResources()
@@ -559,7 +575,10 @@ async function performReferenceTextImport(
     if (!text.trim()) return { success: false, error: 'KNOWLEDGE_BASE_TEXT_EMPTY' }
     assertAuthority()
     await ensureMigration(projectPath)
-    if (!knowledgeStoreSupportsCommits(projectPath)) return { success: false, error: 'KNOWLEDGE_BASE_VOLUME_UNSUPPORTED' }
+    if (!knowledgeStoreSupportsCommits(projectPath)) {
+      if (admission) assertAuthority()
+      return { success: false, error: 'KNOWLEDGE_BASE_VOLUME_UNSUPPORTED' }
+    }
     assertAuthority()
     const projectDb = resources ? resources.database : getProjectDb()
     if (!projectDb) return { success: false, error: 'PROJECT_NOT_OPEN' }
@@ -569,37 +588,41 @@ async function performReferenceTextImport(
     const chunkSetHash = hashCanonicalChunkSet(chunks)
     const keyHash = createHash('sha256').update(stableKey, 'utf8').digest('hex')
 
-    const receipt = projectDb.prepare(`
-      SELECT document_id, idempotency_key_hash, content_hash, chunk_set_hash,
-             expected_chunk_count, corpus_kind, state
-      FROM import_reference_documents
-      WHERE document_id = ? OR idempotency_key_hash = ?
-    `).get(documentId, keyHash) as {
-      document_id: string
-      idempotency_key_hash: string
-      content_hash: string
-      chunk_set_hash: string
-      expected_chunk_count: number
-      corpus_kind: string
-      state: 'prepared' | 'committed'
-    } | undefined
-    if (receipt && (
-      receipt.document_id !== documentId
-      || receipt.idempotency_key_hash !== keyHash
-      || receipt.content_hash !== contentHash
-      || receipt.chunk_set_hash !== chunkSetHash
-      || receipt.expected_chunk_count !== chunks.length
-      || receipt.corpus_kind !== 'reference'
-    )) return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_RECEIPT_CONFLICT' }
-    if (!receipt) {
-      assertAuthority()
-      projectDb.prepare(`
-        INSERT INTO import_reference_documents (
-          document_id, idempotency_key_hash, content_hash, chunk_set_hash,
-          expected_chunk_count, corpus_kind, state
-        ) VALUES (?, ?, ?, ?, ?, 'reference', 'prepared')
-      `).run(documentId, keyHash, contentHash, chunkSetHash, chunks.length)
-    }
+    const receiptConflict = withReceiptTransaction(() => {
+      const receipt = projectDb.prepare(`
+        SELECT document_id, idempotency_key_hash, content_hash, chunk_set_hash,
+               expected_chunk_count, corpus_kind, state
+        FROM import_reference_documents
+        WHERE document_id = ? OR idempotency_key_hash = ?
+      `).get(documentId, keyHash) as {
+        document_id: string
+        idempotency_key_hash: string
+        content_hash: string
+        chunk_set_hash: string
+        expected_chunk_count: number
+        corpus_kind: string
+        state: 'prepared' | 'committed'
+      } | undefined
+      if (receipt && (
+        receipt.document_id !== documentId
+        || receipt.idempotency_key_hash !== keyHash
+        || receipt.content_hash !== contentHash
+        || receipt.chunk_set_hash !== chunkSetHash
+        || receipt.expected_chunk_count !== chunks.length
+        || receipt.corpus_kind !== 'reference'
+      )) return true
+      if (!receipt) {
+        assertAuthority()
+        projectDb.prepare(`
+          INSERT INTO import_reference_documents (
+            document_id, idempotency_key_hash, content_hash, chunk_set_hash,
+            expected_chunk_count, corpus_kind, state
+          ) VALUES (?, ?, ?, ?, ?, 'reference', 'prepared')
+        `).run(documentId, keyHash, contentHash, chunkSetHash, chunks.length)
+      }
+      return false
+    })
+    if (receiptConflict) return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_RECEIPT_CONFLICT' }
 
     const existingIntegrity = await getDocumentIntegrity(projectPath, documentId)
     assertAuthority()
@@ -609,23 +632,27 @@ async function performReferenceTextImport(
       && existingIntegrity.chunkCount === chunks.length
       && existingIntegrity.chunkSetHash === chunkSetHash
     ) {
-      assertAuthority()
-      projectDb.prepare(`
-        UPDATE import_reference_documents
-        SET state = 'committed', updated_at = datetime('now')
-        WHERE document_id = ?
-      `).run(documentId)
+      withReceiptTransaction(() => {
+        assertAuthority()
+        projectDb.prepare(`
+          UPDATE import_reference_documents
+          SET state = 'committed', updated_at = datetime('now')
+          WHERE document_id = ?
+        `).run(documentId)
+      })
       return { success: true, docId: documentId, chunkCount: chunks.length, idempotent: true }
     }
     if (existingIntegrity && !await removeReferenceDocument()) {
       return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_CLEANUP_FAILED' }
     }
-    assertAuthority()
-    projectDb.prepare(`
-      UPDATE import_reference_documents
-      SET state = 'prepared', updated_at = datetime('now')
-      WHERE document_id = ?
-    `).run(documentId)
+    withReceiptTransaction(() => {
+      assertAuthority()
+      projectDb.prepare(`
+        UPDATE import_reference_documents
+        SET state = 'prepared', updated_at = datetime('now')
+        WHERE document_id = ?
+      `).run(documentId)
+    })
 
     let vectors: number[][] | undefined
     if (hasRequiredApiKey(model)) {
@@ -658,13 +685,14 @@ async function performReferenceTextImport(
       },
       embeddingSpaceFor(protocol, model),
     )
-    if (!result.success) return { success: false, error: result.error }
+    if (!result.success && !admission) return { success: false, error: result.error }
     try {
       assertAuthority()
     } catch (error) {
       await removeReferenceDocument()
       throw error
     }
+    if (!result.success) return { success: false, error: result.error }
     const committedIntegrity = await getDocumentIntegrity(projectPath, documentId)
     try {
       assertAuthority()
@@ -681,12 +709,19 @@ async function performReferenceTextImport(
       await removeReferenceDocument()
       return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_VERIFY_FAILED' }
     }
-    assertAuthority()
-    projectDb.prepare(`
-      UPDATE import_reference_documents
-      SET state = 'committed', updated_at = datetime('now')
-      WHERE document_id = ?
-    `).run(documentId)
+    try {
+      withReceiptTransaction(() => {
+        assertAuthority()
+        projectDb.prepare(`
+          UPDATE import_reference_documents
+          SET state = 'committed', updated_at = datetime('now')
+          WHERE document_id = ?
+        `).run(documentId)
+      })
+    } catch (error) {
+      if (admission) await removeReferenceDocument()
+      throw error
+    }
     return { success: true, docId: documentId, chunkCount: chunks.length, idempotent: false }
   } catch (error) {
     return { success: false, ...knowledgeFailureDetails(error) }
@@ -705,15 +740,21 @@ export async function importReferenceText(
   protocol: 'openai' | 'gemini',
   model: EmbeddingModel,
   resources?: ReferenceImportResources,
+  admission?: ReferenceImportAdmission,
 ): Promise<ReferenceImportResult> {
   const stableKey = stableImportKey.trim()
   if (!stableKey || stableKey.length > 512 || !/^[\w:.-]+$/u.test(stableKey)) {
     return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_KEY_INVALID' }
   }
   const documentId = createHash('sha256').update(`reference-import:${stableKey}`, 'utf8').digest('hex')
-  const authority = { runId, executionAuthority, chapterNumber, stableKey, content: text, projectPath, resources }
+  const authority = { runId, executionAuthority, chapterNumber, stableKey, content: text, projectPath, resources, admission }
   let releaseWork: (() => void) | undefined
   try {
+    if (admission) {
+      assertIssuedReferenceImportAdmission(admission)
+      if (!resources) throw new Error('KNOWLEDGE_BASE_REFERENCE_ADMISSION_RESOURCES_REQUIRED')
+      admission.assertCurrent(resources, runId)
+    }
     if (resources) {
       resources.assertResources()
       assertRequiredExpectedProjectPath(resources.canonicalRoot, fs.realpathSync.native(projectPath))
@@ -727,6 +768,7 @@ export async function importReferenceText(
       baseUrl: model.baseUrl,
       modelName: model.modelName ?? '',
       embeddingOptions,
+      ...(admission ? { admission: admission.bindingKey } : {}),
     })).digest('hex')
     // Legacy and captured calls share native work; this identity does not grant legacy background access.
     const flightEpoch = resources?.executionEpoch ?? projectRuntimeHost.getActiveView()?.executionEpoch
@@ -749,7 +791,7 @@ export async function importReferenceText(
           protocol,
           model,
           assertCurrentAuthority,
-          resources,
+          authority,
         )
       },
     )

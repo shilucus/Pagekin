@@ -896,3 +896,15 @@ Root actually ran the focused eight-file package: 127/127, zero failed/pending, 
 Root serial build exited 0; three entry hashes are unchanged because this helper pair is still uncomposed in production. That is build compatibility, not an application runtime exercise. Independent final artifact review follows against ten source/test/ADR, one raw report and three built entries.
 
 Final artifact reviewer feedback_audit independently matched all fourteen identities, raw denominators and required regression presence, with no scope evidence blocker. Root owns the separate Git path/index/hook/exclusion checks. This was artifact inspection, not an independent rerun or whole-feature acceptance.
+
+## 2026-11-11 - Stage 45 Reference Knowledge Grant Admission
+
+Independent source reviewers baseline_audit and feedback_audit traced actual issuance, captured runtime/grant/portable checks, KB receipt transactions/replay and physical single-flight/cleanup. Initial review found effect-bearing nested calls lacked their own rollback boundary; the owner added a savepoint and two outer-catch regressions before execution. Both reviewers re-read the correction.
+
+Actual first run was 207/208: the unit fixture's persistent admission_effects table violated canonical schema on reopen. Both reviewers acknowledged the missed fixture problem and withdrew the affected no-missing-case conclusion. The owner changed only the fixture to TEMP and the second connection's write to existing project_core, preserving strict lock and production reopen guards. Both independent reviewers inspected those final bytes with no narrow source blocker.
+
+Root's fresh fourteen-file run passed 208/208, zero failed/pending, exit 0; initial and final typecheck exit 0. [Stage 45 evidence](stage-45-evidence.md) retains both raw reports, identities, precise fixture correction and explicit limits. Final lint/i18n/build and separate artifact review follow actual completion. This does not qualify complete IMPORT, durable request/model-source freezing, unknown recovery, UI, real models or target platforms.
+
+Final lint/color, i18n and serial source build each exit 0, retaining existing warnings. Root recomputed all five source/test/ADR identities unchanged after execution, froze both reports and three built entries, and checked the original excluded paths/index/hook boundary. Independent artifact inspection follows; command exits remain root execution evidence, not reviewer reruns.
+
+Final artifact reviewer feedback_audit matched all ten identities and raw denominators, the previously failed case now passed exactly once, retained failure lineage, six completed flags and exclusions. No narrow-scope evidence blocker remains. The reviewer did not rerun commands or operate Git; root owns the nine-path/index/hooks check and scoped commit.

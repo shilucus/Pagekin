@@ -1080,6 +1080,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Stage 6E driver vertical and project switching protection tests passed (5 files, 147/147 tests passed); typecheck, lint, check:i18n, build exit 0",
           "limitations": "Multi-book reference mixing belongs to Stage 6F"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "f93dfeff8cb023d32a8db117bde449fc04d3a2ac",
+          "artifactOrReceipt": "stage-45-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage45/focused-tests-final.json",
+          "environment": "Windows x64; Node24.13.0/pnpm11.11.0/Vitest4.1.12; five frozen source/test/ADR identities; real isolated fictional SQLite/Lance and mocked transport",
+          "result": "Main-only existing-grant admission and actual KB transaction/replay/flight isolation passed fourteen files 208/208 after a test-only canonical-reopen fixture correction; two independent source reviews",
+          "limitations": "Initial 207/208 retained. No full driver, durable capsule/model configuration, embedding dispatch/unknown recovery, background activation, UI or quality/platform qualification; later global/blueprint destination/adoption contract is unresolved. IMPORT-001 remains in_progress/passes=false. Quality/build and final artifact results are recorded in Stage45 evidence."
         }
       ]
     },
@@ -1204,6 +1212,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Stage 6E driver vertical and project switching protection tests passed (5 files, 147/147 tests passed); typecheck, lint, check:i18n, build exit 0",
           "limitations": "Multi-book reference mixing belongs to Stage 6F"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "f93dfeff8cb023d32a8db117bde449fc04d3a2ac",
+          "artifactOrReceipt": "stage-45-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage45/focused-tests-final.json",
+          "environment": "Same shared fourteen-file fictional native boundary report and five frozen identities as IMPORT-001, not a separate imitation workflow run",
+          "result": "Shared main grant admission/KB transaction, revocation, captured cleanup and cross-grant physical-flight boundaries passed 208/208; separate source reviews inspected actual integrated paths",
+          "limitations": "Initial 207/208 retained and not summed. Current product has one reference preparation chain, no separate imitation/adoption mode; formal global/blueprint destination remains an explicit contract gap. No complete imitation/style-to-target acceptance, capsule, frozen configuration or dispatch recovery. IMPORT-002 remains in_progress/passes=false; quality/build and artifact results remain bounded in Stage45 evidence."
         }
       ]
     },
