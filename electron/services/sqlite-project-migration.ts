@@ -55,6 +55,7 @@ export interface ProjectSqliteEvidence {
   preWorkflowBatchDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preReferenceImportGrantsDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
   preBlueprintFeedbackDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
+  preEmbeddingDispatchDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
 }
 
 function regular(file: string): void {
@@ -122,6 +123,8 @@ function domainColumns(db: BetterSqlite3.Database, preIdentity = false, preAsset
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]
   const postLegacyTables = [...M02_AUXILIARY_TABLES, ...M03_REVIEW_CYCLE_TABLES, ...M05_ASSET_TABLES] as readonly string[]
   return tables.filter(({ name }) => (!(preIdentity || preAsset || preRecycle || preFeedback || preFeedbackRanges || preGrants || preRecoveryTails || preWorkflowDriver || preWorkflowBatch)
+      || name !== 'reference_embedding_dispatches')
+    && (!(preIdentity || preAsset || preRecycle || preFeedback || preFeedbackRanges || preGrants || preRecoveryTails || preWorkflowDriver || preWorkflowBatch)
       || name !== 'planning_feedback_blueprint_revisions')
     && (!preIdentity || !postLegacyTables.includes(name))
     && (!preAsset || !(M05_ASSET_TABLES as readonly string[]).includes(name))
@@ -174,9 +177,11 @@ function inspect(db: BetterSqlite3.Database, registry: MigrationRegistry, target
     ...(result.version >= 13 ? { preWorkflowDriverDomain: domain(db, domainColumns(db, false, false, false, false, false, false, false, true)) } : {}),
     ...(result.version >= 14 ? { preWorkflowBatchDomain: domain(db, domainColumns(db, false, false, false, false, false, false, false, false, true)) } : {}),
     ...(result.version >= 15 ? { preReferenceImportGrantsDomain: domain(db, domainColumns(db)
-      .filter(({ name }) => name !== 'reference_import_grants' && name !== 'planning_feedback_blueprint_revisions')) } : {}),
+      .filter(({ name }) => name !== 'reference_import_grants' && name !== 'planning_feedback_blueprint_revisions' && name !== 'reference_embedding_dispatches')) } : {}),
     ...(result.version >= 16 ? { preBlueprintFeedbackDomain: domain(db, domainColumns(db)
-      .filter(({ name }) => name !== 'planning_feedback_blueprint_revisions')) } : {}) }
+      .filter(({ name }) => name !== 'planning_feedback_blueprint_revisions' && name !== 'reference_embedding_dispatches')) } : {}),
+    ...(result.version >= 17 ? { preEmbeddingDispatchDomain: domain(db, domainColumns(db)
+      .filter(({ name }) => name !== 'reference_embedding_dispatches')) } : {}) }
 }
 function qualifiedLegacySource(db: BetterSqlite3.Database): string | null {
   const adapter = new SqliteSchemaAdapter(db)

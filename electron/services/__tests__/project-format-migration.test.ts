@@ -394,7 +394,7 @@ it('rejects M13-only target contamination after asset migration and preserves th
   expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
 })
 
-it.each([8, 9, 10, 11, 12, 13, 14, 15].flatMap(sourceVersion =>
+it.each([8, 9, 10, 11, 12, 13, 14, 15, 16].flatMap(sourceVersion =>
   (['valid', 'missing', 'tampered', 'grant-pollution', 'tail-pollution', 'workflow-pollution',
     ...(sourceVersion === 14 ? ['reference-grant-pollution' as const] : [])] as const)
     .map(mode => ({ sourceVersion, mode })),
@@ -404,7 +404,7 @@ it.each([8, 9, 10, 11, 12, 13, 14, 15].flatMap(sourceVersion =>
     : sourceVersion === 9 ? 'preFeedbackRangesDomain' : sourceVersion === 10 ? 'preGrantsDomain'
       : sourceVersion === 11 ? 'preRecoveryTailsDomain' : sourceVersion === 12 ? 'preWorkflowDriverDomain'
         : sourceVersion === 13 ? 'preWorkflowBatchDomain' : sourceVersion === 14 ? 'preReferenceImportGrantsDomain'
-          : 'preBlueprintFeedbackDomain'
+          : sourceVersion === 15 ? 'preBlueprintFeedbackDomain' : 'preEmbeddingDispatchDomain'
   let tailInput: PreserveGenerationTailInput | undefined
   let workflowRunId: string | undefined
   const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -417,7 +417,7 @@ it.each([8, 9, 10, 11, 12, 13, 14, 15].flatMap(sourceVersion =>
     migrateSchema(new SqliteSchemaAdapter(source), getDesktopMigrationRegistry(), sourceVersion)
     source.prepare("INSERT INTO project_core(id,project_name,core_outline) VALUES('main','Fiction','Original outline')").run()
     source.prepare('INSERT INTO contents(body) VALUES(?)').run('Synthetic author text')
-    if (sourceVersion === 15) source.prepare("INSERT INTO blueprints(chapter_number,title,notes) VALUES(3,'Original blueprint','Author notes')").run()
+    if (sourceVersion >= 15) source.prepare("INSERT INTO blueprints(chapter_number,title,notes) VALUES(3,'Original blueprint','Author notes')").run()
     if (sourceVersion === 9) source.prepare(`INSERT INTO planning_feedback_bases
       (base_id,schema_version,project_id,target,source_revision,source_hash,source_json,value,value_hash,created_at)
       VALUES('old-base',1,?,'coreOutline',1,'old-source-hash','{}','Original outline','old-value-hash',1)`).run(options.projectId)

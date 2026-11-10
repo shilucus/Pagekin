@@ -10,6 +10,12 @@
 
 import { normalizeEmbeddingOptions, type EmbeddingOptions } from '../src/shared/embedding-options'
 import { EmbeddingResponseValidationError } from './services/embedding-response-error'
+import {
+  EmbeddingDispatchBarrierError,
+  type EmbeddingBatchObserver,
+  type EmbeddingRequestLifecycle,
+  type EmbeddingRequestOutcome,
+} from './services/reference-embedding-dispatch-contract'
 
 const RELEASE_SMOKE_BASE_URL_PREFIX = 'vela-release-smoke://'
 
@@ -239,11 +245,89 @@ function buildOpenAIEmbeddingUrl(baseUrl: string): string {
   return `${base}/embeddings`
 }
 
+function dispatchBarrier(): never {
+  throw new EmbeddingDispatchBarrierError('REFERENCE_EMBEDDING_DISPATCH_PERSISTENCE_FAILED')
+}
+
+function assertLifecycle(lifecycle: unknown): asserts lifecycle is EmbeddingRequestLifecycle {
+  if (!isRecord(lifecycle) || typeof lifecycle.beforeDispatch !== 'function' || typeof lifecycle.settled !== 'function') {
+    dispatchBarrier()
+  }
+}
+
+function lifecycleHook(lifecycle: EmbeddingRequestLifecycle | undefined, phase: 'beforeDispatch' | 'settled', outcome?: EmbeddingRequestOutcome): void {
+  if (lifecycle === undefined) return
+  try {
+    assertLifecycle(lifecycle)
+    const hook = lifecycle[phase]
+    if (Object.prototype.toString.call(hook) === '[object AsyncFunction]') dispatchBarrier()
+    const result: unknown = phase === 'beforeDispatch' ? lifecycle.beforeDispatch() : lifecycle.settled(outcome!)
+    if (result !== undefined) {
+      // A rejected asynchronous guard must not escape as an unhandled rejection.
+      if (result && (typeof result === 'object' || typeof result === 'function')
+        && typeof (result as { then?: unknown }).then === 'function') void Promise.resolve(result).catch(() => {})
+      dispatchBarrier()
+    }
+  } catch {
+    dispatchBarrier()
+  }
+}
+
+function batchLifecycle(observer: EmbeddingBatchObserver | undefined, ordinal: number, count: number): EmbeddingRequestLifecycle | undefined {
+  if (observer === undefined) return undefined
+  try {
+    if (!isRecord(observer) || typeof observer.forBatch !== 'function'
+      || Object.prototype.toString.call(observer.forBatch) === '[object AsyncFunction]') dispatchBarrier()
+    const lifecycle: unknown = observer.forBatch(ordinal, count)
+    if (lifecycle && (typeof lifecycle === 'object' || typeof lifecycle === 'function')
+      && typeof (lifecycle as { then?: unknown }).then === 'function') {
+      void Promise.resolve(lifecycle).catch(() => {})
+      dispatchBarrier()
+    }
+    assertLifecycle(lifecycle)
+    return lifecycle
+  } catch {
+    dispatchBarrier()
+  }
+}
+
+async function requestEmbeddings(
+  provider: 'OpenAI' | 'Gemini',
+  url: string,
+  init: RequestInit,
+  batchLength: number,
+  lifecycle?: EmbeddingRequestLifecycle,
+): Promise<number[][]> {
+  lifecycleHook(lifecycle, 'beforeDispatch')
+  let res: Response
+  try {
+    res = await fetch(url, init)
+  } catch (error) {
+    lifecycleHook(lifecycle, 'settled', { kind: 'transport_unknown' })
+    throw error
+  }
+  if (!res.ok) {
+    lifecycleHook(lifecycle, 'settled', { kind: 'http_failed', httpStatus: res.status })
+    embeddingHttpError(provider, res.status)
+  }
+  let vectors: number[][]
+  try {
+    const data = await parseEmbeddingJsonResponse(provider, res)
+    vectors = provider === 'OpenAI' ? validateOpenAIEmbeddings(data, batchLength) : validateGeminiEmbeddings(data, batchLength)
+  } catch (error) {
+    lifecycleHook(lifecycle, 'settled', { kind: 'response_invalid', httpStatus: res.status })
+    throw error
+  }
+  lifecycleHook(lifecycle, 'settled', { kind: 'response_received', httpStatus: res.status })
+  return vectors
+}
+
 /** OpenAI Embedding API */
 export async function embedOpenAI(
   texts: string[],
   model: { baseUrl: string; apiKey: string; modelName?: string },
   signal?: AbortSignal,
+  lifecycle?: EmbeddingRequestLifecycle,
 ): Promise<number[][]> {
   const ollamaCompatibleBaseUrl = ollamaOpenAIEmbeddingBaseUrl(model.baseUrl)
   if (ollamaCompatibleBaseUrl) {
@@ -251,7 +335,7 @@ export async function embedOpenAI(
   }
   const embeddingModel = model.modelName || 'text-embedding-3-small'
   const url = buildOpenAIEmbeddingUrl(model.baseUrl)
-  const res = await fetch(url, {
+  return requestEmbeddings('OpenAI', url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -262,14 +346,7 @@ export async function embedOpenAI(
       input: texts,
     }),
     signal,
-  })
-
-  if (!res.ok) {
-    embeddingHttpError('OpenAI', res.status)
-  }
-
-  const data = await parseEmbeddingJsonResponse('OpenAI', res)
-  return validateOpenAIEmbeddings(data, texts.length)
+  }, texts.length, lifecycle)
 }
 
 /** Gemini Embedding API */
@@ -277,6 +354,7 @@ export async function embedGemini(
   texts: string[],
   model: { baseUrl: string; apiKey: string; modelName?: string },
   signal?: AbortSignal,
+  lifecycle?: EmbeddingRequestLifecycle,
 ): Promise<number[][]> {
   const embeddingModel = model.modelName || 'gemini-embedding-001'
   const baseUrl = model.baseUrl.replace(/\/$/, '')
@@ -289,7 +367,7 @@ export async function embedGemini(
     taskType: 'RETRIEVAL_DOCUMENT',
   }))
 
-  const res = await fetch(url, {
+  return requestEmbeddings('Gemini', url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -297,14 +375,7 @@ export async function embedGemini(
     },
     body: JSON.stringify({ requests }),
     signal,
-  })
-
-  if (!res.ok) {
-    embeddingHttpError('Gemini', res.status)
-  }
-
-  const data = await parseEmbeddingJsonResponse('Gemini', res)
-  return validateGeminiEmbeddings(data, texts.length)
+  }, texts.length, lifecycle)
 }
 
 /** 统一的 Embedding 调用接口 (支持 SCHED-001 单书独立网络任务有界并发与首失败保序裁决) */
@@ -316,6 +387,7 @@ export async function generateEmbeddings(
   assertActive?: () => void,
   signal?: AbortSignal,
   configuredConcurrencyLimit?: number,
+  observer?: EmbeddingBatchObserver,
 ): Promise<number[][]> {
   // 空文本处理
   if (texts.length === 0) return []
@@ -343,9 +415,10 @@ export async function generateEmbeddings(
     const results: number[][] = []
     for (const batch of batches) {
       assertActive?.()
+      const lifecycle = batchLifecycle(observer, batch.index, batch.texts.length)
       const embeddings = protocol === 'gemini'
-        ? await embedGemini(batch.texts, model, signal)
-        : await embedOpenAI(batch.texts, model, signal)
+        ? await embedGemini(batch.texts, model, signal, lifecycle)
+        : await embedOpenAI(batch.texts, model, signal, lifecycle)
       assertActive?.()
       results.push(...embeddings)
     }
@@ -373,9 +446,10 @@ export async function generateEmbeddings(
         if (signal?.aborted) {
           throw new Error('EMBEDDING_REQUEST_ABORTED')
         }
+        const lifecycle = batchLifecycle(observer, batch.index, batch.texts.length)
         const embeddings = protocol === 'gemini'
-          ? await embedGemini(batch.texts, model, signal)
-          : await embedOpenAI(batch.texts, model, signal)
+          ? await embedGemini(batch.texts, model, signal, lifecycle)
+          : await embedOpenAI(batch.texts, model, signal, lifecycle)
         assertActive?.()
         outcomes[current] = { status: 'fulfilled', embeddings }
       } catch (error) {
@@ -394,6 +468,11 @@ export async function generateEmbeddings(
 
   // 等待所有在途 worker 彻底退出并吸收所有在途请求结果
   await Promise.allSettled(activeWorkerPromises)
+
+  // A lost dispatch/settlement receipt forbids fallback even if an earlier batch failed normally.
+  for (const outcome of outcomes) {
+    if (outcome?.status === 'rejected' && outcome.error instanceof EmbeddingDispatchBarrierError) throw outcome.error
+  }
 
   // 按原 batch 序号严格首失败裁决（First-Failure Adjudication by Original Batch Order）
   for (let i = 0; i < batches.length; i++) {

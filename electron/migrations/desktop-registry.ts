@@ -13,8 +13,9 @@ import { applyM10RuntimeFeedbackGrants, createM10Migration } from './m10-runtime
 import { applyM11GenerationRecoveryTails, createM11Migration, verifyM11GenerationRecoveryTails } from './m11-generation-recovery-tails'
 import { applyM12WorkflowDriver, createM12Migration, verifyM12WorkflowDriver } from './m12-workflow-driver'
 import { applyM13WorkflowBatch, createM13Migration, verifyM13WorkflowBatch } from './m13-workflow-batch'
-import { applyM14ReferenceImportGrants, createM14Migration } from './m14-reference-import-grants'
-import { applyM15PlanningFeedbackBlueprints, createM15Migration } from './m15-planning-feedback-blueprints'
+import { applyM14ReferenceImportGrants, createM14Migration, verifyM14ReferenceImportGrants } from './m14-reference-import-grants'
+import { applyM15PlanningFeedbackBlueprints, createM15Migration, verifyM15PlanningFeedbackBlueprints } from './m15-planning-feedback-blueprints'
+import { applyM16ReferenceEmbeddingDispatches, createM16Migration } from './m16-reference-embedding-dispatches'
 import { verifyCurrentReviewCycles } from './current-review-cycle'
 import { createM00Migration } from './m00-baseline'
 import { initializeLegacyBaselineSchema, applyBaselineTables } from './baseline-schema'
@@ -23,7 +24,7 @@ import { SqliteSchemaAdapter, sqliteSchemaFingerprint } from './sqlite-schema-ad
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
-export const CURRENT_DESKTOP_SCHEMA_VERSION = 16
+export const CURRENT_DESKTOP_SCHEMA_VERSION = 17
 let installed: MigrationRegistry | undefined
 
 function installKnownDonorAvatarColumn(db: import('better-sqlite3').Database): void {
@@ -137,11 +138,18 @@ export function getDesktopMigrationRegistry(): MigrationRegistry {
       verifyKnownSchema: db => blueprintFeedbackFingerprints.has(sqliteSchemaFingerprint(native(db)))
         && verifyM02CharacterIdentity(native(db)) && verifyCurrentReviewCycles(native(db)) && verifyM08PlanningFeedback(native(db))
         && verifyM11GenerationRecoveryTails(native(db)) && verifyM12WorkflowDriver(native(db)) && verifyM13WorkflowBatch(native(db)) })
-    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05, m06, m07, m08, m09, m10, m11, m12, m13, m14, m15], [
+    for (const db of references) db.transaction(() => applyM16ReferenceEmbeddingDispatches(db))()
+    const dispatchSchemas = schemas(17), dispatchFingerprints = new Set(dispatchSchemas.map(item => item.fingerprint))
+    const m16 = createM16Migration({ database: native,
+      verifyKnownSchema: db => dispatchFingerprints.has(sqliteSchemaFingerprint(native(db)))
+        && verifyM02CharacterIdentity(native(db)) && verifyCurrentReviewCycles(native(db)) && verifyM08PlanningFeedback(native(db))
+        && verifyM11GenerationRecoveryTails(native(db)) && verifyM12WorkflowDriver(native(db)) && verifyM13WorkflowBatch(native(db))
+        && verifyM14ReferenceImportGrants(native(db)) && verifyM15PlanningFeedbackBlueprints(native(db)) })
+    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05, m06, m07, m08, m09, m10, m11, m12, m13, m14, m15, m16], [
       ...sourceSchemas, ...baselineSchemas.map(schema => ({ ...schema, version: 0 })),
       ...baselineSchemas, ...generationSchemas, ...identitySchemas,
       ...reviewCycleSchemas, ...importEffectSchemas, ...characterAssetSchemas, ...mergeSnapshotSchemas, ...recycleSchemas, ...feedbackSchemas,
-      ...feedbackRangeSchemas, ...runtimeGrantSchemas, ...recoveryTailSchemas, ...driverSchemas, ...batchSchemas, ...referenceGrantSchemas, ...blueprintFeedbackSchemas,
+      ...feedbackRangeSchemas, ...runtimeGrantSchemas, ...recoveryTailSchemas, ...driverSchemas, ...batchSchemas, ...referenceGrantSchemas, ...blueprintFeedbackSchemas, ...dispatchSchemas,
     ])
     return installed
   } finally { reference.close(); donor.close() }

@@ -553,10 +553,32 @@ it('preserves every schema 15 table and column while a failed M15 leaves its bac
  expect(probeProjectSqlite({databasePath:f.target})).toEqual(before)
  expect(fs.readFileSync(f.target)).toEqual(original)
  const upgraded=upgradeProjectSqlite({databasePath:f.target})
- expect(upgraded.schemaVersion).toBe(16)
+ expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
  expect(upgraded.preBlueprintFeedbackDomain).toEqual(before.domain)
  expect(upgraded.domain.tableCounts.planning_feedback_blueprint_revisions).toBe(1)
  expect(upgraded.domain.tableCounts.planning_feedback_bases).toBe(1)
+ expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
+it.each(['standard','donor'] as const)('preserves schema16 %s domain and bytes across failed M16 and successful retry', async variant => {
+ const f=fixture()
+ if(variant==='donor') {
+  const row=f.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='characters'").get() as {sql:string}
+  f.db.exec('ALTER TABLE characters RENAME TO characters_without_avatar')
+  f.db.exec(row.sql.replace("      cs_location TEXT DEFAULT '',", "      avatar TEXT NOT NULL DEFAULT '',\n      cs_location TEXT DEFAULT '',"))
+  f.db.exec('DROP TABLE characters_without_avatar')
+ }
+ await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:16})
+ const before=probeProjectSqlite({databasePath:f.target}), original=fs.readFileSync(f.target), registry=getDesktopMigrationRegistry()
+ expect(before.schemaVersion).toBe(16)
+ const failing={...registry,implementations:registry.implementations.map(step=>step.id==='M16'
+  ? {...step,migrate:(reader: Parameters<typeof step.migrate>[0])=>{step.migrate(reader);throw new Error('embedding-dispatch-migration-interruption')}} : step)}
+ expect(()=>upgradeProjectSqlite({databasePath:f.target,registry:failing})).toThrow('embedding-dispatch-migration-interruption')
+ expect(probeProjectSqlite({databasePath:f.target})).toEqual(before)
+ expect(fs.readFileSync(f.target)).toEqual(original)
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.schemaVersion).toBe(17)
+ expect(upgraded.preEmbeddingDispatchDomain).toEqual(before.domain)
+ expect(upgraded.domain.tableCounts.reference_embedding_dispatches).toBeUndefined()
  expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
 })
 it('resolves a trusted system scratch junction before validating its private snapshot', () => {

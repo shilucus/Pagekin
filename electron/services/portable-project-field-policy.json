@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 16,
+  "schemaVersion": 17,
   "rules": {
     "D": ["preserve-domain", "signed-domain-value", "portable-domain-copy"],
     "H": ["historical-nonreplayable", "nonreplayable-history", "portable-history-projector"],
@@ -27,6 +27,7 @@
   "m13Tables": ["workflow_batch_tasks", "workflow_batch_steps", "workflow_batch_effects"],
   "m14Tables": ["reference_import_grants"],
   "m15Tables": ["planning_feedback_blueprint_revisions"],
+  "m16Tables": ["reference_embedding_dispatches"],
   "optionalFields": ["characters.avatar"],
   "deltaCharacterFields": ["character_id", "legacy_key", "static_provenance", "identity_revision", "retired"],
   "signedOverrides": {
@@ -130,6 +131,7 @@
     "planning_feedback_adoptions": {"adoption_id":"H","schema_version":"H","project_id":"H","base_id":"H","candidate_id":"H","idempotency_key":"X","request_hash":"X","target":"H","decision":"H","decision_source":"H","text":"H","text_hash":"H","before_value":"H","before_hash":"H","source_revision":"H","committed_revision":"H","created_at":"H","adopted_scope_json":"R"},
     "runtime_feedback_grants": {"grant_id":"H","project_id":"H","revision":"H","operation_key":"X","action":"H","target":"H","base_id":"H","parent_candidate_id":"H","run_id":"H","request_hash":"H","state":"H","candidate_id":"H","decision_source":"H","created_at":"H","revoked_at":"H"},
     "reference_import_grants": {"grant_id":"H","operation_key":"X","project_id":"H","import_run_id":"H","revision":"H","action":"H","manifest_fingerprint":"X","request_hash":"X","state":"H","decision_source":"H","created_at":"H","completed_at":"H","revoked_at":"H"},
+    "reference_embedding_dispatches": {"dispatch_id":"H","import_run_id":"H","document_id":"H","batch_ordinal":"H","input_count":"H","state":"H","http_status":"H","marked_at":"H","settled_at":"H"},
     "generation_recovery_tails": {"attempt_id":"H","artifact_id":"H","durable_revision":"H","prefix_hash":"H","tail_text":"H","tail_hash":"H","preserved_at":"H"},
     "post_process_runs": {"id":"H","trigger_source_type":"H","trigger_source_id":"H","source_label":"H","all_critical_passed":"H","created_at":"H","updated_at":"H"},
     "post_process_steps": {"id":"H","run_id":"H","step_key":"H","label":"H","critical":"H","ok":"H","error_msg":"R","attempt_count":"H","completed_at":"H","last_attempt_at":"H"},

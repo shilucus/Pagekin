@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openCanonicalProjectFixture } from '../../test/helpers/canonical-project-fixture'
 import type { ReferenceImportGrantRef } from '../../src/shared/reference-import-grant'
+import type { EmbeddingModel } from '../../src/shared/embedding-options'
 import { getProjectDb } from '../database'
 import { captureReferenceImportResources, importReferenceText } from '../knowledge-base'
 import { ImportRunRepository } from '../repositories/import-run-repository'
@@ -23,12 +24,11 @@ const embeddingModel = { ...ftsModel, baseUrl: 'https://embedding.example/v1', a
 let temporaryParent = ''
 let parent = ''
 
-function book(name: string) {
+function book(name: string, content = `Fictional ${name} courier waits beside a harbor.`) {
   const root = path.join(parent, name)
   fs.mkdirSync(root)
   openCanonicalProjectFixture(root)
   const runtime = projectRuntimeHost.getActiveView()!
-  const content = `Fictional ${name} courier waits beside a harbor.`
   ImportRunRepository.prepare({ runId: RUN, purpose: 'reference', sourceFingerprint: hash(`source:${name}`), locale: 'en-US',
     sourceDisplay: [{ displayName: 'Chapter 1.txt', mediaType: 'text/plain', size: Buffer.byteLength(content) }],
     chapters: [{ number: 1, title: 'One', content, contentSize: Buffer.byteLength(content), contentFingerprint: hash(content) }] })
@@ -57,21 +57,24 @@ function importBook(value: Book, options: {
   resources?: Book['resources']
   authority?: Book['authority']
   runId?: string
-  model?: typeof ftsModel
+  model?: EmbeddingModel
+  protocol?: 'openai' | 'gemini'
 } = {}) {
   return importReferenceText(value.content, 'Chapter 1.txt', value.binding.stableKey, 1, options.runId ?? RUN,
-    options.authority ?? value.authority, value.root, 'openai', options.model ?? ftsModel,
+    options.authority ?? value.authority, value.root, options.protocol ?? 'openai', options.model ?? ftsModel,
     options.resources ?? value.resources, options.admission ?? value.admission)
 }
 
 function documentId(value: Book): string { return hash(`reference-import:${value.binding.stableKey}`) }
 function documentRows(value: Book) { return value.runtime.database.prepare('SELECT * FROM import_reference_documents ORDER BY document_id').all() }
 function knowledgeRows(value: Book) { return value.runtime.database.prepare('SELECT * FROM import_run_knowledge_receipts ORDER BY chapter_number').all() }
+function dispatchRows(value: Book) { return value.runtime.database.prepare('SELECT * FROM reference_embedding_dispatches ORDER BY batch_ordinal').all() }
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>(accept => { resolve = accept })
-  return { promise, resolve }
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((accept, decline) => { resolve = accept; reject = decline })
+  return { promise, resolve, reject }
 }
 
 function embeddingResponse() {
@@ -83,7 +86,8 @@ function holdEmbedding() {
   const started = deferred<void>(), finish = deferred<Response>()
   const fetch = vi.fn(() => { started.resolve(); return finish.promise })
   vi.stubGlobal('fetch', fetch)
-  return { started: started.promise, finish: () => finish.resolve(embeddingResponse()), fetch }
+  return { started: started.promise, finish: () => finish.resolve(embeddingResponse()),
+    fail: () => finish.reject(new Error('FICTIONAL_TRANSPORT_REJECTED')), fetch }
 }
 
 async function expectBUnchanged() {
@@ -152,6 +156,7 @@ describe('actual reference knowledge grant admission', () => {
     expect(knowledgeRows(a)).toEqual([expect.objectContaining({ document_id: imported.docId, state: 'committed' })])
     await expect(store.getDocumentIntegrity(a.root, imported.docId!)).resolves.toMatchObject({ complete: true, corpusKind: 'reference', chunkCount: 1 })
     expect(fetch).not.toHaveBeenCalled()
+    expect(dispatchRows(a)).toEqual([])
     const documents = documentRows(a), receipts = knowledgeRows(a)
     a.grants.revoke(a.ref)
     await expect(importBook(a)).resolves.toMatchObject({ success: false })
@@ -195,12 +200,14 @@ describe('actual reference knowledge grant admission', () => {
     const held = holdEmbedding(), pending = importBook(a, { model: embeddingModel })
     try {
       await held.started
+      expect(dispatchRows(a)).toEqual([expect.objectContaining({ state: 'dispatch_marked', http_status: null, settled_at: null })])
       a.grants.revoke(a.ref)
       held.finish()
       await expect(pending).resolves.toMatchObject({ success: false })
       expect(held.fetch).toHaveBeenCalledTimes(1)
       expect(documentRows(a)).toEqual([expect.objectContaining({ state: 'prepared' })])
       expect(knowledgeRows(a)).toEqual([])
+      expect(dispatchRows(a)).toEqual([expect.objectContaining({ state: 'response_received', http_status: 200, settled_at: expect.any(Number) })])
       await expect(store.listDocuments(a.root)).resolves.toEqual([])
       await expectBUnchanged()
     } finally { held.finish(); await pending }
@@ -273,7 +280,11 @@ describe('actual reference knowledge grant admission', () => {
     } else expect(documentRows(a)).toEqual(before)
     expect(knowledgeRows(a)).toEqual([])
     a.runtime.database.exec('DROP TRIGGER fictional_revoke_reference')
-    await expect(importBook(a)).resolves.toMatchObject({ success: true, idempotent: boundary === 'replay' })
+    if (boundary === 'commit') {
+      await expect(importBook(a)).resolves.toMatchObject({ success: false, error: 'REFERENCE_EMBEDDING_PREPARED_UNPROVEN' })
+      expect(dispatchRows(a)).toEqual([])
+      await expect(store.listDocuments(a.root)).resolves.toEqual([])
+    } else await expect(importBook(a)).resolves.toMatchObject({ success: true, idempotent: boundary === 'replay' })
     await expectBUnchanged()
   })
 
@@ -342,11 +353,19 @@ describe('actual reference knowledge grant admission', () => {
       expect(add).toHaveBeenCalledTimes(1)
       finishCleanup.resolve()
       await expect(old).resolves.toMatchObject({ success: false })
-      await expect(current).resolves.toMatchObject({ success: true, idempotent: false, docId: documentId(a) })
-      expect(add).toHaveBeenCalledTimes(2)
-      expect(documentRows(a)).toEqual([expect.objectContaining({ state: 'committed' })])
-      await expect(store.getDocumentIntegrity(a.root, documentId(a))).resolves.toMatchObject({ complete: true, chunkCount: 1 })
-      if (nextKind !== 'legacy') await expectBUnchanged()
+      if (nextKind === 'legacy') {
+        await expect(current).resolves.toMatchObject({ success: true, idempotent: false, docId: documentId(a) })
+        expect(add).toHaveBeenCalledTimes(2)
+        expect(documentRows(a)).toEqual([expect.objectContaining({ state: 'committed' })])
+        await expect(store.getDocumentIntegrity(a.root, documentId(a))).resolves.toMatchObject({ complete: true, chunkCount: 1 })
+      } else {
+        await expect(current).resolves.toMatchObject({ success: false, error: 'REFERENCE_EMBEDDING_PREPARED_UNPROVEN' })
+        expect(add).toHaveBeenCalledTimes(1)
+        expect(documentRows(a)).toEqual([expect.objectContaining({ state: 'prepared' })])
+        await expect(store.getDocumentIntegrity(a.root, documentId(a))).resolves.toBeNull()
+        await expectBUnchanged()
+      }
+      expect(dispatchRows(a)).toEqual([])
     } finally { finishWrite.resolve(); finishCleanup.resolve(); await Promise.allSettled(current ? [old, current] : [old]) }
   })
 
@@ -389,5 +408,164 @@ describe('actual reference knowledge grant admission', () => {
       expect(reopened.database.prepare('SELECT state FROM import_reference_documents').all()).toEqual([{ state: 'prepared' }])
       await expectBUnchanged()
     } finally { finishCleanup.resolve(); await pending; if (closing) await closing; unregister() }
+  })
+
+  it.each(['openai', 'gemini'] as const)('records actual %s dispatch and validated response, then reconciles a complete document without another request', async protocol => {
+    const fetchMock = vi.fn(async () => {
+      expect(dispatchRows(a)).toEqual([expect.objectContaining({ import_run_id: RUN, document_id: documentId(a),
+        batch_ordinal: 0, input_count: 1, state: 'dispatch_marked', http_status: null, settled_at: null })])
+      const payload = protocol === 'openai' ? { data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] }
+        : { embeddings: [{ values: [0.1, 0.2, 0.3] }] }
+      return new Response(JSON.stringify(payload), { status: 201 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(importBook(a, { model: embeddingModel, protocol })).resolves.toMatchObject({ success: true, idempotent: false })
+    const history = dispatchRows(a)
+    expect(history).toEqual([expect.objectContaining({ dispatch_id: `reference-embedding:${documentId(a)}:0`,
+      state: 'response_received', http_status: 201, marked_at: expect.any(Number), settled_at: expect.any(Number) })])
+    await expect(importBook(a, { model: embeddingModel, protocol })).resolves.toMatchObject({ success: true, idempotent: true })
+    expect(dispatchRows(a)).toEqual(history)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await expect(store.getDocumentIntegrity(a.root, documentId(a))).resolves.toMatchObject({ complete: true,
+      embeddingGenerations: expect.arrayContaining([expect.objectContaining({ complete: true, chunkCount: 1 })]) })
+    await expectBUnchanged()
+  })
+
+  it.each(['http_failed', 'transport_unknown'] as const)('retains %s while preserving same-invocation whole-document FTS fallback', async state => {
+    const fetchMock = vi.fn(async () => {
+      if (state === 'transport_unknown') throw new Error('FICTIONAL_TRANSPORT_REJECTED')
+      return new Response('', { status: 503 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(importBook(a, { model: embeddingModel })).resolves.toMatchObject({ success: true, idempotent: false })
+    const history = dispatchRows(a)
+    expect(history).toEqual([expect.objectContaining({ state, http_status: state === 'http_failed' ? 503 : null, settled_at: expect.any(Number) })])
+    await expect(store.getDocumentIntegrity(a.root, documentId(a))).resolves.toMatchObject({ complete: true, embeddingGenerations: [] })
+    await expect(importBook(a, { model: embeddingModel })).resolves.toMatchObject({ success: true, idempotent: true })
+    expect(dispatchRows(a)).toEqual(history)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await expectBUnchanged()
+  })
+
+  it.each(['response_received', 'http_failed', 'response_invalid', 'transport_unknown'] as const)('blocks incomplete %s history across the same grant, a new grant and legacy entry', async state => {
+    const fetchMock = vi.fn(async () => {
+      if (state === 'transport_unknown') throw new Error('FICTIONAL_TRANSPORT_REJECTED')
+      if (state === 'http_failed') return new Response('', { status: 429 })
+      return state === 'response_invalid' ? new Response('{}', { status: 200 }) : embeddingResponse()
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const add = vi.spyOn(store, 'addChunks').mockResolvedValue({ success: false, chunkCount: 0, error: 'FICTIONAL_PROJECTION_FAILED' })
+    await expect(importBook(a, { model: embeddingModel })).resolves.toMatchObject({ success: false })
+    expect(add).toHaveBeenCalledTimes(state === 'response_invalid' ? 0 : 1)
+    add.mockRestore()
+    const history = dispatchRows(a)
+    expect(history).toEqual([expect.objectContaining({ state, settled_at: expect.any(Number) })])
+    await expect(importBook(a, { model: embeddingModel })).resolves.toMatchObject({ success: false, error: 'REFERENCE_EMBEDDING_PRIOR_DISPATCH_BLOCKED' })
+    a.grants.revoke(a.ref)
+    const grant = a.grants.issue({ grantId: randomUUID(), operationKey: randomUUID(), runId: RUN,
+      manifestFingerprint: a.grant.manifestFingerprint!, requestHash })
+    const admission = captureReferenceImportAdmission(a.runtime, { grantId: grant.grantId, revision: grant.revision, runId: RUN }, requestHash)
+    await expect(importBook(a, { model: embeddingModel, admission })).resolves.toMatchObject({ success: false, error: 'REFERENCE_EMBEDDING_PRIOR_DISPATCH_BLOCKED' })
+    await expectBUnchanged()
+    store.closeConnection(b.root)
+    projectRuntimeHost.releaseIdle(b.runtime)
+    projectRuntimeHost.activateView(a.runtime)
+    await expect(withLegacyProjectOperation('kb:import-reference-text', () => importReferenceText(a.content, 'Chapter 1.txt',
+      a.binding.stableKey, 1, RUN, a.authority, a.root, 'openai', embeddingModel)))
+      .resolves.toMatchObject({ success: false, error: 'REFERENCE_EMBEDDING_PRIOR_DISPATCH_BLOCKED' })
+    expect(dispatchRows(a)).toEqual(history)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await expect(store.listDocuments(a.root)).resolves.toEqual([])
+    expect(documentRows(a)).toEqual([expect.objectContaining({ state: 'prepared' })])
+  })
+
+  it.each(['mark', 'settlement'] as const)('treats actual SQL %s failure as a hard barrier without FTS or a replacement request', async phase => {
+    const fetchMock = vi.fn(async () => embeddingResponse())
+    vi.stubGlobal('fetch', fetchMock)
+    const add = vi.spyOn(store, 'addChunks')
+    a.runtime.database.exec(`CREATE TEMP TRIGGER fictional_embedding_persistence BEFORE ${phase === 'mark' ? 'INSERT' : 'UPDATE'}
+      ON reference_embedding_dispatches BEGIN SELECT RAISE(ABORT, 'FICTIONAL_LEDGER_WRITE_FAILED'); END;`)
+    await expect(importBook(a, { model: embeddingModel })).resolves.toMatchObject({ success: false, error: 'REFERENCE_EMBEDDING_DISPATCH_PERSISTENCE_FAILED' })
+    expect(fetchMock).toHaveBeenCalledTimes(phase === 'mark' ? 0 : 1)
+    expect(add).not.toHaveBeenCalled()
+    expect(dispatchRows(a)).toEqual(phase === 'mark' ? [] : [expect.objectContaining({ state: 'dispatch_marked', settled_at: null })])
+    a.runtime.database.exec('DROP TRIGGER fictional_embedding_persistence')
+    await expect(importBook(a, { model: embeddingModel })).resolves.toMatchObject({ success: false,
+      error: phase === 'mark' ? 'REFERENCE_EMBEDDING_PREPARED_UNPROVEN' : 'REFERENCE_EMBEDDING_PRIOR_DISPATCH_BLOCKED' })
+    expect(fetchMock).toHaveBeenCalledTimes(phase === 'mark' ? 0 : 1)
+    expect(add).not.toHaveBeenCalled()
+    await expectBUnchanged()
+  })
+
+  it('drains a sibling request before reporting a later settlement fence despite an earlier ordinary HTTP failure', async () => {
+    const value = book('Batches', 'x'.repeat(150))
+    projectRuntimeHost.activateView(b.runtime)
+    const model = { ...embeddingModel, embeddingOptions: { chunkSize: 100, chunkOverlap: 0, batchSize: 1, concurrencyLimit: 2 } }
+    const first = deferred<Response>(), second = deferred<Response>(), both = deferred<void>()
+    const fetchMock = vi.fn().mockImplementationOnce(() => first.promise).mockImplementationOnce(() => { both.resolve(); return second.promise })
+    vi.stubGlobal('fetch', fetchMock)
+    value.runtime.database.exec(`CREATE TEMP TRIGGER fictional_second_settlement BEFORE UPDATE ON reference_embedding_dispatches
+      WHEN NEW.batch_ordinal=1 BEGIN SELECT RAISE(ABORT, 'FICTIONAL_SECOND_LEDGER_WRITE_FAILED'); END;`)
+    const add = vi.spyOn(store, 'addChunks'), pending = importBook(value, { model })
+    try {
+      await both.promise
+      first.resolve(new Response('', { status: 503 }))
+      await vi.waitFor(() => expect(dispatchRows(value)).toEqual([
+        expect.objectContaining({ batch_ordinal: 0, state: 'http_failed' }), expect.objectContaining({ batch_ordinal: 1, state: 'dispatch_marked' }),
+      ]))
+      let finished = false
+      void pending.then(() => { finished = true })
+      await Promise.resolve()
+      expect(finished).toBe(false)
+      expect(() => projectRuntimeHost.acquireMaintenance(value.runtime, 'backup')).toThrow('PROJECT_RUNTIME_BUSY')
+      second.resolve(embeddingResponse())
+      await expect(pending).resolves.toMatchObject({ success: false, error: 'REFERENCE_EMBEDDING_DISPATCH_PERSISTENCE_FAILED' })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(add).not.toHaveBeenCalled()
+      expect(dispatchRows(value)).toEqual([
+        expect.objectContaining({ batch_ordinal: 0, state: 'http_failed', http_status: 503 }),
+        expect.objectContaining({ batch_ordinal: 1, state: 'dispatch_marked', settled_at: null }),
+      ])
+      await expectBUnchanged()
+    } finally { first.resolve(new Response('', { status: 503 })); second.resolve(embeddingResponse()); await pending }
+  })
+
+  it.each(['response_received', 'transport_unknown'] as const)('settles the exact revoked %s request before close and preserves history on original-project reopen without resending', async state => {
+    const held = holdEmbedding(), pending = importBook(a, { model: embeddingModel })
+    const unregister = projectRuntimeHost.onBeforeRelease(runtime => store.closeConnection(runtime.canonicalRoot))
+    let closing: Promise<void> | undefined
+    try {
+      await held.started
+      a.grants.revoke(a.ref)
+      closing = projectRuntimeHost.requestClose(a.runtime)
+      let closed = false
+      void closing.then(() => { closed = true }, () => {})
+      await Promise.resolve()
+      expect(closed).toBe(false)
+      expect(a.runtime.database.open).toBe(true)
+      if (state === 'transport_unknown') held.fail()
+      else held.finish()
+      await expect(pending).resolves.toMatchObject({ success: false })
+      await closing
+      expect(a.runtime.database.open).toBe(false)
+      await expectBUnchanged()
+      store.closeConnection(b.root)
+      projectRuntimeHost.releaseIdle(b.runtime)
+      openCanonicalProjectFixture(a.root)
+      const reopened = projectRuntimeHost.getActiveView()!
+      expect(reopened.databaseIdentity).not.toBe(a.runtime.databaseIdentity)
+      expect(reopened.database.prepare('SELECT state,http_status FROM reference_embedding_dispatches').all())
+        .toEqual([{ state, http_status: state === 'response_received' ? 200 : null }])
+      await expect(withLegacyProjectOperation('kb:import-reference-text', () => importReferenceText(a.content, 'Chapter 1.txt',
+        a.binding.stableKey, 1, RUN, a.authority, a.root, 'openai', embeddingModel)))
+        .resolves.toMatchObject({ success: false, error: 'IMPORT_RUN_EXECUTION_STALE' })
+      const execution = ImportRunRepository.startOrResume(RUN, 'fictional-reopened-owner', Date.now(), 60_000, reopened).execution
+      expect(execution.epoch).toBeGreaterThan(a.authority.epoch)
+      await expect(withLegacyProjectOperation('kb:import-reference-text', () => importReferenceText(a.content, 'Chapter 1.txt',
+        a.binding.stableKey, 1, RUN, { owner: execution.owner, epoch: execution.epoch }, a.root, 'openai', embeddingModel)))
+        .resolves.toMatchObject({ success: false, error: 'REFERENCE_EMBEDDING_PRIOR_DISPATCH_BLOCKED' })
+      expect(held.fetch).toHaveBeenCalledTimes(1)
+      await expect(store.listDocuments(a.root)).resolves.toEqual([])
+    } finally { held.finish(); await pending; if (closing) await closing; unregister() }
   })
 })

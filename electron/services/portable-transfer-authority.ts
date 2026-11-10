@@ -158,6 +158,26 @@ export function assertReferenceImportGrantFreezeCoverage(database: Database.Data
   }
 }
 
+/** Exported dispatches remain history; genuinely new local runs keep their own live authority. */
+export function assertReferenceEmbeddingDispatchFreezeCoverage(
+  database: Database.Database,
+  freeze?: PortableRuntimeFreezeGuard,
+  completePortableCopy = false,
+): void {
+  if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reference_embedding_dispatches'").get()) return
+  const rows = database.prepare(`SELECT d.dispatch_id,d.import_run_id,d.document_id,r.source_fingerprint,r.manifest_fingerprint
+    FROM reference_embedding_dispatches d JOIN import_runs r ON r.id=d.import_run_id`).all() as Array<{
+      dispatch_id: string; import_run_id: string; document_id: string; source_fingerprint: string; manifest_fingerprint: string
+    }>
+  for (const row of rows) {
+    const historical = completePortableCopy || row.source_fingerprint === '' || row.manifest_fingerprint === ''
+      || freeze?.isFrozen('reference_embedding_dispatches', row.dispatch_id)
+      || freeze?.isFrozen('import_runs', row.import_run_id) || freeze?.isFrozen('import_reference_documents', row.document_id)
+    if (historical && (!freeze?.active || !freeze.isFrozen('reference_embedding_dispatches', row.dispatch_id)
+      || !freeze.isFrozen('import_runs', row.import_run_id) || !freeze.isFrozen('import_reference_documents', row.document_id))) invalid()
+  }
+}
+
 function receiptId(input: Pick<PortableTransferAuthority,
   'originProjectId' | 'snapshotGeneration' | 'portableDatabaseSha256' | 'finalizations' | 'summarySources'>): string {
   return `portable-transfer:${sha256(JSON.stringify({ originProjectId: input.originProjectId,
@@ -275,6 +295,7 @@ export function verifyPortableTransferAuthority(
   freeze?: PortableRuntimeFreezeGuard,
 ): void {
   assertReferenceImportGrantFreezeCoverage(database, freeze)
+  assertReferenceEmbeddingDispatchFreezeCoverage(database, freeze, true)
   const facts = currentness(database, false, freeze)
   if (JSON.stringify(facts.finalizations) !== JSON.stringify(authority.finalizations)
     || JSON.stringify(facts.summarySources) !== JSON.stringify(authority.summarySources)) invalid()
@@ -286,6 +307,7 @@ export function verifyPortableTransferAuthorityHistory(
   freeze?: PortableRuntimeFreezeGuard,
 ): void {
   assertReferenceImportGrantFreezeCoverage(database, freeze)
+  assertReferenceEmbeddingDispatchFreezeCoverage(database, freeze)
   const deleted = new Set<number>()
   for (const item of authority.finalizations) {
     const row = database.prepare(`

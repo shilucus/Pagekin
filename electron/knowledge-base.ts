@@ -50,6 +50,9 @@ import { withKnowledgeSourceGate } from './services/knowledge-source-gate'
 import { projectRuntimeHost, type ProjectRuntime } from './services/project-runtime'
 import type { ReferenceImportKnowledgeSnapshot } from './services/reference-import-knowledge-source'
 import { assertIssuedReferenceImportAdmission, type ReferenceImportAdmission } from './services/reference-import-admission'
+import { assertNoReferenceEmbeddingDispatches, prepareReferenceEmbeddingDocument,
+  type ReferenceEmbeddingDispatchFlight } from './services/reference-embedding-dispatch'
+import { EmbeddingDispatchBarrierError } from './services/reference-embedding-dispatch-contract'
 
 // ===== 迁移状态跟踪 =====
 
@@ -557,6 +560,7 @@ async function performReferenceTextImport(
   authority: ReferenceImportAuthorityRequest,
 ): Promise<ReferenceImportResult> {
   const { resources, admission, runId } = authority
+  let embeddingFlight: ReferenceEmbeddingDispatchFlight | null = null
   const withReceiptTransaction = <T>(operation: () => T): T => {
     if (!admission) return operation()
     assertIssuedReferenceImportAdmission(admission)
@@ -588,7 +592,12 @@ async function performReferenceTextImport(
     const chunkSetHash = hashCanonicalChunkSet(chunks)
     const keyHash = createHash('sha256').update(stableKey, 'utf8').digest('hex')
 
-    const receiptConflict = withReceiptTransaction(() => {
+    const preparation = admission
+      ? prepareReferenceEmbeddingDocument({ resources: resources!, admission, runId, assertAuthority,
+        document: { documentId, keyHash, contentHash, chunkSetHash, chunkCount: chunks.length } })
+      : null
+    embeddingFlight = preparation?.flight ?? null
+    const receiptConflict = preparation?.conflict ?? withReceiptTransaction(() => {
       const receipt = projectDb.prepare(`
         SELECT document_id, idempotency_key_hash, content_hash, chunk_set_hash,
                expected_chunk_count, corpus_kind, state
@@ -642,6 +651,11 @@ async function performReferenceTextImport(
       })
       return { success: true, docId: documentId, chunkCount: chunks.length, idempotent: true }
     }
+    // Any prior physical request blocks incomplete-document reentry, even through a new grant or legacy caller.
+    assertNoReferenceEmbeddingDispatches(projectDb, documentId)
+    if (admission && !embeddingFlight) {
+      throw new EmbeddingDispatchBarrierError('REFERENCE_EMBEDDING_PREPARED_UNPROVEN')
+    }
     if (existingIntegrity && !await removeReferenceDocument()) {
       return { success: false, error: 'KNOWLEDGE_BASE_REFERENCE_CLEANUP_FAILED' }
     }
@@ -663,10 +677,13 @@ async function performReferenceTextImport(
           model,
           model.embeddingOptions?.batchSize,
           assertAuthority,
+          undefined,
+          undefined,
+          embeddingFlight ?? undefined,
         )
       } catch (error) {
         assertAuthority()
-        if (error instanceof EmbeddingResponseValidationError) throw error
+        if (error instanceof EmbeddingResponseValidationError || error instanceof EmbeddingDispatchBarrierError) throw error
         console.warn('[AI Novel KB] reference import embedding failed; using FTS-only:', error)
       }
       assertAuthority()
@@ -725,6 +742,8 @@ async function performReferenceTextImport(
     return { success: true, docId: documentId, chunkCount: chunks.length, idempotent: false }
   } catch (error) {
     return { success: false, ...knowledgeFailureDetails(error) }
+  } finally {
+    embeddingFlight?.finish()
   }
 }
 
