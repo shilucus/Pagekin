@@ -438,6 +438,55 @@ function outlineFixture(file = ':memory:') {
 }
 
 describe('fixed plot-outline range feedback adapter', () => {
+  it('lists only exact schema2 range summaries without full sources or JSON key-order dependence', () => {
+    const f = outlineFixture(), scope = { kind: 'plot-outline-range' as const, from: 3, to: 4 }
+    const closed = f.repository.captureBase(scope)
+    f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 5 })
+    f.repository.captureBase({ kind: 'plot-outline-range', from: 1, to: 2 })
+    const field = f.repository.captureBase('coreOutline')
+    const candidate = stage(f, closed, outlineBody(3, 4, 'Listed candidate'))
+    const adoption = f.repository.adopt({ candidateId: candidate.candidateId, idempotencyKey: 'listed-range', decision: 'full', text: candidate.text })
+    const open = f.repository.captureBase(scope)
+    f.db.prepare('UPDATE planning_feedback_bases SET scope_json=? WHERE base_id=?')
+      .run(JSON.stringify({ to: 4, from: 3, kind: 'plot-outline-range' }), closed.baseId)
+    f.db.prepare('UPDATE planning_feedback_bases SET created_at=1001 WHERE base_id=?').run(open.baseId)
+    const changes = f.db.prepare('SELECT total_changes()').pluck().get()
+
+    expect(f.repository.listRangeBases(scope)).toEqual([
+      { baseId: open.baseId, projectId: 'project-A', target: 'plotOutlineRange', scope, createdAt: 1001, closedAt: null, closedByAdoptionId: null },
+      { baseId: closed.baseId, projectId: 'project-A', target: 'plotOutlineRange', scope, createdAt: closed.createdAt,
+        closedAt: adoption.createdAt, closedByAdoptionId: adoption.adoptionId },
+    ])
+    expect(f.repository.listFieldBases('coreOutline')).toEqual([{ baseId: field.baseId, projectId: 'project-A', target: 'coreOutline',
+      createdAt: field.createdAt, closedAt: null, closedByAdoptionId: null }])
+    expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+  })
+
+  it('lists current-project and exact frozen range history only, retaining the authority guard', () => {
+    const f = outlineFixture(), scope = { kind: 'plot-outline-range' as const, from: 3, to: 4 }
+    const own = f.repository.captureBase(scope)
+    const foreign = new PlanningFeedbackRepository(f.db, { ...f.options, projectId: 'other-project' })
+    const allowed = foreign.captureBase(scope), denied = foreign.captureBase(scope)
+    f.frozen.add(`planning_feedback_candidates:${denied.baseId}`)
+    expect(f.repository.listRangeBases(scope).map(base => base.baseId)).toEqual([own.baseId])
+    f.frozen.add(`planning_feedback_bases:${allowed.baseId}`)
+    expect(f.repository.listRangeBases(scope).map(base => base.baseId).sort()).toEqual([own.baseId, allowed.baseId].sort())
+    expect(f.repository.listRangeBases(scope).find(base => base.baseId === allowed.baseId)?.projectId).toBe('other-project')
+    f.assertCurrent.mockImplementationOnce(() => { throw new Error('FICTIONAL_SESSION_STALE') })
+    expect(() => f.repository.listRangeBases(scope)).toThrow('FICTIONAL_SESSION_STALE')
+  })
+
+  it.each([
+    { kind: 'field', field: 'coreOutline' },
+    { kind: 'plot-outline-range', from: 0, to: 2 },
+    { kind: 'plot-outline-range', from: 4, to: 3 },
+    { kind: 'plot-outline-range', from: 3, to: 4, source: 'untrusted' },
+  ])('rejects invalid range-summary scope %j without writing', scope => {
+    const f = outlineFixture(), changes = f.db.prepare('SELECT total_changes()').pluck().get()
+    expect(() => f.repository.listRangeBases(scope as never)).toThrow()
+    expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+  })
+
   it('keeps F0 while C2 records C1 as the real parent, then adopts only the exact range with the existing synopsis CAS writer', () => {
     const f = outlineFixture(), base = f.repository.captureBase({ kind: 'plot-outline-range', from: 3, to: 4 })
     const before = ProjectCoreRepository.get(f.db)!, first = stage(f, base, outlineBody(3, 4, 'C1')), second = stage(f, base, outlineBody(3, 4, 'C2'), first)
@@ -608,6 +657,10 @@ describe('fixed plot-outline range feedback adapter', () => {
     expect(repository.adopt(request)).toEqual(receipt)
     expect(repository.candidateState(first.candidateId)).toBe('conflict')
     expect(repository.readSource('plotOutlineRange').sourceRevision).toBe(receipt.committedRevision)
+    expect(repository.listRangeBases({ kind: 'plot-outline-range', from: 3, to: 4 })).toEqual([
+      { baseId: base.baseId, projectId: base.projectId, target: 'plotOutlineRange', scope: base.scope,
+        createdAt: base.createdAt, closedAt: receipt.createdAt, closedByAdoptionId: receipt.adoptionId },
+    ])
   })
 
   it('permits only explicit same-scope new-copy lineage and never adopts a frozen old range candidate', () => {

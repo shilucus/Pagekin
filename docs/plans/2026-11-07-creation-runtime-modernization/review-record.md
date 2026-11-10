@@ -858,3 +858,11 @@ Root's final package executed 13 files, 207/207, zero failed/pending; typecheck/
 Root build exited 0 with unchanged known warnings and Stage39 entry hashes. This is source-build compatibility, not production composition or application runtime evidence; no Electron/model/platform qualification was added. Final artifact review follows against recorded identities.
 
 Final artifact reviewer feedback_audit matched all 16 source/test/ADR, report and build identities and actual 207/207, including all four added regressions. No blocker remains for the narrow commit; original green-but-incomplete coverage and subsequent corrections are retained. The review did not rerun commands or grant full feature qualification.
+
+## 2026-11-10 - Stage 41 Desktop Range Feedback v2
+
+Independent source reviewers baseline_audit and feedback_audit traced the integrated dedicated client, bridge, controller, range facade, SQLite writer and portable boundaries. Both found no range-version/authority/writer blocker. Two additional bridge/session cases were reviewed after the initial 1062/1062 execution. Actual quality checks then exposed private generic inference errors and three unused test bindings; the implementer corrected only common-command typing and test bindings. Both reviewers re-read those new bytes and confirmed closed runtime validation, v1/v2 public type separation and all prior guards remained intact.
+
+Root's final type/lint/i18n checks exited 0, followed by a complete sixteen-file rerun against the revised source (1064/1064, zero failed/pending), then serial build exit 0. Initial report and failures, final source/report/build identities and limitations are recorded in [Stage 41 evidence](stage-41-evidence.md). Separate artifact review follows; no reviewer reran commands, and no full feature, UI, real-model or platform qualification is claimed.
+
+Final artifact reviewer feedback_audit matched seventeen final source/test/ADR blobs, two report hashes and three build hashes, checked actual denominators and added bridge cases, retained failures, current feature states and excluded paths. No blocker remains for the narrow scoped commit; command exits are root's execution evidence, not independently rerun. Whole FEEDBACK-003 remains incomplete.

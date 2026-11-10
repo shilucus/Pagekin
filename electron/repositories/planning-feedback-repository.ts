@@ -17,6 +17,7 @@ import { GenerationRunRepository, type GenerationExecutionReceipt } from './gene
 import { ProjectCoreRepository } from './project-core-repository'
 import { validPlotOutlineFeedbackRange } from '../../src/shared/plot-outline-contract'
 import { readPlanningFeedbackOutlineSource, planningFeedbackOutlineValue, commitPlanningFeedbackOutline } from './planning-feedback-outline-adapter'
+import type { PlanningFeedbackRangeScope, PlanningFeedbackRangeBaseSummary } from '../../src/shared/planning-feedback-ipc'
 
 type Row = Record<string, unknown>
 const hash = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex')
@@ -181,6 +182,23 @@ export class PlanningFeedbackRepository {
       .map(row => ({ baseId: text(row.base_id), projectId: text(row.project_id), target,
       createdAt: integer(row.created_at), closedAt: row.closed_at === null ? null : integer(row.closed_at),
       closedByAdoptionId: row.closed_by_adoption_id === null ? null : text(row.closed_by_adoption_id) }))
+  }
+
+  listRangeBases(target: PlanningFeedbackRangeScope): PlanningFeedbackRangeBaseSummary[] {
+    this.current()
+    const scope = parsePlanningFeedbackScope(target)
+    if (scope.kind !== 'plot-outline-range') fail('PLANNING_FEEDBACK_SCOPE_INVALID')
+    const rows = this.db.prepare(`SELECT base_id,project_id,target,scope_json,created_at,closed_at,closed_by_adoption_id
+      FROM planning_feedback_bases WHERE schema_version=2 AND target='plotOutlineRange' ORDER BY created_at DESC,base_id`).all() as Row[]
+    return rows.filter(row => row.project_id === this.options.projectId || this.options.isFrozen('planning_feedback_bases', text(row.base_id)))
+      .flatMap(row => {
+        const storedScope = parsePlanningFeedbackScope(parse(row.scope_json))
+        if (storedScope.kind !== 'plot-outline-range') fail('PLANNING_FEEDBACK_INTEGRITY_FAILED')
+        if (storedScope.from !== scope.from || storedScope.to !== scope.to) return []
+        return [{ baseId: text(row.base_id), projectId: text(row.project_id), target: 'plotOutlineRange' as const, scope: storedScope,
+          createdAt: integer(row.created_at), closedAt: row.closed_at === null ? null : integer(row.closed_at),
+          closedByAdoptionId: row.closed_by_adoption_id === null ? null : text(row.closed_by_adoption_id) }]
+      })
   }
 
   private ready(base: PlanningFeedbackBase): void {

@@ -41,6 +41,17 @@ describe('桌面预加载接口', () => {
     expect(request).toEqual({ target: 'premise' })
     expect(Object.keys(session)).toEqual(['projectId', 'leaseId', 'projectPath'])
   })
+  it('forwards v2 range payload and the captured session without expanding or rewriting authority', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const request = { target: { kind: 'plot-outline-range' as const, from: 3, to: 4 } }
+    const session = Object.freeze({ projectId: 'range-project', leaseId: 'range-lease', projectPath: 'C:/fictional-range' })
+    const result = { baseId: 'range-base' }
+    electron.ipcRenderer.invoke.mockResolvedValueOnce(result)
+    await expect(bridge.invoke('planning-feedback:v2:capture', request, session)).resolves.toBe(result)
+    expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith('planning-feedback:v2:capture', request, session)
+    expect(request).toEqual({ target: { kind: 'plot-outline-range', from: 3, to: 4 } })
+    expect(Object.keys(session)).toEqual(['projectId', 'leaseId', 'projectPath'])
+  })
   it('forwards only the literal retained-view entry without manufacturing a project lease', async () => {
     const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
     const target = { grantId: 'fictional-open-grant' }

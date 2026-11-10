@@ -116,6 +116,18 @@ describe('project-scoped IPC session transport', () => {
     expect(invoke).toHaveBeenCalledExactlyOnceWith('planning-feedback:v1:list-bases', { target: 'premise' }, frozen)
   })
 
+  it('requires and forwards a captured session for v2 range feedback without substituting the active project', async () => {
+    const request = { target: { kind: 'plot-outline-range' as const, from: 3, to: 4 } }
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('planning-feedback:v2:list-bases', request)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    expect(invoke).not.toHaveBeenCalled()
+    const frozen = Object.freeze({ projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' })
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    invoke.mockResolvedValue([])
+    await ipc.invokeWithProjectSession(frozen, 'planning-feedback:v2:list-bases', request)
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('planning-feedback:v2:list-bases', request, frozen)
+  })
+
   it('keeps diagnostic reads bound to the captured project and rejects a missing session', async () => {
     const frozen = Object.freeze({ projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' })
     const handle = { projectId: 'project-A', epoch: 'lease-A', rootActionId: 'root-A', runId: 'run-A' }

@@ -204,6 +204,18 @@ describe('planning feedback portable history', () => {
       expect(guard.isFrozen('generation_attempts', receipt.attempt.attemptId)).toBe(true)
       expect(history.candidateState(staged.candidateId)).toBe('frozen')
       if (adoption) {
+        const rangeScope = { kind: 'plot-outline-range' as const, from: 3, to: 4 }
+        const restoredPlanning = new PlanningFeedbackService({ database: copied, projectId: restored.targetProjectId, projectPath: target,
+          assertCurrent: () => undefined, assertGenerationBindingCurrent: () => undefined })
+        const summaries = restoredPlanning.listRangeBases(rangeScope)
+        expect(summaries.find(summary => summary.baseId === base.baseId)).toEqual({ baseId: base.baseId, projectId: base.projectId,
+          target: 'plotOutlineRange', scope: rangeScope, createdAt: base.createdAt, closedAt: adoption.createdAt,
+          closedByAdoptionId: adoption.adoptionId })
+        expect(summaries.map(summary => summary.baseId).sort()).toEqual([base.baseId, ...(fresh ? [fresh.baseId] : [])].sort())
+        for (const summary of summaries) expect(Object.keys(summary).sort())
+          .toEqual(['baseId', 'projectId', 'target', 'scope', 'createdAt', 'closedAt', 'closedByAdoptionId'].sort())
+        expect(restoredPlanning.listRangeBases({ kind: 'plot-outline-range', from: 2, to: 3 })).toEqual([])
+        expect(restoredPlanning.listFieldBases('worldSetting').map(summary => summary.baseId)).toContain(v1.baseId)
         expect(history.getBase(base.baseId)).toMatchObject({ schemaVersion: 2, source: base.source,
           scope: { kind: 'plot-outline-range', from: 3, to: 4 }, sourceHash: hash(JSON.stringify(base.source)) })
         expect(history.listAdoptions(base.baseId)[0]).toMatchObject({ adoptionId: adoption.adoptionId, schemaVersion: 2,

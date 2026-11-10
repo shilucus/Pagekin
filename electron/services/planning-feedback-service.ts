@@ -5,6 +5,7 @@ import { assertPlanningFeedbackId, assertPlanningFeedbackObject, assertPlanningF
   type RelineagePlanningFeedbackCandidate, type PlanningFeedbackTable } from '../../src/shared/planning-feedback'
 import { readPortableRuntimeFreeze, type PortableRuntimeFreezeTable } from './portable-runtime-freeze'
 import { assertPlanningFeedbackProof, buildPlanningFeedbackContext, type PlanningFeedbackGenerationContext } from './planning-feedback-generation'
+import type { PlanningFeedbackRangeScope } from '../../src/shared/planning-feedback-ipc'
 
 export interface PlanningFeedbackGenerationInput {
   baseId: string
@@ -66,6 +67,7 @@ export class PlanningFeedbackService {
   captureBase(target: PlanningFeedbackCaptureTarget) { return this.repository().captureBase(target) }
   getBase(baseId: string) { return this.repository().getBase(baseId) }
   listFieldBases(target: PlanningFeedbackCoreTarget) { return this.repository().listFieldBases(target) }
+  listRangeBases(target: PlanningFeedbackRangeScope) { return this.repository().listRangeBases(target) }
 
   prepare(input: PlanningFeedbackGenerationInput) {
     const context = capturePlanningFeedbackContext(this.options.database, input, { projectId: this.options.projectId,

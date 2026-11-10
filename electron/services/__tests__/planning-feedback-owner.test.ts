@@ -380,6 +380,15 @@ const firstRange = '## 第3章：候选三\n候选三正文\n\n## 第4章：候�
 const secondRange = '## 第3章：新三\n新三正文\n\n## 第4章：新四\n新四正文'
 const chapterThree = '## 第3章：新三\n新三正文'
 
+async function generateRange(owner: Owner, baseId: string, nonce: string, parentCandidateId?: string) {
+  const input = { baseId, ...(parentCandidateId ? { parentCandidateId } : {}), feedback: 'Make it vivid', constraints: ['Keep F0'] }
+  const view = owner.beginRangeFeedback({ input, modelId: 'model', uiActionNonce: nonce })
+  const executed = await owner.executeRangeFeedback(view.handle)
+  const artifact = executed.outcome.receipt.visibleArtifact!
+  return { input, view, executed, stage: () => owner.stageRangeFeedback({ ...input, runId: view.handle.runId,
+    attemptId: artifact.attemptId, artifactId: artifact.artifactId }) }
+}
+
 it('keeps range F0 through C1 and C2, resumes its proof, and adopts only chapter 3', async () => {
   let calls = 0
   const f = fixture(async (_request, options) => {
@@ -388,9 +397,13 @@ it('keeps range F0 through C1 and C2, resumes its proof, and adopts only chapter
   })
   f.db.prepare("UPDATE project_core SET synopsis=?,characters_arch='F0 cast' WHERE id='main'").run(originalOutline)
   const scope = { kind: 'plot-outline-range' as const, from: 3, to: 4 }
-  const base = f.owner.capturePlanningFeedbackBase(scope)
-  const first = await generate(f.owner, base.baseId, 'range-one'), c1 = first.stage()
-  const second = await generate(f.owner, base.baseId, 'range-two', c1.candidateId)
+  const base = f.owner.captureRangeFeedback(scope)
+  expect(f.owner.listRangeFeedbackBases(scope).map(item => item.baseId)).toContain(base.baseId)
+  const first = await generateRange(f.owner, base.baseId, 'range-one'), c1 = first.stage()
+  const second = await generateRange(f.owner, base.baseId, 'range-two', c1.candidateId)
+  expect(f.owner.listRangeFeedbackRuns(base.baseId).map(item => item.handle.runId)).toEqual(expect.arrayContaining([first.view.handle.runId, second.view.handle.runId]))
+  expect(f.owner.readRangeFeedbackRun(second.view.handle)).toMatchObject({ input: second.input, sourceStatus: 'current' })
+  expect(f.owner.readRangeFeedbackHistory(base.baseId).candidates.map(item => item.candidate.candidateId)).toEqual([c1.candidateId])
   const task = (f.spy.mock.calls[1]![0] as { task: GenerationTask }).task
   const context = JSON.parse(task.messages.find(message => message.role === 'user')!.content)
   expect(context).toMatchObject({ schemaVersion: 2, target: 'plotOutlineRange', scope,
@@ -400,14 +413,16 @@ it('keeps range F0 through C1 and C2, resumes its proof, and adopts only chapter
   expect(f.db.prepare("SELECT synopsis FROM project_core WHERE id='main'").pluck().get()).toBe(originalOutline)
   const artifact = second.executed.outcome.receipt.visibleArtifact!
   const next = f.reopen()
-  const c2 = next.stagePlanningFeedback({ ...second.input, runId: second.view.handle.runId,
+  const c2 = next.stageRangeFeedback({ ...second.input, runId: second.view.handle.runId,
     attemptId: artifact.attemptId, artifactId: artifact.artifactId })
   expect(c2.text).toBe(secondRange)
   const request = { candidateId: c2.candidateId, idempotencyKey: 'range-adopt', decision: 'partial' as const,
     adoptedRange: { from: 3, to: 3 }, text: chapterThree }
-  const adopted = next.adoptPlanningFeedback(request)
+  const adopted = next.adoptRangeFeedback(request)
   expect(adopted.adoptedScope).toEqual({ kind: 'plot-outline-range', from: 3, to: 3 })
-  expect(next.adoptPlanningFeedback(request)).toEqual(adopted)
+  expect(next.adoptRangeFeedback(request)).toEqual(adopted)
+  expect(next.readRangeFeedbackRun(second.view.handle).sourceStatus).toBe('conflict')
+  expect(next.readRangeFeedbackHistory(base.baseId).adoptions).toEqual([adopted])
   expect(f.db.prepare("SELECT synopsis FROM project_core WHERE id='main'").pluck().get())
     .toBe(originalOutline.replace('## 第3章：旧三\n旧三正文', chapterThree))
   expect(f.spy).toHaveBeenCalledTimes(2)
@@ -421,8 +436,8 @@ it.each([
 ])('rejects incomplete, duplicate or out-of-range outline candidate %#', async text => {
   const f = fixture(async (_request, options) => { options.onVisible({ kind: 'delta', text }); return { finishReason: 'stop', usage } })
   f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
-  const base = f.owner.capturePlanningFeedbackBase({ kind: 'plot-outline-range', from: 3, to: 4 })
-  const attempt = await generate(f.owner, base.baseId, 'invalid-range')
+  const base = f.owner.captureRangeFeedback({ kind: 'plot-outline-range', from: 3, to: 4 })
+  const attempt = await generateRange(f.owner, base.baseId, 'invalid-range')
   expect(() => attempt.stage()).toThrow()
   expect(f.db.prepare("SELECT synopsis FROM project_core WHERE id='main'").pluck().get()).toBe(originalOutline)
 })
@@ -430,26 +445,169 @@ it.each([
 it('rejects outline source ABA before dispatch', async () => {
   const f = fixture()
   f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
-  const base = f.owner.capturePlanningFeedbackBase({ kind: 'plot-outline-range', from: 3, to: 4 })
+  const base = f.owner.captureRangeFeedback({ kind: 'plot-outline-range', from: 3, to: 4 })
   const input = { baseId: base.baseId, feedback: '', constraints: [] }
-  const view = f.owner.beginPlanningFeedback({ input, modelId: 'model', uiActionNonce: 'outline-aba' })
+  const view = f.owner.beginRangeFeedback({ input, modelId: 'model', uiActionNonce: 'outline-aba' })
   f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline + '\nchanged')
   f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
-  await expect(f.owner.executePlanningFeedback(view.handle)).rejects.toThrow()
+  expect(f.owner.readRangeFeedbackRun(view.handle).sourceStatus).toBe('conflict')
+  await expect(f.owner.executeRangeFeedback(view.handle)).rejects.toThrow()
   expect(f.spy).not.toHaveBeenCalled()
 })
 
 it('rejects a v1 prompt key bound to a v2 range before dispatch', async () => {
   const f = fixture()
   f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
-  const base = f.owner.capturePlanningFeedbackBase({ kind: 'plot-outline-range', from: 3, to: 4 })
-  const view = f.owner.beginPlanningFeedback({ input: { baseId: base.baseId, feedback: '', constraints: [] },
+  const base = f.owner.captureRangeFeedback({ kind: 'plot-outline-range', from: 3, to: 4 })
+  const view = f.owner.beginRangeFeedback({ input: { baseId: base.baseId, feedback: '', constraints: [] },
     modelId: 'model', uiActionNonce: 'wrong-version' })
   const row = f.db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').get(view.handle.runId) as { binding_json: string }
   const binding = JSON.parse(row.binding_json)
   expect(binding.sourceManifest.promptKeys).toEqual(['planning-feedback-v2'])
   binding.sourceManifest.promptKeys = ['planning-feedback-v1']
   f.db.prepare('UPDATE generation_runs SET binding_json=? WHERE run_id=?').run(JSON.stringify(binding), view.handle.runId)
-  await expect(f.owner.executePlanningFeedback(view.handle)).rejects.toThrow()
+  await expect(f.owner.executeRangeFeedback(view.handle)).rejects.toThrow()
+  expect(f.spy).not.toHaveBeenCalled()
+})
+
+it.each(['invalid-range', 'source-cas', 'source-aba'] as const)('rejects range adoption %s without changing the formal outline', async change => {
+  const f = fixture(async (_request, options) => {
+    options.onVisible({ kind: 'delta', text: firstRange })
+    return { finishReason: 'stop', usage }
+  })
+  f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
+  const base = f.owner.captureRangeFeedback({ kind: 'plot-outline-range', from: 3, to: 4 })
+  const attempt = await generateRange(f.owner, base.baseId, `adopt-${change}`), candidate = attempt.stage()
+  if (change !== 'invalid-range') {
+    f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline + '\nAuthor changed source')
+    if (change === 'source-aba') f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
+  }
+  const before = f.db.prepare("SELECT synopsis FROM project_core WHERE id='main'").pluck().get()
+  expect(() => f.owner.adoptRangeFeedback({ candidateId: candidate.candidateId, idempotencyKey: `adopt-${change}`,
+    decision: 'partial', adoptedRange: change === 'invalid-range' ? { from: 5, to: 5 } : { from: 3, to: 4 },
+    text: firstRange })).toThrow()
+  expect(f.db.prepare("SELECT synopsis FROM project_core WHERE id='main'").pluck().get()).toBe(before)
+  expect(f.owner.readRangeFeedbackHistory(base.baseId).adoptions).toEqual([])
+})
+
+it('explicitly relineages an old range candidate only onto a new current base', async () => {
+  const f = fixture(async (_request, options) => {
+    options.onVisible({ kind: 'delta', text: firstRange })
+    return { finishReason: 'stop', usage }
+  })
+  f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
+  const scope = { kind: 'plot-outline-range' as const, from: 3, to: 4 }
+  const base = f.owner.captureRangeFeedback(scope), first = await generateRange(f.owner, base.baseId, 'copy-range')
+  const candidate = first.stage()
+  f.db.prepare("UPDATE project_core SET core_outline='Author changed core' WHERE id='main'").run()
+  expect(f.owner.readRangeFeedbackHistory(base.baseId).candidates[0]?.state).toBe('conflict')
+  const next = f.owner.captureRangeFeedback(scope)
+  const copied = f.owner.relineageRangeFeedback({ baseId: next.baseId, sourceCandidateId: candidate.candidateId,
+    feedback: 'Author copies this candidate', constraints: [] })
+  expect(copied).toMatchObject({ baseId: next.baseId, parentCandidateId: null, text: firstRange,
+    origin: { kind: 'copied', sourceCandidateId: candidate.candidateId } })
+  expect(f.db.prepare("SELECT synopsis FROM project_core WHERE id='main'").pluck().get()).toBe(originalOutline)
+  expect(f.spy).toHaveBeenCalledTimes(1)
+})
+
+it('rebinds an explicitly executed old pending range run after reopening', async () => {
+  const f = fixture(async (_request, options) => {
+    options.onVisible({ kind: 'delta', text: firstRange })
+    return { finishReason: 'stop', usage }
+  })
+  f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
+  const base = f.owner.captureRangeFeedback({ kind: 'plot-outline-range', from: 3, to: 4 })
+  const view = f.owner.beginRangeFeedback({ input: { baseId: base.baseId, feedback: '', constraints: [] }, modelId: 'model', uiActionNonce: 'pending-range' })
+  const next = f.reopen()
+  expect(next.readRangeFeedbackRun(view.handle).sourceStatus).toBe('current')
+  expect((await next.executeRangeFeedback(view.handle)).outcome.status).toBe('completed')
+  expect(f.spy).toHaveBeenCalledTimes(1)
+})
+
+it('does not resend an unknown range outcome after reopening', async () => {
+  const f = fixture(async () => { throw new Error('synthetic uncertain range transport') })
+  f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
+  const base = f.owner.captureRangeFeedback({ kind: 'plot-outline-range', from: 3, to: 4 })
+  const first = await generateRange(f.owner, base.baseId, 'unknown-range')
+  expect(first.executed.outcome.status).toBe('incomplete')
+  const next = f.reopen()
+  expect((await next.executeRangeFeedback(first.view.handle)).outcome.status).toBe('incomplete')
+  expect(next.readRangeFeedbackHistory(base.baseId).candidates).toEqual([])
+  expect(f.spy).toHaveBeenCalledTimes(1)
+})
+
+it('cancels a range run before dispatch without changing the formal outline', async () => {
+  const f = fixture()
+  f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
+  const base = f.owner.captureRangeFeedback({ kind: 'plot-outline-range', from: 3, to: 4 })
+  const view = f.owner.beginRangeFeedback({ input: { baseId: base.baseId, feedback: '', constraints: [] }, modelId: 'model', uiActionNonce: 'cancel-range' })
+  f.owner.cancelRangeFeedback(view.handle)
+  await expect(f.owner.executeRangeFeedback(view.handle)).rejects.toThrow()
+  expect(f.spy).not.toHaveBeenCalled()
+  expect(f.db.prepare("SELECT synopsis FROM project_core WHERE id='main'").pluck().get()).toBe(originalOutline)
+})
+
+it('keeps field and range bases, candidates and runs in separate facades', async () => {
+  const f = fixture(async (_request, options) => {
+    options.onVisible({ kind: 'delta', text: firstRange })
+    return { finishReason: 'stop', usage }
+  })
+  f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
+  const field = f.owner.captureFieldFeedback('coreOutline')
+  const range = f.owner.captureRangeFeedback({ kind: 'plot-outline-range', from: 3, to: 4 })
+  const fieldAttempt = await generate(f.owner, field.baseId, 'field-crosswire'), fieldCandidate = fieldAttempt.stage()
+  const rangeAttempt = await generateRange(f.owner, range.baseId, 'range-crosswire'), rangeCandidate = rangeAttempt.stage()
+  expect(() => f.owner.readFieldFeedbackHistory(range.baseId)).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => f.owner.readRangeFeedbackHistory(field.baseId)).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => f.owner.readFieldFeedbackRun(rangeAttempt.view.handle)).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => f.owner.readRangeFeedbackRun(fieldAttempt.view.handle)).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => f.owner.beginRangeFeedback({ input: fieldAttempt.input, modelId: 'model', uiActionNonce: 'wrong-range' })).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => f.owner.beginFieldFeedback({ input: rangeAttempt.input, modelId: 'model', uiActionNonce: 'wrong-field' })).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  const fieldArtifact = fieldAttempt.executed.outcome.receipt.visibleArtifact!
+  expect(() => f.owner.stageRangeFeedback({ ...rangeAttempt.input, runId: fieldAttempt.view.handle.runId,
+    attemptId: fieldArtifact.attemptId, artifactId: fieldArtifact.artifactId })).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  const rangeArtifact = rangeAttempt.executed.outcome.receipt.visibleArtifact!
+  expect(() => f.owner.stageFieldFeedback({ ...fieldAttempt.input, runId: rangeAttempt.view.handle.runId,
+    attemptId: rangeArtifact.attemptId, artifactId: rangeArtifact.artifactId })).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => f.owner.readRangeFeedbackRun({ ...rangeAttempt.view.handle, projectId: 'another-project' })).toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
+  expect(() => f.owner.beginRangeFeedback({ input: { ...rangeAttempt.input, parentCandidateId: fieldCandidate.candidateId },
+    modelId: 'model', uiActionNonce: 'wrong-parent' })).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => f.owner.adoptRangeFeedback({ candidateId: fieldCandidate.candidateId, idempotencyKey: 'wrong-adopt-range', decision: 'full', text: fieldCandidate.text })).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => f.owner.adoptFieldFeedback({ candidateId: rangeCandidate.candidateId, idempotencyKey: 'wrong-adopt-field', decision: 'full', text: rangeCandidate.text })).toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+  expect(() => f.owner.captureRangeFeedback('coreOutline' as never)).toThrow()
+})
+
+it.each(['scope', 'scope-extra', 'project', 'operation', 'schema'] as const)('rejects range run context crosswire %s before exposing input or dispatching', kind => {
+  const f = fixture()
+  f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
+  const base = f.owner.captureRangeFeedback({ kind: 'plot-outline-range', from: 3, to: 4 })
+  const view = f.owner.beginRangeFeedback({ input: { baseId: base.baseId, feedback: '', constraints: [] }, modelId: 'model', uiActionNonce: `context-${kind}` })
+  const row = f.db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').get(view.handle.runId) as { binding_json: string }
+  const binding = JSON.parse(row.binding_json)
+  if (kind === 'scope') binding.sourceManifest.planningFeedbackContext.scope = { kind: 'plot-outline-range', from: 4, to: 4 }
+  if (kind === 'scope-extra') binding.sourceManifest.planningFeedbackContext.scope.extra = true
+  if (kind === 'project') binding.sourceManifest.planningFeedbackContext.projectId = 'another-project'
+  if (kind === 'operation') binding.sourceManifest.operation = 'chapter-draft'
+  if (kind === 'schema') binding.sourceManifest.planningFeedbackContext.schemaVersion = 1
+  f.db.prepare('UPDATE generation_runs SET binding_json=? WHERE run_id=?').run(JSON.stringify(binding), view.handle.runId)
+  expect(() => f.owner.readRangeFeedbackRun(view.handle)).toThrow()
+  expect(() => f.owner.executeRangeFeedback(view.handle)).toThrow()
+  expect(f.spy).not.toHaveBeenCalled()
+})
+
+it('never infers range inputs from a redacted historical run', () => {
+  const f = fixture()
+  f.db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(originalOutline)
+  const base = f.owner.captureRangeFeedback({ kind: 'plot-outline-range', from: 3, to: 4 })
+  const view = f.owner.beginRangeFeedback({ input: { baseId: base.baseId, feedback: '', constraints: [] }, modelId: 'model', uiActionNonce: 'redacted-range' })
+  const row = f.db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').get(view.handle.runId) as { binding_json: string }
+  const binding = JSON.parse(row.binding_json)
+  delete binding.sourceManifest.planningFeedbackInput
+  delete binding.sourceManifest.planningFeedbackContext
+  delete binding.sourceManifest.planningFeedbackTask
+  f.db.prepare('UPDATE generation_runs SET binding_json=? WHERE run_id=?').run(JSON.stringify(binding), view.handle.runId)
+  expect(f.owner.listRangeFeedbackRuns(base.baseId)).toEqual([])
+  expect(() => f.owner.readRangeFeedbackRun(view.handle)).toThrow()
+  expect(() => f.owner.executeRangeFeedback(view.handle)).toThrow()
   expect(f.spy).not.toHaveBeenCalled()
 })

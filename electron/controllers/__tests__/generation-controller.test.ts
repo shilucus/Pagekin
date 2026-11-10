@@ -9,7 +9,7 @@ import type { FinalizationGenerationChannels } from '../../../src/shared/finaliz
 import type { ReviewRevisionGenerationInvokeChannels, ReviewRevisionOperation } from '../../../src/shared/review-revision-generation'
 import { createHumanConfirmedReviewSnapshot, renderHumanConfirmedReviewBrief, serializeHumanConfirmedReviewSnapshot } from '../../../src/shared/human-confirmed-review'
 import { ipc } from '../../../src/services/ipc-client'
-import { createPlanningFeedbackClient } from '../../../src/services/planning-feedback-client'
+import { createPlanningFeedbackClient, createPlanningFeedbackRangeClient } from '../../../src/services/planning-feedback-client'
 import { setActiveProjectSessionContext } from '../../../src/shared/project-session-context'
 import { ReviewRepository } from '../../repositories/review-repository'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
@@ -552,6 +552,281 @@ describe('planning feedback v1 registered IPC', () => {
     const copied = await invoke('planning-feedback:v1:relineage', { baseId: fresh.baseId, sourceCandidateId: original.candidate.candidateId,
       feedback: '', constraints: [] })
     expect(copied).toMatchObject({ baseId: fresh.baseId, parentCandidateId: null, text: original.candidate.text, origin: { kind: 'copied' } })
+  })
+})
+describe('planning feedback v2 registered range IPC', () => {
+  const scope = { kind: 'plot-outline-range' as const, from: 3, to: 4 }
+  const oldThree = '## 第3章：旧三\r\n旧三正文'
+  const outline = '# Outline\r\n\r\n## 第1章：旧一\r\n旧一正文\r\n\r\n## 第2章：旧二\r\n旧二正文\r\n\r\n'
+    + oldThree + '\r\n\r\n## 第4章：旧四\r\n旧四正文\r\n\r\n## 第5章：旧五\r\n旧五正文\r\n'
+  const firstText = '## 第3章：候选三\nFirst range chapter three.\n\n## 第4章：候选四\nFirst range chapter four.'
+  const secondText = '## 第3章：新三\nSecond range chapter three.\n\n## 第4章：新四\nSecond range chapter four.'
+  const chapterThree = '## 第3章：新三\nSecond range chapter three.'
+  const currentSynopsis = () => ProjectCoreRepository.get(getProjectDb()!)!.synopsis
+
+  beforeEach(() => {
+    getProjectDb()!.prepare("UPDATE project_core SET synopsis=?,characters_arch='Fictional range cast',total_chapters=5 WHERE id='main'").run(outline)
+  })
+
+  async function generate(baseId: string, text: string, nonce: string, parentCandidateId?: string) {
+    const fetch = stream(text)
+    const input = { baseId, feedback: 'Revise only the selected range', constraints: ['Keep author facts'],
+      ...(parentCandidateId ? { parentCandidateId } : {}) }
+    const view = await invoke('planning-feedback:v2:begin', { input, modelId: model.id, uiActionNonce: nonce })
+    const result = await invoke('planning-feedback:v2:execute', { handle: view.handle })
+    const artifact = result.outcome.receipt.visibleArtifact!
+    const stage = { ...input, runId: view.handle.runId, attemptId: artifact.attemptId, artifactId: artifact.artifactId }
+    return { fetch, input, view, result, stage }
+  }
+
+  function reopen() {
+    closeProjectDatabase()
+    projectAccess.invalidateCurrentSession()
+    initProjectDatabase(session.projectPath)
+    session = { ...session, leaseId: projectAccess.beginSession(openedProject).leaseId }
+  }
+
+  it('routes the production range client through C1/C2 and adopts only chapter 3 with raw outside bytes intact', async () => {
+    const bridge = vi.fn((channel: string, ...args: unknown[]) => mocks.handlers.get(channel)!({ sender }, ...args))
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: bridge } })
+    setActiveProjectSessionContext(session)
+    const client = createPlanningFeedbackRangeClient(session)
+    const base = await client.capture({ target: scope })
+    const input = { baseId: base.baseId, feedback: 'First revision', constraints: ['Keep author facts'] }
+    const fetch1 = stream(firstText)
+    const c1 = await client.generateCandidate({ input, modelId: model.id, uiActionNonce: 'range-client-first' })
+    expect(currentSynopsis()).toBe(outline)
+    const fetch2 = stream(secondText)
+    const c2 = await client.generateCandidate({ input: { ...input, parentCandidateId: c1.candidateId, feedback: 'Second revision' },
+      modelId: model.id, uiActionNonce: 'range-client-second' })
+    expect(currentSynopsis()).toBe(outline)
+    expect(c2.parentCandidateId).toBe(c1.candidateId)
+    const binding = JSON.parse(getProjectDb()!.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(
+      c2.origin.kind === 'generated' ? c2.origin.runId : '') as string)
+    expect(binding.sourceManifest.planningFeedbackContext).toMatchObject({ schemaVersion: 2, scope, parentText: firstText,
+      parentCandidateId: c1.candidateId, source: { synopsis: outline } })
+    expect(JSON.stringify(fetch2.mock.calls)).toContain('First range chapter three.')
+    const adoption = { candidateId: c2.candidateId, idempotencyKey: 'range-client-adopt', decision: 'partial' as const,
+      adoptedRange: { from: 3, to: 3 }, text: chapterThree }
+    const receipt = await client.adopt(adoption)
+    expect(await client.adopt(adoption)).toEqual(receipt)
+    expect(receipt.adoptedScope).toEqual({ kind: 'plot-outline-range', from: 3, to: 3 })
+    expect(currentSynopsis()).toBe(outline.replace(oldThree, chapterThree))
+    await expect(client.adopt({ ...adoption, text: chapterThree + '\nDifferent final text.' })).rejects.toThrow()
+    await expect(client.adopt({ candidateId: c1.candidateId, idempotencyKey: 'consumed-range', decision: 'full', text: firstText })).rejects.toThrow()
+    const history = await client.readHistory({ baseId: base.baseId })
+    expect(history.base.closedByAdoptionId).toBe(receipt.adoptionId)
+    expect(history.candidates).toHaveLength(2)
+    expect(history.adoptions).toEqual([receipt])
+    expect(fetch1).toHaveBeenCalledTimes(1)
+    expect(fetch2).toHaveBeenCalledTimes(1)
+    expect(bridge.mock.calls.every(([channel]) => channel.startsWith('planning-feedback:v2:'))).toBe(true)
+    expect(bridge.mock.calls.some(([channel]) => channel === 'planning-feedback:v2:stage')).toBe(true)
+  })
+
+  it.each([
+    '## 第3章：缺章\nOnly chapter three.',
+    '## 第3章：三\nThree.\n\n## 第3章：重复\nDuplicate.\n\n## 第4章：四\nFour.',
+    '## 第3章：三\nThree.\n\n## 第4章：四\nFour.\n\n## 第5章：越界\nOutside.',
+    'Not a chapter range.',
+  ])('rejects invalid final range text without any formal write: %#', async text => {
+    const base = await invoke('planning-feedback:v2:capture', { target: scope })
+    const generated = await generate(base.baseId, firstText, 'invalid-final-range')
+    const candidate = await invoke('planning-feedback:v2:stage', generated.stage)
+    const before = getProjectDb()!.prepare('SELECT * FROM project_core').all()
+    await expect(invoke('planning-feedback:v2:adopt', { candidateId: candidate.candidateId, idempotencyKey: 'invalid',
+      decision: 'edited', text })).rejects.toThrow('PLANNING_FEEDBACK_TEXT_INVALID')
+    expect(getProjectDb()!.prepare('SELECT * FROM project_core').all()).toEqual(before)
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM planning_feedback_adoptions').pluck().get()).toBe(0)
+  })
+
+  it('rejects v1 bases, candidates and runs at every range facade and keeps unknown errors private', async () => {
+    const base = await invoke('planning-feedback:v1:capture', { target: 'coreOutline' })
+    const range = await invoke('planning-feedback:v2:capture', { target: scope })
+    const input = { baseId: base.baseId, feedback: '', constraints: [] }
+    stream('Fictional field candidate')
+    const view = await invoke('planning-feedback:v1:begin', { input, modelId: model.id, uiActionNonce: 'field-crosswire' })
+    const result = await invoke('planning-feedback:v1:execute', { handle: view.handle })
+    const artifact = result.outcome.receipt.visibleArtifact!
+    const stage = { ...input, runId: view.handle.runId, attemptId: artifact.attemptId, artifactId: artifact.artifactId }
+    const candidate = await invoke('planning-feedback:v1:stage', stage)
+    for (const channel of ['planning-feedback:v2:read-history', 'planning-feedback:v2:list-runs'] as const) {
+      await expect(invoke(channel, { baseId: base.baseId })).rejects.toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+    }
+    await expect(invoke('planning-feedback:v2:begin', { input, modelId: model.id, uiActionNonce: 'crosswire' })).rejects.toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+    await expect(invoke('planning-feedback:v2:begin', { input: { ...input, baseId: range.baseId, parentCandidateId: candidate.candidateId },
+      modelId: model.id, uiActionNonce: 'cross-parent' })).rejects.toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+    await expect(invoke('planning-feedback:v2:stage', stage)).rejects.toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+    await expect(invoke('planning-feedback:v2:adopt', { candidateId: candidate.candidateId, idempotencyKey: 'cross-adopt',
+      decision: 'full', text: candidate.text })).rejects.toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+    await expect(invoke('planning-feedback:v2:relineage', { baseId: range.baseId, sourceCandidateId: candidate.candidateId,
+      feedback: '', constraints: [] })).rejects.toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+    for (const channel of ['planning-feedback:v2:read-run', 'planning-feedback:v2:execute', 'planning-feedback:v2:cancel'] as const) {
+      await expect(invoke(channel, { handle: view.handle })).rejects.toThrow('PLANNING_FEEDBACK_TARGET_INVALID')
+    }
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(generationIpcErrorCode('planning-feedback:v2:stage', new Error('Fictional private range content'))).toBe('GENERATION_REQUEST_FAILED')
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('Fictional private range content')
+    expect(currentSynopsis()).toBe(outline)
+  })
+
+  it('rejects range wire overrides, stale project sessions and non-feedback handles before dispatch', async () => {
+    const base = await invoke('planning-feedback:v2:capture', { target: scope })
+    const begin = { input: { baseId: base.baseId, feedback: '', constraints: [] }, modelId: model.id, uiActionNonce: 'wire-range' }
+    const handler = mocks.handlers.get('planning-feedback:v2:begin')!
+    for (const key of ['task', 'source', 'output', 'proof', 'scope', 'decisionSource']) {
+      await expect(handler({ sender }, { ...begin, input: { ...begin.input, [key]: 'renderer-claim' } }, session)).rejects.toThrow()
+    }
+    await expect(handler({ sender }, begin, { ...session, leaseId: 'stale' })).rejects.toThrow()
+    await expect(mocks.handlers.get('planning-feedback:v2:capture')!({ sender }, { target: 'coreOutline' }, session)).rejects.toThrow()
+    const unrelated = await invoke('generation:begin', request)
+    for (const channel of ['planning-feedback:v2:read-run', 'planning-feedback:v2:execute', 'planning-feedback:v2:cancel'] as const) {
+      await expect(invoke(channel, { handle: unrelated.handle })).rejects.toThrow('GENERATION_FEEDBACK_ADMISSION_REQUIRED')
+    }
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
+  })
+
+  it('discovers exact range history and stages original proof after reopen without redispatch', async () => {
+    const base = await invoke('planning-feedback:v2:capture', { target: scope })
+    const other = await invoke('planning-feedback:v2:capture', { target: { ...scope, from: 2 } })
+    const generated = await generate(base.baseId, firstText, 'range-reopen')
+    const attempts = getProjectDb()!.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts').all()
+    reopen()
+    const summaries = await invoke('planning-feedback:v2:list-bases', { target: scope })
+    expect(summaries.map(item => item.baseId)).toContain(base.baseId)
+    expect(summaries.map(item => item.baseId)).not.toContain(other.baseId)
+    expect(summaries[0]).not.toHaveProperty('source')
+    expect(summaries[0]).not.toHaveProperty('value')
+    expect((await invoke('planning-feedback:v2:list-runs', { baseId: base.baseId })).map(item => item.handle.runId)).toContain(generated.view.handle.runId)
+    expect((await invoke('planning-feedback:v2:read-run', { handle: generated.view.handle })).input).toEqual(generated.input)
+    await invoke('planning-feedback:v2:execute', { handle: generated.view.handle })
+    expect(generated.fetch).toHaveBeenCalledTimes(1)
+    expect(getProjectDb()!.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts').all()).toEqual(attempts)
+    const candidate = await invoke('planning-feedback:v2:stage', generated.stage)
+    const adopted = await invoke('planning-feedback:v2:adopt', { candidateId: candidate.candidateId, idempotencyKey: 'reopened-range',
+      decision: 'full', text: candidate.text })
+    expect(adopted.beforeValue).toBe(base.value)
+  })
+
+  it('blocks source ABA before dispatch while allowing read-only recovery to report conflict', async () => {
+    const base = await invoke('planning-feedback:v2:capture', { target: scope })
+    const fetch = stream(firstText)
+    const view = await invoke('planning-feedback:v2:begin', { input: { baseId: base.baseId, feedback: '', constraints: [] },
+      modelId: model.id, uiActionNonce: 'range-aba' })
+    getProjectDb()!.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(outline + 'Changed')
+    getProjectDb()!.prepare("UPDATE project_core SET synopsis=? WHERE id='main'").run(outline)
+    expect((await invoke('planning-feedback:v2:read-run', { handle: view.handle })).sourceStatus).toBe('conflict')
+    await expect(invoke('planning-feedback:v2:execute', { handle: view.handle })).rejects.toThrow()
+    expect(fetch).not.toHaveBeenCalled()
+    expect(currentSynopsis()).toBe(outline)
+  })
+
+  it('invalidates older range bases after same-content adoption without changing author bytes', async () => {
+    const old = await invoke('planning-feedback:v2:capture', { target: scope })
+    const pending = await invoke('planning-feedback:v2:begin', { input: { baseId: old.baseId, feedback: '', constraints: [] },
+      modelId: model.id, uiActionNonce: 'old-range-same-value' })
+    const base = await invoke('planning-feedback:v2:capture', { target: scope })
+    const generated = await generate(base.baseId, base.value, 'same-value-range')
+    const candidate = await invoke('planning-feedback:v2:stage', generated.stage)
+    await invoke('planning-feedback:v2:adopt', { candidateId: candidate.candidateId, idempotencyKey: 'same-range-value', decision: 'full', text: candidate.text })
+    expect(currentSynopsis()).toBe(outline)
+    await expect(invoke('planning-feedback:v2:execute', { handle: pending.handle })).rejects.toThrow()
+    expect(generated.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not resend a range unknown outcome, including after original-project reopen', async () => {
+    const fetch = vi.fn(async () => { throw new Error('Fictional range transport failure') })
+    vi.stubGlobal('fetch', fetch)
+    const base = await invoke('planning-feedback:v2:capture', { target: scope })
+    const view = await invoke('planning-feedback:v2:begin', { input: { baseId: base.baseId, feedback: '', constraints: [] },
+      modelId: model.id, uiActionNonce: 'range-unknown' })
+    expect((await invoke('planning-feedback:v2:execute', { handle: view.handle })).outcome.status).toBe('incomplete')
+    const count = fetch.mock.calls.length
+    expect(count).toBeGreaterThan(0)
+    const attempts = getProjectDb()!.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts').all()
+    reopen()
+    await invoke('planning-feedback:v2:execute', { handle: view.handle })
+    expect(fetch).toHaveBeenCalledTimes(count)
+    expect(getProjectDb()!.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts').all()).toEqual(attempts)
+    expect((await invoke('planning-feedback:v2:read-history', { baseId: base.baseId })).candidates).toHaveLength(0)
+    expect(currentSynopsis()).toBe(outline)
+  })
+
+  it('does not dispatch a cancelled range or stage an abort-ignoring late stop', async () => {
+    const base = await invoke('planning-feedback:v2:capture', { target: scope })
+    const begin = (nonce: string) => invoke('planning-feedback:v2:begin', { input: { baseId: base.baseId, feedback: '', constraints: [] },
+      modelId: model.id, uiActionNonce: nonce })
+    const before = await begin('range-cancel-before')
+    const unused = stream(firstText)
+    await invoke('planning-feedback:v2:cancel', { handle: before.handle })
+    await expect(invoke('planning-feedback:v2:execute', { handle: before.handle })).rejects.toThrow()
+    expect(unused).not.toHaveBeenCalled()
+    let entered!: () => void, release!: () => void
+    const started = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+    const fetch = vi.fn(async () => {
+      entered()
+      await gate
+      return { ok: true, body: new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: firstText }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`))
+        controller.close()
+      } }) }
+    })
+    vi.stubGlobal('fetch', fetch)
+    const late = await begin('range-cancel-late')
+    const running = invoke('planning-feedback:v2:execute', { handle: late.handle })
+    await started
+    try {
+      await invoke('planning-feedback:v2:cancel', { handle: late.handle })
+      expect((await running).outcome.status).toBe('incomplete')
+      expect(() => closeProjectDatabase()).toThrow('PROJECT_RUNTIME_BUSY')
+    } finally {
+      release()
+      await running.catch(() => undefined)
+    }
+    await vi.waitFor(() => reopen())
+    expect((await invoke('planning-feedback:v2:execute', { handle: late.handle })).outcome.status).toBe('incomplete')
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect((await invoke('planning-feedback:v2:read-history', { baseId: base.baseId })).candidates).toHaveLength(0)
+    expect(currentSynopsis()).toBe(outline)
+  })
+
+  it('reads portable range history without reviving old execution and requires explicit new lineage', async () => {
+    const base = await invoke('planning-feedback:v2:capture', { target: scope })
+    const generated = await generate(base.baseId, firstText, 'portable-range')
+    const candidate = await invoke('planning-feedback:v2:stage', generated.stage)
+    const archivePath = path.join(root, 'range.ainovel'), restoredRoot = path.join(root, 'range-restored')
+    await exportPortableProject({ sourceProjectRoot: session.projectPath, projectSession: session, targetArchivePath: archivePath,
+      attemptParentPath: root, assertCurrentContext: context => { expect(context).toEqual(session) },
+      assets: { snapshot: () => ({ files: [], verifyUnchanged: () => {} }) } })
+    await restorePortableProject({ archivePath, targetProjectRoot: restoredRoot })
+    closeProjectDatabase()
+    projectAccess.invalidateCurrentSession()
+    const project = projectAccess.probeExistingProject(restoredRoot)
+    if (project.kind !== 'manifest' || project.storageFormat !== 'canonical') throw new Error('Expected fictional range restore')
+    initProjectDatabase(project.rootPath)
+    session = { projectId: project.projectId, projectPath: project.rootPath, leaseId: projectAccess.beginSession(project).leaseId }
+    expect(session.projectId).not.toBe(base.projectId)
+    expect((await invoke('planning-feedback:v2:list-bases', { target: scope })).map(item => item.baseId)).toContain(base.baseId)
+    expect((await invoke('planning-feedback:v2:read-history', { baseId: base.baseId })).candidates).toMatchObject([
+      { candidate: { candidateId: candidate.candidateId, text: firstText }, state: 'frozen' },
+    ])
+    expect(getProjectDb()!.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(generated.view.handle.runId)).toBe('{}')
+    expect(await invoke('planning-feedback:v2:list-runs', { baseId: base.baseId })).toEqual([])
+    for (const channel of ['planning-feedback:v2:read-run', 'planning-feedback:v2:execute', 'planning-feedback:v2:cancel'] as const) {
+      await expect(invoke(channel, { handle: generated.view.handle })).rejects.toThrow()
+    }
+    await expect(invoke('planning-feedback:v2:stage', generated.stage)).rejects.toThrow()
+    await expect(invoke('planning-feedback:v2:adopt', { candidateId: candidate.candidateId, idempotencyKey: 'old-range',
+      decision: 'full', text: firstText })).rejects.toThrow()
+    await expect(invoke('planning-feedback:v2:relineage', { baseId: base.baseId, sourceCandidateId: candidate.candidateId,
+      feedback: '', constraints: [] })).rejects.toThrow()
+    const fresh = await invoke('planning-feedback:v2:capture', { target: scope })
+    const copied = await invoke('planning-feedback:v2:relineage', { baseId: fresh.baseId, sourceCandidateId: candidate.candidateId,
+      feedback: '', constraints: [] })
+    expect(copied).toMatchObject({ baseId: fresh.baseId, parentCandidateId: null, text: firstText, origin: { kind: 'copied' } })
+    await invoke('planning-feedback:v2:adopt', { candidateId: copied.candidateId, idempotencyKey: 'new-range-author-action',
+      decision: 'partial', adoptedRange: { from: 3, to: 3 }, text: firstText.split('\n\n')[0]! })
+    expect(generated.fetch).toHaveBeenCalledTimes(1)
   })
 })
 describe('generation public IPC with actual project authority and SQLite', () => {

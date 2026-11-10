@@ -38,6 +38,29 @@ beforeEach(() => {
 afterEach(() => db.close())
 
 describe('planning feedback preparation', () => {
+  it('lists exact range summaries through the service without exposing frozen sources or changing v1 lists', () => {
+    db.prepare("UPDATE project_core SET synopsis=? WHERE id='main'")
+      .run('# Plot Outline\n\n## Chapter 1: One\nFirst.\n\n## Chapter 2: Two\nSecond.\n\n## Chapter 3: Three\nThird.\n\n## Chapter 4: Four\nFourth.')
+    const scope = { kind: 'plot-outline-range' as const, from: 3, to: 4 }, base = service.captureBase(scope)
+    service.captureBase({ kind: 'plot-outline-range', from: 2, to: 3 })
+    const field = service.captureBase('coreOutline'), changes = db.prepare('SELECT total_changes()').pluck().get()
+    const expected = [{ baseId: base.baseId, projectId: base.projectId, target: 'plotOutlineRange', scope,
+      createdAt: base.createdAt, closedAt: null, closedByAdoptionId: null }]
+    expect(service.listRangeBases(scope)).toEqual(expected)
+    expect(service.listFieldBases('coreOutline')).toEqual([{ baseId: field.baseId, projectId: field.projectId, target: field.target,
+      createdAt: field.createdAt, closedAt: null, closedByAdoptionId: null }])
+    expect(db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+
+    const copied = new PlanningFeedbackService({ database: db, projectId: 'copy', projectPath: 'fixture',
+      assertCurrent: () => {}, assertGenerationBindingCurrent: () => {} })
+    expect(copied.listRangeBases(scope)).toEqual([])
+    frozen.value = true
+    expect(copied.listRangeBases(scope)).toEqual(expected)
+    const stale = new PlanningFeedbackService({ database: db, projectId: 'project', projectPath: 'fixture',
+      assertCurrent: () => { throw new Error('FICTIONAL_SESSION_STALE') }, assertGenerationBindingCurrent: () => {} })
+    expect(() => stale.listRangeBases(scope)).toThrow('FICTIONAL_SESSION_STALE')
+  })
+
   it('captures the real core projection and tolerates unrelated cached state', () => {
     const base = service.captureBase('coreOutline')
     db.prepare("UPDATE project_core SET character_states='cached',plot_tree_snapshot='cached' WHERE id='main'").run()

@@ -129,7 +129,7 @@ export function generationIpcErrorCode(channel: string, error: unknown): string 
     console.error('[generation] diagnostic read failed', { channel, name: 'Error' })
     return 'GENERATION_REQUEST_FAILED'
   }
-  if (channel.startsWith('planning-feedback:v1:') || channel.startsWith('runtime-feedback:')
+  if (channel.startsWith('planning-feedback:') || channel.startsWith('runtime-feedback:')
     || channel.startsWith('workflow-driver:') || channel.startsWith('workflow-batch:')) {
     console.error('[generation] unmapped feedback failure', { channel, name: error instanceof Error ? 'Error' : typeof error,
       stack: error instanceof Error ? errorStackFrames(error, 7) : undefined })
@@ -646,7 +646,7 @@ export function registerGenerationController(options: {
           if (!request || typeof request !== 'object' || Array.isArray(request)
             || Object.keys(request).length !== 1 || !Object.hasOwn(request, 'handle')) throw new Error('GENERATION_DIAGNOSTICS_INVALID')
         }
-        if (channel.startsWith('planning-feedback:v1:')) assertPlanningFeedbackRequest(channel as PlanningFeedbackChannel, raw[0])
+        if (channel.startsWith('planning-feedback:')) assertPlanningFeedbackRequest(channel as PlanningFeedbackChannel, raw[0])
         const owner = authorizedOwner(session, event)
         const runtime = ownerRuntimes.get(owner)!
         activeHandlers.set(runtime, (activeHandlers.get(runtime) ?? 0) + 1)
@@ -675,6 +675,17 @@ export function registerGenerationController(options: {
   register('planning-feedback:v1:stage', 1, (owner, request) => owner.stageFieldFeedback(request))
   register('planning-feedback:v1:relineage', 1, (owner, request) => owner.relineageFieldFeedback(request))
   register('planning-feedback:v1:adopt', 1, (owner, request) => owner.adoptFieldFeedback(request))
+  register('planning-feedback:v2:capture', 1, (owner, request) => owner.captureRangeFeedback(request.target))
+  register('planning-feedback:v2:list-bases', 1, (owner, request) => owner.listRangeFeedbackBases(request.target))
+  register('planning-feedback:v2:read-history', 1, (owner, request) => owner.readRangeFeedbackHistory(request.baseId))
+  register('planning-feedback:v2:begin', 1, (owner, request) => owner.beginRangeFeedback(request))
+  register('planning-feedback:v2:execute', 1, (owner, request) => owner.executeRangeFeedback(request.handle))
+  register('planning-feedback:v2:read-run', 1, (owner, request) => owner.readRangeFeedbackRun(request.handle))
+  register('planning-feedback:v2:list-runs', 1, (owner, request) => owner.listRangeFeedbackRuns(request.baseId))
+  register('planning-feedback:v2:cancel', 1, (owner, request) => owner.cancelRangeFeedback(request.handle))
+  register('planning-feedback:v2:stage', 1, (owner, request) => owner.stageRangeFeedback(request))
+  register('planning-feedback:v2:relineage', 1, (owner, request) => owner.relineageRangeFeedback(request))
+  register('planning-feedback:v2:adopt', 1, (owner, request) => owner.adoptRangeFeedback(request))
   // 补写中间章时，本章及以后章节的定稿正文不能进取材，否则模型会提前写出或照抄后文。
   const laterFinalizedDocuments = (owner: Owner, chapterNumber: number) => new Set([...FinalizationRepository.knowledgeDocumentChapters(ownerRuntimes.get(owner)!.database)]
     .filter(([, finalizedChapter]) => finalizedChapter >= chapterNumber).map(([documentId]) => documentId))

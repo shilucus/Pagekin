@@ -1512,6 +1512,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Outline range CAS and blueprint field multi-round revision tests passed (3 focus suites, 17/17 tests passed; 6 feedback suites, 155/155 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Character proposal and manuscript feedback belong to subsequent features (FEEDBACK-004)"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "d21479a2fb05fe73e5802f18b6f122ee752f5ee3 + stage-41-evidence.md final source blobs",
+          "artifactOrReceipt": "stage-41-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage41/focused-tests-final.json",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, isolated fictional SQLite/archives and deterministic provider",
+          "result": "Eleven closed desktop range-v2 IPC/client operations wired to actual main owner and writer; exact scope, two-way version rejection, F0-C1-C2, raw outside bytes, CAS/replay/ABA, cancel/unknown, reopen and portable frozen history covered. Final 16 files 1064/1064, typecheck/lint/i18n/build exit 0; independent frozen-source re-review accepted the narrow increment.",
+          "limitations": "Initial 1062 report and first type/lint failures retained with corrections. No UI or trusted human capability, blueprint durable feedback, real-model quality or target-platform qualification; whole FEEDBACK-003 and its dependencies remain incomplete."
         }
       ]
     },
