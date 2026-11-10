@@ -2,12 +2,13 @@ import {
   assembleStageExecutionReceipt,
   createScratchOrchestrationManifest,
   validateScratchCreationGrant,
+  type CandidateDraftingBarrierReason,
   type ScratchCreationStage,
   type ScratchCreationTaskGrant,
   type ScratchOrchestrationManifest,
 } from '../../src/shared/scratch-orchestration-contract'
-import type { AutonomousBatchChainConfig, AutonomousStepReceipt } from '../../src/shared/autonomous-executor-contract'
-import type { AutonomousCreationExecutor } from './autonomous-creation-executor'
+import type { AutonomousBatchChainConfig, AutonomousExecutionResult } from '../../src/shared/autonomous-executor-contract'
+import { AutonomousExecutionInterruptedError, type AutonomousCreationExecutor } from './autonomous-creation-executor'
 import type { PreliminaryAcceptanceService } from './preliminary-acceptance-service'
 
 export interface DomainFactGenerator {
@@ -31,6 +32,7 @@ export interface DomainFactGenerator {
 export class ScratchCreationOrchestrator {
   private readonly manifests = new Map<string, ScratchOrchestrationManifest>()
   private readonly grants = new Map<string, ScratchCreationTaskGrant>()
+  private readonly activePipelines = new Map<string, Promise<ScratchOrchestrationManifest>>()
 
   constructor(
     private readonly autonomousExecutor: AutonomousCreationExecutor,
@@ -48,10 +50,13 @@ export class ScratchCreationOrchestrator {
     }
 
     const manifest = createScratchOrchestrationManifest(grant)
+    if (this.manifests.has(manifest.orchestrationId) || this.activePipelines.has(manifest.orchestrationId)) {
+      throw new Error('SCRATCH_ORCHESTRATION_ID_CONFLICT')
+    }
     this.manifests.set(manifest.orchestrationId, manifest)
     this.grants.set(manifest.orchestrationId, grant)
 
-    return this.runPipeline(manifest, grant)
+    return this.launchPipeline(manifest, grant)
   }
 
   /**
@@ -67,7 +72,9 @@ export class ScratchCreationOrchestrator {
       throw new Error(`未找到从零编排任务 [${orchestrationId}]`) // i18n-exempt: 内部断言错误
     }
 
-    if (manifest.status === 'completed') {
+    const active = this.activePipelines.get(orchestrationId)
+    if (active) return active
+    if (manifest.candidateDraftingBarrier || manifest.status === 'completed') {
       return manifest
     }
 
@@ -81,7 +88,39 @@ export class ScratchCreationOrchestrator {
     manifest.repairAttempts = 0
     manifest.updatedAt = Date.now()
 
-    return this.runPipeline(manifest, grant)
+    return this.launchPipeline(manifest, grant)
+  }
+
+  private launchPipeline(manifest: ScratchOrchestrationManifest, grant: ScratchCreationTaskGrant): Promise<ScratchOrchestrationManifest> {
+    // Install the flight before the first generator runs, including synchronous reentrant resume calls.
+    const flight = Promise.resolve().then(() => this.runPipeline(manifest, grant)).finally(() => {
+      if (this.activePipelines.get(manifest.orchestrationId) === flight) this.activePipelines.delete(manifest.orchestrationId)
+    })
+    this.activePipelines.set(manifest.orchestrationId, flight)
+    return flight
+  }
+
+  private retainDraftingResult(manifest: ScratchOrchestrationManifest, result: AutonomousExecutionResult): void {
+    const actual = structuredClone(result)
+    manifest.draftingExecutionResults.push(actual)
+    manifest.candidateChapterIds = [...new Set([...manifest.candidateChapterIds,
+      ...actual.receipts.filter(receipt => receipt.status === 'candidate_draft_created'
+        && Number.isSafeInteger(receipt.draftId) && receipt.draftId > 0).map(receipt => String(receipt.draftId))])]
+  }
+
+  private suspendDrafting(manifest: ScratchOrchestrationManifest, reason: CandidateDraftingBarrierReason,
+    interruption?: AutonomousExecutionInterruptedError): ScratchOrchestrationManifest {
+    const diagnostic = interruption ? `${interruption.code}:${interruption.phase}:${interruption.chapterNumber}`
+      : `SCRATCH_CANDIDATE_DRAFTING_${reason.toUpperCase()}`
+    manifest.candidateDraftingBarrier ??= reason
+    manifest.stageReceipts.push(assembleStageExecutionReceipt({ orchestrationId: manifest.orchestrationId,
+      stage: 'candidate_drafting', success: false, entityCount: 0, error: diagnostic }))
+    manifest.suspendedAtStage = 'candidate_drafting'
+    manifest.currentStage = 'suspended_needs_author'
+    manifest.status = 'suspended'
+    manifest.suspensionReason = diagnostic
+    manifest.updatedAt = Date.now()
+    return manifest
   }
 
   /**
@@ -251,41 +290,38 @@ export class ScratchCreationOrchestrator {
           allowAutoFinalize: false,
         }
 
-        let draftResult: {
-          batchId: string
-          receipts: AutonomousStepReceipt[]
-          stoppedDueToConflict: boolean
-          completedChapters: number
-        }
+        let draftResult: AutonomousExecutionResult
 
         try {
           draftResult = await this.autonomousExecutor.executeBatchChain(chainConfig)
         } catch (err: unknown) {
-          const suspended = this.handleStageFailure(
-            manifest,
-            grant,
-            'candidate_drafting',
-            err instanceof Error ? err.message : String(err),
-          )
-          if (suspended) {
-            return manifest
+          if (err instanceof AutonomousExecutionInterruptedError) {
+            this.retainDraftingResult(manifest, err.actualExecutionResult)
+            return this.suspendDrafting(manifest, err.phase === 'candidate_save' ? 'unproven' : 'interrupted', err)
           }
+          return this.suspendDrafting(manifest, 'interrupted')
+        }
+
+        this.retainDraftingResult(manifest, draftResult)
+        if (draftResult.receipts.some(receipt => receipt.status === 'unknown')) return this.suspendDrafting(manifest, 'unknown')
+        if (draftResult.stoppedDueToConflict || draftResult.receipts.some(receipt => receipt.status === 'predecessor_conflict_readonly')) {
+          return this.suspendDrafting(manifest, 'predecessor_conflict')
+        }
+        const saved = draftResult.receipts.filter(receipt => receipt.status === 'candidate_draft_created')
+        const complete = draftResult.completedChapters === grant.targetChapterCount && saved.length === grant.targetChapterCount
+          && draftResult.receipts.length === saved.length
+          && new Set(saved.map(receipt => receipt.chapterNumber)).size === grant.targetChapterCount
+          && saved.every(receipt => receipt.chapterNumber >= 1 && receipt.chapterNumber <= grant.targetChapterCount
+            && Number.isSafeInteger(receipt.chapterNumber) && Number.isSafeInteger(receipt.draftId) && receipt.draftId > 0)
+        if (!complete) {
+          if (saved.length) return this.suspendDrafting(manifest, 'partial')
+          const safelyFailed = draftResult.completedChapters === 0 && draftResult.receipts.length > 0
+            && draftResult.receipts.every(receipt => receipt.status === 'failed')
+          if (!safelyFailed) return this.suspendDrafting(manifest, 'unproven')
+          if (this.handleStageFailure(manifest, grant, 'candidate_drafting', 'SCRATCH_CANDIDATE_DRAFTING_FAILED')) return manifest
           continue
         }
 
-        if (
-          draftResult.stoppedDueToConflict ||
-          draftResult.receipts.some(r => r.status === 'failed' || r.status === 'unknown') ||
-          draftResult.completedChapters < grant.targetChapterCount
-        ) {
-          const suspended = this.handleStageFailure(manifest, grant, 'candidate_drafting', '正文候选生成中断或发生前序冲突')
-          if (suspended) {
-            return manifest
-          }
-          continue
-        }
-
-        manifest.candidateChapterIds = draftResult.receipts.map((r: AutonomousStepReceipt) => `ch-${r.chapterNumber}`)
         manifest.stageReceipts.push(
           assembleStageExecutionReceipt({
             orchestrationId: manifest.orchestrationId,

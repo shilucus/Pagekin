@@ -886,3 +886,13 @@ Root retained initial TS2345 and native 1262/1264 failures. Three test-only corr
 Root actually reran all twenty files: 1264/1264, zero failed/pending; final typecheck/lint/i18n/build each exit 0. [Stage 43 evidence](stage-43-evidence.md) records exact source, both reports, built entry identities and limitations. Final artifact review follows; no reviewer command rerun, UI acceptance, whole-feature completion, real-model quality or platform qualification is inferred.
 
 Final artifact reviewer feedback_audit matched all seventeen identities and identical raw denominators, including both previously failed cases now passed exactly once. No evidence blocker remains. Root separately verified the exact sixteen owned paths, empty index and Git hook/exclusion boundaries; the artifact reviewer did not run Git. This accepts only the narrow v3 desktop increment.
+
+## 2026-11-10 - Stage 44 Actual Autonomous Receipts And Retry Barrier
+
+Independent reviewers baseline_audit and feedback_audit inspected both services, both shared contracts, their four tests and ADR-0053/0057. Three await interruptions retain only actual prefixes; missing predecessors stop read-only; scratch preserves attempt history/real IDs, classifies unsafe results before retry, checks barriers/flights before resume reset and requires exact target success receipts. Root's static integration finding about ID collisions was repaired with a closed rejection and active/completed history regressions before execution. Both final source reviews find no unresolved narrow-scope correctness issue or required missing case.
+
+Root actually ran the focused eight-file package: 127/127, zero failed/pending, exit 0, and fresh typecheck/lint/i18n exit 0. [Stage 44 evidence](stage-44-evidence.md) records frozen identities, exact commands, denominators and explicit limitations. Serial build and artifact review follow actual completion. Neither review executed project scripts or qualified persistent/production AUTO behavior, real models, multi-book operation or trusted approval.
+
+Root serial build exited 0; three entry hashes are unchanged because this helper pair is still uncomposed in production. That is build compatibility, not an application runtime exercise. Independent final artifact review follows against ten source/test/ADR, one raw report and three built entries.
+
+Final artifact reviewer feedback_audit independently matched all fourteen identities, raw denominators and required regression presence, with no scope evidence blocker. Root owns the separate Git path/index/hook/exclusion checks. This was artifact inspection, not an independent rerun or whole-feature acceptance.

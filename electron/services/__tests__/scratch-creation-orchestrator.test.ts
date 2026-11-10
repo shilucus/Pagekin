@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ScratchCreationOrchestrator, type DomainFactGenerator } from '../scratch-creation-orchestrator'
-import type { ScratchCreationTaskGrant } from '../../../src/shared/scratch-orchestration-contract'
-import type { AutonomousCreationExecutor, ExecutionResult } from '../autonomous-creation-executor'
+import { createScratchOrchestrationManifest, type ScratchCreationTaskGrant } from '../../../src/shared/scratch-orchestration-contract'
+import { AutonomousCreationExecutor, AutonomousExecutionInterruptedError, type ExecutionResult,
+  type DraftStorageProvider, type ChapterGenerator } from '../autonomous-creation-executor'
 import type { PreliminaryAcceptanceService } from '../preliminary-acceptance-service'
 
 describe('ScratchCreationOrchestrator', () => {
@@ -112,7 +113,8 @@ describe('ScratchCreationOrchestrator', () => {
     expect(manifest.repairAttempts).toBe(0)
     expect(manifest.isHumanConfirmed).toBe(false)
     expect(manifest.canAutoFinalize).toBe(false)
-    expect(manifest.candidateChapterIds).toEqual(['ch-1', 'ch-2'])
+    expect(manifest.candidateChapterIds).toEqual(['101', '102'])
+    expect(manifest.draftingExecutionResults).toHaveLength(1)
     expect(manifest.preliminaryReportIds).toEqual([])
     expect(manifest.stageReceipts.length).toBe(6)
     expect(manifest.stageReceipts[5]).toMatchObject({
@@ -454,5 +456,304 @@ describe('ScratchCreationOrchestrator', () => {
     orchestrator.clearProjectOrchestrations('proj-1')
     expect(orchestrator.getOrchestration(m1.orchestrationId)).toBeUndefined()
     expect(orchestrator.getOrchestration(m2.orchestrationId)).toBeDefined()
+  })
+
+  function realDraftingFixture(options: {
+    generate?: ChapterGenerator['generateChapter']
+    read?: DraftStorageProvider['getDraft']
+    saveFailureAt?: number
+    commitBeforeThrow?: boolean
+  } = {}) {
+    const saved = new Map<number, { draftId: number; version: number; contentHash: string; content: string }>()
+    const storage: DraftStorageProvider = {
+      getDraft: vi.fn(options.read ?? (async chapterNumber => saved.get(chapterNumber) ?? null)),
+      saveCandidateDraft: vi.fn(async (chapterNumber, content) => {
+        const row = { draftId: 1000 + chapterNumber, version: 1, contentHash: `fictional-hash-${chapterNumber}`, content }
+        if (options.saveFailureAt === chapterNumber) {
+          if (options.commitBeforeThrow) saved.set(chapterNumber, row)
+          throw new Error('PRIVATE_STORAGE_DETAIL_DO_NOT_RETAIN')
+        }
+        saved.set(chapterNumber, row)
+        return row
+      }),
+    }
+    const generator: ChapterGenerator = {
+      generateChapter: vi.fn(options.generate ?? (async chapterNumber => ({ content: `Fictional chapter ${chapterNumber}` }))),
+    }
+    const executor = new AutonomousCreationExecutor({ storage, generator })
+    const execute = vi.spyOn(executor, 'executeBatchChain')
+    const domain = createMockDomainGenerator()
+    const orchestrator = new ScratchCreationOrchestrator(executor, createMockAcceptanceService(), domain)
+    return { saved, storage, generator, executor, execute, domain, orchestrator }
+  }
+
+  async function expectBarrierResumesInert(f: ReturnType<typeof realDraftingFixture>, manifest: Awaited<ReturnType<ScratchCreationOrchestrator['startOrchestration']>>) {
+    const before = structuredClone(manifest), storedBefore = [...f.saved.entries()]
+    const calls = f.execute.mock.calls.length
+    for (const stage of [undefined, 'candidate_drafting', 'foundation_setup', 'outline_generation', undefined] as const) {
+      expect(await f.orchestrator.resumeOrchestration(manifest.orchestrationId, stage)).toBe(manifest)
+      expect(manifest).toEqual(before)
+      expect([...f.saved.entries()]).toEqual(storedBefore)
+      expect(f.execute).toHaveBeenCalledTimes(calls)
+    }
+    expect(f.domain.generateFoundation).toHaveBeenCalledTimes(1)
+    expect(f.domain.generateOutline).toHaveBeenCalledTimes(1)
+    expect(f.domain.generateBlueprints).toHaveBeenCalledTimes(1)
+  }
+
+  it.each([1, 2])('retains actual unknown receipts after %i generation calls and blocks every resume path', async chapterNumber => {
+    const f = realDraftingFixture({ generate: async chapter => ({ content: 'Fictional prose', status: chapter === chapterNumber ? 'unknown' : 'succeeded' }) })
+    const manifest = await f.orchestrator.startOrchestration(validGrant)
+    expect(manifest).toMatchObject({ status: 'suspended', suspendedAtStage: 'candidate_drafting', candidateDraftingBarrier: 'unknown', repairAttempts: 0 })
+    expect(manifest.draftingExecutionResults).toEqual([expect.objectContaining({ completedChapters: chapterNumber - 1,
+      receipts: expect.arrayContaining([expect.objectContaining({ chapterNumber, status: 'unknown', draftId: 0 })]) })])
+    expect(manifest.candidateChapterIds).toEqual(chapterNumber === 1 ? [] : ['1001'])
+    expect(f.storage.saveCandidateDraft).toHaveBeenCalledTimes(chapterNumber - 1)
+    await expectBarrierResumesInert(f, manifest)
+  })
+
+  it.each(['missing', 'changed'] as const)('retains the saved prefix and actual %s predecessor conflict without retry', async kind => {
+    const f = realDraftingFixture({ read: async () => kind === 'missing' ? null : { version: 2, contentHash: 'changed-fictional-predecessor' } })
+    const manifest = await f.orchestrator.startOrchestration(validGrant)
+    expect(manifest.candidateDraftingBarrier).toBe('predecessor_conflict')
+    expect(manifest.repairAttempts).toBe(0)
+    expect(manifest.candidateChapterIds).toEqual(['1001'])
+    expect(manifest.draftingExecutionResults[0]).toMatchObject({ completedChapters: 1, stoppedDueToConflict: true })
+    expect(manifest.draftingExecutionResults[0].receipts.map(receipt => receipt.status)).toEqual(['candidate_draft_created', 'predecessor_conflict_readonly'])
+    expect(f.generator.generateChapter).toHaveBeenCalledTimes(1)
+    expect(f.storage.saveCandidateDraft).toHaveBeenCalledTimes(1)
+    await expectBarrierResumesInert(f, manifest)
+  })
+
+  it('retains a failed second step after saving the first candidate and never spends a retry on the partial batch', async () => {
+    const f = realDraftingFixture({ generate: async chapter => ({ content: 'Fictional prose', status: chapter === 2 ? 'failed' : 'succeeded' }) })
+    const manifest = await f.orchestrator.startOrchestration(validGrant)
+    expect(manifest.candidateDraftingBarrier).toBe('partial')
+    expect(manifest.repairAttempts).toBe(0)
+    expect(manifest.candidateChapterIds).toEqual(['1001'])
+    expect(manifest.draftingExecutionResults[0].receipts.map(receipt => receipt.status)).toEqual(['candidate_draft_created', 'failed'])
+    await expectBarrierResumesInert(f, manifest)
+  })
+
+  it.each([
+    ['generation', 1, false], ['generation', 2, false], ['predecessor_read', 2, false],
+    ['candidate_save', 1, false], ['candidate_save', 2, false],
+    ['candidate_save', 1, true], ['candidate_save', 2, true],
+  ] as const)('retains the actual prefix on %s chapter %i throw (save already committed: %s)', async (phase, chapterNumber, commitBeforeThrow) => {
+    const f = realDraftingFixture({
+      ...(phase === 'generation' ? { generate: async (chapter: number) => {
+        if (chapter === chapterNumber) throw new Error('PRIVATE_PROVIDER_DETAIL_DO_NOT_RETAIN')
+        return { content: 'Fictional prose' }
+      } } : {}),
+      ...(phase === 'predecessor_read' ? { read: async () => { throw new Error('PRIVATE_READ_DETAIL_DO_NOT_RETAIN') } } : {}),
+      ...(phase === 'candidate_save' ? { saveFailureAt: chapterNumber, commitBeforeThrow } : {}),
+    })
+    const manifest = await f.orchestrator.startOrchestration(validGrant)
+    expect(manifest.candidateDraftingBarrier).toBe(phase === 'candidate_save' ? 'unproven' : 'interrupted')
+    expect(manifest.suspensionReason).toBe(`AUTONOMOUS_EXECUTION_INTERRUPTED:${phase}:${chapterNumber}`)
+    expect(manifest.repairAttempts).toBe(0)
+    expect(manifest.draftingExecutionResults).toEqual([expect.objectContaining({ completedChapters: chapterNumber - 1 })])
+    expect(manifest.draftingExecutionResults[0].receipts).toHaveLength(chapterNumber - 1)
+    expect(manifest.candidateChapterIds).toEqual(chapterNumber === 1 ? [] : ['1001'])
+    expect(f.saved.size).toBe(chapterNumber - 1 + (commitBeforeThrow ? 1 : 0))
+    expect(JSON.stringify(manifest)).not.toContain('PRIVATE_')
+    await expectBarrierResumesInert(f, manifest)
+  })
+
+  it('does not invent a zero-effect result from an untyped executor exception', async () => {
+    const f = realDraftingFixture()
+    f.execute.mockRejectedValue(new Error('PRIVATE_UNTYPED_EXCEPTION_DO_NOT_RETAIN'))
+    const manifest = await f.orchestrator.startOrchestration(validGrant)
+    expect(manifest.candidateDraftingBarrier).toBe('interrupted')
+    expect(manifest.draftingExecutionResults).toEqual([])
+    expect(manifest.candidateChapterIds).toEqual([])
+    expect(manifest.repairAttempts).toBe(0)
+    expect(JSON.stringify(manifest)).not.toContain('PRIVATE_')
+    await expectBarrierResumesInert(f, manifest)
+  })
+
+  it('retains separate cloned returned and typed-interruption results rather than mutable executor objects', async () => {
+    const f = realDraftingFixture()
+    const empty: ExecutionResult = { batchId: 'fictional-batch', receipts: [], stoppedDueToConflict: false, completedChapters: 0 }
+    const interrupted = new AutonomousExecutionInterruptedError('generation', 1, empty)
+    f.execute.mockRejectedValue(interrupted)
+    const manifest = await f.orchestrator.startOrchestration(validGrant)
+    interrupted.actualExecutionResult.completedChapters = 9
+    empty.completedChapters = 8
+    expect(manifest.draftingExecutionResults[0].completedChapters).toBe(0)
+
+    const returned = realDraftingFixture()
+    const result: ExecutionResult = { batchId: 'fictional-batch', receipts: [], stoppedDueToConflict: false, completedChapters: 0 }
+    returned.execute.mockResolvedValue(result)
+    const other = await returned.orchestrator.startOrchestration(validGrant)
+    result.completedChapters = 9
+    expect(other.draftingExecutionResults[0].completedChapters).toBe(0)
+    expect(other.candidateDraftingBarrier).toBe('unproven')
+  })
+
+  it.each(['empty', 'duplicate', 'wrong-chapter', 'counter-only', 'repair-only', 'invalid-id'] as const)('rejects %s drafting success without exact target chapter receipts', async kind => {
+    const executor = createMockAutonomousExecutor()
+    const result = await executor.executeBatchChain({ batchId: 'fixture', grantId: 'fixture', projectId: 'fixture', startChapter: 1, chapterCount: 2, predecessorChain: [] })
+    if (kind === 'empty') { result.receipts = []; result.completedChapters = 0 }
+    if (kind === 'duplicate') result.receipts[1].chapterNumber = 1
+    if (kind === 'wrong-chapter') result.receipts[1].chapterNumber = 3
+    if (kind === 'counter-only') result.receipts = []
+    if (kind === 'repair-only') { result.receipts[0].status = 'repair_converged'; result.receipts = [result.receipts[0]]; result.completedChapters = 0 }
+    if (kind === 'invalid-id') result.receipts[1].draftId = 0
+    vi.mocked(executor.executeBatchChain).mockResolvedValue(result)
+    const orchestrator = new ScratchCreationOrchestrator(executor, createMockAcceptanceService(), createMockDomainGenerator())
+    const manifest = await orchestrator.startOrchestration(validGrant)
+    expect(manifest.status).toBe('suspended')
+    expect(manifest.suspendedAtStage).toBe('candidate_drafting')
+    expect(manifest.candidateDraftingBarrier).toBe(kind === 'duplicate' || kind === 'wrong-chapter' || kind === 'invalid-id' ? 'partial' : 'unproven')
+    expect(manifest.repairAttempts).toBe(0)
+    expect(manifest.draftingExecutionResults).toEqual([result])
+    expect(executor.executeBatchChain).toHaveBeenCalledTimes(2)
+    if (kind === 'invalid-id') expect(manifest.candidateChapterIds).toEqual(['101'])
+  })
+
+  it('retains safe failed attempts and then accepts actual complete target receipts from the real executor', async () => {
+    let calls = 0
+    const f = realDraftingFixture({ generate: async chapter => ({ content: `Fictional chapter ${chapter}`, status: ++calls === 1 ? 'failed' : 'succeeded' }) })
+    const manifest = await f.orchestrator.startOrchestration(validGrant)
+    expect(f.execute).toHaveBeenCalledTimes(2)
+    expect(manifest.draftingExecutionResults.map(result => result.completedChapters)).toEqual([0, 2])
+    expect(manifest.draftingExecutionResults[0].receipts[0].status).toBe('failed')
+    expect(manifest.draftingExecutionResults[1].receipts.map(receipt => receipt.chapterNumber)).toEqual([1, 2])
+    expect(manifest.candidateChapterIds).toEqual(['1001', '1002'])
+    expect(manifest.candidateDraftingBarrier).toBeUndefined()
+    expect(manifest.suspendedAtStage).toBe('preliminary_acceptance')
+    expect(manifest.stageReceipts.filter(receipt => receipt.stage === 'candidate_drafting').map(receipt => receipt.success)).toEqual([false, true])
+  })
+
+  it('exhausts finite safe zero-save failed attempts while retaining every real result', async () => {
+    const f = realDraftingFixture({ generate: async () => ({ content: '', status: 'failed' }) })
+    const manifest = await f.orchestrator.startOrchestration({ ...validGrant, maxRepairAttempts: 3 })
+    expect(f.execute).toHaveBeenCalledTimes(3)
+    expect(f.storage.saveCandidateDraft).not.toHaveBeenCalled()
+    expect(manifest.repairAttempts).toBe(3)
+    expect(manifest.candidateDraftingBarrier).toBeUndefined()
+    expect(manifest.suspendedAtStage).toBe('candidate_drafting')
+    expect(manifest.draftingExecutionResults).toHaveLength(3)
+    expect(manifest.draftingExecutionResults.every(result => result.completedChapters === 0 && result.receipts.length === 1 && result.receipts[0].status === 'failed')).toBe(true)
+    expect(manifest.candidateChapterIds).toEqual([])
+  })
+
+  it('shares the start pipeline with all busy resumes before any phase or repair-budget reset', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1794300000000)
+    let release!: (value: { success: boolean; worldView: string }) => void, entered!: () => void
+    const gated = new Promise<{ success: boolean; worldView: string }>(resolve => { release = resolve })
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const domain = createMockDomainGenerator({ generateFoundation: vi.fn()
+      .mockResolvedValueOnce({ success: false, error: 'Fictional safe foundation failure' })
+      .mockImplementationOnce(() => { entered(); return gated }) })
+    const executor = createMockAutonomousExecutor()
+    const orchestrator = new ScratchCreationOrchestrator(executor, createMockAcceptanceService(), domain)
+    try {
+      const started = orchestrator.startOrchestration(validGrant)
+      await waiting
+      const id = createScratchOrchestrationManifest(validGrant).orchestrationId
+      const manifest = orchestrator.getOrchestration(id)!
+      const before = structuredClone(manifest)
+      expect(manifest.repairAttempts).toBe(1)
+      const busy = [undefined, 'foundation_setup', 'outline_generation']
+        .map(stage => orchestrator.resumeOrchestration(id, stage as 'foundation_setup' | 'outline_generation' | undefined))
+      expect(manifest).toEqual(before)
+      expect(domain.generateFoundation).toHaveBeenCalledTimes(2)
+      release({ success: true, worldView: 'Gated fictional foundation' })
+      const results = await Promise.all([started, ...busy])
+      expect(results.every(result => result === manifest)).toBe(true)
+      expect(executor.executeBatchChain).toHaveBeenCalledTimes(1)
+      expect(domain.generateOutline).toHaveBeenCalledTimes(1)
+      expect(manifest.draftingExecutionResults).toHaveLength(1)
+    } finally { clock.mockRestore() }
+  })
+
+  it('removes a rejected active flight so an explicit retry can run again', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1794300000001)
+    const domain = createMockDomainGenerator({ generateFoundation: vi.fn()
+      .mockResolvedValueOnce({ success: true, get worldView(): string { throw new Error('SYNTHETIC_PIPELINE_REJECTION') } })
+      .mockResolvedValue({ success: true, worldView: 'Recovered fictional foundation' }) })
+    const executor = createMockAutonomousExecutor()
+    const orchestrator = new ScratchCreationOrchestrator(executor, createMockAcceptanceService(), domain)
+    try {
+      await expect(orchestrator.startOrchestration(validGrant)).rejects.toThrow('SYNTHETIC_PIPELINE_REJECTION')
+      const id = createScratchOrchestrationManifest(validGrant).orchestrationId
+      const resumed = await orchestrator.resumeOrchestration(id, 'foundation_setup')
+      expect(resumed.suspendedAtStage).toBe('preliminary_acceptance')
+      expect(domain.generateFoundation).toHaveBeenCalledTimes(2)
+      expect(executor.executeBatchChain).toHaveBeenCalledTimes(1)
+    } finally { clock.mockRestore() }
+  })
+
+  it('coalesces concurrent resumes of a suspended task and leaves a busy earlier-stage request inert', async () => {
+    let release!: (value: { success: boolean; chapters: Array<{ chapter: number; summary: string }> }) => void, entered!: () => void
+    const gated = new Promise<{ success: boolean; chapters: Array<{ chapter: number; summary: string }> }>(resolve => { release = resolve })
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const domain = createMockDomainGenerator({ generateOutline: vi.fn()
+      .mockResolvedValueOnce({ success: false, error: 'Fictional outline failure' })
+      .mockImplementationOnce(() => { entered(); return gated }) })
+    const executor = createMockAutonomousExecutor()
+    const orchestrator = new ScratchCreationOrchestrator(executor, createMockAcceptanceService(), domain)
+    const manifest = await orchestrator.startOrchestration({ ...validGrant, maxRepairAttempts: 1 })
+    expect(manifest.suspendedAtStage).toBe('outline_generation')
+    const resumed = orchestrator.resumeOrchestration(manifest.orchestrationId)
+    await waiting
+    const before = structuredClone(manifest)
+    const duplicates = [orchestrator.resumeOrchestration(manifest.orchestrationId),
+      orchestrator.resumeOrchestration(manifest.orchestrationId, 'foundation_setup')]
+    expect(manifest).toEqual(before)
+    release({ success: true, chapters: [{ chapter: 1, summary: 'Fictional first chapter' }, { chapter: 2, summary: 'Fictional second chapter' }] })
+    const results = await Promise.all([resumed, ...duplicates])
+    expect(results.every(result => result === manifest)).toBe(true)
+    expect(manifest.suspendedAtStage).toBe('preliminary_acceptance')
+    expect(domain.generateFoundation).toHaveBeenCalledTimes(1)
+    expect(domain.generateOutline).toHaveBeenCalledTimes(2)
+    expect(domain.generateBlueprints).toHaveBeenCalledTimes(1)
+    expect(executor.executeBatchChain).toHaveBeenCalledTimes(1)
+    expect(manifest.draftingExecutionResults).toHaveLength(1)
+  })
+
+  it('rejects colliding active start IDs before replacing the original manifest, grant or flight', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1794300000002)
+    let release!: (value: { success: boolean; worldView: string }) => void, entered!: () => void
+    const gated = new Promise<{ success: boolean; worldView: string }>(resolve => { release = resolve })
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const domain = createMockDomainGenerator({ generateFoundation: vi.fn(() => { entered(); return gated }) })
+    const executor = createMockAutonomousExecutor()
+    const orchestrator = new ScratchCreationOrchestrator(executor, createMockAcceptanceService(), domain)
+    try {
+      const started = orchestrator.startOrchestration(validGrant)
+      await waiting
+      const id = createScratchOrchestrationManifest(validGrant).orchestrationId
+      const manifest = orchestrator.getOrchestration(id)!, before = structuredClone(manifest)
+      await expect(orchestrator.startOrchestration({ ...validGrant, targetChapterCount: 1, maxRepairAttempts: 1,
+        allowedStages: ['foundation_setup'] })).rejects.toThrow('SCRATCH_ORCHESTRATION_ID_CONFLICT')
+      expect(orchestrator.getOrchestration(id)).toBe(manifest)
+      expect(manifest).toEqual(before)
+      const resumed = orchestrator.resumeOrchestration(id, 'foundation_setup')
+      release({ success: true, worldView: 'Original fictional foundation' })
+      expect(await resumed).toBe(await started)
+      expect(manifest.suspendedAtStage).toBe('preliminary_acceptance')
+      expect(domain.generateFoundation).toHaveBeenCalledTimes(1)
+      expect(executor.executeBatchChain).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(executor.executeBatchChain).mock.calls[0][0].chapterCount).toBe(2)
+    } finally { clock.mockRestore() }
+  })
+
+  it('rejects completed ID collisions without clobbering retained history', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1794300000003)
+    const domain = createMockDomainGenerator(), executor = createMockAutonomousExecutor()
+    const orchestrator = new ScratchCreationOrchestrator(executor, createMockAcceptanceService(), domain)
+    try {
+      const manifest = await orchestrator.startOrchestration({ ...validGrant, allowedStages: ['foundation_setup'] })
+      const before = structuredClone(manifest)
+      expect(manifest.status).toBe('completed')
+      await expect(orchestrator.startOrchestration(validGrant)).rejects.toThrow('SCRATCH_ORCHESTRATION_ID_CONFLICT')
+      expect(orchestrator.getOrchestration(manifest.orchestrationId)).toBe(manifest)
+      expect(manifest).toEqual(before)
+      expect(domain.generateFoundation).toHaveBeenCalledTimes(1)
+      expect(executor.executeBatchChain).not.toHaveBeenCalled()
+    } finally { clock.mockRestore() }
   })
 })

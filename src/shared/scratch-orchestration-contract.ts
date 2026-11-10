@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type { AutonomousExecutionResult } from './autonomous-executor-contract'
 
 export type ScratchCreationStage =
   | 'foundation_setup'
@@ -37,6 +38,13 @@ export interface ScratchStagedArtifacts {
   draftContents?: Record<number, string>
 }
 
+export type CandidateDraftingBarrierReason =
+  | 'unknown'
+  | 'predecessor_conflict'
+  | 'partial'
+  | 'interrupted'
+  | 'unproven'
+
 export interface ScratchOrchestrationManifest {
   orchestrationId: string
   grantId: string
@@ -45,6 +53,8 @@ export interface ScratchOrchestrationManifest {
   suspendedAtStage?: ScratchCreationStage
   repairAttempts: number
   stageReceipts: StageExecutionReceipt[]
+  draftingExecutionResults: AutonomousExecutionResult[]
+  candidateDraftingBarrier?: CandidateDraftingBarrierReason
   candidateChapterIds: string[]
   preliminaryReportIds: string[]
   stagedArtifacts: ScratchStagedArtifacts
@@ -116,6 +126,7 @@ export function createScratchOrchestrationManifest(grant: ScratchCreationTaskGra
     currentStage: 'foundation_setup',
     repairAttempts: 0,
     stageReceipts: [],
+    draftingExecutionResults: [],
     candidateChapterIds: [],
     preliminaryReportIds: [],
     stagedArtifacts: {},

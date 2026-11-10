@@ -58,6 +58,13 @@ export interface AutonomousStepReceipt {
   createdAt: number
 }
 
+export interface AutonomousExecutionResult {
+  batchId: string
+  receipts: AutonomousStepReceipt[]
+  stoppedDueToConflict: boolean
+  completedChapters: number
+}
+
 /**
  * Validates the batch configuration ensuring chapter limit (<= 10), chain integrity,
  * and forbidding auto_finalize bypass.

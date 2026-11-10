@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   type AutonomousBatchChainConfig,
+  type AutonomousExecutionResult,
+  type AutonomousStepReceipt,
   AutonomousExecutorError,
   checkPredecessorConflict,
   EXECUTOR_ERROR_CODES,
@@ -35,6 +37,27 @@ describe('autonomous-executor-contract', () => {
     ],
     allowAutoFinalize: false,
   }
+
+  it('preserves the exact four-field execution result without inventing a current-step receipt', () => {
+    expectTypeOf<AutonomousExecutionResult>().toEqualTypeOf<{
+      batchId: string
+      receipts: AutonomousStepReceipt[]
+      stoppedDueToConflict: boolean
+      completedChapters: number
+    }>()
+    expectTypeOf<keyof AutonomousExecutionResult>()
+      .toEqualTypeOf<'batchId' | 'receipts' | 'stoppedDueToConflict' | 'completedChapters'>()
+    expectTypeOf<AutonomousStepReceipt['isFinalized']>().toEqualTypeOf<false>()
+
+    const result: AutonomousExecutionResult = {
+      batchId: baseConfig.batchId,
+      receipts: [],
+      stoppedDueToConflict: false,
+      completedChapters: 0,
+    }
+    expect(Object.keys(result).sort()).toEqual(['batchId', 'completedChapters', 'receipts', 'stoppedDueToConflict'])
+    expect(result.receipts).toEqual([])
+  })
 
   describe('validateAutonomousBatchConfig', () => {
     it('passes for a valid batch configuration within 10 chapters', () => {

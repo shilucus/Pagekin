@@ -1985,6 +1985,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Bounded autonomous creation executor and chained dependency receipts contract tests passed (2 suites, 11/11 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Autonomous scope strictly capped at MAX_BATCH_CHAPTER_LIMIT=10 chapters; predecessor changes trigger readonly block; no auto-finalize allowed"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "d8c6196b1916aa03fc531b81e9c4dfa8c92544d6 + stage-44-evidence.md frozen source hashes",
+          "artifactOrReceipt": "stage-44-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage44/focused-tests.json",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, deterministic fictional in-memory storage/providers",
+          "result": "Three await interruption phases retain only actual confirmed prefix results, including save-then-throw; missing direct/actual predecessors stop read-only before subsequent generation/save. Shared four-field result compatibility and existing ten-chapter/no-finalize boundaries retained. Integrated eight-file package 127/127 and typecheck/lint/i18n/build exit 0; two independent frozen-source reviews accept this protection increment.",
+          "limitations": "No production driver, stable domain-effect reconciliation, cross-crash source proof or Electron qualification. AUTO-002 remains in_progress/passes=false; build and final artifact results are recorded in Stage44 evidence."
         }
       ]
     },
@@ -2058,6 +2066,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Removed fabricated preliminary prose/version/receipt/evidence; missing real acceptance evidence suspends and preserves candidates/history on repeated default resume; final focused package 207/207 with independent source review",
           "limitations": "Corrects the earlier Stage23 true-draft preliminary-acceptance claim, not complete automation; real evidence adapter, production/persistence qualification and candidate unknown-no-resend remain open"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "d8c6196b1916aa03fc531b81e9c4dfa8c92544d6 + stage-44-evidence.md frozen source hashes",
+          "artifactOrReceipt": "stage-44-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-10/stage44/focused-tests.json",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, real internal executor with fictional in-memory storage/providers",
+          "result": "Every actual drafting attempt result is retained with real saved draft IDs; unknown/conflict/partial/exception/unproven results suspend before retry and all resume state resets. Only explicit zero-save failed attempts use bounded repair. Start/resume share one flight, ID collisions preserve old history, and existing preliminary pause/explicit earlier redo remain. Eight files 127/127 and typecheck/lint/i18n/build exit 0; two independent source reviews accept the narrow increment.",
+          "limitations": "History and barrier survive only the current in-memory manifest lifecycle. No persistent recovery/production composition, trusted approval, real-model quality or multi-book qualification. Whole AUTO-003 remains incomplete; build and artifact results are recorded in Stage44 evidence."
         }
       ]
     },

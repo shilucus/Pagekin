@@ -29,6 +29,15 @@
    - 当前 scratch 输入接口不能提供该证据包，抵达 `preliminary_acceptance` 时保留候选、历史阶段记录及已有报告引用，以 `SCRATCH_PRELIMINARY_EVIDENCE_UNAVAILABLE` 暂停待作者处理。不调用 unversioned 正文 getter 或评估器来猜测证据，不消耗生成修复预算；默认恢复仍停在该阶段，不重新生成前序产物；
    - 多书任务按各自独立的 `ProjectSessionContext` 与数据库租约并发执行，严格杜绝跨作品数据泄漏。
 
+## Stage 44 草稿收据与恢复屏障 (2026-11-10)
+
+- 内存 manifest 的 `draftingExecutionResults` 按尝试追加真实结果快照，包含零候选的明确失败；不只保留最后一次，也不从 raw exception 补造空执行结果。候选 ID 仅从实际 `candidate_draft_created` 收据取 `String(draftId)`，不从章号、失败或冲突步骤推造。
+- unknown、前驱冲突、部分保存、任何执行异常或无完整证据的结果立即暂停，建立独立 `candidateDraftingBarrier`。该屏障在当前 manifest 生命周期内单调保留，所有 resume 在改状态、阶段或预算之前检查；默认、当前或更早阶段恢复均不能清掉屏障重发。本增量不是持久化或崩溃恢复实现。
+- 只有本次结果明确 failed、没有成功保存步骤、unknown、冲突或异常时，才能消耗既有有限重试预算；空收据或 completedChapters=0 本身不是零副作用证明。完整成功必须由目标章集合的真实成功收据支持，历史中的安全失败不否定后续成功。
+- 同一 orchestration 的启动执行和 resume 共用 single-flight；活动时重复恢复（含显式更早阶段）不得重置阶段/预算或另起流水线。正常结束或抛错后移除对应 flight。
+- 保留原 preliminary 缺证据暂停。完整 drafting 成功后仅缺初验证据时，默认恢复不重生成；作者显式要求更早阶段重做的原行为仍保留，不以全面禁用 redo 替代风险屏障。
+- 内存 Map、可变 grant/read API 及尚未组合的生产驱动不获得持久、多书、授权或文学质量资格；本阶段不扩大到这些独立边界。
+
 ## 效果与保证
 - 目标是从作者任务到候选与真实初验报告的有据编排；缺证据时暂停，不声称已形成高质量自主闭环；
 - 避免了死循环重试和未授权定稿；
