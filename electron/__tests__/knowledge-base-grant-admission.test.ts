@@ -178,6 +178,56 @@ afterEach(() => {
 })
 
 describe('actual reference knowledge grant admission', () => {
+  it('preserves a committed zero-overlap legacy chunk set when the corrected set conflicts', async () => {
+    const first = 'A'.repeat(60), second = 'B'.repeat(60)
+    const value = book('LegacyZeroOverlap', `${first}\n\n${second}`)
+    projectRuntimeHost.activateView(b.runtime)
+    const legacyChunks = [first, `${first}\n\n${second.slice(0, 38)}`, second.slice(38)]
+    const correctedChunks = [first, second]
+    const id = documentId(value)
+    expect(store.hashCanonicalChunkSet(legacyChunks)).not.toBe(store.hashCanonicalChunkSet(correctedChunks))
+    await expect(store.addChunks(value.root, id, 'Chapter 1.txt', legacyChunks, undefined, undefined,
+      { corpusKind: 'reference', replacementMode: 'stable-id' })).resolves.toMatchObject({ success: true, chunkCount: 3 })
+    value.admission.withTransaction(value.resources, RUN, () => {
+      value.runtime.database.prepare(`INSERT INTO import_reference_documents
+        (document_id, idempotency_key_hash, content_hash, chunk_set_hash, expected_chunk_count, corpus_kind, state)
+        VALUES (?, ?, ?, ?, ?, 'reference', 'committed')`).run(id, hash(value.binding.stableKey), hash(value.content),
+        store.hashCanonicalChunkSet(legacyChunks), legacyChunks.length)
+      ImportRunRepository.commitReferenceImportReceipt(RUN, value.authority, 1, id, value.runtime.database)
+    })
+    const documents = documentRows(value), receipts = knowledgeRows(value), dispatches = dispatchRows(value)
+    const projection = await store.listDocuments(value.root)
+    expect(projection).toHaveLength(1)
+    const integrity = await store.getDocumentIntegrity(value.root, id)
+    expect(integrity).toMatchObject({ complete: true, corpusKind: 'reference', chunkCount: 3,
+      chunkSetHash: store.hashCanonicalChunkSet(legacyChunks) })
+    expect(receipts).toEqual([expect.objectContaining({ run_id: RUN, chapter_number: 1, document_id: id,
+      content_fingerprint: hash(value.content), state: 'committed' })])
+    const connection = await store.getConnection(value.root)
+    const table = await connection.openTable('chunks')
+    const readChunks = async () => {
+      const rows = await table.query().select(['chunkIndex', 'text']).toArray() as Array<{ chunkIndex: number; text: string }>
+      return rows.sort((left, right) => left.chunkIndex - right.chunkIndex).map(row => ({ chunkIndex: row.chunkIndex, text: row.text }))
+    }
+    try {
+      const chunks = await readChunks()
+      expect(chunks).toEqual(legacyChunks.map((text, chunkIndex) => ({ chunkIndex, text })))
+      const fts = await store.search(value.root, second.slice(0, 22))
+      expect(fts.length).toBeGreaterThan(0)
+      await expect(importBook(value, { model: batchModel(1) })).resolves.toMatchObject({
+        success: false, error: 'KNOWLEDGE_BASE_REFERENCE_RECEIPT_CONFLICT',
+      })
+      expect(fetch).not.toHaveBeenCalled()
+      expect(documentRows(value)).toEqual(documents)
+      expect(knowledgeRows(value)).toEqual(receipts)
+      expect(dispatchRows(value)).toEqual(dispatches)
+      expect(await store.listDocuments(value.root)).toEqual(projection)
+      expect(await readChunks()).toEqual(chunks)
+      expect(await store.getDocumentIntegrity(value.root, id)).toEqual(integrity)
+      expect(await store.search(value.root, second.slice(0, 22))).toEqual(fts)
+      await expectBUnchanged()
+    } finally { table.close() }
+  })
   it('imports real FTS/Lance A with B active and replays the same document only under its active grant', async () => {
     const imported = await importBook(a)
     expect(imported).toMatchObject({ success: true, idempotent: false, docId: documentId(a), chunkCount: 1 })

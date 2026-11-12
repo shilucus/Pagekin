@@ -990,6 +990,14 @@
           "environment": "Same183-assertion package, actual generateEmbeddings with eight fictional texts/four controlled local fetch batches per configuration",
           "result": "One included benchmark case emits two observations: request/completion count4/4 and peak1 versus2, ordered complete vectors, completion order0,1,2,3 versus1,0,2,3; elapsed79.2427/45.7039ms.",
           "limitations": "Includes manual gates and10ms controlled delay; not controller/provider latency, responsiveness, percent speedup or SLA. The benchmark is already included in183 and the observations are not independent extra tests. Whole feature remains in_progress/false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "9def8e2f6cadd6f617c43589398b81ab34c7a03b + stage-59-source-manifest.json final source/test SHA256",
+          "artifactOrReceipt": "stage-59-evidence.md; .runtime/creation-runtime-modernization/stage59/related-final.json",
+          "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; actual controller/KB and isolated fictional SQLite/Lance, controlled fetch only",
+          "result": "Two zero-overlap retention expressions repaired after actual independent-golden red4/6; focused green6/6 and final serial10-file212/212, zero failed/pending/todo. Restored multiline controller29 passes with frozen default1/explicit2 and ordered vectors. Actual legacy FTS-only receipt/projection/chunks stay unchanged on incompatible corrected layout, zero fetch and B isolation; source/runtime independently accepted. Fresh typecheck/lint/color/i18n/build exit0.",
+          "limitations": "Partial SCHED-001 correctness only; root/request/active-duration budget policy and dispatch/commit budget checks remain open. Legacy preservation does not prove embedded-vector migration or unmanaged IPC. Filtered legacy green1passed/40name-filtered and prior red are retained, not added to212. No browser/Electron/provider/platform run, full import migration, global registry37 pass or all35 final review. Feature remains in_progress/false."
         }
       ]
     },

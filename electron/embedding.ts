@@ -544,7 +544,7 @@ export function chunkText(
         if (sentenceChunk.length + sentence.length > maxChars && sentenceChunk.length > 0) {
           pushWithinLimit(sentenceChunk)
           // 保留 overlap
-          sentenceChunk = sentenceChunk.slice(-overlap) + sentence
+          sentenceChunk = (overlap === 0 ? '' : sentenceChunk.slice(-overlap)) + sentence
         } else {
           sentenceChunk += sentence
         }
@@ -559,7 +559,7 @@ export function chunkText(
     if (currentChunk.length + para.length > maxChars && currentChunk.length > 0) {
       pushWithinLimit(currentChunk)
       // 保留 overlap
-      currentChunk = currentChunk.slice(-overlap) + '\n\n' + para
+      currentChunk = (overlap === 0 ? '' : currentChunk.slice(-overlap)) + '\n\n' + para
     } else {
       currentChunk += (currentChunk ? '\n\n' : '') + para
     }

@@ -63,7 +63,7 @@ function deferred<T>() {
 }
 function response() { return new Response(JSON.stringify({ data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] }), { status: 200 }) }
 const BATCH_CHUNKS = ['A alpha', 'B bravo', 'C charlie'].map(text => text.padEnd(100, 'x'))
-const BATCH_CONTENT = BATCH_CHUNKS.join('')
+const BATCH_CONTENT = BATCH_CHUNKS.join('\n\n')
 function batchResponse(ordinal: number) {
   return new Response(JSON.stringify({ data: [{ index: 0, embedding: [ordinal + 1, 0, 0] }] }), { status: 200 })
 }
