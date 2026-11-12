@@ -1555,6 +1555,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Planning feedback UI candidate diff adoption passed (2 suites, 25/25 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Single-book planning targets only; batch and plot outline range feedback belong to subsequent features"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "a5f06f75237101997bfbf0d664cfa889254695ca + stage-49-evidence.md frozen final source SHA256",
+          "artifactOrReceipt": "stage-49-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-12/stage49-native.json; stage49-browser-final.json",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12; isolated fictional native projects and headless Chromium 1228",
+          "result": "Narrow acknowledged-adoption repair: saved field baseline, newer edits including clear/undefined, frozen session and closed-instance protection, and same-instance manual replay keys. Native 11 files 463/463; final browser 5 files 60/60; typecheck/lint/i18n/build exit 0; fresh independent source review accepted.",
+          "limitations": "Partial feature only. Wider browser 6-file attempt failed 95/96 plus existing overview unhandled rejection; missing browser launch and initial C2 fixture evidence correction retained. Browser bridge is fictional, not SQLite/Electron/model evidence. Dirty-start/history/closed-result synchronization and full UI qualification remain incomplete; no feature promotion."
         }
       ]
     },
@@ -1793,6 +1801,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Planning feedback UI architecture entry, candidate diff, fine-tune editing, stale protection and lease guard passed (3 suites, 33/33 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Single-book planning and single architecture section targets; multi-book and range outline feedback belong to subsequent features"
+        },
+        {
+          "type": "browser",
+          "sourceSha": "a5f06f75237101997bfbf0d664cfa889254695ca + stage-49-evidence.md frozen final source SHA256",
+          "artifactOrReceipt": "stage-49-evidence.md; .runtime/creation-runtime-modernization/recheck-2026-11-12/stage49-browser-final.json",
+          "environment": "Windows x64, Vitest 4.1.12; existing local Chromium headless 1228; fictional bridge, real React/store/form/client",
+          "result": "Fresh narrow 5-file browser execution 60/60 includes six setup field baselines, concurrent newer author edits, explicit Esc, delayed commit ACK after M save/C2, frozen session and manual lost-ACK same-key replay. No new layout, copy or author policy; source quality/build exit 0.",
+          "limitations": "Whole UI-002 remains in_progress/false. Six-file wider run failed 95/96 and old overview unhandled rejection; retained rather than suppressed. Browser act warnings retained. No Electron, full history/reopen sync, dirty-before-start/impact presentation, complete design or platform/model qualification."
         }
       ]
     },

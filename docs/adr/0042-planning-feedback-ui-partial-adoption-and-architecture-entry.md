@@ -31,7 +31,7 @@
 - 底部操作按钮增加：
   - “采用整篇候选” (`decision: 'full'`)：采用模型的完整候选；
   - “采用微调版本” (`decision: 'edited'`)：以作者修改后的 `editedText` 为最终正文调用 `client.adopt`；
-- 所有采用均生成唯一的幂等键 `adopt-${candidateId}-${Date.now()}`，确保主进程只接受合法采用。
+- 采用幂等遵守已接受的 [ADR-0041](0041-planning-feedback-candidate-diff-adoption-ui.md) 与领域 request-binding 合同：同一弹窗实例内，相同会话、目标、底稿、候选、决定和实际文本重用原键；改变绑定才生成新 UUID。不能用每次点击的新时间戳绕过原收据，也不自动重试或声称跨弹窗实例恢复。本提议不另行授予采用权限。
 
 ### 2.3 过期候选（Stale Candidate / Conflict）防御
 - 弹窗记录捕获基线时的文本 `capturedText` 与哈希。

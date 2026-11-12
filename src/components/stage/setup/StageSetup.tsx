@@ -26,7 +26,7 @@ import { NOVEL_GENRES, novelConfigSessionKey, useNovelConfigForm } from '../../e
 import { captureProjectSession } from '../../project-session-gate'
 import { Button } from '../../ui/Button'
 import { InkDialog } from '../InkDialog'
-import { PlanningFeedbackDialog } from '../feedback/PlanningFeedbackDialog'
+import { PlanningFeedbackDialog, type PlanningFeedbackAdoptionContext } from '../feedback/PlanningFeedbackDialog'
 import ModelMissingNotice from '../ModelMissingNotice'
 import { commandLabel } from '../shortcut-keys'
 import { useModelMissing } from '../use-model-missing'
@@ -116,15 +116,23 @@ function GenerateError({ field, label, form }: { field: GeneratableField; label:
   )
 }
 
+function publishFeedbackAdoption(field: keyof NovelConfig, value: string, context: PlanningFeedbackAdoptionContext) {
+  if (!context.projectSession) return
+  const store = useProjectStore.getState()
+  const currentValue = store.currentProject?.novelConfig[field] ?? ''
+  store.publishSavedNovelConfig({ [field]: value }, context.projectSession,
+    currentValue === context.baseTextAtAdoption ? 'none' : 'current')
+}
+
 function FeedbackReviseButton({ target, label, currentText, onAdopt }: {
   target: PlanningFeedbackCoreTarget
   label: string
   currentText: string
-  onAdopt: (text: string) => void
+  onAdopt: (text: string, context: PlanningFeedbackAdoptionContext) => void
 }) {
   const text = useLocaleStore(s => s.text)
   const [open, setOpen] = useState(false)
-  if (!currentText.trim()) return null
+  if (!currentText.trim() && !open) return null
 
   return (
     <>
@@ -242,7 +250,7 @@ function MorePanel({ field, config, form, aiReason, onCollapse }: {
               target={field.aiField as PlanningFeedbackCoreTarget}
               label={name}
               currentText={config[field.id] ?? ''}
-              onAdopt={next => form.update(field.id, next)}
+              onAdopt={(next, context) => publishFeedbackAdoption(field.id, next, context)}
             />
             <AiButton field={field.aiField} label={name} form={form} disabledReason={aiReason} />
           </div>
@@ -392,7 +400,7 @@ function SetupSession({ projectKey }: { projectKey: string }) {
                   target="coreOutline"
                   label={text('核心大纲', 'Core outline')}
                   currentText={config.coreOutline}
-                  onAdopt={next => form.update('coreOutline', next)}
+                  onAdopt={(next, context) => publishFeedbackAdoption('coreOutline', next, context)}
                 />
                 <AiButton field="coreOutline" label={text('核心大纲', 'Core outline')} form={form} disabledReason={aiReason} />
               </div>

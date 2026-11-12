@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, Check, Copy, Edit3, History, LoaderCircle, Sparkles, X } from 'lucide-react'
 import type { PlanningFeedbackCandidate, PlanningFeedbackCoreTarget } from '../../../shared/planning-feedback'
 import type { PlanningFeedbackFieldBase, PlanningFeedbackHistory } from '../../../shared/planning-feedback-ipc'
@@ -13,7 +13,13 @@ import { Button } from '../../ui/Button'
 import { toast } from '../../ui/Toast'
 import { InkDialog } from '../InkDialog'
 import { displayedErrorMessage } from '../../../i18n/app-errors'
+import { randomUUID } from '../../../utils/id'
 import './planning-feedback.css'
+
+export interface PlanningFeedbackAdoptionContext {
+  projectSession: ProjectSessionContext | null
+  baseTextAtAdoption: string
+}
 
 export interface PlanningFeedbackDialogProps {
   target: PlanningFeedbackCoreTarget
@@ -21,7 +27,7 @@ export interface PlanningFeedbackDialogProps {
   baseText: string
   isOpen: boolean
   onClose: () => void
-  onAdopted: (adoptedText: string) => void
+  onAdopted: (adoptedText: string, context: PlanningFeedbackAdoptionContext) => void
   projectSession?: ProjectSessionContext | null
   client?: PlanningFeedbackClient
   initialBaseId?: string
@@ -61,15 +67,26 @@ function PlanningFeedbackDialogInner({
   const [parentCandidateId, setParentCandidateId] = useState<string | null>(null)
   const [isEditing, setIsEditing] = useState(initialIsEditing ?? false)
   const [userEditedText, setUserEditedText] = useState<string | null>(null)
+  const adoptionKeys = useRef(new Map<string, string>())
+  const instanceActive = useRef(false)
+
+  useEffect(() => {
+    instanceActive.current = true
+    return () => { instanceActive.current = false }
+  }, [])
 
   // 弹窗打开实例建立时，冻结当刻的项目会话，生命周期内保持不可变，防止跨书/换租约穿透
   const [frozenSession] = useState<ProjectSessionContext | null>(() => {
-    if (projectSession) return projectSession
     const curr = useProjectStore.getState().currentProject
-    return curr ? captureProjectSession(curr) : null
+    const source = projectSession ?? (curr ? captureProjectSession(curr) : null)
+    return source ? Object.freeze({ projectId: source.projectId, leaseId: source.leaseId, projectPath: source.projectPath }) : null
   })
 
-  const sessionToCheck = frozenSession ?? projectSession
+  const sessionToCheck = frozenSession
+  const closeDialog = () => {
+    instanceActive.current = false
+    onClose()
+  }
 
   const isCapturing = isOpen && !baseId && !captureError
   const isStale = capturedBaseText !== null && baseText !== capturedBaseText
@@ -194,7 +211,7 @@ function PlanningFeedbackDialogInner({
   }
 
   const handleAdopt = async () => {
-    if (!selectedCandidate || !resolvedClient) return
+    if (!instanceActive.current || !selectedCandidate || !resolvedClient) return
     if (sessionToCheck && !isProjectSessionCurrent(sessionToCheck)) {
       toast.error(text('当前项目已切换，无法采用', 'Project changed, adoption aborted.'))
       return
@@ -205,9 +222,22 @@ function PlanningFeedbackDialogInner({
     }
 
     setIsAdopting(true)
-    const idempotencyKey = `adopt-${selectedCandidate.candidateId}-${Date.now()}`
     const adoptedContent = isEditing ? editedText : selectedCandidate.text
     const decision = isEditing ? 'edited' : 'full'
+    const adoptionContext: PlanningFeedbackAdoptionContext = {
+      projectSession: sessionToCheck ?? null,
+      baseTextAtAdoption: baseText,
+    }
+    const requestIdentity = JSON.stringify([
+      sessionToCheck?.projectId ?? null, sessionToCheck?.leaseId ?? null, sessionToCheck?.projectPath ?? null,
+      target, baseId, selectedCandidate.candidateId, decision, adoptedContent,
+    ])
+    // A lost acknowledgement must replay the same request only when the author clicks again.
+    let idempotencyKey = adoptionKeys.current.get(requestIdentity)
+    if (!idempotencyKey) {
+      idempotencyKey = `adopt-${randomUUID()}`
+      adoptionKeys.current.set(requestIdentity, idempotencyKey)
+    }
 
     try {
       await resolvedClient.adopt({
@@ -217,16 +247,19 @@ function PlanningFeedbackDialogInner({
         text: adoptedContent,
       })
 
-      if (sessionToCheck && !isProjectSessionCurrent(sessionToCheck)) return
+      if (!instanceActive.current || sessionToCheck && !isProjectSessionCurrent(sessionToCheck)) return
 
-      toast.success(text(`已采用候选至「${label}」`, `Adopted candidate for ${label}.`))
-      onAdopted(adoptedContent)
-      onClose()
+      onAdopted(adoptedContent, adoptionContext)
+      if (instanceActive.current) {
+        toast.success(text(`已采用候选至「${label}」`, `Adopted candidate for ${label}.`))
+        closeDialog()
+      }
     } catch (err: unknown) {
+      if (!instanceActive.current || sessionToCheck && !isProjectSessionCurrent(sessionToCheck)) return
       const reason = displayedErrorMessage(useLocaleStore.getState().locale, err)
       toast.error(text(`采用失败：${reason}`, `Adoption failed: ${reason}`))
     } finally {
-      setIsAdopting(false)
+      if (instanceActive.current && (!sessionToCheck || isProjectSessionCurrent(sessionToCheck))) setIsAdopting(false)
     }
   }
 
@@ -239,7 +272,7 @@ function PlanningFeedbackDialogInner({
   return (
     <InkDialog
       open={isOpen}
-      onOpenChange={open => { if (!open) onClose() }}
+      onOpenChange={open => { if (!open) closeDialog() }}
       title={text(`意见修订：${label}`, `Feedback Revision: ${label}`)}
       description={text(
         '提出修改意见，生成独立候选并逐字对比；只有明确点击采用才会覆盖正式设定，未确认前绝不写库。',
@@ -247,7 +280,7 @@ function PlanningFeedbackDialogInner({
       )}
       footer={(
         <>
-          <Button variant="secondary" onClick={onClose} disabled={isGenerating || isAdopting}>
+          <Button variant="secondary" onClick={closeDialog} disabled={isGenerating || isAdopting}>
             <X size={14} aria-hidden />
             {text('放弃 / 关闭', 'Dismiss / Close')}
           </Button>
