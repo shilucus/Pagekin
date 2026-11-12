@@ -9,14 +9,16 @@ const SAFE_CODES = new Set(['ERR_ASSERTION', 'ETIMEDOUT', 'ECONNRESET', 'ECONNRE
   'PERFORMANCE_DRAFT_READ_UNAVAILABLE', 'PERFORMANCE_BLUEPRINT_READ_UNAVAILABLE', 'PERFORMANCE_REQUEST_SUMMARY_UNAVAILABLE',
   'PERFORMANCE_EVENT_COVERAGE_MISSING', 'PERFORMANCE_REQUEST_CUTOFF_CHANGED', 'PERFORMANCE_FIXTURE_REQUEST_CUTOFF_CHANGED',
   'PERFORMANCE_FINAL_REQUEST_SUMMARY_FAILED', 'PERFORMANCE_PRESSURE_TIMEOUT', 'PERFORMANCE_PRESSURE_FINAL_REQUEST_EVIDENCE_FAILED',
-  'DRIVE_FINAL_OBSERVATION_TIMEOUT', 'DRIVE_EXTERNAL_REQUEST_LOG_UNAVAILABLE', 'PERFORMANCE_REQUESTS_DURING_QUIT',
+  'DRIVE_FINAL_OBSERVATION_TIMEOUT', 'DRIVE_EXTERNAL_REQUEST_LOG_UNAVAILABLE', 'PERFORMANCE_REQUESTS_DURING_QUIT', 'ISOLATION_CLEANUP_BOUNDARY',
   'GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR', 'ROOT_BUDGET_EXHAUSTED', 'GENERATION_STORAGE_FAILED',
   'GENERATION_CONTEXT_LENGTH_EXCEEDED', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT',
   'UND_ERR_SOCKET', 'ENOTFOUND', 'EAI_AGAIN', 'ABORT_ERR', 'ERR_STREAM_PREMATURE_CLOSE',
   'HTTP_ERROR', 'RESPONSE_BODY_MISSING', 'PROVIDER_STREAM_ERROR', 'STREAM_INVALID', 'STREAM_INCOMPLETE',
   'TIMEOUT', 'UNCLASSIFIED_ERROR'])
 const ERROR_CLASSES = new Set(['Error', 'TimeoutError', 'AssertionError', 'AggregateError', 'TypeError', 'RangeError'])
-const SCENARIOS = new Set(['perf-import-10', 'perf-import-100', 'perf-import-1000', 'perf-long-stream', 'perf-slow-embedding', 'perf-rate-limit'])
+const SCENARIOS = new Set(['perf-import-10', 'perf-import-100', 'perf-import-1000', 'perf-long-stream', 'perf-slow-embedding', 'perf-rate-limit',
+  'perf-parse-author-10', 'perf-parse-author-100', 'perf-parse-author-1000',
+  'perf-parse-reference-10', 'perf-parse-reference-100', 'perf-parse-reference-1000'])
 const IMPORT_STAGES = ['parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'author-commit',
   'author-publish', 'author-postprocess', 'refresh', 'completed']
 const OPERATIONS = ['import-global-facts', 'import-blueprints', 'import-inference', 'import-inference:endpoint-card-recovery',
@@ -121,11 +123,13 @@ const costAttribution = value => fields(value, {
 const measurements = value => fields(value, {
   main: value => fields(value, { metrics: value => fields(value, { schemaVersion: member([1]),
     quantiles: member(['fixed-histogram-upper-bounds']), metrics }),
-  memory: value => fields(value, { rssMax: number, rssSamples: count }),
+  memory: value => fields(value, { ...numbers(['rssStart', 'rssEnd', 'rssMax', 'rssIntervalMs']), rssSamples: count }),
+  cpu: value => fields(value, numbers(['userUs', 'systemUs', 'windowMs'])),
   eventLoop: value => fields(value, { count, ...numbers(['minMs', 'maxMs', 'meanMs', 'p50Ms', 'p95Ms']) }) }),
   renderer: value => fields(value, { metrics,
     heartbeat: value => fields(value, { intervalMs: member([100]), count, ...numbers(['sumDelayMs', 'maxDelayMs']) }) }),
-  coverage: probeCoverage, stopFailures: value => fields(value, { main: count, renderer: count }), costAttribution,
+  coverage: value => fields(value, { main: member(PROBE_COVERAGE), renderer: member(PROBE_COVERAGE), cpu: member(['observed', 'unavailable']) }),
+  stopFailures: value => fields(value, { main: count, renderer: count }), costAttribution,
 })
 const transport = value => fields(value, { ...numbers(['elapsedMs', 'firstResponseMs', 'lastResponseMs', 'lastOutputMs']),
   httpStatus: value => Number.isSafeInteger(value) && value >= 100 && value <= 599 ? value : null,
@@ -171,7 +175,13 @@ const measured = value => fields(value, {
     cpu: privateString, ramBytes: count, driverNode: version,
     appRuntime: value => fields(value, { electron: version, node: version, chrome: version }),
     sourceSha, ...counts(['chapters', 'books']), cache: member(['uncontrolled']) }),
-  scenario: member([...SCENARIOS]), corpusSha256: hash,
+  scenario: member([...SCENARIOS]), corpusSha256: hash, corpusBytes: count,
+  inspection: value => fields(value, {
+    purpose: member(['author-manuscript', 'reference']), classification: member(['new', 'resumable', 'exact-duplicate', 'conflict']),
+    stage: member(IMPORT_STAGES), status: member(['ready', 'running', 'failed', 'cancelled', 'completed']),
+    ...counts(['sourceCount', 'chapterCount', 'totalBytes', 'totalWords', 'completedSources', 'totalSources',
+      'newCount', 'duplicateCount', 'conflictCount']),
+  }),
   ...counts(['importedChapters', 'blueprintChapters', 'fixtureAcceptedRequests', 'finalFixtureAcceptedRequests',
     'cleanupFailures', 'attempted', 'failed', 'stopFailures']), elapsedMs: number,
   requestSummary, finalRequestSummary: requestSummary,
@@ -193,7 +203,7 @@ const measured = value => fields(value, {
   thresholds: value => fields(value, { target100Ms: member(['candidate_only']), target500Ms: member(['candidate_only']) }),
 })
 
-/** The six performance scenes export only their known report tree, never arbitrary diagnostic keys. */
+/** Performance scenes export only their known report tree, never arbitrary diagnostic keys. */
 export function projectPerformanceResult(result, out, options = {}) {
   return fields(result, { scenario: member([...SCENARIOS]), theme: member(['light', 'dark']), session: member([...SCENARIOS]),
     shell: member(['writer', 'stage']), screenshot: value => typeof value === 'string' ? performanceArtifactPath(value, out, options) : null,

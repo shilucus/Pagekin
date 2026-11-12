@@ -312,6 +312,134 @@ describe('performance baseline contract', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it.each([{ user: 0, system: 0 }, { user: 37, system: 13 }])('records actual window CPU deltas including measured zero: %j', async delta => {
+    vi.useFakeTimers()
+    let now = 100
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const start = { user: 100, system: 50 }
+    const cpuUsage = vi.spyOn(process, 'cpuUsage').mockReturnValue(delta).mockReturnValueOnce(start)
+    vi.spyOn(process, 'memoryUsage').mockReturnValue({ rss: 200 }).mockReturnValueOnce({ rss: 100 }).mockReturnValueOnce({ rss: 300 })
+    const app = { evaluate: async callback => callback() }
+    const page = { evaluate: async (callback, argument) => callback(argument) }
+    await startPerformanceBaseline(app, page)
+    now = 350
+    await vi.advanceTimersByTimeAsync(250)
+    const result = await stopPerformanceBaseline(app, page)
+    expect(cpuUsage).toHaveBeenCalledTimes(2)
+    expect(cpuUsage).toHaveBeenNthCalledWith(1)
+    expect(cpuUsage).toHaveBeenNthCalledWith(2, start)
+    expect(result.main.cpu).toEqual({ userUs: delta.user, systemUs: delta.system, windowMs: 250 })
+    expect(result.coverage.cpu).toBe('observed')
+    expect(result.main.memory).toEqual({ rssStart: 100, rssEnd: 200, rssIntervalMs: 250, rssMax: 300, rssSamples: 3 })
+    expect(result.stopFailures).toEqual({ main: 0, renderer: 0 })
+    expect(globalThis[Symbol.for('pagekin.performance-baseline.probe')]).toBeUndefined()
+    expect(globalThis[Symbol.for('pagekin.performance-baseline.renderer')]).toBeUndefined()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([0, -1, NaN, Infinity])('exports only a finite nonnegative CPU probe window: %s', async windowMs => {
+    vi.useFakeTimers()
+    let now = 100
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    vi.spyOn(process, 'cpuUsage').mockReturnValue({ user: 0, system: 0 })
+    const app = { evaluate: async callback => callback() }
+    const page = { evaluate: async (callback, argument) => callback(argument) }
+    await startPerformanceBaseline(app, page)
+    now += windowMs
+    const result = await stopPerformanceBaseline(app, page)
+    expect(result.main.cpu).toEqual(windowMs === 0 ? { userUs: 0, systemUs: 0, windowMs: 0 } : null)
+    expect(result.coverage.cpu).toBe(windowMs === 0 ? 'observed' : 'unavailable')
+    expect(result.stopFailures).toEqual({ main: 0, renderer: 0 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([
+    { start: undefined, end: { user: 0, system: 0 } },
+    { start: { user: 10, system: 20 }, end: undefined },
+    { start: { user: 10, system: 20 }, end: { user: -1, system: 0 } },
+  ])('keeps absent or invalid CPU unavailable rather than substituting zero: %j', async usage => {
+    vi.useFakeTimers()
+    vi.spyOn(process, 'cpuUsage').mockReturnValue(usage.end).mockReturnValueOnce(usage.start)
+    const app = { evaluate: async callback => callback() }
+    const page = { evaluate: async (callback, argument) => callback(argument) }
+    await startPerformanceBaseline(app, page)
+    const result = await stopPerformanceBaseline(app, page)
+    expect(result.main.cpu).toBeNull()
+    expect(result.coverage.cpu).toBe('unavailable')
+    expect(result.stopFailures).toEqual({ main: 0, renderer: 0 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each(['start', 'stop'])('still stops both probes when CPU sampling throws at %s', async phase => {
+    vi.useFakeTimers()
+    const cpuUsage = vi.spyOn(process, 'cpuUsage').mockImplementation(() => { throw new Error('private CPU sampling error') })
+    if (phase === 'stop') cpuUsage.mockReturnValueOnce({ user: 10, system: 20 })
+    const app = { evaluate: async callback => callback() }
+    const page = { evaluate: async (callback, argument) => callback(argument) }
+    await startPerformanceBaseline(app, page)
+    const result = await stopPerformanceBaseline(app, page)
+    expect(result.main.cpu).toBeNull()
+    expect(result.coverage.cpu).toBe('unavailable')
+    expect(result.stopFailures).toEqual({ main: 0, renderer: 0 })
+    expect(JSON.stringify(result)).not.toContain('private CPU sampling error')
+    expect(globalThis[Symbol.for('pagekin.performance-baseline.probe')]).toBeUndefined()
+    expect(globalThis[Symbol.for('pagekin.performance-baseline.renderer')]).toBeUndefined()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([undefined, 0])('does not invent missing RSS endpoints or qualify invalid RSS: %s', async rss => {
+    vi.useFakeTimers()
+    vi.spyOn(process, 'memoryUsage').mockReturnValue({ rss })
+    const app = { evaluate: async callback => callback() }
+    const page = { evaluate: async (callback, argument) => callback(argument) }
+    await startPerformanceBaseline(app, page)
+    const result = await stopPerformanceBaseline(app, page)
+    expect(result.main.memory.rssStart).toBe(rss)
+    expect(result.main.memory.rssEnd).toBe(rss)
+    expect(result.main.memory.rssIntervalMs).toBe(250)
+    expect(result.coverage.main).toBe('unavailable')
+    expect(result.stopFailures).toEqual({ main: 1, renderer: 0 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('disables the histogram when main probe startup fails before its timer is registered', async () => {
+    vi.useFakeTimers()
+    const hooks = process.getBuiltinModule('node:perf_hooks'), monitor = hooks.monitorEventLoopDelay
+    let disable
+    vi.spyOn(hooks, 'monitorEventLoopDelay').mockImplementation(options => {
+      const histogram = monitor(options)
+      disable = vi.spyOn(histogram, 'disable')
+      return histogram
+    })
+    vi.spyOn(process, 'memoryUsage').mockImplementation(() => { throw new Error('RSS start failed') })
+    const app = { evaluate: async callback => callback() }
+    const page = { evaluate: vi.fn() }
+    await expect(startPerformanceBaseline(app, page)).rejects.toThrow('RSS start failed')
+    expect(disable).toHaveBeenCalledOnce()
+    expect(page.evaluate).not.toHaveBeenCalled()
+    expect(globalThis[Symbol.for('pagekin.performance-baseline.probe')]).toBeUndefined()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('cleans the main probe even when its final read fails', async () => {
+    vi.useFakeTimers()
+    const key = Symbol.for('pagekin.performance-baseline.probe')
+    const app = { evaluate: async callback => callback() }
+    const page = { evaluate: async (callback, argument) => callback(argument) }
+    await startPerformanceBaseline(app, page)
+    const disable = vi.spyOn(globalThis[key].histogram, 'disable')
+    globalThis[key].read = () => { throw new Error('private final probe read') }
+    const result = await stopPerformanceBaseline(app, page)
+    expect(result.main).toBeNull()
+    expect(result.coverage.cpu).toBe('unavailable')
+    expect(result.stopFailures).toEqual({ main: 1, renderer: 0 })
+    expect(disable).toHaveBeenCalledOnce()
+    expect(globalThis[key]).toBeUndefined()
+    expect(globalThis[Symbol.for('pagekin.performance-baseline.renderer')]).toBeUndefined()
+    expect(JSON.stringify(result)).not.toContain('private final probe read')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('derives schema-2 nonexclusive costs from valid owner-side summaries without mutating raw measurements', async () => {
     const summary = sum => ({ count: 1, sum, min: sum, max: sum, p50UpperBound: sum, p95UpperBound: sum })
     const main = { metrics: { schemaVersion: 1, quantiles: 'fixed-histogram-upper-bounds', metrics: {
@@ -320,7 +448,7 @@ describe('performance baseline contract', () => {
       'renderer.snapshot.queue_ms': summary(999), 'source.capture.ms': { ...summary(1), sum: NaN },
       'scheduler.acquire.calls': summary(3), 'scheduler.acquire.admitted': summary(2), 'scheduler.acquire.rejected': summary(1),
       'scheduler.wait.admitted_ms': summary(0), 'scheduler.wait.rejected_ms': summary(4), 'scheduler.queue': summary(1),
-    } }, memory: { rssSamples: 1, rssMax: 1024 }, eventLoop: { count: 1 } }
+    } }, memory: { rssSamples: 1, rssMax: 1024, rssStart: 1024, rssEnd: 1024, rssIntervalMs: 250 }, eventLoop: { count: 1 } }
     const renderer = { metrics: { 'renderer.snapshot.queue_ms': summary(0), 'renderer.snapshot.processing_ms': summary(5),
       'source.read.ms': summary(999), 'generation.provider.ms': summary(999), 'workflow.import.refresh.ms': summary(7) },
     heartbeat: { intervalMs: 100, count: 1, sumDelayMs: 0, maxDelayMs: 0 } }
@@ -344,7 +472,7 @@ describe('performance baseline contract', () => {
     const summary = { count: 1, sum: 0, min: 0, max: 0, p50UpperBound: 0, p95UpperBound: 0 }
     const main = { metrics: { schemaVersion: 1, quantiles: 'fixed-histogram-upper-bounds', metrics: {
       'import.read.ms': summary, 'renderer.snapshot.queue_ms': summary,
-    } }, memory: { rssSamples: 1, rssMax: 1024 }, eventLoop: { count: 1 } }
+    } }, memory: { rssSamples: 1, rssMax: 1024, rssStart: 1024, rssEnd: 1024, rssIntervalMs: 250 }, eventLoop: { count: 1 } }
     const renderer = { metrics: { 'renderer.snapshot.queue_ms': summary, 'import.read.ms': summary },
       heartbeat: { intervalMs: 100, count: 1, sumDelayMs: 0, maxDelayMs: 0 } }
     const result = await stopPerformanceBaseline({ evaluate: async () => missing === 'main' ? null : main },
@@ -394,7 +522,7 @@ describe('performance baseline contract', () => {
     const result = await stopPerformanceBaseline(app, page)
     expect(result.renderer.heartbeat.count).toBe(3)
     expect(result.renderer.metrics).toEqual({})
-    expect(result.coverage).toEqual({ main: 'live_zero_events', renderer: 'live_zero_events' })
+    expect(result.coverage).toEqual({ main: 'live_zero_events', renderer: 'live_zero_events', cpu: 'observed' })
     expect(result.stopFailures).toEqual({ main: 0, renderer: 0 })
     expect(() => assertPerformanceProbeCoverage(result)).not.toThrow()
     expect(vi.getTimerCount()).toBe(0)
@@ -403,7 +531,7 @@ describe('performance baseline contract', () => {
   it.each([{ heartbeat: 0, loop: 1 }, { heartbeat: 1, loop: 0 }, { heartbeat: 0, loop: 0 }])(
     'retains zero-sampling raw evidence but rejects complete coverage: %j', async counts => {
       const main = { metrics: { schemaVersion: 1, quantiles: 'fixed-histogram-upper-bounds', metrics: {} },
-        memory: { rssMax: 1024, rssSamples: 1 }, eventLoop: { count: counts.loop } }
+        memory: { rssMax: 1024, rssSamples: 1, rssStart: 1024, rssEnd: 1024, rssIntervalMs: 250 }, eventLoop: { count: counts.loop } }
       const renderer = { metrics: {}, heartbeat: { intervalMs: 100, count: counts.heartbeat, sumDelayMs: 0, maxDelayMs: 0 } }
       const result = await stopPerformanceBaseline({ evaluate: async () => main }, { evaluate: async () => renderer })
       expect(result.main).toBe(main)
@@ -412,7 +540,7 @@ describe('performance baseline contract', () => {
       expect(result.renderer.heartbeat.count).toBe(counts.heartbeat)
       expect(result.stopFailures).toEqual({ main: 0, renderer: 0 })
       expect(result.coverage).toEqual({ main: counts.loop ? 'live_zero_events' : 'insufficient_samples',
-        renderer: counts.heartbeat ? 'live_zero_events' : 'insufficient_samples' })
+        renderer: counts.heartbeat ? 'live_zero_events' : 'insufficient_samples', cpu: 'unavailable' })
       expect(() => assertPerformanceProbeCoverage(result)).toThrow('PERFORMANCE_PROBE_COVERAGE_UNAVAILABLE')
       expect(() => assertPerformanceProbeCoverage({ ...result, coverage: { main: 'live_zero_events', renderer: 'live_zero_events' } }))
         .toThrow('PERFORMANCE_PROBE_COVERAGE_UNAVAILABLE')
@@ -472,7 +600,7 @@ describe('performance baseline contract', () => {
     const page = { evaluate: async callback => callback() }
     const result = await stopPerformanceBaseline(app, page)
     expect(result.stopFailures).toEqual({ main: 1, renderer: 1 })
-    expect(result.coverage).toEqual({ main: 'unavailable', renderer: 'unavailable' })
+    expect(result.coverage).toEqual({ main: 'unavailable', renderer: 'unavailable', cpu: 'unavailable' })
   })
 
   it('reports a missing main collector while still stopping both probes', async () => {

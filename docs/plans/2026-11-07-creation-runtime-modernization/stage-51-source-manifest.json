@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "stage": 51,
+  "date": "2026-11-12",
+  "entryHead": "69d2d4334fcf8f426347f2ba20e880adddb3c89b",
+  "sourceBinding": "The report sourceSha identifies entryHead; the uncommitted Stage51 harness and tested build are bound by the exact SHA256 values below. No production source changed in this stage.",
+  "files": {
+    "scripts/redesign/drive.mjs": "2C05216C209F247311D56427201E7EF5A3F97D31BF19E230B7829A970009D4BC",
+    "scripts/redesign/performance-baseline.mjs": "3CB7E9109C4444BD38FE2048E59B84BD229C623F7590F59A0DBC1959C376FFBB",
+    "scripts/redesign/drive-performance-output.mjs": "A681134C0FBBCB64AB68638CAB7E656B551AB25C5C3FC47830A40E70232870D5",
+    "scripts/redesign/performance-parse-scenarios.mjs": "A1387C021109C3BDF7EC12EF6E5BE10646EDE788D5AA44456D109E220EAB9C9E",
+    "scripts/redesign/performance-scenarios.mjs": "8BC89D4C777C3A82F4C7C57EF89172CC73BF57AA2204218957C6CDABF860CF4C",
+    "scripts/redesign/__tests__/performance-parse-scenarios.test.mjs": "F1A7DF44F9DF1465CEF2CE0F2CA3A75088D2B68FF10D3977DAC317BDD35AB488",
+    "scripts/redesign/__tests__/performance-baseline.test.mjs": "994FFE4F5ACDE56D80256BD11DBD3FD042E67C4A81484C06B6DF183B86A1DCDA",
+    "scripts/redesign/__tests__/drive-performance-output.test.mjs": "A4FDD24899BB6B09D735EBBA1AC65A8AA784E64762D987A5D7C144C60F2E42DE",
+    "scripts/redesign/__tests__/drive-isolation-cleanup.test.mjs": "7E6E7FDAD42024756503BB6DDBC65550FEC46D5549C04B145DACD87E75836592",
+    "docs/adr/0063-measurement-driven-parsing-and-computation-optimization.md": "177A4FE7FF14D018D4BD97BA4716CBB84755F33B0621AE42F3846BB8DBF3E77A",
+    "dist/index.html": "0D71B40985A44204213BC9802A7C1029BDAE792590F9A8D9EC00DCB8CA6825FC",
+    "dist-electron/main.js": "EABC1D5582D4C923CA0BBDF6401403AE037747792A7DDC1C57E38DD1DB202B5E",
+    "dist-electron/preload.mjs": "CE3796C389B464906E650CF17953392FB23EDD5A18DFB9951A2D7D7EA5147B2B",
+    ".runtime/creation-runtime-modernization/stage51-resume/native-initial.json": "1D2A383AC46DB3DD07308D9D13E7B994DF650D477CFF9B8D4EAC53658EE217B2",
+    ".runtime/creation-runtime-modernization/stage51-resume/native-final.json": "372CB3BD99441430EE5DEB28039D6F62E88EB951B9267C0FED56FD9C32D49CC7",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-author-10-light.json": "0C2534EA2B21CFB12FD6187F8C03B37E26626414CDD94ED53FFEA51D3B86E80F",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-author-10-light.png": "88BBB76472040ADC997A0E975022D434055AE0140F9F393007BD04108F30E60C",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-author-100-light.json": "CE690051C5AEFE75CDAA0C55FF5E1355C11689C7542F2FDB749D67C582F68121",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-author-100-light.png": "88BBB76472040ADC997A0E975022D434055AE0140F9F393007BD04108F30E60C",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-author-1000-light.json": "A6960F5374B9A1F6938FDA5A58EF40BD14F85A15D32A85A5351AC22B9B5129F9",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-author-1000-light.png": "88BBB76472040ADC997A0E975022D434055AE0140F9F393007BD04108F30E60C",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-reference-10-light.json": "11F160D3A0BBC80F53BC2FEDDA278E40799D25860474E87698A8E8DFDCAB4153",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-reference-10-light.png": "88BBB76472040ADC997A0E975022D434055AE0140F9F393007BD04108F30E60C",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-reference-100-light.json": "E6D9644895D0B2F2914968FFB9E5DEFEB5A073530A931754C023F0DC355432A3",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-reference-100-light.png": "88BBB76472040ADC997A0E975022D434055AE0140F9F393007BD04108F30E60C",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-reference-1000-light.json": "543DE66249288035BA8DCACB9A83BBC99BA3169AD5E608515CFB16E53B2E0064",
+    ".runtime/creation-runtime-modernization/stage51-resume/electron/perf-parse-reference-1000-light.png": "88BBB76472040ADC997A0E975022D434055AE0140F9F393007BD04108F30E60C"
+  },
+  "protected": {
+    "docs/repository-analysis-2026-11-07.md": "BB6866223C596C690E4D2E35C38FAA9EBB05E45084776EE1B285083BAD89A74B",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-evidence.md": "5AA85559B9A71022D378CFA7B50EB55E1539BEABD77E1766050D819FA336F1F9",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-source-manifest.json": "7AE7D4318C58DC872664BB89BD455A3995A3C02E5C2DE4E2C8FE7D3D9AD48130"
+  }
+}

@@ -281,9 +281,44 @@ export async function startPerformanceBaseline(app, page) {
     if (globalThis[key]) throw new Error('PERFORMANCE_PROBE_ALREADY_RUNNING')
     const histogram = process.getBuiltinModule('node:perf_hooks').monitorEventLoopDelay({ resolution: 20 })
     histogram.enable()
-    let rssMax = process.memoryUsage().rss, rssSamples = 1
-    const timer = setInterval(() => { rssMax = Math.max(rssMax, process.memoryUsage().rss); rssSamples++ }, 250)
-    globalThis[key] = { histogram, timer, read: () => ({ rssMax, rssSamples }) }
+    let timer
+    try {
+      let cpuStart = null, cpuStartedAt = null
+      try {
+        const startedAt = performance.now()
+        const usage = process.cpuUsage()
+        if (Number.isFinite(startedAt) && Number.isSafeInteger(usage?.user) && usage.user >= 0
+          && Number.isSafeInteger(usage?.system) && usage.system >= 0) {
+          cpuStart = { user: usage.user, system: usage.system }
+          cpuStartedAt = startedAt
+        }
+      } catch { /* CPU sampling may be unavailable without invalidating the existing probes. */ }
+      const rssIntervalMs = 250, rssStart = process.memoryUsage().rss
+      let rssMax = rssStart, rssSamples = 1
+      const sampleRss = () => {
+        const rss = process.memoryUsage().rss
+        rssMax = Math.max(rssMax, rss); rssSamples++
+        return rss
+      }
+      timer = setInterval(sampleRss, rssIntervalMs)
+      globalThis[key] = { histogram, timer, read: () => {
+        let cpu = null
+        if (cpuStart) {
+          try {
+            // This is main-process CPU over the whole probe window, not pure parsing CPU.
+            const usage = process.cpuUsage(cpuStart), windowMs = performance.now() - cpuStartedAt
+            if (Number.isSafeInteger(usage?.user) && usage.user >= 0 && Number.isSafeInteger(usage?.system) && usage.system >= 0
+              && Number.isFinite(windowMs) && windowMs >= 0) {
+              cpu = { userUs: usage.user, systemUs: usage.system, windowMs }
+            }
+          } catch { /* Preserve unavailable CPU separately from measured zero. */ }
+        }
+        return { cpu, memory: { rssStart, rssEnd: sampleRss(), rssIntervalMs, rssMax, rssSamples } }
+      } }
+    } catch (error) {
+      clearInterval(timer); histogram.disable()
+      throw error
+    }
   })
   try {
     await page.evaluate(metrics => {
@@ -333,7 +368,7 @@ export async function startPerformanceBaseline(app, page) {
 
 export async function stopPerformanceBaseline(app, page) {
   let renderer = null, main = null, rendererStopFailures = 0, mainStopFailures = 0
-  const coverage = { main: 'unavailable', renderer: 'unavailable' }
+  const coverage = { main: 'unavailable', renderer: 'unavailable', cpu: 'unavailable' }
   const record = value => value !== null && typeof value === 'object' && !Array.isArray(value)
   try {
     renderer = await boundedObservation(() => page.evaluate(() => globalThis[Symbol.for('pagekin.performance-baseline.renderer')]?.stop() ?? null))
@@ -348,21 +383,27 @@ export async function stopPerformanceBaseline(app, page) {
     main = await boundedObservation(() => app.evaluate(() => {
       const key = Symbol.for('pagekin.performance-baseline.probe'), probe = globalThis[key]
       if (!probe) return null
-      clearInterval(probe.timer); probe.histogram.disable()
-      const h = probe.histogram, memory = probe.read()
-      delete globalThis[key]
-      const metrics = globalThis[Symbol.for('pagekin.performance-baseline')]?.() ?? null
-      return { metrics, memory, eventLoop: { count: h.count, minMs: h.count ? h.min / 1e6 : null,
-        maxMs: h.count ? h.max / 1e6 : null, meanMs: h.count ? h.mean / 1e6 : null,
-        p50Ms: h.count ? h.percentile(50) / 1e6 : null, p95Ms: h.count ? h.percentile(95) / 1e6 : null } }
+      try {
+        clearInterval(probe.timer); probe.histogram.disable()
+        const h = probe.histogram, { memory, cpu } = probe.read()
+        const metrics = globalThis[Symbol.for('pagekin.performance-baseline')]?.() ?? null
+        return { metrics, memory, cpu, eventLoop: { count: h.count, minMs: h.count ? h.min / 1e6 : null,
+          maxMs: h.count ? h.max / 1e6 : null, meanMs: h.count ? h.mean / 1e6 : null,
+          p50Ms: h.count ? h.percentile(50) / 1e6 : null, p95Ms: h.count ? h.percentile(95) / 1e6 : null } }
+      } finally { delete globalThis[key] }
     }))
     if (!main || main.metrics?.schemaVersion !== 1 || main.metrics?.quantiles !== 'fixed-histogram-upper-bounds'
       || !record(main.metrics?.metrics) || !Number.isSafeInteger(main.memory?.rssSamples) || main.memory.rssSamples < 1
       || !Number.isFinite(main.memory?.rssMax) || main.memory.rssMax <= 0
+      || !Number.isFinite(main.memory?.rssStart) || main.memory.rssStart <= 0
+      || !Number.isFinite(main.memory?.rssEnd) || main.memory.rssEnd <= 0 || main.memory?.rssIntervalMs !== 250
       || !Number.isSafeInteger(main.eventLoop?.count) || main.eventLoop.count < 0) mainStopFailures++
     else coverage.main = main.eventLoop.count === 0 ? 'insufficient_samples'
       : Object.keys(main.metrics.metrics).length ? 'observed_metrics' : 'live_zero_events'
   } catch { mainStopFailures++ }
+  if (record(main?.cpu) && Number.isSafeInteger(main.cpu.userUs) && main.cpu.userUs >= 0
+    && Number.isSafeInteger(main.cpu.systemUs) && main.cpu.systemUs >= 0
+    && Number.isFinite(main.cpu.windowMs) && main.cpu.windowMs >= 0) coverage.cpu = 'observed'
   return { main, renderer, coverage, stopFailures: { main: mainStopFailures, renderer: rendererStopFailures },
-    costAttribution: performanceCostAttribution(main, renderer, coverage) }
+    costAttribution: performanceCostAttribution(main, renderer, { main: coverage.main, renderer: coverage.renderer }) }
 }

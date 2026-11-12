@@ -39,6 +39,64 @@ afterEach(() => {
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true })
 })
 
+it('projects the six no-model parse scenes and only their bounded inspection fields', () => {
+  const scenarios = ['perf-parse-author-10', 'perf-parse-author-100', 'perf-parse-author-1000',
+    'perf-parse-reference-10', 'perf-parse-reference-100', 'perf-parse-reference-1000']
+  const inspection = { purpose: 'reference', sourceCount: 1, chapterCount: 1000, totalBytes: 5000, totalWords: 700,
+    classification: 'new', stage: 'prepared', status: 'ready', completedSources: 1, totalSources: 1,
+    newCount: 1, duplicateCount: 0, conflictCount: 0 }
+  for (const scenario of scenarios) {
+    const raw = { scenario, session: scenario, measured: { scenario, corpusSha256: 'a'.repeat(64), corpusBytes: 5000,
+      inspection: { ...inspection, filename: 'private-path', title: 'private-title', text: 'private-text', id: 'private-id' } } }
+    const result = projectPerformanceResult(raw, 'C:/fictional/out')
+    assert.equal(result.scenario, scenario)
+    assert.equal(result.session, scenario)
+    assert.equal(result.measured.scenario, scenario)
+    assert.equal(result.measured.corpusSha256, 'a'.repeat(64))
+    assert.equal(result.measured.corpusBytes, 5000)
+    assert.deepEqual(result.measured.inspection, inspection)
+    assert.equal(JSON.stringify(result).includes('private-'), false)
+  }
+  const author = projectPerformanceResult({ measured: { inspection: { purpose: 'author-manuscript', sourceCount: 1 } } })
+  assert.deepEqual(author.measured.inspection, { purpose: 'author-manuscript', sourceCount: 1 })
+})
+
+it('distinguishes observed zero, missing and poisoned CPU and RSS evidence', () => {
+  const zero = projectPerformanceResult({ measured: { measurements: {
+    main: { cpu: { userUs: 0, systemUs: 0, windowMs: 0, secret: 'private-cpu' },
+      memory: { rssStart: 0, rssEnd: 0, rssMax: 0, rssSamples: 0, rssIntervalMs: 250, secret: 'private-rss' } },
+    coverage: { main: 'live_zero_events', cpu: 'observed', secret: 'private-coverage' },
+  } } })
+  assert.deepEqual(zero.measured.measurements.main.cpu, { userUs: 0, systemUs: 0, windowMs: 0 })
+  assert.deepEqual(zero.measured.measurements.main.memory, { rssStart: 0, rssEnd: 0, rssMax: 0, rssIntervalMs: 250, rssSamples: 0 })
+  assert.deepEqual(zero.measured.measurements.coverage, { main: 'live_zero_events', cpu: 'observed' })
+  assert.equal(JSON.stringify(zero).includes('private-'), false)
+  const elapsed = projectPerformanceResult({ measured: { measurements: { main: { cpu: { windowMs: 250.5 } } } } })
+  assert.deepEqual(elapsed.measured.measurements.main.cpu, { windowMs: 250.5 })
+
+  const missing = projectPerformanceResult({ measured: { measurements: { main: { cpu: {}, memory: {} }, coverage: { cpu: 'unavailable' } } } })
+  assert.deepEqual(missing.measured.measurements.main, { cpu: {}, memory: {} })
+  assert.deepEqual(missing.measured.measurements.coverage, { cpu: 'unavailable' })
+  const unavailable = projectPerformanceResult({ measured: { measurements: { main: { cpu: null, memory: { rssStart: null } } } } })
+  assert.deepEqual(unavailable.measured.measurements.main, { memory: { rssStart: null }, cpu: null })
+  assert.equal(Object.hasOwn(unavailable.measured.measurements, 'coverage'), false)
+
+  const poisoned = projectPerformanceResult({ measured: { corpusBytes: -1, inspection: {
+    purpose: 'private-purpose', classification: 'private-classification', stage: 'private-stage', status: 'private-status',
+    sourceCount: -1, chapterCount: 1.5, totalBytes: Infinity, totalWords: '0', completedSources: NaN,
+    totalSources: Number.MAX_SAFE_INTEGER + 1, newCount: false, duplicateCount: {}, conflictCount: null, extra: 'private-extra',
+  }, measurements: { main: { cpu: { userUs: -1, systemUs: Infinity, windowMs: 'private-window' },
+    memory: { rssStart: NaN, rssEnd: '0', rssMax: -1, rssSamples: 0.5, rssIntervalMs: null } }, coverage: { cpu: 'private-cpu' } } } })
+  assert.equal(poisoned.measured.corpusBytes, null)
+  assert.deepEqual(poisoned.measured.inspection, { purpose: null, sourceCount: null, chapterCount: null, totalBytes: null,
+    totalWords: null, classification: null, stage: null, status: null, completedSources: null, totalSources: null,
+    newCount: null, duplicateCount: null, conflictCount: null })
+  assert.deepEqual(poisoned.measured.measurements.main, { cpu: { userUs: null, systemUs: null, windowMs: null },
+    memory: { rssStart: null, rssEnd: null, rssMax: null, rssIntervalMs: null, rssSamples: null } })
+  assert.deepEqual(poisoned.measured.measurements.coverage, { cpu: null })
+  assert.equal(JSON.stringify(poisoned).includes('private-'), false)
+})
+
 it('requires lexical and real containment for Windows, UNC and prefix traps', () => {
   const options = { pathApi: path.win32, contained: () => true }
   const out = 'C:\\Users\\alice\\out'
@@ -69,6 +127,10 @@ it('projects exception and external evidence without changing input or dropping 
   assert.deepEqual(projected.measured, { attempted: 2, failed: 1 })
   assert.equal(JSON.stringify(projected).includes('alice'), false)
   assert.equal(performanceError(Object.assign(new Error('private'), { code: 'EACCES' })), 'PERFORMANCE_FAILURE:Error:EACCES')
+  const boundary = performanceError(Object.assign(new Error('C:\\Users\\alice\\private'), { code: 'ISOLATION_CLEANUP_BOUNDARY' }))
+  assert.equal(boundary, 'PERFORMANCE_FAILURE:Error:ISOLATION_CLEANUP_BOUNDARY')
+  assert.equal(projectPerformanceResult({ error: boundary }).error, boundary)
+  assert.equal(boundary.includes('alice'), false)
 })
 
 it('preserves bounded receipt hashes, statuses, coverage and attempt totals', () => {

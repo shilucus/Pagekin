@@ -17,6 +17,7 @@ import { assertNodeRunsTypeScript } from './node-version.mjs'
 import { dismissCompletionToasts, dismissStartupNotice, firstInteractiveControl, waitForShell } from './pages/shell.mjs'
 import { PERFORMANCE_SCENARIOS } from './performance-scenarios.mjs'
 import { PERFORMANCE_PRESSURE_SCENARIOS } from './performance-pressure-scenarios.mjs'
+import { PERFORMANCE_PARSE_SCENARIOS } from './performance-parse-scenarios.mjs'
 import { appendPerformanceFailureDiagnostic } from './performance-baseline.mjs'
 import { performanceError, projectPerformanceResult } from './drive-performance-output.mjs'
 
@@ -45,7 +46,7 @@ const VIEWPORT = { width: 1440, height: 900 }
 const THEMES = ['light', 'dark']
 const SHELLS = ['writer', 'stage']
 const ROOT_NAMES = ['legacy', 'canonical', 'userData', 'home', 'appData', 'localAppData', 'temp', 'projects']
-const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS, ...F491_SCENARIOS, ...F484_SCENARIOS, ...ST504_SCENARIOS, ...F512_SCENARIOS, ...SM517_SCENARIOS, ...BPG_SCENARIOS, ...IMPORT_INFER_SCENARIOS, ...RBK_SCENARIOS, ...F537_SCENARIOS, ...F555_SCENARIOS, ...D77_SCENARIOS, ...REOPEN_SCENARIOS, ...I552_SCENARIOS, ...A573_SCENARIOS, ...F571_SCENARIOS, ...RTUX_SCENARIOS, ...TRASH_SCENARIOS, ...REAL_SCENARIOS, ...F593_SCENARIOS, ...PERFORMANCE_SCENARIOS, ...PERFORMANCE_PRESSURE_SCENARIOS }
+const SCENARIOS = { ...BASELINE_SCENARIOS, ...EXTRA_SCENARIOS, ...STAGE_SCENARIOS, ...RUN_SCENARIOS, ...ARCH_SCENARIOS, ...BLUEPRINT_SCENARIOS, ...CHAPTER_SCENARIOS, ...REFS_SCENARIOS, ...VISUAL_SCENARIOS, ...X1_SCENARIOS, ...X2_SCENARIOS, ...RDX3_SCENARIOS, ...RD10_SCENARIOS, ...README_SCENARIOS, ...CONTRAST_SCENARIOS, ...F491_SCENARIOS, ...F484_SCENARIOS, ...ST504_SCENARIOS, ...F512_SCENARIOS, ...SM517_SCENARIOS, ...BPG_SCENARIOS, ...IMPORT_INFER_SCENARIOS, ...RBK_SCENARIOS, ...F537_SCENARIOS, ...F555_SCENARIOS, ...D77_SCENARIOS, ...REOPEN_SCENARIOS, ...I552_SCENARIOS, ...A573_SCENARIOS, ...F571_SCENARIOS, ...RTUX_SCENARIOS, ...TRASH_SCENARIOS, ...REAL_SCENARIOS, ...F593_SCENARIOS, ...PERFORMANCE_SCENARIOS, ...PERFORMANCE_PRESSURE_SCENARIOS, ...PERFORMANCE_PARSE_SCENARIOS }
 /** 计时会话：先在同一隔离目录预启动一次写好外观（书房计时另建 20 部作品），再计之后那次冷启动。 */
 const TIMED_SESSIONS = new Set(['startup-timing', 'library-timing'])
 /** 空闲内存：与启动计时同样先预启动一次，第二次冷启动到可交互后静置，再按间隔采样全部进程的内存。 */
@@ -489,6 +490,36 @@ export function releaseSessionRoot(root, clean, sessionErrors, remove = removePa
   if (reason) sessionErrors.push(`删不掉隔离目录 ${root}：${reason}`)
 }
 
+/** Only the verified direct child of this run's scratch parent may be recursively removed. */
+export function releaseCheckedSessionRoot(root, parent, clean, sessionErrors, remove = removePath) {
+  if (!clean) return
+  try {
+    if (!path.isAbsolute(root) || !path.isAbsolute(parent)) throw new Error('ISOLATION_CLEANUP_BOUNDARY')
+    const relative = path.relative(parent, root)
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+      || relative.includes(path.sep)) throw new Error('ISOLATION_CLEANUP_BOUNDARY')
+    const canonicalParent = fs.realpathSync(parent)
+    const canonicalRoot = fs.realpathSync(root)
+    if (path.relative(path.join(canonicalParent, relative), canonicalRoot)) throw new Error('ISOLATION_CLEANUP_BOUNDARY')
+    const pending = [root]
+    while (pending.length) {
+      const directory = pending.pop()
+      const stat = fs.lstatSync(directory)
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('ISOLATION_CLEANUP_BOUNDARY')
+      for (const name of fs.readdirSync(directory)) {
+        const entry = path.join(directory, name)
+        const child = fs.lstatSync(entry)
+        if (child.isSymbolicLink()) throw new Error('ISOLATION_CLEANUP_BOUNDARY')
+        if (child.isDirectory()) pending.push(entry)
+      }
+    }
+  } catch {
+    sessionErrors.push('ISOLATION_CLEANUP_BOUNDARY')
+    return
+  }
+  releaseSessionRoot(root, true, sessionErrors, remove)
+}
+
 /**
  * 写诊断日志；写不进去只记进 sessionErrors，后面的退出与凭据清理照常执行。
  * 诊断里带出 secret 时写盘前就遮掉，运行中途被打断也不会把密钥留在产出目录；出现过即记进 sessionErrors，会话判失败。
@@ -688,7 +719,7 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
   } catch (error) { sessionErrors.push(performanceBaseline
     ? performanceMessageOf(error, 'cleanup', 'cleanup', shared.failureDiagnostics ??= []) : messageOf(error)) }
   const clean = sessionIsClean({ failedAt, sessionErrors, residualProcesses: shared.residualProcesses, externalWrites: shared.externalWrites })
-  releaseSessionRoot(roots.root, clean, sessionErrors)
+  releaseCheckedSessionRoot(roots.root, scratchParent(), clean, sessionErrors)
   return results.map((result, index) => {
     const errors = [result.error, failedAt !== null && index > failedAt ? `未运行：本会话的 ${names[failedAt]} 先失败` : null, ...sessionErrors]
     const error = errors.filter(Boolean).join('\n')
