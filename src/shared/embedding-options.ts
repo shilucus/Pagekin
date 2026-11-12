@@ -5,7 +5,7 @@ export interface EmbeddingOptions {
   chunkOverlap: number
   /** 单次发送到 Embedding API 的文本块数量。 */
   batchSize: number
-  /** 单书独立网络任务有界并发限制（SCHED-001，默认 2，范围 1~4）。 */
+  /** 单书独立网络任务有界并发限制（SCHED-001，默认 1，范围 1~4）。 */
   concurrencyLimit?: number
 }
 

@@ -3,6 +3,8 @@
 ## 状态
 Accepted
 
+2026-11-13 证据与默认值更正：当前 normalizeEmbeddingOptions 的实际默认是1，范围1~4；本次只修正字段注释，不提高默认并发。实际参考书 KB 入口传入 model 参数及 assertAuthority，按 model.embeddingOptions 采用显式并发；这不证明生产模型租约冻结合同已完整接入。该入口未传 AbortSignal，撤权后等待在途结果并非已验证的网络中断。普通错误/非法向量按原 batch 序号裁决；任意 dispatch/settlement 持久收据失败另属 hard barrier，优先禁止 FTS fallback，即使更早批次发生普通 HTTP 失败。下文默认2、40%~45%提速及全局完全消除风险并非当前运行证据结论，不据此判定 SCHED-001 完成。[Stage 54](../plans/2026-11-07-creation-runtime-modernization/stage-54-evidence.md)将分别记录真实 KB 回归、受控 fake-fetch 观测及完整 AC 中仍缺的证据；真实服务商、其他平台和生成根预算不由这些测试替代。
+
 ## 背景与问题 (Context & Problem)
 在参考资料导入与知识库向量构建（`electron/embedding.ts` 与 `electron/knowledge-base.ts`）中：
 1. **纯串行网络等待瓶颈 (E10)**：

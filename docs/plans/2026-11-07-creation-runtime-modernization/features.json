@@ -958,6 +958,22 @@
           "environment": "Windows x64, Node 24.13.0, Vitest 4.1.12",
           "result": "Bounded concurrency limit, out-of-order assembly, and first-failure adjudication by original batch order passed (6/6 tests passed; regression 30/30 tests passed); tsc, eslint, check:i18n, check:color-literals exit 0",
           "limitations": "Cross-book fair scheduling belongs to SCHED-002"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "4c3ed192c0c41285e11c3325a3668957938146ac + stage-54-source-manifest.json final source SHA256",
+          "artifactOrReceipt": "stage-54-evidence.md; .runtime/creation-runtime-modernization/stage54/native-recheck.json",
+          "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; real SQLite/Lance/FTS in isolated fictional projects, local fetch stub",
+          "result": "Final serialized15-file335/335, zero failed/pending/todo. Seven new real-KB cases cover default1, explicit2 ordered vectors/replay, four serial-versus-parallel HTTP/invalid return-order combinations and three-batch revoke/physical-close-drain without partial projections; typecheck/lint/color/i18n exit0. Independent source correction review accepted.",
+          "limitations": "Partial SCHED-001 only. Internal captured admission seam is not production IPC wiring. AC1 production root/request/active-duration policy, model-source-grant binding and dispatch/commit budget checks remain incomplete. Two earlier334/335 failures and cleanup/reopen fixes are retained; second legacy portable STACK_TRACE_ERROR cause not definitively established. No new application build, Electron/model/platform run."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "4c3ed192c0c41285e11c3325a3668957938146ac + stage-54-source-manifest.json final source SHA256",
+          "artifactOrReceipt": "stage-54-evidence.md; .runtime/creation-runtime-modernization/stage54/benchmark-observation.console.log",
+          "environment": "Windows x64, actual generateEmbeddings, eight fictional texts/four local fake-fetch batches; controlled10ms post-gate delay",
+          "result": "Dedicated same-version1/1 observation records four sends/completions, peak1 versus2, original-order full vectors and fake completion orders0,1,2,3 versus1,0,2,3; elapsed80.2575/49.0161ms.",
+          "limitations": "Elapsed includes manual gates and three parallel return waves; no percent/SLA/provider throughput or production speedup claim. Completion means fake fetch returned, not ledger settled. Two benchmark executions and integrated repetitions are overlapping evidence, not added independent tests. Whole feature remains in_progress/false."
         }
       ]
     },

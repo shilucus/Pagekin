@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "stage": 54,
+  "date": "2026-11-13",
+  "entryHead": "4c3ed192c0c41285e11c3325a3668957938146ac",
+  "sourceBinding": "Final15-file serialized run binds the two final test files, comment-only embedding options and unchanged actual KB/embedding/admission/dispatch sources below. Initial KB identity6BAAC1E037E1733E7FCC4CC2C8BB617BE42E320ABC8322DC2A09D5F7629CBC8E is historical before test-only native cleanup and real canonical reopen corrections. Both334/335 failures are preserved; native-final.json is a failed intermediate despite its filename. Native-recheck is the final335/335 execution, not a new build, Electron, production IPC composition or provider speedup claim. Console captures contain stdout, not all stderr/exit events. No self-hash or mutable feature/review record included.",
+  "files": {
+    "electron/__tests__/knowledge-base-grant-admission.test.ts": "2B2A0167149F146B92B0BB03DC2632E13041D5139C340E92883C68C1EC5386DB",
+    "electron/__tests__/single-book-embedding-performance.test.ts": "D08CC3CBAA3A22C6B7DD5CE5D410C6897CE3F24F53DDB29EEB88505F8103CDAE",
+    "src/shared/embedding-options.ts": "E00C07DD663D590F0E55B46F5ED2EC7F36180E52F7DDFAB8347680F63BAD5018",
+    "docs/adr/0064-bounded-concurrency-for-single-book-network-tasks.md": "A2053DACC8B1E5332CE2AD69F75B661C63749EADE3663AF77D633F677FF5B7F1",
+    "electron/embedding.ts": "EB402C3B43FC6E4B1198A6B5DF95AC2A77E51C039D240A37B3B96504D54CECEE",
+    "electron/knowledge-base.ts": "B0C4A7B1561890872485239C323DFD53D354B682E96C58FC7C30E9B598440610",
+    "electron/controllers/kb-controller.ts": "53F73674F9F10F64F4BA0FD8C184F8F1569CB419F14A77C4999C79D2D302EE82",
+    "electron/services/reference-import-admission.ts": "1B1AE7FF4935A31F71836FA5415DFD26C27CA3A35CCEB4A72A6EFBF1B571991A",
+    "electron/services/reference-embedding-dispatch.ts": "9022AA71549DD100EBF1A919ADAC19C39D09867ECFA1CA553146F85D5B92D986",
+    "electron/services/reference-embedding-dispatch-contract.ts": "C0811B840E1BD742545D4423DDE2A58B95389ECFC85882AD74DC1C1CBE02F195",
+    "electron/repositories/reference-import-grant-repository.ts": "3C807B67CD5A1ACC42106F0397FC57A5298E319BE2A7FD78B023129C21261896",
+    "electron/services/__tests__/reference-embedding-dispatch-portable.test.ts": "7A3B9C0CC76DB8604F2349E93A37832A05CF6911ADA0D44C3DB99B218B5BF362",
+    ".runtime/creation-runtime-modernization/stage54/benchmark-initial.json": "E29EEABB0E42285AFC09871D959BDCEB1866E2804ACFD04506558852ACD35F91",
+    ".runtime/creation-runtime-modernization/stage54/benchmark-initial.console.log": "9A1411E54D3CD62337AA95D32B5E2BE3A0C86EB493B76007BCC3D2FA52D6BBB4",
+    ".runtime/creation-runtime-modernization/stage54/benchmark-observation.console.log": "29546AB7C3870A0F1B9C793FAFA2D4926A56CA71767068C5B7202285826652BD",
+    ".runtime/creation-runtime-modernization/stage54/native-initial.json": "B2135B632E225E7727D7258F49B38D82B4FF0BD07031FAB3424EA4BE3E98E6D9",
+    ".runtime/creation-runtime-modernization/stage54/native-final.json": "3EBBE2261F2F243625A5CE03862C0C0A36073F6594280F6A984F380C6F7140DB",
+    ".runtime/creation-runtime-modernization/stage54/native-recheck.json": "BCB5F3278ED3B36759967F044E47F6E0A756218C3A751ED7A5509461EAD342ED",
+    ".runtime/creation-runtime-modernization/stage54/native-recheck.console.log": "B46C3B13F7C7296C0591F23F1E5676E05F5528C372488E5F3EA2B17A5EC67E08"
+  },
+  "protected": {
+    "docs/repository-analysis-2026-11-07.md": "BB6866223C596C690E4D2E35C38FAA9EBB05E45084776EE1B285083BAD89A74B",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-evidence.md": "5AA85559B9A71022D378CFA7B50EB55E1539BEABD77E1766050D819FA336F1F9",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-source-manifest.json": "7AE7D4318C58DC872664BB89BD455A3995A3C02E5C2DE4E2C8FE7D3D9AD48130"
+  }
+}

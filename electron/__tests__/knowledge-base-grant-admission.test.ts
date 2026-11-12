@@ -17,6 +17,7 @@ import { withLegacyProjectOperation } from '../services/project-runtime-compatib
 import * as store from '../vector-store'
 
 const RUN = 'fictional-grant-reference'
+const BATCH_TEXT = `${'A'.repeat(100)}${'B'.repeat(100)}${'C'.repeat(100)}`
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 const requestHash = hash('fictional-frozen-reference-request')
 const ftsModel = { provider: 'openai', baseUrl: 'https://unused.example/v1', apiKey: '', modelName: 'fts-only' }
@@ -70,6 +71,29 @@ function documentRows(value: Book) { return value.runtime.database.prepare('SELE
 function knowledgeRows(value: Book) { return value.runtime.database.prepare('SELECT * FROM import_run_knowledge_receipts ORDER BY chapter_number').all() }
 function dispatchRows(value: Book) { return value.runtime.database.prepare('SELECT * FROM reference_embedding_dispatches ORDER BY batch_ordinal').all() }
 
+function batchModel(concurrencyLimit?: number): EmbeddingModel {
+  return { ...embeddingModel, embeddingOptions: {
+    chunkSize: 100, chunkOverlap: 0, batchSize: 1,
+    ...(concurrencyLimit === undefined ? {} : { concurrencyLimit }),
+  } }
+}
+
+async function embeddingRows(value: Book) {
+  const registry = await store.getEmbeddingSpaces(value.root)
+  const active = registry.spaces.find(space => space.generation === registry.activeGeneration)
+  if (!active) return []
+  const table = await (await store.getConnection(value.root)).openTable(active.tableName)
+  try {
+    const rows = await table.query().filter(`\`docId\` = '${documentId(value)}'`)
+      .select(['chunkIndex', 'text', 'vector']).toArray() as Array<{
+        chunkIndex: number
+        text: string
+        vector: number[]
+      }>
+    return rows.sort((left, right) => left.chunkIndex - right.chunkIndex)
+  } finally { table.close() }
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason: unknown) => void
@@ -77,10 +101,18 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function embeddingResponse() {
-  return new Response(JSON.stringify({ data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] }),
+function embeddingResponse(vector = [0.1, 0.2, 0.3]) {
+  return new Response(JSON.stringify({ data: [{ index: 0, embedding: vector }] }),
     { status: 200, headers: { 'Content-Type': 'application/json' } })
 }
+
+function invalidEmbeddingResponse() {
+  return new Response(JSON.stringify({ data: [{ index: 0, embedding: [0.1, 'invalid', 0.3] }] }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } })
+}
+
+function batchOrdinal(text: string): number { return text.charCodeAt(0) - 'A'.charCodeAt(0) }
+function batchVector(text: string): number[] { return [batchOrdinal(text) + 1, 0, 0] }
 
 function holdEmbedding() {
   const started = deferred<void>(), finish = deferred<Response>()
@@ -431,6 +463,194 @@ describe('actual reference knowledge grant admission', () => {
     await expectBUnchanged()
   })
 
+  it('keeps the real multi-batch KB default serial and replays a fully embedded document without another request', async () => {
+    const value = book('DefaultBatching', BATCH_TEXT)
+    projectRuntimeHost.activateView(b.runtime)
+    let inFlight = 0, peakInFlight = 0
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      const input = (JSON.parse(init?.body as string).input as string[])[0]
+      inFlight++
+      peakInFlight = Math.max(peakInFlight, inFlight)
+      return Promise.resolve().then(() => embeddingResponse(batchVector(input))).finally(() => { inFlight-- })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const model = batchModel()
+
+    const imported = await importBook(value, { model })
+    expect(imported).toMatchObject({ success: true, idempotent: false, docId: documentId(value), chunkCount: 3 })
+    expect(peakInFlight).toBe(1)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(dispatchRows(value)).toEqual([0, 1, 2].map(batch_ordinal => expect.objectContaining({
+      batch_ordinal, input_count: 1, state: 'response_received', http_status: 200, settled_at: expect.any(Number),
+    })))
+    await expect(store.getDocumentIntegrity(value.root, documentId(value))).resolves.toMatchObject({
+      complete: true, corpusKind: 'reference', chunkCount: 3,
+      embeddingGenerations: [expect.objectContaining({ complete: true, chunkCount: 3 })],
+    })
+    expect((await embeddingRows(value)).map(row => ({ chunkIndex: row.chunkIndex, text: row.text, vector: Array.from(row.vector) })))
+      .toEqual(['A', 'B', 'C'].map((letter, chunkIndex) => ({
+        chunkIndex, text: letter.repeat(100), vector: [chunkIndex + 1, 0, 0],
+      })))
+
+    const history = dispatchRows(value)
+    await expect(importBook(value, { model })).resolves.toMatchObject({ success: true, idempotent: true, docId: imported.docId })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(dispatchRows(value)).toEqual(history)
+    await expectBUnchanged()
+  })
+
+  it('persists explicit-two out-of-order real KB batches in original vector order', async () => {
+    const value = book('ExplicitTwoBatching', BATCH_TEXT)
+    projectRuntimeHost.activateView(b.runtime)
+    const gates = [deferred<Response>(), deferred<Response>(), deferred<Response>()]
+    const completed: number[] = []
+    let inFlight = 0, peakInFlight = 0
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      const input = (JSON.parse(init?.body as string).input as string[])[0]
+      const ordinal = batchOrdinal(input)
+      inFlight++
+      peakInFlight = Math.max(peakInFlight, inFlight)
+      return gates[ordinal].promise.then(response => {
+        completed.push(ordinal)
+        return response
+      }).finally(() => { inFlight-- })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = importBook(value, { model: batchModel(2) })
+    void pending.catch(() => {})
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+      expect(peakInFlight).toBe(2)
+      expect(dispatchRows(value)).toEqual([0, 1].map(batch_ordinal => expect.objectContaining({
+        batch_ordinal, state: 'dispatch_marked', http_status: null, settled_at: null,
+      })))
+
+      gates[1].resolve(embeddingResponse(batchVector('B')))
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+      expect(dispatchRows(value)).toEqual([
+        expect.objectContaining({ batch_ordinal: 0, state: 'dispatch_marked' }),
+        expect.objectContaining({ batch_ordinal: 1, state: 'response_received', http_status: 200, settled_at: expect.any(Number) }),
+        expect.objectContaining({ batch_ordinal: 2, state: 'dispatch_marked' }),
+      ])
+      gates[2].resolve(embeddingResponse(batchVector('C')))
+      await vi.waitFor(() => expect(dispatchRows(value)[2]).toMatchObject({ state: 'response_received', http_status: 200 }))
+      gates[0].resolve(embeddingResponse(batchVector('A')))
+
+      await expect(pending).resolves.toMatchObject({ success: true, idempotent: false, chunkCount: 3 })
+      expect(completed).toEqual([1, 2, 0])
+      expect(peakInFlight).toBe(2)
+      expect(dispatchRows(value)).toEqual([0, 1, 2].map(batch_ordinal => expect.objectContaining({
+        batch_ordinal, input_count: 1, state: 'response_received', http_status: 200, settled_at: expect.any(Number),
+      })))
+      await expect(store.getDocumentIntegrity(value.root, documentId(value))).resolves.toMatchObject({
+        complete: true, corpusKind: 'reference', chunkCount: 3,
+        embeddingGenerations: [expect.objectContaining({ complete: true, chunkCount: 3 })],
+      })
+      expect((await embeddingRows(value)).map(row => ({ chunkIndex: row.chunkIndex, text: row.text, vector: Array.from(row.vector) })))
+        .toEqual(['A', 'B', 'C'].map((letter, chunkIndex) => ({
+          chunkIndex, text: letter.repeat(100), vector: [chunkIndex + 1, 0, 0],
+        })))
+
+      const history = dispatchRows(value)
+      await expect(importBook(value, { model: batchModel(2) })).resolves.toMatchObject({ success: true, idempotent: true })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(dispatchRows(value)).toEqual(history)
+      await expectBUnchanged()
+    } finally {
+      gates.forEach((gate, ordinal) => gate.resolve(embeddingResponse([ordinal + 1, 0, 0])))
+      await Promise.allSettled([pending])
+    }
+  })
+
+  it.each([
+    ['http', 0], ['http', 1], ['invalid', 0], ['invalid', 1],
+  ] as const)('matches serial outcome when ordinal zero is %s and ordinal %i returns first', async (ordinalZeroKind, firstCompletedOrdinal) => {
+    const content = `${'A'.repeat(100)}${'B'.repeat(100)}`
+    const serial = book(`Serial-${ordinalZeroKind}`, content)
+    const parallel = book(`Parallel-${ordinalZeroKind}`, content)
+    projectRuntimeHost.activateView(b.runtime)
+    const kindAtOrdinal = [ordinalZeroKind, ordinalZeroKind === 'http' ? 'invalid' : 'http'] as const
+    const responseFor = (kind: typeof kindAtOrdinal[number]) => kind === 'http'
+      ? new Response('', { status: 503 })
+      : invalidEmbeddingResponse()
+    const requestOrdinal = (init?: RequestInit) => batchOrdinal((JSON.parse(init?.body as string).input as string[])[0])
+    const serialFetch = vi.fn((_url: string, init?: RequestInit) => Promise.resolve(responseFor(kindAtOrdinal[requestOrdinal(init)])))
+    const add = vi.spyOn(store, 'addChunks')
+    vi.stubGlobal('fetch', serialFetch)
+    const serialResult = await importBook(serial, { model: batchModel(1) })
+    const serialDispatch = dispatchRows(serial)
+
+    const gates = [deferred<Response>(), deferred<Response>()]
+    const completionOrder: number[] = []
+    const parallelFetch = vi.fn((_url: string, init?: RequestInit) => {
+      const ordinal = requestOrdinal(init)
+      return gates[ordinal].promise.then(response => {
+        completionOrder.push(ordinal)
+        return response
+      })
+    })
+    vi.stubGlobal('fetch', parallelFetch)
+    const pending = importBook(parallel, { model: batchModel(2) })
+    void pending.catch(() => {})
+    try {
+      await vi.waitFor(() => expect(parallelFetch).toHaveBeenCalledTimes(2))
+      gates[firstCompletedOrdinal].resolve(responseFor(kindAtOrdinal[firstCompletedOrdinal]))
+      const firstCompletedKind = kindAtOrdinal[firstCompletedOrdinal]
+      const firstCompletedState = firstCompletedKind === 'http' ? 'http_failed' : 'response_invalid'
+      await vi.waitFor(() => expect(dispatchRows(parallel)[firstCompletedOrdinal]).toMatchObject({
+        batch_ordinal: firstCompletedOrdinal, state: firstCompletedState, settled_at: expect.any(Number),
+      }))
+      let parallelSettled = false
+      void pending.then(() => { parallelSettled = true }, () => { parallelSettled = true })
+      await Promise.resolve()
+      expect(parallelSettled).toBe(false)
+      const secondCompletedOrdinal = 1 - firstCompletedOrdinal
+      gates[secondCompletedOrdinal].resolve(responseFor(kindAtOrdinal[secondCompletedOrdinal]))
+      const parallelResult = await pending
+      expect(completionOrder).toEqual([firstCompletedOrdinal, secondCompletedOrdinal])
+
+      const summarize = async (value: Book, result: Awaited<ReturnType<typeof importBook>>) => {
+        const integrity = await store.getDocumentIntegrity(value.root, documentId(value))
+        const documents = await store.listDocuments(value.root)
+        return {
+          success: result.success,
+          error: result.error ?? null,
+          documentState: (documentRows(value)[0] as { state?: string } | undefined)?.state ?? null,
+          integrityComplete: integrity?.complete ?? false,
+          chunkCount: integrity?.chunkCount ?? 0,
+          embeddedChunks: integrity?.embeddingGenerations.reduce((total, generation) => total + generation.chunkCount, 0) ?? 0,
+          visibleDocuments: documents.length,
+        }
+      }
+      const serialOutcome = await summarize(serial, serialResult)
+      const parallelOutcome = await summarize(parallel, parallelResult)
+      expect(parallelOutcome).toEqual(serialOutcome)
+      if (ordinalZeroKind === 'http') {
+        expect(serialOutcome).toEqual({ success: true, error: null, documentState: 'committed',
+          integrityComplete: true, chunkCount: 2, embeddedChunks: 0, visibleDocuments: 1 })
+        expect(add).toHaveBeenCalledTimes(2)
+      } else {
+        expect(serialOutcome).toEqual({ success: false, error: 'EMBEDDING_RESPONSE_INVALID', documentState: 'prepared',
+          integrityComplete: false, chunkCount: 0, embeddedChunks: 0, visibleDocuments: 0 })
+        expect(add).not.toHaveBeenCalled()
+      }
+      expect(serialDispatch).toEqual([expect.objectContaining({
+        batch_ordinal: 0, state: ordinalZeroKind === 'http' ? 'http_failed' : 'response_invalid', settled_at: expect.any(Number),
+      })])
+      const ordinalOneState = kindAtOrdinal[1] === 'http' ? 'http_failed' : 'response_invalid'
+      expect(dispatchRows(parallel)).toEqual([
+        expect.objectContaining({ batch_ordinal: 0, state: ordinalZeroKind === 'http' ? 'http_failed' : 'response_invalid', settled_at: expect.any(Number) }),
+        expect.objectContaining({ batch_ordinal: 1, state: ordinalOneState, settled_at: expect.any(Number) }),
+      ])
+      expect(serialFetch).toHaveBeenCalledTimes(1)
+      expect(parallelFetch).toHaveBeenCalledTimes(2)
+      await expectBUnchanged()
+    } finally {
+      gates.forEach((gate, ordinal) => gate.resolve(responseFor(kindAtOrdinal[ordinal])))
+      await Promise.allSettled([pending])
+    }
+  })
+
   it.each(['http_failed', 'transport_unknown'] as const)('retains %s while preserving same-invocation whole-document FTS fallback', async state => {
     const fetchMock = vi.fn(async () => {
       if (state === 'transport_unknown') throw new Error('FICTIONAL_TRANSPORT_REJECTED')
@@ -528,6 +748,81 @@ describe('actual reference knowledge grant admission', () => {
       ])
       await expectBUnchanged()
     } finally { first.resolve(new Response('', { status: 503 })); second.resolve(embeddingResponse()); await pending }
+  })
+
+  it('stops a revoked three-batch import after two dispatches and drains its sibling before close', async () => {
+    const value = book('RevokedThreeBatch', BATCH_TEXT)
+    projectRuntimeHost.activateView(b.runtime)
+    const gates = [deferred<Response>(), deferred<Response>(), deferred<Response>()]
+    let starts = 0, importSettled = false, closeSettled = false
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      const input = (JSON.parse(init?.body as string).input as string[])[0]
+      const ordinal = batchOrdinal(input)
+      starts++
+      return gates[ordinal].promise
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const add = vi.spyOn(store, 'addChunks')
+    const pending = importBook(value, { model: batchModel(2) })
+    void pending.then(() => { importSettled = true }, () => { importSettled = true })
+    let sqlAtRelease: { documents: unknown[]; receipts: unknown[]; dispatches: unknown[] } | null = null
+    const unregister = projectRuntimeHost.onBeforeRelease(runtime => {
+      if (runtime !== value.runtime) return
+      sqlAtRelease = { documents: documentRows(value), receipts: knowledgeRows(value), dispatches: dispatchRows(value) }
+      store.closeConnection(runtime.canonicalRoot)
+    })
+    let closing: Promise<void> | undefined
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+      expect(starts).toBe(2)
+      expect(dispatchRows(value)).toEqual([0, 1].map(batch_ordinal => expect.objectContaining({
+        batch_ordinal, state: 'dispatch_marked', http_status: null, settled_at: null,
+      })))
+      expect(() => projectRuntimeHost.acquireMaintenance(value.runtime, 'backup')).toThrow('PROJECT_RUNTIME_BUSY')
+
+      value.grants.revoke(value.ref)
+      closing = projectRuntimeHost.requestClose(value.runtime)
+      void closing.then(() => { closeSettled = true }, () => { closeSettled = true })
+      await Promise.resolve()
+      gates[0].resolve(embeddingResponse(batchVector('A')))
+      await vi.waitFor(() => expect(dispatchRows(value)).toEqual([
+        expect.objectContaining({ batch_ordinal: 0, state: 'response_received', http_status: 200, settled_at: expect.any(Number) }),
+        expect.objectContaining({ batch_ordinal: 1, state: 'dispatch_marked', http_status: null, settled_at: null }),
+      ]))
+      expect(starts).toBe(2)
+      expect(importSettled).toBe(false)
+      expect(closeSettled).toBe(false)
+      expect(value.runtime.database.open).toBe(true)
+      expect(() => projectRuntimeHost.acquireMaintenance(value.runtime, 'backup')).toThrow('PROJECT_RUNTIME_CLOSE_REQUESTED')
+
+      gates[1].resolve(embeddingResponse(batchVector('B')))
+      await expect(pending).resolves.toMatchObject({ success: false })
+      expect(importSettled).toBe(true)
+      await closing
+      expect(closeSettled).toBe(true)
+      expect(value.runtime.database.open).toBe(false)
+      expect(sqlAtRelease).toEqual({
+        documents: [expect.objectContaining({ state: 'prepared' })],
+        receipts: [],
+        dispatches: [0, 1].map(batch_ordinal => expect.objectContaining({
+          batch_ordinal, state: 'response_received', http_status: 200, settled_at: expect.any(Number),
+        })),
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(add).not.toHaveBeenCalled()
+      openCanonicalProjectFixture(value.root)
+      const reopened = projectRuntimeHost.getActiveView()!
+      expect(reopened.databaseIdentity).not.toBe(value.runtime.databaseIdentity)
+      await expect(store.listDocuments(value.root)).resolves.toEqual([])
+      expect(await (await store.getConnection(value.root)).tableNames()).toEqual([])
+      projectRuntimeHost.activateView(b.runtime)
+      await expectBUnchanged()
+    } finally {
+      gates.forEach((gate, ordinal) => gate.resolve(embeddingResponse([ordinal + 1, 0, 0])))
+      await Promise.allSettled([pending, ...(closing ? [closing] : [])])
+      store.closeConnection(value.root)
+      unregister()
+    }
   })
 
   it.each(['response_received', 'transport_unknown'] as const)('settles the exact revoked %s request before close and preserves history on original-project reopen without resending', async state => {
