@@ -28,6 +28,9 @@ import type { WritingLanguage } from '../../shared/writing-language'
 import { countDraftUnits } from '../../shared/draft-units'
 import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
 import type { PerformanceMetric } from '../../shared/performance-baseline'
+import { assertReferenceKnowledgeRequest, type ReferenceKnowledgeReference } from '../../shared/reference-knowledge-contract'
+
+type ReferenceKnowledgeIssuance = { reference: ReferenceKnowledgeReference; execution: ImportRunExecutionLease }
 
 export interface ImportWorkflowParams {
   projectPath: string
@@ -37,6 +40,7 @@ export interface ImportWorkflowParams {
   executionOwner: string
   /** Durable manifest chapter numbers; required for author-manuscript writes. */
   authorChapterNumbers?: readonly number[]
+  referenceKnowledge?: ReferenceKnowledgeIssuance
 }
 
 function textForLocale(locale: ImportRunSnapshot['locale'], zhCNText: string, enUSText: string): string {
@@ -119,6 +123,7 @@ function currentNovelConfigSummary(writingLanguage: WritingLanguage): string {
 function productionDependencies(
   context: WorkflowContext,
   callbacks: StepCallbacks,
+  referenceKnowledge?: ReferenceKnowledgeIssuance,
 ): ImportRunOrchestratorDependencies {
   const session = context.projectSession
   const projectPath = context.projectPath
@@ -130,11 +135,17 @@ function productionDependencies(
   return {
     getRun: runId => ipc.invokeWithProjectSession(session, 'db:import-run-get', runId, projectPath),
     startOrResume: async (runId, owner) => {
-      const start = required(
-        await ipc.invokeWithProjectSession(session, 'db:import-run-start-resume', runId, owner, projectPath),
-        '无法开始或继续这次导入。',
-        'Could not start or resume the import run.',
-      ).start!
+      const start = referenceKnowledge
+        ? await ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:resume', referenceKnowledge.reference)
+        : required(
+            await ipc.invokeWithProjectSession(session, 'db:import-run-start-resume', runId, owner, projectPath),
+            '无法开始或继续这次导入。',
+            'Could not start or resume the import run.',
+          ).start!
+      if (referenceKnowledge && (start.run.id !== runId || start.execution.owner !== owner
+        || start.execution.epoch !== referenceKnowledge.execution.epoch)) {
+        throw new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
+      }
       context.data.importRunExecution = start.execution
       return start
     },
@@ -256,12 +267,11 @@ function productionDependencies(
       session, 'db:import-run-list-representative-chapters', runId, projectPath,
     ),
     importReference: async (chapter, run, executionAuthority) => {
+      if (!referenceKnowledge) throw new Error('KNOWLEDGE_BASE_REFERENCE_ISSUANCE_REQUIRED')
       const result = await ipc.invokeWithProjectSession(
         session,
-        'kb:import-reference-text',
-        chapter.number,
-        run.id,
-        executionAuthority,
+        'reference-knowledge:v1:import',
+        { reference: referenceKnowledge.reference, chapterNumber: chapter.number, execution: executionAuthority },
       )
       // 带上主进程给的码：取消请求之后剩下的章节被拒绝时，取消判定只凭这个码。
       if (!result.success) throw Object.assign(new Error(result.error || textForLocale(
@@ -459,11 +469,18 @@ function productionDependencies(
       '无法保存导入取消状态。',
       'Could not save import cancellation.',
     ).run!,
-    complete: async (runId, execution) => required(
+    complete: async (runId, execution) => {
+      const run = required(
       await ipc.invokeWithProjectSession(session, 'db:import-run-complete', runId, execution, projectPath),
       '无法完成这次导入。',
       'Could not complete the import run.',
-    ).run!,
+      ).run!
+      if (referenceKnowledge) {
+        const result = await ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:complete', referenceKnowledge.reference)
+        if (result.state !== 'completed') throw new Error('KNOWLEDGE_BASE_REFERENCE_COMPLETE_FAILED')
+      }
+      return run
+    },
   }
 }
 
@@ -488,12 +505,13 @@ function importStageObservation(stage: ImportWorkflowStage): (() => void) | unde
   } catch { return undefined }
 }
 
-function importStep(
+function createImportStep(
   run: ImportRunSnapshot,
   executionOwner: string,
   stage: ImportWorkflowStage,
   name: [string, string],
   description: [string, string],
+  referenceKnowledge?: ReferenceKnowledgeIssuance,
 ) {
   return {
     name: textForLocale(run.locale, ...name),
@@ -501,7 +519,7 @@ function importStep(
     executor: async (_step: WorkflowStep, context: WorkflowContext, callbacks: StepCallbacks) => {
       const observe = importStageObservation(stage)
       try {
-        await new ImportRunOrchestrator(productionDependencies(context, callbacks))
+        await new ImportRunOrchestrator(productionDependencies(context, callbacks, referenceKnowledge))
           .executeStage(run.id, stage, executionOwner, context, callbacks)
       } finally { observe?.() }
     },
@@ -518,6 +536,26 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
     ))
   }
   const session = Object.freeze({ ...params.projectSession })
+  let referenceKnowledge: ReferenceKnowledgeIssuance | undefined
+  if (params.run.purpose === 'reference') {
+    const issuance = params.referenceKnowledge
+    if (!issuance) throw new Error('KNOWLEDGE_BASE_REFERENCE_ISSUANCE_REQUIRED')
+    assertReferenceKnowledgeRequest('reference-knowledge:v1:resume', issuance.reference)
+    assertReferenceKnowledgeRequest('reference-knowledge:v1:import', {
+      reference: issuance.reference, chapterNumber: 1,
+      execution: { owner: issuance.execution?.owner, epoch: issuance.execution?.epoch },
+    })
+    if (issuance.reference.projectId !== session.projectId || issuance.reference.runId !== params.run.id
+      || issuance.execution.owner !== params.executionOwner || !Number.isFinite(issuance.execution.expiresAt)) {
+      throw new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
+    }
+    referenceKnowledge = Object.freeze({
+      reference: Object.freeze({ ...issuance.reference }), execution: Object.freeze({ ...issuance.execution }),
+    })
+  }
+  const importStep = (run: ImportRunSnapshot, owner: string, stage: ImportWorkflowStage,
+    name: [string, string], description: [string, string]) =>
+    createImportStep(run, owner, stage, name, description, referenceKnowledge)
   const count = params.run.totalChapters
   const chapterCountEn = `${count} ${count === 1 ? 'chapter' : 'chapters'}`
   const contextReadResourceKeys = [
@@ -527,6 +565,10 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
   ]
   const durableCancelHooks: Pick<WorkflowDefinition, 'onCancelRequested'> = {
     onCancelRequested: async context => {
+      if (referenceKnowledge) {
+        await ipc.invoke('reference-knowledge:v1:revoke', referenceKnowledge.reference)
+        return
+      }
       const execution = context.data.importRunExecution as ImportRunExecutionLease | undefined
       if (!execution) return
       const result = await ipc.invokeWithProjectSession(

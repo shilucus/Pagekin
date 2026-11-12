@@ -98,8 +98,12 @@ function createImport(
     projectPath: PROJECT_PATH,
     projectSession: PROJECT_SESSION,
     run: createImportRun(purpose, totalChapters),
-    executionOwner: 'resource-claim-test',
+    executionOwner: '00000000-0000-4000-8000-000000000001',
     authorChapterNumbers,
+    ...(purpose === 'reference' ? { referenceKnowledge: {
+      reference: { projectId: PROJECT_SESSION.projectId, runId: `import-${purpose}`, grantId: '00000000-0000-4000-8000-000000000002', revision: 1 },
+      execution: { owner: '00000000-0000-4000-8000-000000000001', epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+    } } : {}),
   }
   return createImportWorkflow(params)
 }

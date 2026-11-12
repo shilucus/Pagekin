@@ -36,6 +36,7 @@ export function captureReferenceImportAdmission(
   runtime: ProjectRuntime,
   ref: ReferenceImportGrantRef,
   expectedRequestHash: string,
+  assertLocallyCurrent?: () => void,
 ): ReferenceImportAdmission {
   assertReferenceImportGrantRef(ref)
   if (typeof expectedRequestHash !== 'string' || !isContentHash(expectedRequestHash)) fail('REQUEST_HASH_INVALID')
@@ -56,8 +57,11 @@ export function captureReferenceImportAdmission(
     isFrozen: grantId => readPortableRuntimeFreeze(canonicalRoot).isFrozen('reference_import_grants', grantId) })
 
   const assertGrant = () => {
+    // A failed durable revoke must not revive an issuer's already retired local capability.
+    if (assertLocallyCurrent && synchronous(assertLocallyCurrent) !== undefined) fail('ASYNC_GUARD_INVALID')
     const grant = synchronous(() => grants.assertActive(capturedRef))
     if (grant.requestHash !== expectedRequestHash) fail('REQUEST_MISMATCH')
+    if (assertLocallyCurrent && synchronous(assertLocallyCurrent) !== undefined) fail('ASYNC_GUARD_INVALID')
   }
   const transaction = <T>(operation: () => T, isolateEffects = false): T => {
     assertRuntime()

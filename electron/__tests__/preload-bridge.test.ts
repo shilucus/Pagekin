@@ -4,6 +4,7 @@ import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../src/shared/project-runt
 import { RUNTIME_FEEDBACK_CHANNELS } from '../../src/shared/runtime-feedback-contract'
 import { WORKFLOW_DRIVER_CHANNELS } from '../../src/shared/workflow-driver-contract'
 import { WORKFLOW_BATCH_CHANNELS } from '../../src/shared/workflow-batch-contract'
+import { REFERENCE_KNOWLEDGE_CHANNELS } from '../../src/shared/reference-knowledge-contract'
 
 const electron = vi.hoisted(() => ({
   contextBridge: { exposeInMainWorld: vi.fn() },
@@ -14,6 +15,22 @@ vi.mock('electron', () => electron)
 await import('../preload')
 
 describe('桌面预加载接口', () => {
+  it('forwards only the closed reference knowledge family without issuing or expanding authority', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const request = Object.freeze({ projectId: 'fictional-project', runId: 'fictional-run',
+      grantId: '11111111-1111-4111-8111-111111111111', revision: 1 })
+    const session = Object.freeze({ projectId: request.projectId, projectPath: 'C:/fictional-project', leaseId: 'fictional-view' })
+    for (const channel of REFERENCE_KNOWLEDGE_CHANNELS) {
+      await bridge.invoke(channel, request, session)
+      expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, request, session)
+    }
+    const calls = electron.ipcRenderer.invoke.mock.calls.length
+    for (const channel of ['reference-knowledge:v2:prepare', 'reference-knowledge:v1:execute', 'reference-knowledge:v1:reauthorize']) {
+      await expect(bridge.invoke(channel, request)).rejects.toThrow('KNOWLEDGE_BASE_REFERENCE_CHANNEL_NOT_ALLOWED')
+    }
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)
+    expect(Object.keys(request)).toEqual(['projectId', 'runId', 'grantId', 'revision'])
+  })
   it('仅提供规范接口，事件回调不暴露 Electron 事件对象', async () => {
     expect(electron.contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(1)
     const [name, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]

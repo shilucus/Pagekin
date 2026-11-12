@@ -474,6 +474,7 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    ImportRunRepository.assertLegacyReferenceImportAllowed(runId)
     return { success: true, start: ImportRunRepository.startOrResume(runId, owner) }
   })
 

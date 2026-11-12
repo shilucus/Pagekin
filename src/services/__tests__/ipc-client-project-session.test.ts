@@ -39,6 +39,31 @@ afterEach(() => {
 })
 
 describe('project-scoped IPC session transport', () => {
+  it('keeps foreground reference issuance and effects view-bound while allowing only private revoke without a view', async () => {
+    const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
+    const reference = { projectId: 'project-A', runId: 'fictional-run', grantId: '11111111-1111-4111-8111-111111111111', revision: 1 }
+    const prepare = { operationId: reference.grantId, runId: reference.runId, executionOwner: '22222222-2222-4222-8222-222222222222' }
+    const chapter = { reference, chapterNumber: 1, execution: { owner: prepare.executionOwner, epoch: 1 } }
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    await ipc.invokeWithProjectSession(frozen, 'reference-knowledge:v1:prepare', prepare)
+    expect(invoke).toHaveBeenLastCalledWith('reference-knowledge:v1:prepare', prepare, frozen)
+    await ipc.invokeWithProjectSession(frozen, 'reference-knowledge:v1:import', chapter)
+    expect(invoke).toHaveBeenLastCalledWith('reference-knowledge:v1:import', chapter, frozen)
+    for (const channel of ['reference-knowledge:v1:resume', 'reference-knowledge:v1:complete'] as const) {
+      await ipc.invokeWithProjectSession(frozen, channel, reference)
+      expect(invoke).toHaveBeenLastCalledWith(channel, reference, frozen)
+    }
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('reference-knowledge:v1:prepare', prepare)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    await expect(ipc.invoke('reference-knowledge:v1:import', chapter)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    for (const channel of ['reference-knowledge:v1:resume', 'reference-knowledge:v1:complete'] as const) {
+      await expect(ipc.invoke(channel, reference)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    }
+    await ipc.invoke('reference-knowledge:v1:revoke', reference)
+    expect(invoke).toHaveBeenLastCalledWith('reference-knowledge:v1:revoke', reference)
+    await expect(ipc.invokeWithProjectSession(frozen, 'reference-knowledge:v1:revoke', reference)).rejects.toThrow('通道不属于项目会话范围')
+    expect(invoke).toHaveBeenCalledTimes(5)
+  })
   it('rejects a missing canonical bridge without invoking the legacy write API', async () => {
     Object.defineProperty(globalThis, 'window', {
       configurable: true,

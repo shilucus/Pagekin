@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   projectStoragePreflightFailure: vi.fn(),
   readJsonFile: vi.fn(),
   resolveReferenceImportAuthority: vi.fn(),
+  assertLegacyReferenceImportAllowed: vi.fn(),
   commitReferenceImportReceipt: vi.fn(),
   getRun: vi.fn(),
   knowledgeDocumentChapters: vi.fn(() => new Map<string, number>()),
@@ -61,6 +62,7 @@ vi.mock('../../services/knowledge-base-loader', () => ({
 
 vi.mock('../../repositories/import-run-repository', () => ({
   ImportRunRepository: {
+    assertLegacyReferenceImportAllowed: mocks.assertLegacyReferenceImportAllowed,
     resolveReferenceImportAuthority: mocks.resolveReferenceImportAuthority,
     commitReferenceImportReceipt: mocks.commitReferenceImportReceipt,
     get: mocks.getRun,
@@ -106,6 +108,7 @@ beforeEach(() => {
   mocks.currentProjectPath = 'C:/projects/A'
   vi.clearAllMocks()
   mocks.getProjectDb.mockReturnValue(mocks.database)
+  mocks.assertLegacyReferenceImportAllowed.mockImplementation(() => undefined)
   mocks.readJsonFile.mockImplementation((_path: string, fallback: unknown) => fallback)
   mocks.resolveReferenceImportAuthority.mockReturnValue({
     chapterNumber: 1,
@@ -175,6 +178,22 @@ describe('knowledge-base controller project context guard', () => {
       'run-1', authority, 1, 'reference-doc', mocks.database,
     )
     expect(mocks.getProjectDb).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a managed reference run before legacy source/config/KB work can bypass its private issuance', async () => {
+    mocks.assertLegacyReferenceImportAllowed.mockImplementation(() => { throw new Error('IMPORT_RUN_REFERENCE_UNBOUND') })
+    mocks.getRun.mockReturnValue({ locale: 'en-US' })
+    const result = await rawHandler('kb:import-reference-text')(
+      {}, 1, 'run-1', { owner: 'renderer-a', epoch: 3 }, {
+        projectId: 'project-A', leaseId: 'lease-A', projectPath: mocks.currentProjectPath,
+      },
+    )
+    expect(result).toMatchObject({ success: false, errorCode: 'IMPORT_RUN_REFERENCE_UNBOUND' })
+    expect(mocks.assertLegacyReferenceImportAllowed).toHaveBeenCalledExactlyOnceWith('run-1', mocks.database)
+    expect(mocks.resolveReferenceImportAuthority).not.toHaveBeenCalled()
+    expect(mocks.readJsonFile).not.toHaveBeenCalled()
+    expect(mocks.run).not.toHaveBeenCalled()
+    expect(mocks.commitReferenceImportReceipt).not.toHaveBeenCalled()
   })
 
   it('derives a stable, control-free bounded KB label from a long main-owned title', async () => {
@@ -583,7 +602,7 @@ describe('embedding config fallback by protocol', () => {
 
   it('keeps the OpenAI-compatible fallback for a legacy profile without a protocol field', () => {
     withModel(generationModel)
-    expect(getEmbeddingConfig()).toMatchObject({ model: { modelName: 'm', baseUrl: 'https://gateway.example/v1' } })
+    expect(getEmbeddingConfig()).toMatchObject({ modelId: 'default', protocol: 'openai', model: { modelName: 'm', baseUrl: 'https://gateway.example/v1' } })
   })
 
   it('never falls back to an Anthropic-protocol profile, which has no embedding endpoint', () => {

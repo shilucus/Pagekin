@@ -2599,6 +2599,13 @@ export class ImportRunRepository {
     })()
   }
 
+  /** Persisted grant history cannot fall back to an unissued legacy executor. */
+  static assertLegacyReferenceImportAllowed(runId: string, database: Database.Database = db()): void {
+    if (database.prepare('SELECT 1 FROM reference_import_grants WHERE import_run_id=? LIMIT 1').get(runId)) {
+      throw new Error('IMPORT_RUN_REFERENCE_UNBOUND')
+    }
+  }
+
   static startOrResume(
     runId: string,
     owner: string,

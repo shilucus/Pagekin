@@ -9,6 +9,7 @@ import { registerLLMController } from './controllers/llm-controller'
 import { registerGenerationController } from './controllers/generation-controller'
 import { registerDatabaseController } from './controllers/db-controller'
 import { registerKBController } from './controllers/kb-controller'
+import { registerReferenceKnowledgeController } from './controllers/reference-knowledge-controller'
 import { registerImportController } from './controllers/import-controller'
 import { registerWindowController } from './controllers/window-controller'
 import { registerOfficialHomepageController } from './controllers/official-homepage-controller'
@@ -71,6 +72,7 @@ export function registerIPCHandlers() {
   registerFinalizationController()
   registerChapterLifecycleController()
   registerKBController()
+  registerReferenceKnowledgeController()
   registerImportController()
 
   console.log('[AI Novel IPC] 所有 Controller 已注册完成')

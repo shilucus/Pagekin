@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
-const ipcMocks = vi.hoisted(() => ({ invoke: vi.fn() }))
+const ipcMocks = vi.hoisted(() => ({ invoke: vi.fn(), actual: vi.fn(), revoke: vi.fn(), complete: vi.fn() }))
 const characterSyncMocks = vi.hoisted(() => ({ retry: vi.fn() }))
 const commandMocks = vi.hoisted(() => ({
   blueprintContext: undefined as WorkflowContext | undefined,
@@ -10,7 +10,23 @@ const commandMocks = vi.hoisted(() => ({
   style: vi.fn(),
 }))
 vi.mock('../../ipc-client', () => ({
-  ipc: { invokeWithProjectSession: ipcMocks.invoke },
+  ipc: {
+    invokeWithProjectSession: async (session: { projectPath: string }, channel: string, ...args: unknown[]) => {
+      ipcMocks.actual(session, channel, ...args)
+      if (channel === 'reference-knowledge:v1:resume') {
+        const reference = args[0] as { runId: string }
+        const result = await ipcMocks.invoke(session, 'db:import-run-start-resume', reference.runId, executionOwner, session.projectPath)
+        return result.start
+      }
+      if (channel === 'reference-knowledge:v1:import') {
+        const request = args[0] as { chapterNumber: number; reference: { runId: string }; execution: unknown }
+        return ipcMocks.invoke(session, 'kb:import-reference-text', request.chapterNumber, request.reference.runId, request.execution)
+      }
+      if (channel === 'reference-knowledge:v1:complete') return ipcMocks.complete(...args)
+      return ipcMocks.invoke(session, channel, ...args)
+    },
+    invoke: ipcMocks.revoke,
+  },
 }))
 vi.mock('../directory-character-sync-recovery', () => ({
   retryDirectoryCharacterSync: characterSyncMocks.retry,
@@ -44,7 +60,7 @@ vi.mock('../commands/analyze-style.command', () => ({
   },
 }))
 
-import { createImportWorkflow, estimateImportCost, loadAuthorImportChapterNumbers } from '../import-workflow'
+import { createImportWorkflow as createActualWorkflow, estimateImportCost, loadAuthorImportChapterNumbers } from '../import-workflow'
 import { ImportRunOrchestrator } from '../import-run-orchestrator'
 import {
   IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
@@ -56,7 +72,17 @@ import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 
 const session = { projectId: 'test-project', leaseId: 'lease-test-project', projectPath: 'C:\\test-project' }
-const executionOwner = 'test-import-executor'
+const executionOwner = '00000000-0000-4000-8000-000000000001'
+
+function createImportWorkflow(params: Parameters<typeof createActualWorkflow>[0]) {
+  return createActualWorkflow({
+    ...params,
+    ...(params.run.purpose === 'reference' ? { referenceKnowledge: {
+      reference: { projectId: params.projectSession.projectId, runId: params.run.id, grantId: '00000000-0000-4000-8000-000000000002', revision: 1 },
+      execution: { owner: params.executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+    } } : {}),
+  })
+}
 
 function run(overrides: Partial<ImportRunSnapshot> = {}): ImportRunSnapshot {
   return {
@@ -85,6 +111,8 @@ function context(): WorkflowContext {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  ipcMocks.revoke.mockResolvedValue({ state: 'revoked' })
+  ipcMocks.complete.mockResolvedValue({ state: 'completed' })
   characterSyncMocks.retry.mockResolvedValue({ operationId: 'sync-1' })
   useProjectStore.setState({
     currentProject: {
@@ -328,7 +356,7 @@ describe('createImportWorkflow', () => {
   })
 
   it('imports the frozen snapshot through the reference-only idempotent channel and checkpoints it', async () => {
-    let snapshot = run()
+    let snapshot = run({ totalChapters: 2, manifestChapterCount: 2 })
     ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
       if (channel === 'db:import-run-get') return snapshot
       if (channel === 'db:import-run-start-resume') return {
@@ -347,11 +375,14 @@ describe('createImportWorkflow', () => {
         return after === 0 ? [{
           number: 1, title: 'Start', content: 'frozen reference',
           contentFingerprint: 'c'.repeat(64), contentSize: 16,
+        }, {
+          number: 2, title: 'Next', content: 'second reference',
+          contentFingerprint: 'd'.repeat(64), contentSize: 16,
         }] : []
       }
       if (channel === 'kb:import-reference-text') return { success: true, docId: 'stable', idempotent: false }
       if (channel === 'db:import-run-complete-batch') {
-        snapshot = { ...snapshot, completedBatches: { knowledge: ['1-1'] } }
+        snapshot = { ...snapshot, completedBatches: { knowledge: ['1-2'] } }
         return { success: true, run: snapshot, newlyCompleted: true, cancelApplied: false }
       }
       if (channel === 'db:import-run-advance-stage') {
@@ -372,6 +403,54 @@ describe('createImportWorkflow', () => {
       { owner: executionOwner, epoch: 1 },
     )
     expect(ipcMocks.invoke.mock.calls.map(call => call[1])).not.toContain('db:draft-create')
+    expect(ipcMocks.actual).toHaveBeenCalledWith(session, 'reference-knowledge:v1:resume', expect.objectContaining({ runId: snapshot.id }))
+    expect(ipcMocks.actual).toHaveBeenCalledWith(session, 'reference-knowledge:v1:import', {
+      reference: expect.objectContaining({ runId: snapshot.id, projectId: session.projectId }),
+      chapterNumber: 1, execution: { owner: executionOwner, epoch: 1 },
+    })
+    const resumes = ipcMocks.actual.mock.calls.filter(call => call[1] === 'reference-knowledge:v1:resume')
+    const imports = ipcMocks.actual.mock.calls.filter(call => call[1] === 'reference-knowledge:v1:import')
+    expect(imports).toHaveLength(2)
+    expect(imports.map(call => (call[2] as { chapterNumber: number }).chapterNumber)).toEqual([1, 2])
+    expect(imports.every(call => (call[2] as { reference: unknown }).reference === resumes[0]![2])).toBe(true)
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).not.toContain('kb:import-reference-text')
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).not.toContain('db:import-run-start-resume')
+  })
+
+  it('requires matching issuance without preparing implicitly and revokes before any step', async () => {
+    const snapshot = run()
+    const params = { projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner }
+    expect(() => createActualWorkflow(params)).toThrow('KNOWLEDGE_BASE_REFERENCE_ISSUANCE_REQUIRED')
+    const reference = { projectId: session.projectId, runId: snapshot.id, grantId: '00000000-0000-4000-8000-000000000002', revision: 1 }
+    const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+    expect(() => createActualWorkflow({ ...params, referenceKnowledge: { reference: { ...reference, runId: 'other' }, execution } }))
+      .toThrow('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
+    const workflow = createActualWorkflow({ ...params, referenceKnowledge: { reference, execution } })
+    reference.revision = 2
+    await workflow.onCancelRequested!(context())
+    expect(ipcMocks.revoke).toHaveBeenCalledExactlyOnceWith('reference-knowledge:v1:revoke', expect.objectContaining({ revision: 1 }))
+    expect(ipcMocks.actual).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('completes the durable run before grant completion; failure=%s', async fail => {
+    const snapshot = run({ stage: 'refresh', completedBatches: { refresh: ['done'] } })
+    const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-start-resume') return { success: true, start: { run: snapshot, execution } }
+      if (channel === 'db:import-run-renew-execution') return { success: true, execution }
+      if (channel === 'db:import-run-complete') return { success: true, run: { ...snapshot, status: 'completed' } }
+      if (channel === 'db:import-run-fail') return { success: true, run: snapshot }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    if (fail) ipcMocks.complete.mockRejectedValue(new Error('fixture completion failed'))
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    const result = workflow.steps[4].executor({} as never, context(), callbacks)
+    if (fail) await expect(result).rejects.toThrow('fixture completion failed')
+    else await expect(result).resolves.toBeUndefined()
+    const channels = ipcMocks.actual.mock.calls.map(call => call[1])
+    expect(channels.indexOf('db:import-run-complete')).toBeGreaterThanOrEqual(0)
+    expect(channels.indexOf('reference-knowledge:v1:complete')).toBeGreaterThan(channels.indexOf('db:import-run-complete'))
   })
 
   it('rejects a stale project lease before creating any task', () => {
@@ -702,7 +781,7 @@ describe('import workflow failure copy follows the import run locale (#484)', ()
     ['zh-CN', /^无法开始或继续这次导入/u],
     ['en-US', /^Could not start or resume the import run\.$/u],
   ] as const)('falls back to %s copy when the main process refuses without a reason', async (locale, expected) => {
-    const snapshot = run({ locale, stage: 'global' })
+    const snapshot = authorRun(locale)
     const failure = await stepFailure(snapshot, 1, {
       'db:import-run-start-resume': () => ({ success: false }),
     })

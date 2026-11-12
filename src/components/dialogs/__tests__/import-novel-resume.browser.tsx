@@ -1,6 +1,6 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { page } from 'vitest/browser'
 
 import ImportNovelDialog from '../ImportNovelDialog'
@@ -19,7 +19,7 @@ import type { AuthorManuscriptImportPreview } from '../../../shared/author-manus
 
 let root: Root
 let container: HTMLDivElement
-let invoke: ReturnType<typeof vi.fn>
+let invoke: Mock<(channel: string, ...args: unknown[]) => Promise<unknown>>
 let startWorkflow: ReturnType<typeof vi.fn>
 let preparation: ImportRunPreparationResult
 let authorPreview: AuthorManuscriptImportPreview
@@ -113,7 +113,7 @@ beforeEach(async () => {
     chapters: [{ number: 1, title: 'Start', wordCount: 16, disposition: 'new' }],
     newChapterNumbers: [1], duplicateChapterNumbers: [], conflictChapterNumbers: [], authorityInvalid: false,
   }
-  invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+  invoke = vi.fn<(channel: string, ...args: unknown[]) => Promise<unknown>>(async (channel, ...args) => {
     if (channel === 'db:import-run-list-resumable') return []
     if (channel === 'dialog:select-novel-files') {
       const request = args[0] as { purpose?: string } | string | undefined
@@ -146,11 +146,24 @@ beforeEach(async () => {
   Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
-      invoke, on: vi.fn(() => () => {}), once: vi.fn(), send: vi.fn(),
+      invoke: async (channel: string, ...args: unknown[]) => {
+        const result = await invoke(channel, ...args)
+        if (channel === 'reference-knowledge:v1:prepare' && result && typeof result === 'object'
+          && 'success' in result && result.success === true && !('reference' in result && result.reference)) {
+          const request = args[0] as { runId: string; executionOwner: string }
+          const session = args[1] as { projectId: string }
+          return {
+            reference: { projectId: session.projectId, runId: request.runId, grantId: '00000000-0000-4000-8000-000000000002', revision: 1 },
+            execution: { owner: request.executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+          }
+        }
+        return result
+      }, on: vi.fn(() => () => {}), once: vi.fn(), send: vi.fn(),
       setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn(() => 0),
     },
   })
   startWorkflow = vi.fn(async (definition: WorkflowDefinition) => {
+    definition.onStarted?.()
     useWorkflowStore.setState({
       activeRuns: [activeRun(definition)],
       globalLogs: [{ time: '00:00', level: 'info', message: '参照导入任务已启动' }],
@@ -436,6 +449,7 @@ describe('current-project reference import', () => {
       </div>,
     ))
     await chooseCurrentSource()
+    expect(invoke.mock.calls.some(([channel]) => channel === 'reference-knowledge:v1:prepare')).toBe(false)
     await act(async () => page.getByRole('button', { name: /导入当前项目（1 章）/ }).click())
 
     expect(startWorkflow).toHaveBeenCalledOnce()
@@ -443,6 +457,9 @@ describe('current-project reference import', () => {
     expect(invoke.mock.calls.some(([channel]) => channel === 'project:create')).toBe(false)
     expect(invoke.mock.calls.some(([channel]) => channel === 'import:inspect-source')).toBe(false)
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:import-run-prepare-inspection')).toBe(false)
+    const admission = invoke.mock.calls.filter(([channel]) => channel === 'reference-knowledge:v1:prepare')
+    expect(admission).toHaveLength(1)
+    expect(admission[0]?.[1]).toMatchObject({ runId: 'persisted-import', operationId: expect.any(String), executionOwner: expect.any(String) })
     const selectionCall = invoke.mock.calls.find(([channel]) => channel === 'dialog:select-novel-files')
     expect(selectionCall?.[1]).toMatchObject({
       runId: expect.any(String), purpose: 'reference', locale: 'zh-CN', expectedProjectPath: project.path,
@@ -451,6 +468,139 @@ describe('current-project reference import', () => {
       projectId: project.id, leaseId: project.sessionLease, projectPath: project.path,
     })
     await expect.element(page.getByText('导入参照文本与构建知识库', { exact: true })).toBeVisible()
+  })
+
+  it('revokes the exact grant when workflow admission resolves without onStarted', async () => {
+    startWorkflow.mockImplementation(async () => 'persisted-import')
+    await chooseCurrentSource()
+    await act(async () => page.getByRole('button', { name: /导入当前项目（1 章）/ }).click())
+    await vi.waitFor(() => expect(invoke.mock.calls.filter(([channel]) => channel === 'reference-knowledge:v1:revoke')).toHaveLength(1))
+    const revoke = invoke.mock.calls.find(([channel]) => channel === 'reference-knowledge:v1:revoke')!
+    expect(revoke).toEqual(['reference-knowledge:v1:revoke', {
+      projectId: project.id, runId: 'persisted-import', grantId: '00000000-0000-4000-8000-000000000002', revision: 1,
+    }])
+  })
+
+  it('logs both the start failure and a failed grant cleanup without retrying', async () => {
+    const original = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'reference-knowledge:v1:revoke') throw new Error('fixture cleanup failed')
+      return original(channel, ...args)
+    })
+    startWorkflow.mockRejectedValue(new Error('fixture start failed'))
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await chooseCurrentSource()
+      await act(async () => page.getByRole('button', { name: /导入当前项目（1 章）/ }).click())
+      await vi.waitFor(() => expect(log).toHaveBeenCalledTimes(2))
+      expect(log.mock.calls[0]?.[1]).toMatchObject({ message: 'fixture start failed' })
+      expect(log.mock.calls[1]?.[1]).toMatchObject({ message: 'fixture cleanup failed' })
+      expect(invoke.mock.calls.filter(([channel]) => channel === 'reference-knowledge:v1:prepare')).toHaveLength(1)
+      expect(invoke.mock.calls.filter(([channel]) => channel === 'reference-knowledge:v1:revoke')).toHaveLength(1)
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it.each(['zh-CN', 'en-US'] as const)('shows the existing error surface when admission fails in %s', async locale => {
+    const original = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'reference-knowledge:v1:prepare') throw new Error('fixture admission failed')
+      return original(channel, ...args)
+    })
+    await act(async () => useLocaleStore.setState({ locale }))
+    await act(async () => page.getByTestId('import-target-current').click())
+    await act(async () => page.getByRole('button', { name: locale === 'zh-CN' ? '选择' : 'Choose' }).first().click())
+    await act(async () => page.getByRole('button', { name: locale === 'zh-CN' ? /导入当前项目（1 章）/ : /^Import into current project \(/ }).click())
+    await expect.element(page.getByText(/fixture admission failed/)).toBeVisible()
+    expect(startWorkflow).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.some(([channel]) => channel === 'reference-knowledge:v1:revoke')).toBe(false)
+  })
+
+  it('revokes a late issuance after the active project changes', async () => {
+    const pending = deferred<unknown>()
+    const original = invoke.getMockImplementation()!
+    let request: { runId: string; executionOwner: string } | undefined
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'reference-knowledge:v1:prepare') {
+        request = args[0] as typeof request
+        return pending.promise
+      }
+      return original(channel, ...args)
+    })
+    await chooseCurrentSource()
+    await act(async () => page.getByRole('button', { name: /导入当前项目（1 章）/ }).click())
+    await vi.waitFor(() => expect(request).toBeDefined())
+    await act(async () => useProjectStore.setState({ currentProject: { ...project, sessionLease: 'new-lease' } as never }))
+    await act(async () => pending.resolve({
+      reference: { projectId: project.id, runId: request!.runId, grantId: '00000000-0000-4000-8000-000000000002', revision: 1 },
+      execution: { owner: request!.executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+    }))
+    await vi.waitFor(() => expect(invoke.mock.calls.filter(([channel]) => channel === 'reference-knowledge:v1:revoke')).toHaveLength(1))
+    expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('revokes the old issuance after same-project close and reopen without disturbing a new launch', async () => {
+    const pending = [deferred<unknown>(), deferred<unknown>()]
+    const requests: { runId: string; executionOwner: string }[] = []
+    const original = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'reference-knowledge:v1:prepare') {
+        requests.push(args[0] as { runId: string; executionOwner: string })
+        return pending[requests.length - 1]!.promise
+      }
+      return original(channel, ...args)
+    })
+    const onClose = vi.fn()
+    await act(async () => root.render(<ImportNovelDialog open onClose={onClose} />))
+    await chooseCurrentSource()
+    await act(async () => page.getByRole('button', { name: /导入当前项目（1 章）/ }).click())
+    await vi.waitFor(() => expect(requests).toHaveLength(1))
+    await act(async () => root.render(<ImportNovelDialog open={false} onClose={onClose} />))
+    await act(async () => root.render(<ImportNovelDialog open onClose={onClose} />))
+    await chooseCurrentSource()
+    await act(async () => page.getByRole('button', { name: /导入当前项目（1 章）/ }).click())
+    await vi.waitFor(() => expect(requests).toHaveLength(2))
+    const issuance = (index: number, grantId: string) => ({
+      reference: { projectId: project.id, runId: requests[index]!.runId, grantId, revision: 1 },
+      execution: { owner: requests[index]!.executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
+    })
+    const first = issuance(0, '00000000-0000-4000-8000-000000000011')
+    await act(async () => pending[0]!.resolve(first))
+    await vi.waitFor(() => expect(invoke.mock.calls.filter(([channel]) => channel === 'reference-knowledge:v1:revoke')).toHaveLength(1))
+    expect(invoke.mock.calls.find(([channel]) => channel === 'reference-knowledge:v1:revoke')).toEqual(['reference-knowledge:v1:revoke', first.reference])
+    expect(startWorkflow).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    await expect.element(page.getByRole('button', { name: '拆解中...' })).toBeDisabled()
+    await act(async () => pending[1]!.resolve(issuance(1, '00000000-0000-4000-8000-000000000012')))
+    await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'reference-knowledge:v1:revoke')).toHaveLength(1)
+  })
+
+  it('revokes a held issuance after the dialog unmounts', async () => {
+    const pending = deferred<unknown>()
+    const original = invoke.getMockImplementation()!
+    let request: { runId: string; executionOwner: string } | undefined
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'reference-knowledge:v1:prepare') {
+        request = args[0] as typeof request
+        return pending.promise
+      }
+      return original(channel, ...args)
+    })
+    const onClose = vi.fn()
+    await act(async () => root.render(<ImportNovelDialog open onClose={onClose} />))
+    await chooseCurrentSource()
+    await act(async () => page.getByRole('button', { name: /导入当前项目（1 章）/ }).click())
+    await vi.waitFor(() => expect(request).toBeDefined())
+    await act(async () => root.render(<div />))
+    const reference = { projectId: project.id, runId: request!.runId, grantId: '00000000-0000-4000-8000-000000000013', revision: 1 }
+    await act(async () => pending.resolve({ reference, execution: { owner: request!.executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER } }))
+    await vi.waitFor(() => expect(invoke.mock.calls.filter(([channel]) => channel === 'reference-knowledge:v1:revoke')).toHaveLength(1))
+    expect(invoke.mock.calls.find(([channel]) => channel === 'reference-knowledge:v1:revoke')).toEqual(['reference-knowledge:v1:revoke', reference])
+    expect(startWorkflow).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
   })
 
   it('shows the merged new-import inspection in English without a renderer grant step', async () => {
@@ -538,6 +688,7 @@ describe('current-project reference import', () => {
 
     expect(startWorkflow).toHaveBeenCalledOnce()
     const workflow = startWorkflow.mock.calls[0][0] as WorkflowDefinition
+    expect(invoke.mock.calls.some(([channel]) => String(channel).startsWith('reference-knowledge:'))).toBe(false)
     expect(workflow.steps.map(step => step.name)).toEqual([
       '提交权威定稿快照', '发布实体正文', '更新连续性事实', '刷新项目状态',
     ])

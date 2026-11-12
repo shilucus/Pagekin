@@ -51,7 +51,7 @@ function isControlCharacter(character: string): boolean {
   return codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
 }
 
-function referenceImportDisplayName(binding: { chapterNumber: number; title: string }): string {
+export function referenceImportDisplayName(binding: { chapterNumber: number; title: string }): string {
   if (!Number.isSafeInteger(binding.chapterNumber) || binding.chapterNumber < 1) {
     throw new Error(text('参照章节展示名的章号无效', 'The reference chapter display name has an invalid chapter number.'))
   }
@@ -138,7 +138,7 @@ function referenceIntegrityFailure(code: string): readonly [zhCN: string, enUS: 
   ]
 }
 
-function explainReferenceImportFailure<T extends { success: boolean; error?: string }>(result: T, runId: string): T | (T & { errorCode: string }) {
+export function explainReferenceImportFailure<T extends { success: boolean; error?: string }>(result: T, runId: string): T | (T & { errorCode: string }) {
   const code = !result.success ? result.error : undefined
   const explained = code ? REFERENCE_IMPORT_FAILURES[code] ?? referenceIntegrityFailure(code) : undefined
   if (!code) return result
@@ -150,7 +150,7 @@ function explainReferenceImportFailure<T extends { success: boolean; error?: str
   return { ...result, errorCode: code, error: importRunLocale(runId) === 'en-US' ? explained[1] : explained[0] }
 }
 
-function legacyMigrationBlockedFailure() {
+export function legacyMigrationBlockedFailure() {
   return {
     success: false as const,
     errorCode: LEGACY_VECTOR_MIGRATION_BLOCKED,
@@ -161,7 +161,7 @@ function legacyMigrationBlockedFailure() {
   }
 }
 
-function isLegacyMigrationBlockedError(error: unknown): boolean {
+export function isLegacyMigrationBlockedError(error: unknown): boolean {
   return error instanceof LegacyVectorMigrationBlockedError
     || (!!error
       && typeof error === 'object'
@@ -169,7 +169,7 @@ function isLegacyMigrationBlockedError(error: unknown): boolean {
       && (error as { code?: unknown }).code === LEGACY_VECTOR_MIGRATION_BLOCKED)
 }
 
-function isLegacyMigrationBlockedResult(value: unknown): boolean {
+export function isLegacyMigrationBlockedResult(value: unknown): boolean {
   return !!value
     && typeof value === 'object'
     && 'success' in value
@@ -187,7 +187,7 @@ const UNCONFIGURED_EMBEDDING_MODEL: EmbeddingModel = { provider: '', baseUrl: ''
  * `embedding` 的默认模型才可以顶替（#520）——纯生成模型没有嵌入接口，顶替只会
  * 让每次写作前多发一次注定失败的请求。旧档案没有 `purposes` 字段时保持原有回退行为。
  */
-export function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: EmbeddingModel & { modelName: string } } | null {
+export function getEmbeddingConfig(): { modelId: string; protocol: 'openai' | 'gemini'; model: EmbeddingModel & { modelName: string } } | null {
   const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
   const configuredEmbeddingModelId = config.defaultEmbeddingModelId
   const targetModelId = configuredEmbeddingModelId || config.defaultModelId
@@ -203,7 +203,8 @@ export function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: Em
   // Anthropic Messages 协议只有对话端点；旧档案没有 protocol 字段时仍按 OpenAI 兼容回退。
   if (model.protocol === 'anthropic') return null
   return {
-    protocol: model.protocol as 'openai' | 'gemini',
+    modelId: model.id,
+    protocol: model.protocol === 'gemini' ? 'gemini' : 'openai',
     // models.json 只经过宽松的迁移校验，旧档案可能缺这几个字段。
     model: { provider: model.provider ?? '', baseUrl: model.baseUrl ?? '', apiKey: model.apiKey ?? '', modelName: model.modelName, embeddingOptions: model.embeddingOptions },
   }
@@ -373,6 +374,7 @@ export function registerKBController(
       // Keep authority checks and the post-await receipt on the same main-process database.
       const database = getProjectDb()
       if (!database) throw new Error('PROJECT_NOT_OPEN')
+      ImportRunRepository.assertLegacyReferenceImportAllowed(runId, database)
       const binding = ImportRunRepository.resolveReferenceImportAuthority(
         runId, executionAuthority, chapterNumber, undefined, database,
       )

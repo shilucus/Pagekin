@@ -192,6 +192,50 @@ describe('main-only reference import admission', () => {
     expect(operation).not.toHaveBeenCalled()
   })
 
+  it('denies a locally retired issuance even when the durable grant remains active', () => {
+    const a = fixture()
+    let retired = false
+    const assertLocal = () => { if (retired) throw new Error('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED') }
+    const admission = captureReferenceImportAdmission(a.runtime, a.ref, requestHash, assertLocal)
+    expect(() => assertIssuedReferenceImportAdmission(admission)).not.toThrow()
+    admission.assertCurrent(a.resources, runId)
+    retired = true
+    expect(a.grants.get(a.ref.grantId)?.state).toBe('active')
+    expect(() => admission.assertCurrent(a.resources, runId)).toThrow('CAPABILITY_REQUIRED')
+    const operation = vi.fn(() => a.runtime.database.prepare('INSERT INTO admission_effects VALUES(?)').run('forbidden'))
+    expect(() => admission.withTransaction(a.resources, runId, operation)).toThrow('CAPABILITY_REQUIRED')
+    expect(operation).not.toHaveBeenCalled()
+    expect(a.runtime.database.prepare('SELECT COUNT(*) FROM admission_effects').pluck().get()).toBe(0)
+  })
+
+  it('rolls back an effect if the local issuance retires during that transaction', () => {
+    const a = fixture()
+    let retired = false
+    const admission = captureReferenceImportAdmission(a.runtime, a.ref, requestHash, () => {
+      if (retired) throw new Error('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+    })
+    expect(() => admission.withTransaction(a.resources, runId, () => {
+      a.runtime.database.prepare('INSERT INTO admission_effects VALUES(?)').run('must roll back')
+      retired = true
+    })).toThrow('CAPABILITY_REQUIRED')
+    expect(a.grants.get(a.ref.grantId)?.state).toBe('active')
+    expect(a.runtime.database.prepare('SELECT COUNT(*) FROM admission_effects').pluck().get()).toBe(0)
+  })
+
+  it('rejects asynchronous local guards at capture and at a later grant check', () => {
+    const a = fixture()
+    expect(() => captureReferenceImportAdmission(a.runtime, a.ref, requestHash, async () => {})).toThrow('ASYNC_GUARD_INVALID')
+    let asynchronous = false
+    const admission = captureReferenceImportAdmission(a.runtime, a.ref, requestHash, () => {
+      if (asynchronous) return Promise.resolve()
+    })
+    asynchronous = true
+    expect(() => admission.assertCurrent(a.resources, runId)).toThrow('ASYNC_GUARD_INVALID')
+    const operation = vi.fn(() => 'forbidden')
+    expect(() => admission.withTransaction(a.resources, runId, operation)).toThrow('ASYNC_GUARD_INVALID')
+    expect(operation).not.toHaveBeenCalled()
+  })
+
   it.each(['reference_import_grants', 'import_runs'] as const)('denies portable frozen %s at capture and recheck', table => {
     const a = fixture(), admission = captureReferenceImportAdmission(a.runtime, a.ref, requestHash)
     freeze(a, table)

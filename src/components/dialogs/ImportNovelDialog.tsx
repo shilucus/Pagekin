@@ -1,5 +1,5 @@
 import type { ProjectDirectoryGrant } from '../../shared/ipc-channels'
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { FileUp, FolderOpen, BookOpen, FileText, Zap, Clock, AlertTriangle, RotateCcw } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
@@ -39,6 +39,12 @@ interface ImportNovelDialogProps {
 
 const kTokens = (tokens: number) => `${(tokens / 1_000).toFixed(0)}K`
 
+function prepareReferenceKnowledge(session: ProjectSessionContext, runId: string, executionOwner: string) {
+  return ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:prepare', {
+    operationId: randomUUID(), runId, executionOwner,
+  })
+}
+
 /** 小说拆解与仿写向导对话框 */
 export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogProps) {
   const createProject = useProjectStore((s) => s.createProject)
@@ -47,6 +53,20 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const activeWorkflows = useWorkflowStore((s) => s.activeRuns)
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
+  const dialogGeneration = useRef(0)
+  const launchGeneration = useRef(0)
+  const busyGeneration = useRef(0)
+
+  useLayoutEffect(() => () => {
+    dialogGeneration.current += 1
+    launchGeneration.current += 1
+  }, [open])
+
+  const closeDialog = useCallback(() => {
+    dialogGeneration.current += 1
+    launchGeneration.current += 1
+    onClose()
+  }, [onClose])
 
   // 表单状态
   const [name, setName] = useState('')
@@ -54,11 +74,15 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const [targetMode, setTargetMode] = useState<'new' | 'current'>('new')
   const [purpose, setPurpose] = useState<ImportPurpose>('reference')
   const [authorInference, setAuthorInference] = useState(true)
+  const [importing, setImporting] = useState(false)
 
   const [previousOpen, setPreviousOpen] = useState(open)
   if (previousOpen !== open) {
     setPreviousOpen(open)
-    if (open) setSavePath(null)
+    if (open) {
+      setSavePath(null)
+      setImporting(false)
+    }
   }
 
   // 拆章结果
@@ -72,7 +96,6 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   const [selectionProjectLeaseId, setSelectionProjectLeaseId] = useState('')
 
   // 导入流程
-  const [importing, setImporting] = useState(false)
   const [importNotice, setImportNotice] = useState('')
   const [resumableState, setResumableState] = useState<{
     projectLeaseId: string
@@ -269,6 +292,9 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
   }, [])
 
   const launchRun = useCallback(async (run: ImportRunSnapshot) => {
+    const dialog = dialogGeneration.current
+    const launch = ++launchGeneration.current
+    const current = () => dialogGeneration.current === dialog && launchGeneration.current === launch
     const project = useProjectStore.getState().currentProject
     const projectSession = captureProjectSession(project)
     if (!project || !projectSession) {
@@ -277,18 +303,48 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     const authorChapterNumbers = run.purpose === 'author-manuscript'
       ? await loadAuthorImportChapterNumbers(run, projectSession, project.path)
       : undefined
-    if (!isProjectSessionCurrent(projectSession)) return
-    const workflow = createImportWorkflow({
-      run,
-      projectPath: project.path,
-      projectSession,
-      executionOwner: randomUUID(),
-      authorChapterNumbers,
-    })
-    void startWorkflow(workflow, false).catch(error => {
-      console.error('[ImportNovel] 导入工作流失败:', error)
-    })
-    if (isProjectSessionCurrent(projectSession)) onClose()
+    if (!current() || !isProjectSessionCurrent(projectSession)) return
+    const executionOwner = randomUUID()
+    let referenceKnowledge: Awaited<ReturnType<typeof prepareReferenceKnowledge>> | undefined
+    const revoke = async () => {
+      if (!referenceKnowledge) return
+      try {
+        await ipc.invoke('reference-knowledge:v1:revoke', referenceKnowledge.reference)
+      } catch (error) {
+        console.error('[ImportNovel] 撤销参照导入授权失败:', error)
+      }
+    }
+    try {
+      if (run.purpose === 'reference') {
+        referenceKnowledge = await prepareReferenceKnowledge(projectSession, run.id, executionOwner)
+        if (!current() || !isProjectSessionCurrent(projectSession)) {
+          await revoke()
+          return
+        }
+      }
+      const workflow = createImportWorkflow({
+        run, projectPath: project.path, projectSession, executionOwner, authorChapterNumbers, referenceKnowledge,
+      })
+      let started = false
+      if (referenceKnowledge) {
+        const onStarted = workflow.onStarted
+        workflow.onStarted = () => {
+          onStarted?.()
+          started = true
+        }
+      }
+      void startWorkflow(workflow, false).then(async () => {
+        if (referenceKnowledge && !started) await revoke()
+      }, async error => {
+        console.error('[ImportNovel] 导入工作流失败:', error)
+        await revoke()
+      })
+    } catch (error) {
+      await revoke()
+      if (!current() || !isProjectSessionCurrent(projectSession)) return
+      throw error
+    }
+    if (current() && isProjectSessionCurrent(projectSession)) onClose()
   }, [onClose, startWorkflow, text])
 
   const applyPreparation = useCallback(async (
@@ -349,6 +405,9 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       || !currentProject
     ) return
 
+    const dialog = dialogGeneration.current
+    const busy = ++busyGeneration.current
+    launchGeneration.current += 1
     setImporting(true)
     setSplitError('')
     setImportNotice('')
@@ -385,6 +444,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         prepareRequest,
         project.path,
       )
+      if (dialogGeneration.current !== dialog || busyGeneration.current !== busy || !isProjectSessionCurrent(projectSession)) return
       if (!prepared.success) {
         throw new Error(prepared.errorCode === AUTHOR_IMPORT_PREVIEW_STALE
           ? text(
@@ -429,6 +489,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       if (!preparation.run) throw new Error(text('导入运行缺少持久化记录', 'The import run has no persisted record.'))
       await launchRun(preparation.run)
     } catch (e) {
+      if (dialogGeneration.current !== dialog || busyGeneration.current !== busy) return
       console.error('[ImportNovel] 导入失败:', e)
       if (purpose === 'author-manuscript') {
         setInspection(null)
@@ -437,7 +498,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       }
       setSplitError(displayedErrorMessage(locale, e))
     } finally {
-      setImporting(false)
+      if (dialogGeneration.current === dialog && busyGeneration.current === busy) setImporting(false)
     }
   }, [
     applyPreparation, authorInference, authorPreview, currentProject, inspection, launchRun, locale, purpose,
@@ -446,6 +507,9 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
 
   const handleResume = async () => {
     if (!resumableRun) return
+    const dialog = dialogGeneration.current
+    const busy = ++busyGeneration.current
+    launchGeneration.current += 1
     if (resumableRun.stage === 'parsing') {
       const completed = resumableRun.progressCompleted ?? resumableRun.completedSources ?? 0
       const total = resumableRun.progressTotal ?? resumableRun.totalSources ?? 0
@@ -466,25 +530,38 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
           resumableRun.id,
           project.path,
         )
-        if (!isProjectSessionCurrent(projectSession)) return
+        if (dialogGeneration.current !== dialog || busyGeneration.current !== busy || !isProjectSessionCurrent(projectSession)) return
         if (!result.success || !result.preparation) throw new Error(result.error || text(
           '无法完成已解析的导入，请重试。',
           'Could not finalize the parsed import. Please try again.',
         ))
         await applyPreparation(result.preparation, projectSession, resumableRun.id)
       } catch (error) {
-        if (!isProjectSessionCurrent(projectSession)) return
+        if (dialogGeneration.current !== dialog || busyGeneration.current !== busy || !isProjectSessionCurrent(projectSession)) return
         setSplitError(displayedErrorMessage(locale, error))
       } finally {
-        setImporting(false)
+        if (dialogGeneration.current === dialog && busyGeneration.current === busy) setImporting(false)
       }
       return
     }
-    await launchRun(resumableRun)
+    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!session) return
+    setImporting(true)
+    setSplitError('')
+    try {
+      await launchRun(resumableRun)
+    } catch (error) {
+      if (dialogGeneration.current === dialog && busyGeneration.current === busy && isProjectSessionCurrent(session)) setSplitError(displayedErrorMessage(locale, error))
+    } finally {
+      if (dialogGeneration.current === dialog && busyGeneration.current === busy) setImporting(false)
+    }
   }
 
   const handleRestart = async () => {
     if (!resumableRun) return
+    const dialog = dialogGeneration.current
+    const busy = ++busyGeneration.current
+    launchGeneration.current += 1
     const project = useProjectStore.getState().currentProject
     const session = captureProjectSession(project)
     if (!project || !session) return
@@ -498,7 +575,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         randomUUID(),
         project.path,
       )
-      if (!isProjectSessionCurrent(session)) return
+      if (dialogGeneration.current !== dialog || busyGeneration.current !== busy || !isProjectSessionCurrent(session)) return
       if (!result.success || !result.run) throw new Error(result.error || text(
         '无法重新开始导入', 'Could not restart the import.',
       ))
@@ -520,10 +597,10 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       }
       await launchRun(result.run)
     } catch (error) {
-      if (!isProjectSessionCurrent(session)) return
+      if (dialogGeneration.current !== dialog || busyGeneration.current !== busy || !isProjectSessionCurrent(session)) return
       setSplitError(displayedErrorMessage(locale, error))
     } finally {
-      setImporting(false)
+      if (dialogGeneration.current === dialog && busyGeneration.current === busy) setImporting(false)
     }
   }
 
@@ -534,7 +611,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     : null
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+    <Dialog open={open} onOpenChange={(v) => !v && closeDialog()}>
       <DialogContent className="max-w-[560px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -943,7 +1020,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>{text('取消', 'Cancel')}</Button>
+          <Button variant="ghost" onClick={closeDialog}>{text('取消', 'Cancel')}</Button>
           <Button
             onClick={handleImport}
             disabled={
