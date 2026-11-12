@@ -79,7 +79,7 @@ async function networkCounts(app) {
   })
 }
 
-function validateInspection(inspection, purpose, chapters, expectedBytes, expectedWords, chapterWords) {
+export function validateInspection(inspection, purpose, chapters, expectedBytes, expectedWords, chapterWords) {
   assert.ok(inspection && typeof inspection === 'object', 'PERFORMANCE_PARSE_INSPECTION_MISSING')
   assert.equal(inspection.purpose, purpose)
   assert.equal(inspection.sourceCount, 1)
@@ -97,7 +97,7 @@ function validateInspection(inspection, purpose, chapters, expectedBytes, expect
     totalBytes: inspection.totalBytes, totalWords: inspection.totalWords }
 }
 
-function validateReference(preparation, readback, runId, chapters, inspection) {
+export function validateReference(preparation, readback, runId, chapters, inspection) {
   assert.equal(preparation?.classification, 'new')
   for (const [field, length] of [['newChapterNumbers', chapters], ['duplicateChapterNumbers', 0], ['conflictChapterNumbers', 0]]) {
     assert.ok(Array.isArray(preparation[field]))

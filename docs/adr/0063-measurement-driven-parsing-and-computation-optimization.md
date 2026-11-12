@@ -7,6 +7,8 @@ Accepted
 
 2026-11-12 Stage 52 局部实现：上段的作者映射重复哈希描述对应 Stage 51 测量时版本。当前作者及旧版 reference 检查的最终映射复用同次主进程解析、同一正文已计算的指纹和 UTF-8 字节数；缺字段的 EPUB 分支仍按原语义计算。reference repository 的独立内容重验及 inspection 的尺寸校验不变，多行无标题路径内部的临时哈希也未清理。[Stage 52 证据](../plans/2026-11-07-creation-runtime-modernization/stage-52-evidence.md)区分确定性调用次数、实际测量与未覆盖项，不由这两行复用推导整体提速、取消/关闭时限或完整功能通过。
 
+2026-11-13 Stage 53 证据补齐：实际千章 author/reference 的关闭等待已准入 inspection 排空，再以新租约重开；reference prepared/ready 收据实际读回。chooser 取消没有创建 run，未发生读/解析/保存；这不是同步解析中断。当前约25.6ms 的 parse 包含约14.6ms 哈希，secure-read wall time 超过3.2s；较大的 reference loop 样本不能归因于纯解析。因此没有依据为本次等价优化强加 Worker，亦不证明 Worker 更慢或所有长任务消失。CPU/RSS、较差的历史观察、关闭等待含 chooser/read/commit 的范围及三条 AC 映射见[Stage 53](../plans/2026-11-07-creation-runtime-modernization/stage-53-evidence.md)；功能状态仍以清单及独立终审为准，不沿用下文未经证实的量化收益。
+
 ## 背景与问题 (Context & Problem)
 在 Pagekin 的大书导入与拆解链路（`import-controller.ts` 与 `import-run-repository.ts`）中：
 1. **重复解析与全量双重切分 (E07)**：

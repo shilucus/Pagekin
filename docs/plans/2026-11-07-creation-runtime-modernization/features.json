@@ -495,8 +495,8 @@
         "performance",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -521,6 +521,30 @@
           "environment": "Windows x64; driver Node24.13.0, pnpm11.11.0; Electron44.9.3 / Node24.22.0",
           "result": "Two-line same-content main-process fingerprint/size reuse; real-handler parity for TXT/MD/no-heading/EPUB/legacy reference. Fresh12-file210/210 after retained203/210 fixture failure; typecheck/lint/color/i18n/build exit0. Six actual no-model inspections passed; author hash counts20/200/2000 to10/100/1000, structured reference unchanged.",
           "limitations": "Partial PERF004 only, exact dirty-source/build hashes bound to entry SHA. Single observations do not establish overall speedup; author1000 sampled RSS increased and reference1000 loop max146.014207 to163.577855ms/save97.9402 to104.5425ms worsened. Repository integrity checks retained. No active-parse cancel/close timing, EPUB performance, Worker, quality or platform qualification."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "910541848afb2370c09804bdda1e79cc976adbb4",
+          "artifactOrReceipt": "stage-53-evidence.md; stage-53-source-manifest.json; stage-52-evidence.md",
+          "environment": "Windows x64; Node24.13.0, pnpm11.11.0, Vitest4.1.12",
+          "result": "Current real-handler parity/security/parser/repository/runtime/db-context and lifecycle/output package passed15 files332/332,0 failed/pending/todo. Initial lint unused binding fixed without behavior change; full fresh332/332 and lint/color exit0. Typecheck/i18n exit0 before that verified one-binding fix. Three PERF004 AC mapped to current source and Stage51/52/53 evidence.",
+          "limitations": "Entry SHA plus exact working-tree harness identities, not a clean-source claim. Orchestration tests are injected; actual Electron evidence is separately recorded. No current application change or new Stage53 build; unchanged Stage52 build/controller identities verified. No literary quality or package/platform qualification."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "910541848afb2370c09804bdda1e79cc976adbb4",
+          "artifactOrReceipt": "stage-53-evidence.md; stage-53-source-manifest.json; stage-51-evidence.md; stage-52-evidence.md",
+          "environment": "Windows x64; driver Node24.13.0; Electron44.9.3 / Node24.22.0; uncontrolled cache",
+          "result": "Profile-bound duplicate-hash reuse and explicit no-further-isolation rationale; existing6-row before/after matrices retain worse observations. Fresh author/reference1000 close waits3326.4/3457.5ms, main loop max59.342847/154.140671ms, sampled RSS235810816/235204608 bytes. Chooser cancel4.9ms with actual cancellation counter and absent read/parse/hash/save events. Whole CPU windows3655.5715/3807.2206/330.0973ms, periodic RSS16/16/3 samples.",
+          "limitations": "Single observations, no overall/statistical speedup. Parse/hash overlap; secure-read wall time not physical IO. Close includes held chooser and remaining admitted work, not active-parse cancellation or independent close cost. No Worker/clone benchmark, EPUB performance or universal no-isolation conclusion. Prior worse loop/RSS/save and separate full-workflow timeout remain visible."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "910541848afb2370c09804bdda1e79cc976adbb4",
+          "artifactOrReceipt": "stage-53-evidence.md; stage-53-source-manifest.json",
+          "environment": "Windows x64; Electron44.9.3, Node24.22.0, Chrome152.0.7977.167; fresh fictional scratch projects/profile",
+          "result": "Three reviewed no-model scenes exited0,1 attempt/0 failures each. Real close drains admitted author/reference inspection, neutral runtime and actual reopen with new same-project lease; reference prepared/ready persistent readback. Chooser cancellation returns null with no run. All CPU/main/renderer coverage present, zero stop/cleanup failure, normal quit and empty reported effects/residual arrays; final process count0.",
+          "limitations": "Native chooser is replaced, remaining filesystem/parser/DB/close services are real. Request cutoff before_quit, not whole-shutdown coverage. Three viewed PNGs are unchanged empty settings, not corpus/adoption proof. No real model, active-parse abort, other-platform/package or full import/imitation workflow qualification."
         }
       ]
     },

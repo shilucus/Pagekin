@@ -18,7 +18,8 @@ const SAFE_CODES = new Set(['ERR_ASSERTION', 'ETIMEDOUT', 'ECONNRESET', 'ECONNRE
 const ERROR_CLASSES = new Set(['Error', 'TimeoutError', 'AssertionError', 'AggregateError', 'TypeError', 'RangeError'])
 const SCENARIOS = new Set(['perf-import-10', 'perf-import-100', 'perf-import-1000', 'perf-long-stream', 'perf-slow-embedding', 'perf-rate-limit',
   'perf-parse-author-10', 'perf-parse-author-100', 'perf-parse-author-1000',
-  'perf-parse-reference-10', 'perf-parse-reference-100', 'perf-parse-reference-1000'])
+  'perf-parse-reference-10', 'perf-parse-reference-100', 'perf-parse-reference-1000',
+  'perf-parse-author-close-1000', 'perf-parse-reference-close-1000', 'perf-parse-reference-cancel-1000'])
 const IMPORT_STAGES = ['parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'author-commit',
   'author-publish', 'author-postprocess', 'refresh', 'completed']
 const OPERATIONS = ['import-global-facts', 'import-blueprints', 'import-inference', 'import-inference:endpoint-card-recovery',
@@ -181,6 +182,11 @@ const measured = value => fields(value, {
     stage: member(IMPORT_STAGES), status: member(['ready', 'running', 'failed', 'cancelled', 'completed']),
     ...counts(['sourceCount', 'chapterCount', 'totalBytes', 'totalWords', 'completedSources', 'totalSources',
       'newCount', 'duplicateCount', 'conflictCount']),
+  }),
+  lifecycle: value => fields(value, {
+    mode: member(['close-drain', 'chooser-cancel']), closeRequested: boolean, closeWaitMs: number,
+    settledBeforeReload: boolean, runtimeClosed: boolean, reopened: boolean, sessionRotated: boolean,
+    chooserResult: member(['selected', 'cancelled']), runReadback: member(['prepared', 'absent']),
   }),
   ...counts(['importedChapters', 'blueprintChapters', 'fixtureAcceptedRequests', 'finalFixtureAcceptedRequests',
     'cleanupFailures', 'attempted', 'failed', 'stopFailures']), elapsedMs: number,

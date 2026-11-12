@@ -8,7 +8,7 @@ import { MATERIAL_DECISION_OMISSION_REASONS } from '../../../src/shared/generati
 import { PERFORMANCE_METRICS } from '../../../src/shared/performance-baseline.ts'
 
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { driveSessions, releaseSessionRoot } from '../drive.mjs'
+import { driveSessions, parseArgs, releaseSessionRoot } from '../drive.mjs'
 
 const directories = []
 function temporaryDirectory() {
@@ -59,6 +59,44 @@ it('projects the six no-model parse scenes and only their bounded inspection fie
   }
   const author = projectPerformanceResult({ measured: { inspection: { purpose: 'author-manuscript', sourceCount: 1 } } })
   assert.deepEqual(author.measured.inspection, { purpose: 'author-manuscript', sourceCount: 1 })
+})
+
+it('registers and projects only the bounded inspection lifecycle evidence', () => {
+  const scenes = ['perf-parse-author-close-1000', 'perf-parse-reference-close-1000', 'perf-parse-reference-cancel-1000']
+  for (const [index, scenario] of scenes.entries()) {
+    assert.equal(parseArgs(['--scenario', scenario]).scenario, scenario)
+    const cancel = index === 2
+    const lifecycle = { mode: cancel ? 'chooser-cancel' : 'close-drain', closeRequested: !cancel,
+      closeWaitMs: cancel ? null : 3200.5, settledBeforeReload: !cancel, runtimeClosed: !cancel,
+      reopened: !cancel, sessionRotated: cancel ? null : true, chooserResult: cancel ? 'cancelled' : 'selected',
+      runReadback: index === 0 ? null : cancel ? 'absent' : 'prepared' }
+    const projected = projectPerformanceResult({ scenario, session: scenario, measured: { scenario,
+      lifecycle: { ...lifecycle, path: 'private-project', leaseId: 'private-lease', result: 'private-source' } } })
+    assert.equal(projected.scenario, scenario)
+    assert.equal(projected.session, scenario)
+    assert.equal(projected.measured.scenario, scenario)
+    assert.deepEqual(projected.measured.lifecycle, lifecycle)
+    assert.equal(JSON.stringify(projected).includes('private-'), false)
+  }
+})
+
+it('keeps absent and invalid lifecycle observations distinct from observed values', () => {
+  const absent = projectPerformanceResult({ measured: { lifecycle: {} } })
+  assert.deepEqual(absent.measured.lifecycle, {})
+  const invalid = projectPerformanceResult({ measured: { lifecycle: { mode: 'private-mode', closeRequested: 'true',
+    closeWaitMs: Number.NaN, settledBeforeReload: 1, runtimeClosed: 'false', reopened: {}, sessionRotated: 'private-lease',
+    chooserResult: 'private-file', runReadback: 'private-run', secret: 'private-prompt' } } })
+  assert.deepEqual(invalid.measured.lifecycle, { mode: null, closeRequested: null, closeWaitMs: null,
+    settledBeforeReload: null, runtimeClosed: null, reopened: null, sessionRotated: null, chooserResult: null, runReadback: null })
+  const negative = projectPerformanceResult({ measured: { lifecycle: { closeWaitMs: -1 } } })
+  assert.deepEqual(negative.measured.lifecycle, { closeWaitMs: null })
+  const notObserved = projectPerformanceResult({ measured: { failureStage: 'verify', lifecycle: {
+    chooserResult: null, runReadback: null, closeWaitMs: null, sessionRotated: null,
+  } } })
+  assert.equal(notObserved.measured.failureStage, 'verify')
+  assert.deepEqual(notObserved.measured.lifecycle, { chooserResult: null, runReadback: null,
+    closeWaitMs: null, sessionRotated: null })
+  assert.equal(JSON.stringify(invalid).includes('private-'), false)
 })
 
 it('distinguishes observed zero, missing and poisoned CPU and RSS evidence', () => {

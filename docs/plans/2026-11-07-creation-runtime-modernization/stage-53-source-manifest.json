@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "stage": 53,
+  "date": "2026-11-13",
+  "entryHead": "910541848afb2370c09804bdda1e79cc976adbb4",
+  "sourceBinding": "Electron reports executed on2026-11-12 identify entryHead plus the final uncommitted six harness/test files below. Application controller and three build entries are unchanged from the reviewed Stage52 build. Initial module EB0EC15961B46E1211BFFFC057CEACCC6D5B6320FBDA7F3282145611EC2572A5 is historical before the unused-binding-only lint fix, not the current file. Stage51/52 documents and manifests bind the earlier application comparison; they are not fresh executions. No self-hash or mutable feature/review record is included.",
+  "files": {
+    "scripts/redesign/drive.mjs": "4B1E1C3B300AB7323530314339B69390E9462A473A054EA937426A0FD3FDD1FC",
+    "scripts/redesign/drive-performance-output.mjs": "37EC50ED3D9C98AA8F6130FB40C11E36577D9FCD8993C10437548D7330D34C5C",
+    "scripts/redesign/__tests__/drive-performance-output.test.mjs": "597D75A27C1A15FB0DE87B35FE907F8E7E40D38A2D0A9A7A253458FA9D15632A",
+    "scripts/redesign/performance-parse-scenarios.mjs": "525171DFCBFA15D4051A35FDF83E9615020B582FA5B408A729610184B3C9DA94",
+    "scripts/redesign/performance-inspection-lifecycle-scenarios.mjs": "EF55707B85B495401225E593E678EB405F699C412367DDC4DE38BD49A51A9C39",
+    "scripts/redesign/__tests__/performance-inspection-lifecycle-scenarios.test.mjs": "A4DFB5A5E1278058D59B742CA008A7103269AD3EA123723B1E43A831B90DCE7E",
+    "electron/controllers/import-controller.ts": "71F86397E331B4ACED8B0849538E8F949A7F43C0E94BF9D28C6D456B5DD40A65",
+    "scripts/redesign/performance-baseline.mjs": "3CB7E9109C4444BD38FE2048E59B84BD229C623F7590F59A0DBC1959C376FFBB",
+    "scripts/redesign/performance-scenarios.mjs": "8BC89D4C777C3A82F4C7C57EF89172CC73BF57AA2204218957C6CDABF860CF4C",
+    "docs/adr/0063-measurement-driven-parsing-and-computation-optimization.md": "87C8D05C3F80BBCF2D698F0CEBEE523C5E2ACA9AFE5250F80E3567C14CCA10B5",
+    "dist/index.html": "0D71B40985A44204213BC9802A7C1029BDAE792590F9A8D9EC00DCB8CA6825FC",
+    "dist-electron/main.js": "F91971254663B411D27774D4710967BE7F8D32F130FC6A0F071AE88E7406EF21",
+    "dist-electron/preload.mjs": "CE3796C389B464906E650CF17953392FB23EDD5A18DFB9951A2D7D7EA5147B2B",
+    ".runtime/creation-runtime-modernization/stage53/native-initial.json": "EF61D0AF36E15C34F64C626104C3AAE88D96734436CB75EEDA321561330D6667",
+    ".runtime/creation-runtime-modernization/stage53/native-final.json": "068043759CFD4DE614F82988F1C0CDEDFD488592686FEE0B4F3B5CBA90756DC9",
+    ".runtime/creation-runtime-modernization/stage53/electron/perf-parse-author-close-1000-light.json": "BCE60718902D44FC9FF636425BC53BD90F537C2A190BFCEC70040E60F5C7814A",
+    ".runtime/creation-runtime-modernization/stage53/electron/perf-parse-author-close-1000-light.png": "88BBB76472040ADC997A0E975022D434055AE0140F9F393007BD04108F30E60C",
+    ".runtime/creation-runtime-modernization/stage53/electron/perf-parse-reference-close-1000-light.json": "727748BCE1F5FF31EC7379694B22357E4A41B31E67F5FDDA5479B7CC66D92FDF",
+    ".runtime/creation-runtime-modernization/stage53/electron/perf-parse-reference-close-1000-light.png": "88BBB76472040ADC997A0E975022D434055AE0140F9F393007BD04108F30E60C",
+    ".runtime/creation-runtime-modernization/stage53/electron/perf-parse-reference-cancel-1000-light.json": "9D71CD325C16A7E608EE64418D7D26F381F776DE49695418E81A7A6A4946EF6A",
+    ".runtime/creation-runtime-modernization/stage53/electron/perf-parse-reference-cancel-1000-light.png": "88BBB76472040ADC997A0E975022D434055AE0140F9F393007BD04108F30E60C",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-51-evidence.md": "F04008287266E19CC66376479276BEC176BD103573DB78991AE1D6C9F88DE61C",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-51-source-manifest.json": "A7C950E6DB157D92C516698306EF0ADB89E82CAED248F18C50BD963687766F1D",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-52-evidence.md": "F4A6D87B74D674941E3FFAD8CFF49F019A75C0F843C3C299184BEE089BCD7D23",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-52-source-manifest.json": "7C4E491684BDAED02FE0E0D14842F5B975D40C6E624443C9947C42805BDDC472"
+  },
+  "protected": {
+    "docs/repository-analysis-2026-11-07.md": "BB6866223C596C690E4D2E35C38FAA9EBB05E45084776EE1B285083BAD89A74B",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-evidence.md": "5AA85559B9A71022D378CFA7B50EB55E1539BEABD77E1766050D819FA336F1F9",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-source-manifest.json": "7AE7D4318C58DC872664BB89BD455A3995A3C02E5C2DE4E2C8FE7D3D9AD48130"
+  }
+}
