@@ -8,10 +8,12 @@ import '../../../../styles/paper-ink/index.css'
 import '../../stage.css'
 import type { ProjectData } from '../../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../../shared/project-session-context'
+import { globalEventBus } from '../../../../shared/event-bus'
 import { renderSynopsisDbText, synopsisFactsFingerprint } from '../../../../shared/plot-outline-checkpoint'
 import { PLOT_OUTLINE_PROTOCOL, renderPlotOutlineSynopsis } from '../../../../shared/plot-outline-contract'
 import { EMPTY_CARD, useCharacterStore } from '../../../../stores/character-store'
 import { useEditorStore } from '../../../../stores/editor-store'
+import { useDraftStore } from '../../../../stores/draft-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import { useStageStore } from '../../../../stores/navigation/stage-store'
 import { useProjectStore } from '../../../../stores/project-store'
@@ -27,7 +29,7 @@ function snapshot<T>(store: StoreApi<T>): () => void {
   const state = store.getState()
   return () => store.setState(state, true)
 }
-const restores = [useProjectStore, useWorkflowStore, useStageStore, useLocaleStore, useEditorStore, useCharacterStore].map(store => snapshot(store as StoreApi<unknown>))
+const restores = [useProjectStore, useWorkflowStore, useStageStore, useLocaleStore, useEditorStore, useCharacterStore, useDraftStore].map(store => snapshot(store as StoreApi<unknown>))
 
 let root: Root | undefined
 let host: HTMLDivElement | undefined
@@ -94,6 +96,8 @@ beforeEach(() => {
   rosterStatus = 'empty'
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
     if (channel === 'db:project-core-get') return core
+    if (channel === 'db:blueprint-get-all') return []
+    if (channel === 'db:draft-list-all') return []
     if (channel === 'fs:read-json') return partial ? { success: true, data: partial } : { success: false, error: 'not found' }
     if (channel === 'db:character-roster-read') return { schemaVersion: 1, revision: 1, migrationState: 'ready', status: rosterStatus, entries: [], renderedMarkdown: '林舟、沈砚', projectionHash: 'p', factHash: 'f' }
     if (channel === 'generation:list') return []
@@ -537,25 +541,29 @@ describe('架构阶段', () => {
       if (channel === 'db:project-core-get') await held
       return answer(channel, ...args)
     })
-    await act(async () => root!.render(<StageArchitecture projectKey={session.projectPath} />))
-    const shown = () => [...host!.querySelectorAll<HTMLElement>('[data-section="premise"] .arch-section-actions button')]
-      .filter(action => action.checkVisibility({ visibilityProperty: true }))
-      .map(action => action.textContent || action.getAttribute('aria-label'))
-    expect(host!.querySelector('.arch-page[data-loading]')).not.toBeNull()
-    expect(host!.querySelectorAll('[data-section="premise"] .arch-section-actions button').length).toBeGreaterThan(0)
-    expect(shown()).toEqual([])
+    try {
+      await act(async () => root!.render(<StageArchitecture projectKey={session.projectPath} />))
+      const shown = () => [...host!.querySelectorAll<HTMLElement>('[data-section="premise"] .arch-section-actions button')]
+        .filter(action => action.checkVisibility({ visibilityProperty: true }))
+        .map(action => action.textContent || action.getAttribute('aria-label'))
+      expect(host!.querySelector('.arch-page[data-loading]')).not.toBeNull()
+      expect(host!.querySelectorAll('[data-section="premise"] .arch-section-actions button').length).toBeGreaterThan(0)
+      expect(shown()).toEqual([])
 
-    await act(async () => release())
-    await vi.waitFor(() => expect(host!.querySelector('.arch-page[data-loading], .arch-page[data-cast-loading]')).toBeNull())
-    expect(shown()).toEqual(['编辑', '「故事前提」的更多操作'])
+      await act(async () => release())
+      await vi.waitFor(() => expect(host!.querySelector('.arch-page[data-loading], .arch-page[data-cast-loading]')).toBeNull())
+      expect(shown()).toEqual(['意见修订', '编辑', '「故事前提」的更多操作'])
 
-    hold()
-    await click('架构的更多操作')
-    await click('刷新状态')
-    await vi.waitFor(() => expect(host!.querySelector('.arch-page[data-loading]')).not.toBeNull())
-    expect(shown()).toEqual(['编辑', '「故事前提」的更多操作'])
-    await act(async () => release())
-    await vi.waitFor(() => expect(host!.querySelector('.arch-page[data-loading]')).toBeNull())
+      hold()
+      await click('架构的更多操作')
+      await click('刷新状态')
+      await vi.waitFor(() => expect(host!.querySelector('.arch-page[data-loading]')).not.toBeNull())
+      expect(shown()).toEqual(['意见修订', '编辑', '「故事前提」的更多操作'])
+      await act(async () => release())
+      await vi.waitFor(() => expect(host!.querySelector('.arch-page[data-loading]')).toBeNull())
+    } finally {
+      release()
+    }
   })
 
   it('四节状态读取失败时动作区照常显示并可聚焦，页头停在加载态、主按钮不可用', async () => {
@@ -570,22 +578,183 @@ describe('架构阶段', () => {
     window.addEventListener('unhandledrejection', record)
     try {
       await act(async () => root!.render(<StageArchitecture projectKey={session.projectPath} />))
-      await vi.waitFor(() => expect(rejected.map(reason => (reason as Error).message)).toEqual(['数据库读取失败']))
+      await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'db:project-core-get')).toBe(true))
+      const shown = (section: string) => [...host!.querySelectorAll<HTMLElement>(`[data-section="${section}"] .arch-section-actions button`)]
+        .filter(action => action.checkVisibility({ visibilityProperty: true }))
+        .map(action => action.textContent || action.getAttribute('aria-label'))
+      await vi.waitFor(() => expect(shown('premise')).toEqual(['自己写', 'AI 生成此节', '「故事前提」的更多操作']))
+      expect(shown('characters')).toEqual(['打开角色名单', '「角色名单」的更多操作'])
+      expect(host!.querySelector('.arch-page[data-loading]')).not.toBeNull()
+      expect(host!.querySelector('.arch-eyebrow')?.textContent).toBe('架构')
+      expect(primary()).toBe('AI 生成架构')
+      expect(host!.querySelector<HTMLButtonElement>('.arch-header .pi-btn--primary')!.disabled).toBe(true)
+      const cast = button('打开角色名单') as HTMLButtonElement
+      cast.focus()
+      expect(document.activeElement).toBe(cast)
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(rejected).toEqual([])
+      invoke.mockImplementation(answer)
+      await click('架构的更多操作')
+      await click('刷新状态')
+      await vi.waitFor(() => expect(host!.querySelector('.arch-page[data-loading]')).toBeNull())
+      expect(host!.querySelector('[data-section="premise"] .arch-section-summary')?.textContent).toContain(PREMISE.slice(0, 12))
+      expect(rejected).toEqual([])
     } finally {
       window.removeEventListener('unhandledrejection', record)
     }
-    const shown = (section: string) => [...host!.querySelectorAll<HTMLElement>(`[data-section="${section}"] .arch-section-actions button`)]
-      .filter(action => action.checkVisibility({ visibilityProperty: true }))
-      .map(action => action.textContent || action.getAttribute('aria-label'))
-    await vi.waitFor(() => expect(shown('premise')).toEqual(['自己写', 'AI 生成此节', '「故事前提」的更多操作']))
-    expect(shown('characters')).toEqual(['打开角色名单', '「角色名单」的更多操作'])
-    expect(host!.querySelector('.arch-page[data-loading]')).not.toBeNull()
-    expect(host!.querySelector('.arch-eyebrow')?.textContent).toBe('架构')
-    expect(primary()).toBe('AI 生成架构')
-    expect(host!.querySelector<HTMLButtonElement>('.arch-header .pi-btn--primary')!.disabled).toBe(true)
-    const cast = button('打开角色名单') as HTMLButtonElement
-    cast.focus()
-    expect(document.activeElement).toBe(cast)
+  })
+
+  it.each(['manual', 'file', 'workflow'] as const)('已加载后 %s 刷新失败保留内容且后续可恢复，不产生未处理拒绝', async (source) => {
+    await render()
+    const answer = invoke.getMockImplementation()!
+    let failed = false
+    let coreReads = 0
+    let settleFailure!: () => void
+    const settled = new Promise<void>(resolve => { settleFailure = resolve })
+    invoke.mockImplementation(async (channel, ...args) => {
+      if (channel === 'db:project-core-get' && !failed && (source !== 'manual' || ++coreReads === 2)) {
+        failed = true
+        try { throw new Error('数据库读取失败') } finally { settleFailure() }
+      }
+      return answer(channel, ...args)
+    })
+    const rejected: unknown[] = []
+    const record = (event: PromiseRejectionEvent) => { rejected.push(event.reason) }
+    window.addEventListener('unhandledrejection', record)
+    try {
+      if (source === 'manual') {
+        await click('架构的更多操作')
+        await click('刷新状态')
+      } else if (source === 'file') {
+        await act(async () => globalEventBus.emit('ARCH_FILE_UPDATED', { fileName: 'premise.md', projectPath: session.projectPath, projectSession: session, runId: 'file-run' }))
+      } else {
+        await act(async () => globalEventBus.emit('WORKFLOW_COMPLETE', { type: 'architecture_generation', projectPath: session.projectPath, projectSession: session, runId: 'workflow-run' }))
+      }
+      await vi.waitFor(() => expect(failed).toBe(true))
+      await settled
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(rejected).toEqual([])
+      expect(host!.querySelector('[data-section="premise"] .arch-section-summary')?.textContent).toContain(PREMISE.slice(0, 12))
+      expect(button('意见修订')).toBeTruthy()
+      expect(host!.querySelector('.arch-page[data-loading]')).not.toBeNull()
+      expect(host!.querySelector<HTMLButtonElement>('.arch-header .pi-btn--primary')!.disabled).toBe(true)
+      core = { ...core, premise: '新的正式前提。'.repeat(20) }
+      await act(async () => globalEventBus.emit('ARCH_FILE_UPDATED', { fileName: 'premise.md', projectPath: session.projectPath, projectSession: session, runId: 'recovery-run' }))
+      await vi.waitFor(() => expect(host!.querySelector('[data-section="premise"] .arch-section-summary')?.textContent).toContain('新的正式前提'))
+      expect(host!.querySelector('.arch-page[data-loading]')).toBeNull()
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(rejected).toEqual([])
+    } finally {
+      window.removeEventListener('unhandledrejection', record)
+    }
+  })
+
+  it.each(['same-session', 'new-lease', 'new-project'] as const)('旧请求迟到失败不污染 %s 的新结果', async (scenario) => {
+    await render()
+    const answer = invoke.getMockImplementation()!
+    let release!: () => void
+    let settled!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const oldSettled = new Promise<void>(resolve => { settled = resolve })
+    let startedOld = false
+    let hold = true
+    invoke.mockImplementation(async (channel, ...args) => {
+      if (channel === 'db:project-core-get' && hold) {
+        hold = false
+        startedOld = true
+        try { await gate; throw new Error('旧请求读取失败') } finally { settled() }
+      }
+      return answer(channel, ...args)
+    })
+    const rejected: unknown[] = []
+    const record = (event: PromiseRejectionEvent) => { rejected.push(event.reason) }
+    window.addEventListener('unhandledrejection', record)
+    try {
+      await act(async () => globalEventBus.emit('ARCH_FILE_UPDATED', { fileName: 'premise.md', projectPath: session.projectPath, projectSession: session, runId: 'old-run' }))
+      await vi.waitFor(() => expect(startedOld).toBe(true))
+      core = { ...core, premise: '新会话正式前提。'.repeat(20) }
+      if (scenario === 'same-session') {
+        await act(async () => globalEventBus.emit('ARCH_FILE_UPDATED', { fileName: 'premise.md', projectPath: session.projectPath, projectSession: session, runId: 'new-run' }))
+      } else {
+        const next = scenario === 'new-lease' ? { ...session, leaseId: '新租约' }
+          : { projectId: '另一部', projectPath: 'C:/novels/other', leaseId: '新租约' }
+        await act(async () => {
+          useProjectStore.setState({ currentProject: { id: next.projectId, path: next.projectPath, sessionLease: next.leaseId, name: '另一部', novelConfig: { totalChapters: 24 } } as unknown as ProjectData })
+          setActiveProjectSessionContext(next)
+          root!.render(<StageArchitecture projectKey={next.projectPath} />)
+        })
+      }
+      await vi.waitFor(() => expect(host!.querySelector('[data-section="premise"] .arch-section-summary')?.textContent).toContain('新会话正式前提'))
+      await act(async () => { release(); await oldSettled })
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(rejected).toEqual([])
+      expect(host!.querySelector('[data-section="premise"] .arch-section-summary')?.textContent).toContain('新会话正式前提')
+      expect(host!.querySelector('.arch-page[data-loading]')).toBeNull()
+    } finally {
+      release()
+      if (startedOld) await oldSettled
+      window.removeEventListener('unhandledrejection', record)
+    }
+  })
+
+  it.each(['new-lease', 'new-project'] as const)('新读取开始前，旧首次读取失败不结算 %s 的状态', async (scenario) => {
+    filledSpine(['premise'])
+    const answer = invoke.getMockImplementation()!
+    let release!: () => void
+    let settleOld!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const oldSettled = new Promise<void>(resolve => { settleOld = resolve })
+    let oldStarted = false
+    let rosterRead = false
+    let coreReads = 0
+    invoke.mockImplementation(async (channel, ...args) => {
+      if (channel === 'db:project-core-get') {
+        coreReads++
+        if (coreReads === 1) {
+          oldStarted = true
+          try { await gate; throw new Error('旧会话首次读取失败') } finally { settleOld() }
+        }
+      }
+      const result = await answer(channel, ...args)
+      if (channel === 'db:character-roster-read') rosterRead = true
+      return result
+    })
+    const rejected: unknown[] = []
+    const record = (event: PromiseRejectionEvent) => { rejected.push(event.reason) }
+    window.addEventListener('unhandledrejection', record)
+    try {
+      await act(async () => root!.render(<StageArchitecture projectKey={session.projectPath} />))
+      await vi.waitFor(() => { expect(oldStarted).toBe(true); expect(rosterRead).toBe(true) })
+      await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 0)) })
+      expect(coreReads).toBe(1)
+      expect(host!.querySelector('.arch-page[data-status-unread]')).not.toBeNull()
+      const next = scenario === 'new-lease' ? { ...session, leaseId: '新租约' }
+        : { projectId: '另一部', projectPath: 'C:/novels/other', leaseId: '新租约' }
+      setActiveProjectSessionContext(next)
+      await act(async () => { release(); await oldSettled })
+      await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 0)) })
+      expect(coreReads).toBe(1)
+      expect(rejected).toEqual([])
+      expect(host!.querySelector('.arch-page[data-status-unread]')).not.toBeNull()
+      expect(host!.querySelector('.arch-page[data-loading]')).not.toBeNull()
+      const shown = [...host!.querySelectorAll<HTMLElement>('[data-section="premise"] .arch-section-actions button')]
+        .filter(action => action.checkVisibility({ visibilityProperty: true }))
+      expect(shown).toEqual([])
+
+      core = { ...core, premise: '新会话正式前提。'.repeat(20) }
+      await act(async () => {
+        useProjectStore.setState({ currentProject: { id: next.projectId, path: next.projectPath, sessionLease: next.leaseId, name: '另一部', novelConfig: { totalChapters: 24 } } as unknown as ProjectData })
+        root!.render(<StageArchitecture projectKey={next.projectPath} />)
+      })
+      await vi.waitFor(() => expect(host!.querySelector('[data-section="premise"] .arch-section-summary')?.textContent).toContain('新会话正式前提'))
+      expect(coreReads).toBeGreaterThan(1)
+      expect(host!.querySelector('.arch-page[data-status-unread]')).toBeNull()
+      expect(rejected).toEqual([])
+    } finally {
+      release()
+      if (oldStarted) await oldSettled
+      window.removeEventListener('unhandledrejection', record)
+    }
   })
 
   it('英文界面：大纲只生成到第 1 章停下时说 Chapter 1 stays as it is，不说 The first 1 chapter stay', async () => {

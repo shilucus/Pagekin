@@ -23,7 +23,7 @@ import {
   isProjectSessionCurrent,
   isProjectSessionPath,
 } from '../project-session-gate'
-import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import type { DatabaseChannels, ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectSessionContext } from '../../shared/project-session-context'
 import type { MainGenerationRunHandle } from '../../services/generation/generation-runtime'
 import { architectureRecoveryHandle } from '../../shared/architecture-recovery-navigation'
@@ -125,14 +125,20 @@ export function useArchitectureOverview(projectKey: string) {
     const projectPath = projectSession.projectPath
     const requestId = archStatusRequestGate.current.begin()
     setLoading(true)
-    const core = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:project-core-get',
-      projectPath,
-    ).catch((error: unknown) => {
-      if (archStatusRequestGate.current.isLatest(requestId)) setCoreReadEnded(true)
-      throw error
-    })
+    let core: DatabaseChannels['db:project-core-get']['return']
+    try {
+      core = await ipc.invokeWithProjectSession(
+        projectSession,
+        'db:project-core-get',
+        projectPath,
+      )
+    } catch {
+      if (
+        archStatusRequestGate.current.isLatest(requestId)
+        && isProjectSessionCurrent(projectSession)
+      ) setCoreReadEnded(true)
+      return
+    }
     let progress: OutlineProgress
     let recoveryFailed = false
     let recoveredWorldBuildingCandidate = ''

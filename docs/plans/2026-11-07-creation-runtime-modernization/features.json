@@ -1627,6 +1627,14 @@
           "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; existing Chromium headless1228; fictional bridge and actual Workspace/CodeMirror",
           "result": "Acknowledged architecture adoption advances the dirty document saved baseline to C1 while retaining U/revision; actual unmount/remount, F0 dirty/close confirmation and C1 clean passed. Native five files49/49, final browser four files31/31; typecheck/lint/i18n/build exit0; independent source review accepted.",
           "limitations": "Narrow correctness increment only. First browser import failure retained and repaired with complete rerun; bridge is not SQLite/Electron evidence. Whole feedback feature, wider overview failure, dirty-start/history/closed-result synchronization and model/platform qualification remain incomplete."
+        },
+        {
+          "type": "browser",
+          "sourceSha": "185318ae4bd77c3417e7b3bf7fa470af985a2b95 + stage-55-source-manifest.json final source SHA256",
+          "artifactOrReceipt": "stage-55-evidence.md; .runtime/creation-runtime-modernization/stage55/browser-final.json; native-final.json",
+          "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; existing headless Chromium1228; real hook/React/store/CodeMirror with fictional IPC",
+          "result": "Locally settles the detached architecture core-read failure, preserving existing valid-session failure/loading/content behavior; exact current-session plus latest-request fence prevents stale first-read settlement before the next begin. Final seven-file browser108/108 and seven-file non-browser29/29 passed, fresh typecheck/lint/color/i18n/source build exit0; independent final source/raw review accepted.",
+          "limitations": "Partial correctness repair only. Baseline35/36 plus logged unhandled rejection, intermediate106/29 and filtered red2 failures/green2 passes retained; filtered42 were not executed. Existing act/build warnings retained. No new entry/layout/copy, full history/dirty-start/closed-result synchronization, actual Electron/SQLite, model/visual/platform acceptance or whole feature promotion."
         }
       ]
     },
@@ -1881,6 +1889,14 @@
           "environment": "Windows x64, Vitest4.1.12, existing Chromium headless1228; actual React/store/CodeMirror/close UI, fictional bridge",
           "result": "Four-file31/31 final browser execution includes acknowledged dirty-baseline settlement, actual document unmount/remount and existing close protection, session/instance and editor locale/save regressions. No new layout/copy or writer; source quality/build exit0 and independent source review accepted.",
           "limitations": "Whole UI-002 remains in_progress/false. Initial new-file import failed before execution, corrected and rerun, not counted as a pass. Full design/history/dirty-start/closed-result sync and actual Electron/model/platform qualification are not established."
+        },
+        {
+          "type": "browser",
+          "sourceSha": "185318ae4bd77c3417e7b3bf7fa470af985a2b95 + stage-55-source-manifest.json final source SHA256",
+          "artifactOrReceipt": "stage-55-evidence.md; .runtime/creation-runtime-modernization/stage55/browser-final.json",
+          "environment": "Windows x64, Vitest4.1.12, existing headless Chromium1228; actual architecture hook/React/store and CodeMirror, fictional bridge",
+          "result": "Fresh seven-file108/108 closes the formerly wider overview action-list/rejection failures and covers initial/manual/event failure recovery plus old-session failure fencing before/after a newer read. Existing loading, focus, adoption and editor-baseline behavior retained; non-browser29/29 and fresh quality/source-build checks passed with independent source/raw review.",
+          "limitations": "UI-002 stays in_progress/false. The existing Revise action is not a new design approval; ADR0042 remains Proposed. Only the stale-session state update changes, with existing full-session contract evidence. Original baseline and red/green filter runs plus setup act/build warnings retained. No full design-state/viewport comparison, history/dirty-start/closed-result sync, actual Electron, real model or platform qualification."
         }
       ]
     },
