@@ -974,6 +974,22 @@
           "environment": "Windows x64, actual generateEmbeddings, eight fictional texts/four local fake-fetch batches; controlled10ms post-gate delay",
           "result": "Dedicated same-version1/1 observation records four sends/completions, peak1 versus2, original-order full vectors and fake completion orders0,1,2,3 versus1,0,2,3; elapsed80.2575/49.0161ms.",
           "limitations": "Elapsed includes manual gates and three parallel return waves; no percent/SLA/provider throughput or production speedup claim. Completion means fake fetch returned, not ledger settled. Two benchmark executions and integrated repetitions are overlapping evidence, not added independent tests. Whole feature remains in_progress/false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "53bb8e2c42d858d573a1a0adb4aa82b66f26e2ec + stage-58-source-manifest.json final test/source SHA256",
+          "artifactOrReceipt": "stage-58-evidence.md; .runtime/creation-runtime-modernization/stage58/related-final.json",
+          "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; actual registered controller/authority/KB and fictional SQLite/Lance, controlled fetch only",
+          "result": "Serialized7-file183/183, zero failed/pending/todo, includes actual controller29/29. Frozen default1/explicit2, ordered vectors and exact run/chapter/document/content receipt bindings, four failure-order permutations, revoke/physical drain/actual close plus canonical reopen, replay and two added transport_unknown locale cases independently accepted.",
+          "limitations": "Partial SCHED-001 only; no production/default/budget change. Initial22/7, diagnostic1failed/28name-filtered and fixture-retest25/4 remain failures, not additive passes. Embedding request/activity-root policy and dispatch/commit budget checks remain open, as does the separately identified zero-overlap paragraph/sentence chunker behavior. No new application build, Electron/provider/platform run; reused Stage57 artifacts are byte-bound, not rerun."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "53bb8e2c42d858d573a1a0adb4aa82b66f26e2ec + stage-58-source-manifest.json final test/source SHA256",
+          "artifactOrReceipt": "stage-58-evidence.md; .runtime/creation-runtime-modernization/stage58/related-final-console.txt",
+          "environment": "Same183-assertion package, actual generateEmbeddings with eight fictional texts/four controlled local fetch batches per configuration",
+          "result": "One included benchmark case emits two observations: request/completion count4/4 and peak1 versus2, ordered complete vectors, completion order0,1,2,3 versus1,0,2,3; elapsed79.2427/45.7039ms.",
+          "limitations": "Includes manual gates and10ms controlled delay; not controller/provider latency, responsiveness, percent speedup or SLA. The benchmark is already included in183 and the observations are not independent extra tests. Whole feature remains in_progress/false."
         }
       ]
     },

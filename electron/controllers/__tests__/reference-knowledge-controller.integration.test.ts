@@ -57,10 +57,62 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const sender = (): Sender => Object.assign(new EventEmitter(), { id: 51, isDestroyed: () => false })
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>(accept => { resolve = accept })
-  return { promise, resolve }
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((accept, decline) => { resolve = accept; reject = decline })
+  return { promise, resolve, reject }
 }
 function response() { return new Response(JSON.stringify({ data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] }), { status: 200 }) }
+const BATCH_CHUNKS = ['A alpha', 'B bravo', 'C charlie'].map(text => text.padEnd(100, 'x'))
+const BATCH_CONTENT = BATCH_CHUNKS.join('')
+function batchResponse(ordinal: number) {
+  return new Response(JSON.stringify({ data: [{ index: 0, embedding: [ordinal + 1, 0, 0] }] }), { status: 200 })
+}
+function batchOrdinal(init: RequestInit): number {
+  const input = (JSON.parse(String(init.body)) as { input: string[] }).input[0]!
+  return input.charCodeAt(0) - 'A'.charCodeAt(0)
+}
+function prepareBatchRun() {
+  const runId = `fictional-batch-${randomUUID()}`
+  const prepared = ImportRunRepository.prepare({ runId, purpose: 'reference', sourceFingerprint: hash(runId), locale: 'en-US',
+    sourceDisplay: [{ displayName: 'fictional.txt', mediaType: 'text/plain', size: Buffer.byteLength(BATCH_CONTENT) }],
+    chapters: [{ number: 1, title: 'One', content: BATCH_CONTENT, contentSize: Buffer.byteLength(BATCH_CONTENT), contentFingerprint: hash(BATCH_CONTENT) }] })
+  expect(prepared.classification).toBe('new')
+  expect(prepared.newChapterNumbers).toHaveLength(1)
+  return { runId, chapterNumber: prepared.newChapterNumbers[0]! }
+}
+function dispatchRows() {
+  return db.prepare('SELECT batch_ordinal, input_count, state, http_status, settled_at FROM reference_embedding_dispatches ORDER BY batch_ordinal').all()
+}
+async function waitForBatchStarts(fetchMock: { mock: { calls: unknown[] } }, pending: Promise<unknown>, expected: number) {
+  let early: string | undefined
+  void pending.then(result => {
+    const value = result as { success?: boolean; errorCode?: string }
+    early = value.errorCode ?? (value.success ? 'EARLY_SUCCESS' : 'EARLY_FAILURE_WITHOUT_CODE')
+  }, () => { early = 'EARLY_REJECTION' })
+  await vi.waitFor(() => {
+    expect(early, 'import settled before expected physical requests').toBeUndefined()
+    expect(fetchMock.mock.calls).toHaveLength(expected)
+  })
+}
+async function storedBatchVectors() {
+  const registry = await vectorStore.getEmbeddingSpaces(root)
+  const active = registry.spaces.find(space => space.generation === registry.activeGeneration)
+  if (!active) return []
+  const table = await (await vectorStore.getConnection(root)).openTable(active.tableName)
+  try {
+    const rows = await table.query().select(['chunkIndex', 'text', 'vector']).toArray() as Array<{ chunkIndex: number; text: string; vector: number[] }>
+    return rows.sort((a, b) => a.chunkIndex - b.chunkIndex).map(row => ({ ...row, vector: Array.from(row.vector) }))
+  } finally { table.close() }
+}
+async function canonicalBatchRows() {
+  const connection = await vectorStore.getConnection(root)
+  if (!(await connection.tableNames()).includes('chunks')) return []
+  const table = await connection.openTable('chunks')
+  try {
+    const rows = await table.query().select(['chunkIndex', 'text']).toArray() as Array<{ chunkIndex: number; text: string }>
+    return rows.sort((a, b) => a.chunkIndex - b.chunkIndex).map(row => ({ chunkIndex: row.chunkIndex, text: row.text }))
+  } finally { table.close() }
+}
 let tempBase = '', parent = '', root = ''
 let session: ProjectSessionContext
 let subject: Sender
@@ -96,8 +148,8 @@ type Prepared = { reference: ReferenceKnowledgeReference; execution: { owner: st
 async function prepare(operationId = randomUUID(), executionOwner = randomUUID(), runId = RUN): Promise<Prepared> {
   return await invoke('reference-knowledge:v1:prepare', { operationId, runId, executionOwner }) as Prepared
 }
-function importChapter(value: Prepared, who = subject): Promise<unknown> {
-  return invoke('reference-knowledge:v1:import', { reference: value.reference, chapterNumber: 1,
+function importChapter(value: Prepared, who = subject, chapterNumber = 1): Promise<unknown> {
+  return invoke('reference-knowledge:v1:import', { reference: value.reference, chapterNumber,
     execution: { owner: value.execution.owner, epoch: value.execution.epoch } }, who)
 }
 async function denied(operation: Promise<unknown>): Promise<void> {
@@ -249,6 +301,211 @@ describe('registered reference knowledge controller with real native storage', (
       expect(count('import_run_knowledge_receipts')).toBe(1)
     } finally { profile.embeddingOptions = saved }
   })
+  it.each([1, 2] as const)('freezes concurrency %i across profile changes and persists ordered batches', async concurrency => {
+    const profile = mock.profiles[0]!, saved = profile.embeddingOptions
+    const gates = [deferred<Response>(), deferred<Response>(), deferred<Response>()]
+    const completed: number[] = []
+    let inFlight = 0, peak = 0
+    const fetchMock = vi.fn<(url: string, init: RequestInit) => Promise<Response>>((_url, init) => {
+      const ordinal = batchOrdinal(init)
+      inFlight++; peak = Math.max(peak, inFlight)
+      return gates[ordinal]!.promise.then(result => { completed.push(ordinal); return result }).finally(() => { inFlight-- })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    let pending: Promise<unknown> | undefined
+    try {
+      Object.defineProperty(profile, 'embeddingOptions', { value: { chunkSize: 100, chunkOverlap: 0, batchSize: 1,
+        ...(concurrency === 2 ? { concurrencyLimit: 2 } : {}) }, writable: true, configurable: true })
+      const batch = prepareBatchRun(), first = await prepare(randomUUID(), randomUUID(), batch.runId)
+      Object.defineProperty(profile, 'embeddingOptions', { value: { chunkSize: 1000, chunkOverlap: 0, batchSize: 1,
+        concurrencyLimit: concurrency === 1 ? 2 : 1 }, writable: true, configurable: true })
+      pending = importChapter(first, subject, batch.chapterNumber)
+      void pending.catch(() => {})
+      await waitForBatchStarts(fetchMock, pending, concurrency)
+      await Promise.resolve()
+      expect(fetchMock).toHaveBeenCalledTimes(concurrency)
+      expect(dispatchRows()).toEqual(Array.from({ length: concurrency }, (_, batch_ordinal) => expect.objectContaining({
+        batch_ordinal, input_count: 1, state: 'dispatch_marked', settled_at: null,
+      })))
+      if (concurrency === 1) {
+        for (let ordinal = 0; ordinal < 3; ordinal++) {
+          await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(ordinal + 1))
+          gates[ordinal]!.resolve(batchResponse(ordinal))
+        }
+      } else {
+        gates[1]!.resolve(batchResponse(1))
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+        gates[2]!.resolve(batchResponse(2))
+        await vi.waitFor(() => expect(dispatchRows()[2]).toMatchObject({ state: 'response_received' }))
+        gates[0]!.resolve(batchResponse(0))
+      }
+      const result = await pending as { success: boolean; chunkCount: number; docId: string }
+      expect(result).toMatchObject({ success: true, chunkCount: 3, docId: expect.any(String) })
+      expect(completed).toEqual(concurrency === 1 ? [0, 1, 2] : [1, 2, 0])
+      expect(peak).toBe(concurrency)
+      expect(fetchMock.mock.calls.map(([url, init]) => ({ url, model: (JSON.parse(String(init.body)) as { model: string }).model })))
+        .toEqual([0, 1, 2].map(() => ({ url: 'https://a.invalid/v1/embeddings', model: 'model-a' })))
+      expect(dispatchRows()).toEqual([0, 1, 2].map(batch_ordinal => expect.objectContaining({
+        batch_ordinal, input_count: 1, state: 'response_received', http_status: 200, settled_at: expect.any(Number),
+      })))
+      expect(await storedBatchVectors()).toEqual(BATCH_CHUNKS.map((text, chunkIndex) => ({
+        chunkIndex, text, vector: [chunkIndex + 1, 0, 0],
+      })))
+      const canonical = await canonicalBatchRows()
+      expect(canonical).toEqual(BATCH_CHUNKS.map((text, chunkIndex) => ({ chunkIndex, text })))
+      for (const [index, query] of ['alpha', 'bravo', 'charlie'].entries()) {
+        expect(await vectorStore.search(root, query)).toMatchObject([{ text: BATCH_CHUNKS[index] }])
+      }
+      const documentId = db.prepare('SELECT document_id FROM import_reference_documents').pluck().get() as string
+      expect(documentId).toBe(result.docId)
+      expect(db.prepare('SELECT run_id, chapter_number, document_id, content_fingerprint, state FROM import_run_knowledge_receipts').all())
+        .toEqual([{ run_id: batch.runId, chapter_number: batch.chapterNumber, document_id: result.docId, content_fingerprint: hash(BATCH_CONTENT), state: 'committed' }])
+      const integrity = await vectorStore.getDocumentIntegrity(root, documentId)
+      expect(integrity).toMatchObject({ complete: true, chunkCount: 3,
+        embeddingGenerations: [expect.objectContaining({ complete: true, chunkCount: 3 })] })
+      const history = dispatchRows()
+      const receipts = db.prepare('SELECT * FROM import_run_knowledge_receipts').all()
+      await expect(importChapter(first, subject, batch.chapterNumber)).resolves.toMatchObject({ success: true, idempotent: true })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(dispatchRows()).toEqual(history)
+      expect(await canonicalBatchRows()).toEqual(canonical)
+      expect(await vectorStore.getDocumentIntegrity(root, documentId)).toEqual(integrity)
+      expect(db.prepare('SELECT * FROM import_run_knowledge_receipts').all()).toEqual(receipts)
+      expect(count('import_run_knowledge_receipts')).toBe(1)
+      expect(count('import_reference_documents')).toBe(1)
+    } finally {
+      gates.forEach((gate, ordinal) => gate.resolve(batchResponse(ordinal)))
+      if (pending) await Promise.allSettled([pending])
+      profile.embeddingOptions = saved
+    }
+  })
+  it.each([['http', 0], ['http', 1], ['invalid', 0], ['invalid', 1]] as const)(
+    'uses ordinal zero %s outcome even when ordinal %i completes first', async (zeroKind, firstCompleted) => {
+      const profile = mock.profiles[0]!, saved = profile.embeddingOptions
+      const gates = [deferred<Response>(), deferred<Response>()]
+      const kindAt = (ordinal: number) => ordinal === 0 ? zeroKind : zeroKind === 'http' ? 'invalid' : 'http'
+      const resultFor = (ordinal: number) => kindAt(ordinal) === 'http' ? new Response('', { status: 503 })
+        : new Response(JSON.stringify({ data: [{ index: 0, embedding: [0.1, 'invalid', 0.3] }] }), { status: 200 })
+      const fetchMock = vi.fn<(url: string, init: RequestInit) => Promise<Response>>((_url, init) => gates[batchOrdinal(init)]!.promise)
+      vi.stubGlobal('fetch', fetchMock)
+      let pending: Promise<unknown> | undefined
+      try {
+        Object.defineProperty(profile, 'embeddingOptions', { value: { chunkSize: 100, chunkOverlap: 0, batchSize: 1, concurrencyLimit: 2 }, writable: true, configurable: true })
+        const batch = prepareBatchRun(), first = await prepare(randomUUID(), randomUUID(), batch.runId)
+        pending = importChapter(first, subject, batch.chapterNumber)
+        void pending.catch(() => {})
+        await waitForBatchStarts(fetchMock, pending, 2)
+        gates[firstCompleted]!.resolve(resultFor(firstCompleted))
+        await vi.waitFor(() => expect(dispatchRows()[firstCompleted]).toMatchObject({
+          state: kindAt(firstCompleted) === 'http' ? 'http_failed' : 'response_invalid', settled_at: expect.any(Number),
+        }))
+        let settled = false
+        void pending.then(() => { settled = true }, () => { settled = true })
+        await Promise.resolve()
+        expect(settled).toBe(false)
+        gates[1 - firstCompleted]!.resolve(resultFor(1 - firstCompleted))
+        if (zeroKind === 'http') {
+          const result = await pending as { success: boolean; chunkCount: number; docId: string }
+          expect(result).toMatchObject({ success: true, chunkCount: 3, docId: expect.any(String) })
+          expect(db.prepare('SELECT run_id, chapter_number, document_id, content_fingerprint, state FROM import_run_knowledge_receipts').all())
+            .toEqual([{ run_id: batch.runId, chapter_number: batch.chapterNumber, document_id: result.docId, content_fingerprint: hash(BATCH_CONTENT), state: 'committed' }])
+          expect(db.prepare('SELECT document_id FROM import_reference_documents').pluck().get()).toBe(result.docId)
+          expect(await vectorStore.getStats(root)).toMatchObject({ totalChunks: 3, hasVectors: false })
+          expect(count('import_run_knowledge_receipts')).toBe(1)
+          expect(await canonicalBatchRows()).toEqual(BATCH_CHUNKS.map((text, chunkIndex) => ({ chunkIndex, text })))
+          expect(await storedBatchVectors()).toEqual([])
+          for (const [index, query] of ['alpha', 'bravo', 'charlie'].entries()) {
+            expect(await vectorStore.search(root, query)).toMatchObject([{ text: BATCH_CHUNKS[index] }])
+          }
+        } else {
+          await expect(pending).resolves.toMatchObject({ success: false, errorCode: 'EMBEDDING_RESPONSE_INVALID' })
+          expect(await vectorStore.listDocuments(root)).toEqual([])
+          expect(count('import_run_knowledge_receipts')).toBe(0)
+          expect(await canonicalBatchRows()).toEqual([])
+        }
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+        expect(dispatchRows()).toEqual([0, 1].map(batch_ordinal => expect.objectContaining({
+          batch_ordinal, state: kindAt(batch_ordinal) === 'http' ? 'http_failed' : 'response_invalid', settled_at: expect.any(Number),
+        })))
+      } finally {
+        gates.forEach((gate, ordinal) => gate.resolve(resultFor(ordinal)))
+        if (pending) await Promise.allSettled([pending])
+        profile.embeddingOptions = saved
+      }
+    },
+  )
+  it('revokes two physical batches and drains both without dispatching a third', async () => {
+    const profile = mock.profiles[0]!, saved = profile.embeddingOptions
+    const runtime = projectRuntimeHost.getActiveView()!
+    const gates = [deferred<Response>(), deferred<Response>(), deferred<Response>()]
+    const fetchMock = vi.fn<(url: string, init: RequestInit) => Promise<Response>>((_url, init) => gates[batchOrdinal(init)]!.promise)
+    vi.stubGlobal('fetch', fetchMock)
+    let pending: Promise<unknown> | undefined
+    let closing: Promise<void> | undefined
+    let atClose: { dispatches: unknown[]; receipts: number } | undefined
+    const failures: unknown[] = []
+    const removeBeforeRelease = projectRuntimeHost.onBeforeRelease(released => {
+      if (released !== runtime) return
+      atClose = { dispatches: dispatchRows(), receipts: count('import_run_knowledge_receipts') }
+      vectorStore.closeConnection(root)
+    })
+    try {
+      Object.defineProperty(profile, 'embeddingOptions', { value: { chunkSize: 100, chunkOverlap: 0, batchSize: 1, concurrencyLimit: 2 }, writable: true, configurable: true })
+      const batch = prepareBatchRun(), first = await prepare(randomUUID(), randomUUID(), batch.runId)
+      pending = importChapter(first, subject, batch.chapterNumber)
+      void pending.catch(() => {})
+      await waitForBatchStarts(fetchMock, pending, 2)
+      await expect(invoke('reference-knowledge:v1:revoke', first.reference, subject, false)).resolves.toMatchObject({ state: 'revoked' })
+      closing = projectRuntimeHost.requestClose(runtime, { timeoutMs: 5000 })
+      let closeSettled = false
+      void closing.then(() => { closeSettled = true }, () => { closeSettled = true })
+      gates[1]!.resolve(batchResponse(1))
+      await vi.waitFor(() => expect(dispatchRows()[1]).toMatchObject({ state: 'response_received', settled_at: expect.any(Number) }))
+      let settled = false
+      void pending.then(() => { settled = true }, () => { settled = true })
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      expect(closeSettled).toBe(false)
+      expect(runtime.database.open).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(await vectorStore.listDocuments(root)).toEqual([])
+      gates[0]!.resolve(batchResponse(0))
+      await denied(pending)
+      await closing
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(atClose?.dispatches).toEqual([0, 1].map(batch_ordinal => expect.objectContaining({
+        batch_ordinal, state: 'response_received', settled_at: expect.any(Number),
+      })))
+      expect(atClose?.receipts).toBe(0)
+      expect(runtime.database.open).toBe(false)
+      openCanonicalProjectFixture(root, Buffer.alloc(32, 44))
+      const reopened = projectRuntimeHost.getActiveView()!
+      expect(reopened.database).not.toBe(runtime.database)
+      expect(reopened.databaseIdentity).not.toBe(runtime.databaseIdentity)
+      const lease = projectAccess.beginViewSession(reopened)
+      session = { projectId: lease.projectId, leaseId: lease.leaseId, projectPath: root }
+      db = reopened.database
+      expect(dispatchRows()).toEqual(atClose?.dispatches)
+      expect(count('import_run_knowledge_receipts')).toBe(0)
+      expect(db.prepare("SELECT COUNT(*) FROM import_reference_documents WHERE state='committed'").pluck().get()).toBe(0)
+      expect(await vectorStore.listDocuments(root)).toEqual([])
+      expect(await canonicalBatchRows()).toEqual([])
+      expect(await storedBatchVectors()).toEqual([])
+      expect(await vectorStore.search(root, 'alpha')).toEqual([])
+    } catch (error) {
+      failures.push(error)
+    } finally {
+      gates.forEach((gate, ordinal) => gate.resolve(batchResponse(ordinal)))
+      if (pending) await Promise.allSettled([pending])
+      if (closing) {
+        try { await closing } catch (error) { failures.push(error) }
+      }
+      removeBeforeRelease()
+      profile.embeddingOptions = saved
+    }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, 'FIXTURE_ASSERTION_AND_CLEANUP_FAILED')
+  })
   it('cannot reconstruct an issuance from its public reference or operation after native reopen', async () => {
     const operation = randomUUID(), owner = randomUUID()
     const first = await prepare(operation, owner)
@@ -268,17 +525,25 @@ describe('registered reference knowledge controller with real native storage', (
     expect(count('import_run_knowledge_receipts')).toBe(0)
     expect(fetch).not.toHaveBeenCalled()
   })
-  it.each(['zh-CN', 'en-US'] as const)('localizes %s after a new grant cannot resend an incomplete document', async locale => {
+  it.each([['zh-CN', 'response_received'], ['en-US', 'response_received'],
+    ['zh-CN', 'transport_unknown'], ['en-US', 'transport_unknown']] as const)(
+    'localizes %s after a new grant cannot resend an incomplete %s document', async (locale, state) => {
     db.prepare('UPDATE import_runs SET locale=? WHERE id=?').run(locale, RUN)
     const started = deferred<void>(), finish = deferred<Response>()
     const fetchMock = vi.fn(() => { started.resolve(); return finish.promise })
     vi.stubGlobal('fetch', fetchMock)
     const first = await prepare(), importing = importChapter(first)
+    void importing.catch(() => {})
     try {
       await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
       await started.promise
       await invoke('reference-knowledge:v1:revoke', first.reference, subject, false)
-      finish.resolve(response()); await denied(importing)
+      if (state === 'transport_unknown') finish.reject(new Error('FICTIONAL_TRANSPORT_FAILURE'))
+      else finish.resolve(response())
+      await denied(importing)
+      expect(dispatchRows()).toEqual([expect.objectContaining({
+        batch_ordinal: 0, state, http_status: state === 'transport_unknown' ? null : 200, settled_at: expect.any(Number),
+      })])
       const next = await prepare()
       expect(next.reference.grantId).not.toBe(first.reference.grantId)
       expect(count('reference_import_grants')).toBe(2)
@@ -289,6 +554,8 @@ describe('registered reference knowledge controller with real native storage', (
       expect(fetchMock).toHaveBeenCalledTimes(1)
       expect(count('import_run_knowledge_receipts')).toBe(0)
       expect(count('reference_embedding_dispatches')).toBe(1)
+      expect(await vectorStore.listDocuments(root)).toEqual([])
+      expect(await canonicalBatchRows()).toEqual([])
     } finally { finish.resolve(response()); await importing.catch(() => {}) }
   })
   it.each(['zh-CN', 'en-US'] as const)('localizes %s when the real grant writer revokes an issued capability', async locale => {
