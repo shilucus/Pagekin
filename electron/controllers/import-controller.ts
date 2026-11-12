@@ -751,8 +751,8 @@ export function registerImportController(
       const numbered = inspectedChapters.map((ch, idx) => ({
         ...ch,
         number: purpose === 'author-manuscript' ? ch.number : idx + 1,
-        contentFingerprint: sha256(ch.content),
-        contentSize: Buffer.byteLength(ch.content, 'utf8'),
+        contentFingerprint: ch.contentFingerprint ?? sha256(ch.content),
+        contentSize: ch.contentSize ?? Buffer.byteLength(ch.content, 'utf8'),
       }))
       if (purpose === 'author-manuscript') {
         const seen = new Set<number>()

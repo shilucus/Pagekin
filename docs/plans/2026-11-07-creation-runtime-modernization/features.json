@@ -513,6 +513,14 @@
           "environment": "Windows x64; driver Node24.13.0, pnpm11.11.0; Electron44.9.3 / Node24.22.0",
           "result": "Actual no-model author/reference inspection at10/100/1000 chapters:6 attempts,0 failures; CPU window,250ms periodic RSS, live event-loop/renderer coverage and reference prepared/ready persistent readback. Focused11-file198/198; typecheck/lint/color/i18n/build exit0.",
           "limitations": "Partial PERF004 measurement only; entry SHA plus exact uncommitted harness/build hashes. Single observations, uncontrolled cache; parse/hash overlap, secure-read wall time is not physical IO, CPU is whole probe-window and sampled RSS is not true peak. No algorithm change, active-parse cancel/close latency, EPUB, Worker comparison, quality or platform qualification."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "9c66974455bdf5ed29ae3fe1cbaae77f8acc40d2",
+          "artifactOrReceipt": "stage-52-evidence.md; stage-52-source-manifest.json",
+          "environment": "Windows x64; driver Node24.13.0, pnpm11.11.0; Electron44.9.3 / Node24.22.0",
+          "result": "Two-line same-content main-process fingerprint/size reuse; real-handler parity for TXT/MD/no-heading/EPUB/legacy reference. Fresh12-file210/210 after retained203/210 fixture failure; typecheck/lint/color/i18n/build exit0. Six actual no-model inspections passed; author hash counts20/200/2000 to10/100/1000, structured reference unchanged.",
+          "limitations": "Partial PERF004 only, exact dirty-source/build hashes bound to entry SHA. Single observations do not establish overall speedup; author1000 sampled RSS increased and reference1000 loop max146.014207 to163.577855ms/save97.9402 to104.5425ms worsened. Repository integrity checks retained. No active-parse cancel/close timing, EPUB performance, Worker, quality or platform qualification."
         }
       ]
     },

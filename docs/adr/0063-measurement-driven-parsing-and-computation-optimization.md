@@ -5,6 +5,8 @@ Accepted
 
 2026-11-12 证据边界更正：本决定不授予 `PERF-004` 完成资格。当前纯文本路径已有单趟解析，但 EPUB 路径仍有标题预扫描；现有 `yieldEventLoop()` 位于参考来源解析及章节映射之后、同步提交之前，并非每 200 章让步。作者检查映射与参考 repository 的完整性校验仍会重算指纹，解析与 SQLite 事务仍同步执行。下文的约 50% 收益、15~25ms 纯计算、20~40ms Worker clone、所有长任务消除及毫秒级取消/关闭响应，均不是当前源码与运行证据已经证明的结果，不作为验收结论或硬门槛。保留主进程授权、来源和事务检查，是否进一步优化或隔离计算由[Stage 51 测量](../plans/2026-11-07-creation-runtime-modernization/stage-51-evidence.md)及后续聚焦证据决定，不预先改变取消合同或选择 Worker。
 
+2026-11-12 Stage 52 局部实现：上段的作者映射重复哈希描述对应 Stage 51 测量时版本。当前作者及旧版 reference 检查的最终映射复用同次主进程解析、同一正文已计算的指纹和 UTF-8 字节数；缺字段的 EPUB 分支仍按原语义计算。reference repository 的独立内容重验及 inspection 的尺寸校验不变，多行无标题路径内部的临时哈希也未清理。[Stage 52 证据](../plans/2026-11-07-creation-runtime-modernization/stage-52-evidence.md)区分确定性调用次数、实际测量与未覆盖项，不由这两行复用推导整体提速、取消/关闭时限或完整功能通过。
+
 ## 背景与问题 (Context & Problem)
 在 Pagekin 的大书导入与拆解链路（`import-controller.ts` 与 `import-run-repository.ts`）中：
 1. **重复解析与全量双重切分 (E07)**：
