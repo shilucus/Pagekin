@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "stage": 56,
+  "date": "2026-11-13",
+  "entryHead": "cc2f472e20f2b16bfc64e6ed7317ea5f2afbfe3d",
+  "sourceBinding": "Final focused9/9 and integrated160/160 include the same nine final regressions; they are not additive. Red9 has6 failures on the historical service identity below. Fresh quality and source build bind the final bytes. Combined consoles contain both streams but no separate persisted process-exit metadata; exits are root tool evidence. Seventeen source/test/contract/config, ten raw/console and five built entries are bound. Built entries match Stage55; this prototype has no production instantiation or real driver dispatch. No mutable record, self-hash, Electron/model/platform/whole-feature acceptance.",
+  "historicalSourceIdentities": {
+    "serviceBeforeFixObservedNotRetainedCopy": "68A9EF3B5AB1025A370E97E8DEF55BD4F5C1037BBE0D96426400E34F26E204AB"
+  },
+  "files": {
+    "electron/services/inbound-api-service.ts": "8AD4A25354BF71B2F92263AA06F00C07ADDF340E7F8743F62FD86AEFC9625A65",
+    "electron/controllers/__tests__/inbound-api-controller.idempotency.test.ts": "96B114F8CDD20660E9C56693AE70D1E6314584D4424D05D170B7ED56C1D8C897",
+    "electron/controllers/inbound-api-controller.ts": "D2035A381831F4C238F689C23EC10932B77CB4DAFA3B4EED5FCB73EA6144E1C2",
+    "electron/services/inbound-mcp-adapter.ts": "41612D32A8A20823FF2DDC1F4D78635B774819BD1CE23A8C4FC86D7D32B9C81B",
+    "scripts/cli/creation-cli.ts": "49E35EA23D623F65AC1066E5F36E11DE10AB88D55300E55FECD66670095E88C9",
+    "electron/controllers/__tests__/inbound-api-controller.test.ts": "18F2C451EF9263F04828B44A134193F4791A15C3D67531278E3B8EA0F85081FF",
+    "electron/controllers/__tests__/inbound-api-controller.headers.test.ts": "6C179C509F8D52AC17EFF19E6498FDF59C24B3D12B2AD4B2D02817B21AA84CDE",
+    "electron/services/__tests__/inbound-mcp-adapter.test.ts": "ECA3198F29AC475C840D8B3DF8C0C9454BF66D6E985BF5FCC08C22B773EC7D6E",
+    "scripts/cli/__tests__/creation-cli.test.ts": "0A80523D22A992C2B1F4846CC6BD6E97F0203EB7C2FC9CC8C2D9878CC87B6EE3",
+    "src/shared/__tests__/inbound-domain-contract.test.ts": "8938D6C5880BF9C5B75293BF85D8B1C9A3942D5B348DCAC397C147EEA08A88AB",
+    "src/shared/__tests__/inbound-mcp-contract.test.ts": "EDF43ABB6140D420DE76BB37BA21385F69EF8FCFD93B8A69AFE07A0910CCF923",
+    "src/shared/inbound-domain-contract.ts": "17F038422757462B8C809FA70C377E1B110C6EF3FB8016DABC9AF2E7DF6D87A8",
+    "src/shared/inbound-mcp-contract.ts": "78399E10D59C132206888A25860E6082CD3BA7A8C9509F6DF77BAAEAD65C67E5",
+    "docs/adr/0050-inbound-domain-api-security-and-idempotency-contract.md": "6833A78F72BCDF9544873429FFE2B6BFB856C5D5D27A21FB0979A2BF0CF65461",
+    "docs/adr/0058-inbound-narrow-domain-mcp-adapter.md": "02BA686867EAF570246FC51010DB464C3212D47F8C82E0B90731DCE24927304C",
+    "package.json": "AA4CBF80B48400A90DD254FC340B86D3FE57452421438CF6E5971F5CCAF026C6",
+    "vite.config.ts": "DACA389A0E2D1D557E4256DD85E1C66B2E2F2A5619A5F037F56C5AAF218FCC47",
+    ".runtime/creation-runtime-modernization/stage56/build-console.txt": "E640F1C32D1EDD19043CF9BD6C027DE9E4AEDC067906AD4062FEFC24F35465A7",
+    ".runtime/creation-runtime-modernization/stage56/i18n-console.txt": "292373FA407970A929660A47137B66B7BFC5950B65F200A8BCE474DE30BB95C4",
+    ".runtime/creation-runtime-modernization/stage56/idempotency-green-console.txt": "2E8D2C8191EC355AA1E58D19CF93A8B8A261D6CD846F97B3058CAB56681C038F",
+    ".runtime/creation-runtime-modernization/stage56/idempotency-green.json": "9BAA1613D9D9829E8DBDEAD2C07794F5BAC0C2C7A47C38A5D1E6574CD791AD9D",
+    ".runtime/creation-runtime-modernization/stage56/idempotency-red-console.txt": "D3740DFEBDE76307490F60A803D585B10AA399A1009DD8BD43161617189DF2F6",
+    ".runtime/creation-runtime-modernization/stage56/idempotency-red.json": "3A8E8EE9EFAA7B4CE022680BA470E667D00E192DD43C8485CB261D9BFBDE264A",
+    ".runtime/creation-runtime-modernization/stage56/inbound-integration-console.txt": "A9E4B99EC3858D5DF00E510E4B2387CDB710CE0381B5BEEE689F6453B3BBF391",
+    ".runtime/creation-runtime-modernization/stage56/inbound-integration.json": "FB9CC8AD9FFEE0207038714C6E285FBCB8C0DF4D06161CF7EA8C4574B6E8D969",
+    ".runtime/creation-runtime-modernization/stage56/lint-console.txt": "2E23715B9D408650F999B8295C7AA0F045938CAD97DA091EEBA56A2F3D53CD6F",
+    ".runtime/creation-runtime-modernization/stage56/typecheck-console.txt": "E35E370062165F54AF0DED09ECDC2DA806C671C095F0E6340DBF7416B0E59D40",
+    "dist/index.html": "5B595B7E2EFE076E13EC60006D2E159F3804F8F20CE733DFD3C2A1EBBC63E014",
+    "dist/assets/App-BMQwrdcL.js": "E08562070CE6A2F50B1D939E81E56FC86883AA72E844CBA3183BA0D487DBB0DD",
+    "dist/assets/index-WqVwihiE.css": "7F780F1F995881173ED97FE577F9E9D256B69EB3D5C6FEA51147D7874E20A7C6",
+    "dist-electron/main.js": "F91971254663B411D27774D4710967BE7F8D32F130FC6A0F071AE88E7406EF21",
+    "dist-electron/preload.mjs": "CE3796C389B464906E650CF17953392FB23EDD5A18DFB9951A2D7D7EA5147B2B"
+  },
+  "protected": {
+    "docs/repository-analysis-2026-11-07.md": "BB6866223C596C690E4D2E35C38FAA9EBB05E45084776EE1B285083BAD89A74B",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-evidence.md": "5AA85559B9A71022D378CFA7B50EB55E1539BEABD77E1766050D819FA336F1F9",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-source-manifest.json": "7AE7D4318C58DC872664BB89BD455A3995A3C02E5C2DE4E2C8FE7D3D9AD48130"
+  }
+}

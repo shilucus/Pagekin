@@ -23,6 +23,21 @@ interface IdempotencyRecord {
   createdAt: number
 }
 
+interface PendingIdempotencyRecord {
+  normalizedHash: string
+  promise: Promise<InboundReceipt>
+}
+
+function createIdempotencyId(
+  projectId: string,
+  callerId: string,
+  grantId: string,
+  command: InboundCommand,
+  idempotencyKey: string,
+): string {
+  return JSON.stringify([projectId, callerId, grantId, command, idempotencyKey])
+}
+
 interface HumanReviewItem {
   reviewId: string
   taskId: string
@@ -36,6 +51,7 @@ interface HumanReviewItem {
 export class InboundApiService {
   private readonly tokens = new Map<string, InboundAuthToken>()
   private readonly idempotencyStore = new Map<string, IdempotencyRecord>()
+  private readonly pendingIdempotency = new Map<string, PendingIdempotencyRecord>()
   private readonly taskEvents = new Map<string, InboundEvent[]>()
   private readonly reviewItems = new Map<string, HumanReviewItem>()
   private isTrustedReviewChannelOpen = false
@@ -174,7 +190,13 @@ export class InboundApiService {
 
     // 3. Normalization and Idempotency key evaluation
     const { hash: payloadHash } = normalizePayload(request.payload)
-    const idempotencyId = `${request.projectId}:${request.callerId}:${request.grantId}:${request.command}:${request.idempotencyKey}`
+    const idempotencyId = createIdempotencyId(
+      request.projectId,
+      request.callerId,
+      request.grantId,
+      request.command,
+      request.idempotencyKey,
+    )
 
     const existingRecord = this.idempotencyStore.get(idempotencyId)
     if (existingRecord) {
@@ -200,17 +222,51 @@ export class InboundApiService {
       return existingRecord.receipt
     }
 
-    // 4. Command Dispatch
-    const receipt = await this.dispatchCommand(request, payloadHash)
+    const pendingRecord = this.pendingIdempotency.get(idempotencyId)
+    if (pendingRecord) {
+      if (pendingRecord.normalizedHash !== payloadHash) {
+        throw new InboundDomainError(
+          INBOUND_ERROR_CODES.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH,
+          `Idempotency key '${request.idempotencyKey}' reused with different normalized payload`,
+          409,
+        )
+      }
+      return pendingRecord.promise
+    }
 
-    // 5. Store in idempotency cache
-    this.idempotencyStore.set(idempotencyId, {
-      normalizedHash: payloadHash,
-      receipt,
-      createdAt: Date.now(),
+    let resolveAttempt!: (receipt: InboundReceipt) => void
+    let rejectAttempt!: (error: unknown) => void
+    const attemptPromise = new Promise<InboundReceipt>((resolve, reject) => {
+      resolveAttempt = resolve
+      rejectAttempt = reject
     })
+    const attemptRecord = { normalizedHash: payloadHash, promise: attemptPromise }
+    this.pendingIdempotency.set(idempotencyId, attemptRecord)
 
-    return receipt
+    // 4. Command Dispatch
+    const dispatchPromise = this.dispatchCommand(request, payloadHash)
+    void dispatchPromise.then(
+      (receipt) => {
+        // 5. Store in idempotency cache
+        this.idempotencyStore.set(idempotencyId, {
+          normalizedHash: payloadHash,
+          receipt,
+          createdAt: Date.now(),
+        })
+        if (this.pendingIdempotency.get(idempotencyId) === attemptRecord) {
+          this.pendingIdempotency.delete(idempotencyId)
+        }
+        resolveAttempt(receipt)
+      },
+      (error: unknown) => {
+        if (this.pendingIdempotency.get(idempotencyId) === attemptRecord) {
+          this.pendingIdempotency.delete(idempotencyId)
+        }
+        rejectAttempt(error)
+      },
+    )
+
+    return attemptPromise
   }
 
   /**
@@ -395,7 +451,13 @@ export class InboundApiService {
       case 'workflow:receipt': {
         const queryIdempotencyKey = req.payload.targetIdempotencyKey as string
         const targetCommand = (req.payload.targetCommand as InboundCommand) || 'workflow:start'
-        const targetId = `${req.projectId}:${req.callerId}:${req.grantId}:${targetCommand}:${queryIdempotencyKey}`
+        const targetId = createIdempotencyId(
+          req.projectId,
+          req.callerId,
+          req.grantId,
+          targetCommand,
+          queryIdempotencyKey,
+        )
         const record = this.idempotencyStore.get(targetId)
 
         return {
