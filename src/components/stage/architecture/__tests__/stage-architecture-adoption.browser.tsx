@@ -39,7 +39,7 @@ vi.mock('../ArchitectureSection', () => ({
 }))
 vi.mock('../../feedback/PlanningFeedbackDialog', () => ({
   PlanningFeedbackDialog: ({ isOpen, onAdopted }: { isOpen: boolean; onAdopted: (text: string) => void }) => (
-    isOpen ? <button onClick={() => { void mocks.adopt().then(() => onAdopted('adopted')) }}>adopt</button> : null
+    isOpen ? <button onClick={() => { void mocks.adopt().then(() => onAdopted('adopted'), () => undefined) }}>adopt</button> : null
   ),
 }))
 
@@ -49,6 +49,7 @@ const tabId = createProjectArchTabId(session.projectPath, 'ai-novel://core/premi
 let container: HTMLDivElement
 let root: Root
 let completeAdoption: () => void
+let rejectAdoption: (reason: Error) => void
 const originalEditorState = useEditorStore.getState()
 const originalProjectState = useProjectStore.getState()
 
@@ -74,7 +75,10 @@ beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   setSession(session)
   setTab()
-  mocks.adopt.mockReset().mockImplementation(() => new Promise<void>(resolve => { completeAdoption = resolve }))
+  mocks.adopt.mockReset().mockImplementation(() => new Promise<void>((resolve, reject) => {
+    completeAdoption = resolve
+    rejectAdoption = reject
+  }))
   mocks.writeCoreContent.mockReset()
   mocks.loadStatus.mockReset()
   mocks.refreshRoster.mockReset()
@@ -112,19 +116,50 @@ describe('architecture feedback adoption', () => {
     expect(mocks.loadStatus).toHaveBeenCalledTimes(1)
   })
 
-  it('preserves an existing dirty buffer', async () => {
-    setTab({ content: 'existing edit', dirty: true })
+  it('advances the saved baseline without changing an existing dirty buffer or revision', async () => {
+    setTab({ content: 'existing edit', contentRevision: 7, dirty: true })
+    const before = useEditorStore.getState().tabs[0]
     await beginAdoption()
+    expect(useEditorStore.getState().tabs[0]).toEqual(before)
     await finishAdoption()
-    expect(useEditorStore.getState().tabs[0]).toMatchObject({ content: 'existing edit', savedContent: 'original', dirty: true })
+    expect(useEditorStore.getState().tabs[0]).toEqual({ ...before, savedContent: 'adopted', dirty: true })
   })
 
-  it('preserves input made while adoption is pending', async () => {
-    setTab({})
+  it('settles the latest dirty store buffer against the acknowledged text', async () => {
+    setTab({ contentRevision: 4 })
     await beginAdoption()
     act(() => useEditorStore.getState().updateTabContent(tabId, 'new edit'))
+    const before = useEditorStore.getState().tabs[0]
     await finishAdoption()
-    expect(useEditorStore.getState().tabs[0]).toMatchObject({ content: 'new edit', savedContent: 'original', dirty: true })
+    expect(useEditorStore.getState().tabs[0]).toEqual({ ...before, savedContent: 'adopted', dirty: true })
+    expect(useEditorStore.getState().tabs[0].contentRevision).toBe(5)
+  })
+
+  it('clears dirty when the preserved buffer already equals the adopted text', async () => {
+    setTab({ content: 'adopted', contentRevision: 9, dirty: true })
+    const before = useEditorStore.getState().tabs[0]
+    await beginAdoption()
+    expect(useEditorStore.getState().tabs[0]).toEqual(before)
+    await finishAdoption()
+    expect(useEditorStore.getState().tabs[0]).toEqual({ ...before, savedContent: 'adopted', dirty: false })
+  })
+
+  it('does not publish a saved baseline when adoption fails', async () => {
+    setTab({ content: 'existing edit', contentRevision: 7, dirty: true })
+    const before = useEditorStore.getState().tabs[0]
+    await beginAdoption()
+    await act(async () => { rejectAdoption(new Error('adoption failed')); await Promise.resolve() })
+    expect(useEditorStore.getState().tabs[0]).toEqual(before)
+    expect(mocks.loadStatus).not.toHaveBeenCalled()
+    expect(mocks.writeCoreContent).not.toHaveBeenCalled()
+  })
+
+  it('does not change a dirty tab belonging to another project', async () => {
+    setTab({ projectKey: otherSession.projectPath, content: 'other edit', contentRevision: 7, dirty: true })
+    const before = useEditorStore.getState().tabs[0]
+    await beginAdoption()
+    await finishAdoption()
+    expect(useEditorStore.getState().tabs[0]).toEqual(before)
   })
 
   it('does not refresh a tab after switching projects', async () => {

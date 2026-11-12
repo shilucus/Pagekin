@@ -91,7 +91,10 @@ export default function StageArchitecture({ projectKey }: { projectKey: string }
     const store = useEditorStore.getState()
     const tabId = createProjectArchTabId(session.projectPath, uri)
     const tab = store.tabs.find(item => item.id === tabId)
-    if (tab && shouldSyncProjectArchTab(tab, projectKey)) {
+    if (tab?.projectKey === projectKey && tab.dirty) {
+      // The adopted text is already saved; retain the author's current buffer and revision.
+      store.settleTabSave(tabId, { content: adoptedText, contentRevision: tab.contentRevision ?? 0 })
+    } else if (tab && shouldSyncProjectArchTab(tab, projectKey)) {
       store.syncTabContent(tabId, adoptedText)
       store.markTabSaved(tabId, adoptedText)
     }
