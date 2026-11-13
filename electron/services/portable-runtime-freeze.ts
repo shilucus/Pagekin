@@ -1,5 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { stableImportQueryJson } from './portable-import-query-projection'
 
 import { CANONICAL_PROJECT_DIRECTORY } from '../../src/shared/project-format'
 
@@ -36,6 +38,8 @@ export type PortableRuntimeFreezeTable =
   | 'reference_embedding_dispatches'
   | 'reference_embedding_budgets'
   | 'reference_import_manifest_chapters'
+  | 'import_query_plans'
+  | 'import_query_topics'
   | 'import_reference_documents'
   | 'workflow_tasks'
   | 'workflow_steps'
@@ -173,6 +177,11 @@ export function parsePortableRuntimeFreeze(bytes: Buffer): PortableRuntimeFreeze
   const projections = new Map<string, string>()
   for (const item of document.records) {
     const parsed = record(item)
+    if (parsed.table === 'import_query_topics') {
+      const source = item as Record<string, unknown>
+      const digest = createHash('sha256').update(stableImportQueryJson(source.projection)).digest('hex')
+      if (source.projectionHash !== digest) fail('PORTABLE_RUNTIME_FREEZE_INVALID')
+    }
     const key = `${parsed.table}\u0000${parsed.recordId}`
     if (frozen.has(key)) fail('PORTABLE_RUNTIME_FREEZE_INVALID')
     frozen.add(key)

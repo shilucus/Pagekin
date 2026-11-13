@@ -72,6 +72,8 @@ export interface GenerationRunServiceDependencies {
     /** Main-owner queued requests have no attempt/controller yet. */
     onStopRoot?: (rootId: string) => void;
     dispatch: (request: unknown, options: {
+        attemptId: string;
+        rootActionId: string;
         signal: AbortSignal;
         onVisible: (event: VisibleGenerationEvent) => void;
         onReasoning?: (text: string) => void;
@@ -257,7 +259,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 const providerStarted = performanceStarted();
                 recordPerformanceCount('generation.dispatch.calls');
                 providerInvoked = true;
-                const provider = deps.dispatch(request.providerRequest, { signal: controller.signal, onDiagnostics: value => {
+                const provider = deps.dispatch(request.providerRequest, { attemptId, rootActionId: run.rootActionId, signal: controller.signal, onDiagnostics: value => {
                         if (terminal || storageFailed || controller.signal.aborted) return;
                         diagnostics = { ...value };
                         diagnosticsAt = performance.now();

@@ -330,12 +330,34 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     // ===== 向量检索采样 =====
     const searchTopics = getImportInferenceTopics(writingLanguage)
 
+    let managedTopics: import('../../../shared/import-generation').ImportQueryMaterialsResponse['topics'] | undefined
+    if (frozen && !this.excludeReferenceCorpus) {
+      const handle = context.mainGenerationRunHandle
+      const execution = context.data.importRunExecution as BeginGenerationRequest['importExecution']
+      if (!handle || !execution) throw new Error('GENERATION_IMPORT_EXECUTION_REQUIRED')
+      this.assertNotCancelled(context)
+      const prepared = await ipc.invokeWithProjectSession(projectSession, 'import-generation:v1:query-materials', {
+        handle, execution: { owner: execution.owner, epoch: execution.epoch },
+      })
+      this.assertNotCancelled(context)
+      if (prepared.version !== 1 || prepared.run.handle.projectId !== handle.projectId
+        || prepared.run.handle.rootActionId !== handle.rootActionId || prepared.run.handle.runId !== handle.runId
+        || prepared.topics.length !== searchTopics.length || prepared.topics.some((topic, index) => topic.key !== searchTopics[index].key)) {
+        throw new Error('GENERATION_IMPORT_QUERY_RECEIPT_INVALID')
+      }
+      context.mainGenerationRunHandle = Object.freeze({ ...prepared.run.handle })
+      context.mainGenerationRootHandle = Object.freeze({ ...prepared.run.handle })
+      managedTopics = prepared.topics
+    }
+
     const sampledContent: Partial<Record<ImportInferenceTopicKey, string>> = {}
     for (const topic of searchTopics) {
       this.assertNotCancelled(context)
       const label = text(topic.label.zhCN, topic.label.enUS)
       try {
-        const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
+        const managed = managedTopics?.find(item => item.key === topic.key)
+        if (managed && managed.results === null) throw new Error('GENERATION_IMPORT_QUERY_SEARCH_UNAVAILABLE')
+        const results = managed ? managed.results! : unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
           projectSession,
           this.excludeReferenceCorpus ? 'kb:search-writing-context' : 'kb:search',
           topic.query,

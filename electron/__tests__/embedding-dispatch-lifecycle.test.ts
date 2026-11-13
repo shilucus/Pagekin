@@ -78,10 +78,51 @@ describe.each(protocols)('$protocol physical embedding lifecycle', ({ protocol, 
     expect(json).not.toHaveBeenCalled()
   })
 
+  it('holds a known HTTP failure until its actual delayed response body closes', async () => {
+    const hooks = lifecycle()
+    let body!: ReadableStreamDefaultController<Uint8Array>
+    const stream = new ReadableStream<Uint8Array>({ start(controller) {
+      body = controller
+      controller.enqueue(new TextEncoder().encode('fictional error body'))
+    } })
+    const fetchMock = vi.fn(async () => new Response(stream, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const outcome = embed(['fictional text'], model, undefined, hooks).catch(error => error)
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+      expect(hooks.settled).not.toHaveBeenCalled()
+    } finally { body.close(); await outcome }
+    expect(await outcome).toMatchObject({ code: 'EMBEDDING_REQUEST_FAILED', status: 503 })
+    expect(hooks.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'http_failed', httpStatus: 503 })
+  })
+
+  it.each([200, 503])('records a failed HTTP %i body read as transport unknown, not valid FTS fallback', async status => {
+    const hooks = lifecycle(), original = new TypeError('fictional interrupted body')
+    let body!: ReadableStreamDefaultController<Uint8Array>
+    const fetchMock = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { body = controller } }), { status }))
+    vi.stubGlobal('fetch', fetchMock)
+    const outcome = embed(['fictional text'], model, undefined, hooks).catch(error => error)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    body.error(original)
+    expect(await outcome).toBe(original)
+    expect(hooks.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'transport_unknown' })
+  })
+
+  it('does not reclassify an aborted successful response body as invalid JSON', async () => {
+    const hooks = lifecycle(), original = new DOMException('fictional cancellation', 'AbortError')
+    let body!: ReadableStreamDefaultController<Uint8Array>
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { body = controller } }), { status: 200 })))
+    const outcome = embed(['fictional text'], model, undefined, hooks).catch(error => error)
+    await Promise.resolve()
+    body.error(original)
+    expect(await outcome).toBe(original)
+    expect(hooks.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'transport_unknown' })
+  })
+
   it.each(['json', 'shape', 'vector'] as const)('records successful HTTP with invalid %s as response_invalid', async (invalid) => {
     const hooks = lifecycle()
     const json = vi.fn(async () => {
-      if (invalid === 'json') throw new Error(privateError)
+      if (invalid === 'json') throw new SyntaxError(privateError)
       return invalid === 'shape' ? {} : payload(protocol, [])
     })
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 202, json }))

@@ -210,6 +210,26 @@ export async function verifyReferenceImportKnowledge(input: {
   const expected = input.snapshot
   const root = getProjectDataRoot(input.projectPath)
   if (expected.runtimeEpoch !== input.runtimeEpoch || expected.projectStorageRoot !== root) fail('RUNTIME_CHANGED')
+  await verifyReferenceImportKnowledgeMaterial({ root, snapshot: expected, assertActive: input.assertActive })
+}
+
+export async function verifyDurableReferenceImportKnowledge(input: {
+  projectPath: string
+  snapshot: Omit<ReferenceImportKnowledgeSnapshot, 'projectStorageRoot' | 'runtimeEpoch'>
+  assertActive: () => void
+}): Promise<void> {
+  input.assertActive()
+  await verifyReferenceImportKnowledgeMaterial({
+    root: getProjectDataRoot(input.projectPath), snapshot: input.snapshot, assertActive: input.assertActive,
+  })
+}
+
+async function verifyReferenceImportKnowledgeMaterial(input: {
+  root: string
+  snapshot: Omit<ReferenceImportKnowledgeSnapshot, 'projectStorageRoot' | 'runtimeEpoch'>
+  assertActive: () => void
+}): Promise<void> {
+  const { root, snapshot: expected } = input
   if (expected.version !== 1 || typeof expected.query !== 'string' || !Number.isSafeInteger(expected.topK)
     || expected.topK < 1 || expected.topK > 100 || !Array.isArray(expected.items) || !Array.isArray(expected.results)
     || expected.items.length > expected.topK || expected.results.length !== expected.items.length

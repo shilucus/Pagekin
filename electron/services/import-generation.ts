@@ -7,6 +7,8 @@ import { ImportRunRepository } from '../repositories/import-run-repository'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { captureImportGenerationContext, importGenerationSlotKey } from './import-generation-source'
 import { rootBudgetExhausted } from '../../src/shared/generation-contract'
+import { ImportQueryRepository } from '../repositories/import-query-repository'
+import { importQueryFailure, type ImportQueryPlan } from './import-query-contract'
 
 export function importSlotNonce(slotKey: string, retryOf?: DurableGenerationRun): string {
   return `import:${slotKey}${retryOf ? `:retry:${retryOf.runId}` : ''}`
@@ -41,8 +43,17 @@ export class ImportGeneration {
   private rootCanDispatch(rootActionId: string): boolean {
     const budget = this.runs.budget(rootActionId)
     return ['active', 'paused'].includes(budget.root.status) && !budget.blockedCode
-      && !rootBudgetExhausted(budget.policy, budget.attempts, budget.activeElapsedMs)
+      && !rootBudgetExhausted(budget.policy, budget.attempts, budget.activeElapsedMs, budget.auxiliaryRequestCount)
       && budget.attempts.every(attempt => this.readable(attempt.attemptId, budget))
+  }
+  private queryPlan(slot: ImportGenerationSlot): ImportQueryPlan | null {
+    if (slot.stage !== 'global' || !this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_query_plans'").get()) return null
+    if (this.db.prepare('SELECT purpose FROM import_runs WHERE id=?').pluck().get(slot.runId) !== 'reference') return null
+    const queries = new ImportQueryRepository(this.db, { runs: this.runs })
+    if (!this.db.inTransaction) queries.preflight(slot.runId)
+    const plan = queries.get(slot.runId)
+    if (plan?.record.state === 'recovery_unknown') importQueryFailure('GENERATION_IMPORT_QUERY_RECOVERY_UNKNOWN')
+    return plan
   }
   private readable(attemptId: string, budget: GenerationBudgetReceipt): boolean {
     try { this.runs.receipt(attemptId, budget); return true } catch { return false }
@@ -131,6 +142,8 @@ export class ImportGeneration {
     if (!execution) throw new Error('GENERATION_IMPORT_EXECUTION_REQUIRED')
     ImportRunRepository.assertExecutionAuthority(slot.runId, execution, undefined, this.db)
     this.assertSlotRunning(slot)
+    const plan = this.queryPlan(slot)
+    if (plan && plan.record.root_action_id !== run.rootActionId) importQueryFailure('GENERATION_IMPORT_QUERY_ROOT_CHANGED')
     if (this.hasRemoteUnknown(slot)) throw new Error('GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
     return Object.freeze({ owner: execution.owner, epoch: execution.epoch })
   }
@@ -148,6 +161,9 @@ export class ImportGeneration {
       || !isDeepStrictEqual(selection.promptKeys, promptKeys) || !isDeepStrictEqual(selection.skillStages, slot.stage === 'style' ? [] : ['planning'])
       || selection.output !== (slot.stage === 'style' ? 'visible-text' : 'structured-data')) throw new Error('GENERATION_IMPORT_STAGE_INVALID')
     ImportRunRepository.assertExecutionAuthority(slot.runId, selection.importExecution, undefined, this.db)
+    const queryPlan = this.queryPlan(slot)
+    if (queryPlan && existing && existing.rootActionId !== queryPlan.record.root_action_id)
+      importQueryFailure('GENERATION_IMPORT_QUERY_ROOT_CHANGED')
     const modelOf = (run: DurableGenerationRun) => (run.binding.sourceManifest.modelReceipt as { modelId: string }).modelId
     if (existing && !this.retryable(existing)) {
       if (selection.modelId !== modelOf(existing)) throw new Error('GENERATION_IMPORT_MODEL_CHANGED')
@@ -166,7 +182,10 @@ export class ImportGeneration {
     }
     const latest = records.at(-1)
     if (selection.parentRootActionId && selection.parentRootActionId !== latest?.rootActionId) throw new Error('GENERATION_IMPORT_ROOT_CHANGED')
-    const parentRootActionId = selection.parentRootActionId
+    if (queryPlan && selection.parentRootActionId && selection.parentRootActionId !== queryPlan.record.root_action_id)
+      importQueryFailure('GENERATION_IMPORT_QUERY_ROOT_CHANGED')
+    if (queryPlan && !this.rootCanDispatch(queryPlan.record.root_action_id)) throw new Error('ROOT_BUDGET_EXHAUSTED')
+    const parentRootActionId = queryPlan?.record.root_action_id ?? selection.parentRootActionId
       ?? (latest && this.rootCanDispatch(latest.rootActionId) ? latest.rootActionId : undefined)
     return { retryOf: existing, parentRootActionId, modelId: latest && modelOf(latest),
       chapterCount: parentRootActionId ? undefined : totalChapters }

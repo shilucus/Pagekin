@@ -5,6 +5,7 @@ import { isRuntimeFeedbackChannel } from '../src/shared/runtime-feedback-contrac
 import { isWorkflowDriverChannel } from '../src/shared/workflow-driver-contract'
 import { isWorkflowBatchChannel } from '../src/shared/workflow-batch-contract'
 import { isReferenceKnowledgeChannel } from '../src/shared/reference-knowledge-contract'
+import { isImportGenerationChannel } from '../src/shared/import-generation'
 
 /**
  * AI Novel Preload Script — 安全地暴露 IPC 通信能力到渲染进程
@@ -29,6 +30,9 @@ contextBridge.exposeInMainWorld('aiNovelAPI', {
     }
     if (channel.startsWith('reference-knowledge:') && !isReferenceKnowledgeChannel(channel)) {
       return Promise.reject(new Error('KNOWLEDGE_BASE_REFERENCE_CHANNEL_NOT_ALLOWED'))
+    }
+    if (channel.startsWith('import-generation:') && !isImportGenerationChannel(channel)) {
+      return Promise.reject(new Error('GENERATION_IMPORT_CHANNEL_NOT_ALLOWED'))
     }
     return ipcRenderer.invoke(channel, ...args)
   },

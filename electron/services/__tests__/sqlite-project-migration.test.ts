@@ -620,6 +620,27 @@ it.each(['standard','donor'] as const)('preserves schema17 %s bytes/domain acros
  } finally { installed.close() }
  expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
 })
+it.each(['standard','donor'] as const)('preserves schema18 %s domain and bytes across failed M18 and retry', async variant => {
+ const f=fixture()
+ if(variant==='donor') {
+  const row=f.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='characters'").get() as {sql:string}
+  f.db.exec('ALTER TABLE characters RENAME TO characters_without_avatar')
+  f.db.exec(row.sql.replace("      cs_location TEXT DEFAULT '',", "      avatar TEXT NOT NULL DEFAULT '',\n      cs_location TEXT DEFAULT '',"))
+  f.db.exec('DROP TABLE characters_without_avatar')
+ }
+ await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:18})
+ const before=probeProjectSqlite({databasePath:f.target}), original=fs.readFileSync(f.target), registry=getDesktopMigrationRegistry()
+ const failing={...registry,implementations:registry.implementations.map(step=>step.id==='M18'
+  ? {...step,migrate:(reader: Parameters<typeof step.migrate>[0])=>{step.migrate(reader);throw new Error('query-migration-interruption')}} : step)}
+ expect(()=>upgradeProjectSqlite({databasePath:f.target,registry:failing})).toThrow('query-migration-interruption')
+ expect(probeProjectSqlite({databasePath:f.target})).toEqual(before)
+ expect(fs.readFileSync(f.target)).toEqual(original)
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.preImportQueryDomain).toEqual(before.domain)
+ expect(upgraded.domain.tableCounts.import_query_plans).toBeUndefined()
+ expect(upgraded.domain.tableCounts.import_query_topics).toBeUndefined()
+ expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
 it('resolves a trusted system scratch junction before validating its private snapshot', () => {
  const f=fixture(), physical=path.join(f.root,'scratch'), link=path.join(f.root,'scratch-link')
  fs.mkdirSync(physical);fs.symlinkSync(physical,link,'junction')

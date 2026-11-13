@@ -5,7 +5,7 @@ import type { CharacterProposalChannels } from '../../src/shared/character-propo
 import type { FinalizedCharacterGenerationChannels } from '../../src/shared/finalized-character-generation'
 import type { ReviewRevisionGenerationInvokeChannels } from '../../src/shared/review-revision-generation'
 import type { AgentGenerationChannels } from '../../src/shared/agent-generation'
-import type { ImportGenerationChannels } from '../../src/shared/import-generation'
+import { assertImportQueryMaterialsRequest, type ImportGenerationChannels } from '../../src/shared/import-generation'
 import type { EditorInlineGenerationChannels } from '../../src/shared/editor-inline-generation'
 import type { FinalizationGenerationChannels } from '../../src/shared/finalization-generation'
 import type { GraphGenerationChannels } from '../../src/shared/graph-generation'
@@ -107,6 +107,12 @@ export function assertImportGenerationSourcesCurrent(handle: MainGenerationRunHa
   if (entry?.mode !== 'legacy' || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
   entry.owner.assertImportGenerationSources(handle, slot, allowLegacyStyle)
 }
+/** Verify query evidence before opening the synchronous domain transaction. */
+export async function withImportGenerationQuerySources<T>(handle: MainGenerationRunHandle, operation: () => T): Promise<T> {
+  const database = getProjectDb(), entry = database && owners.get(database)
+  if (entry?.mode !== 'legacy' || database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
+  return entry.owner.withImportQuerySources(handle, operation)
+}
 
 const GENERATION_ERROR_CODE = /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER|PLANNING_FEEDBACK|RUNTIME_FEEDBACK|WORKFLOW_DRIVER|WORKFLOW_BATCH)_[A-Z_]+$/u
 const DIAGNOSTIC_MESSAGE_LIMIT = 200
@@ -130,7 +136,7 @@ export function generationIpcErrorCode(channel: string, error: unknown): string 
     return 'GENERATION_REQUEST_FAILED'
   }
   if (channel.startsWith('planning-feedback:') || channel.startsWith('runtime-feedback:')
-    || channel.startsWith('workflow-driver:') || channel.startsWith('workflow-batch:')) {
+    || channel.startsWith('workflow-driver:') || channel.startsWith('workflow-batch:') || channel.startsWith('import-generation:')) {
     console.error('[generation] unmapped feedback failure', { channel, name: error instanceof Error ? 'Error' : typeof error,
       stack: error instanceof Error ? errorStackFrames(error, 7) : undefined })
     return 'GENERATION_REQUEST_FAILED'
@@ -236,6 +242,7 @@ export function registerGenerationController(options: {
     return createMainGenerationOwner({ database: runtime.database, projectId: runtime.projectId,
       projectPath: runtime.canonicalRoot, epoch, assertCurrent, assertRetirementResources: capturedResources(runtime),
       scheduling: { admission: scheduler, projectKey: runtime.executionEpoch, quarantineAfterMs: GENERATION_TRANSPORT_CLEANUP_GRACE_MS },
+      referenceImportQueries: { runtime, loadConfiguration: getEmbeddingConfig },
       withDispatchKnowledge: (snapshot, operation) => guardRuntimeKnowledge(runtime, snapshot, operation),
       assertAdmission: () => projectRuntimeHost.assertWorkAvailable(runtime),
       leases: options.modelExecutionLeases, loadModel: options.loadModel, beforeDispatch: options.applyProxyConfig,
@@ -647,6 +654,7 @@ export function registerGenerationController(options: {
             || Object.keys(request).length !== 1 || !Object.hasOwn(request, 'handle')) throw new Error('GENERATION_DIAGNOSTICS_INVALID')
         }
         if (channel.startsWith('planning-feedback:')) assertPlanningFeedbackRequest(channel as PlanningFeedbackChannel, raw[0])
+        if (channel === 'import-generation:v1:query-materials') assertImportQueryMaterialsRequest(raw[0])
         const owner = authorizedOwner(session, event)
         const runtime = ownerRuntimes.get(owner)!
         activeHandlers.set(runtime, (activeHandlers.get(runtime) ?? 0) + 1)
@@ -769,6 +777,7 @@ export function registerGenerationController(options: {
   register('agent-generation:begin', 1, (owner, request) => owner.agents.begin(request))
   register('agent-generation:read', 1, (owner, request) => owner.agents.read(request.handle))
   register('import-generation:read', 1, (owner, request) => owner.readImportGeneration(request.slot, typeof request.runId === 'string' ? request.runId : undefined))
+  register('import-generation:v1:query-materials', 1, (owner, request) => owner.prepareImportQueryMaterials(request))
   register('import-generation:execute', 1, (owner, request) => owner.executeImportGeneration(request))
   register('editor-inline:begin', 1, (owner, request) => owner.beginEditorInline(request))
   register('editor-inline:read-recovery', 1, (owner, request) => owner.readEditorInlineRecovery(request.handle))

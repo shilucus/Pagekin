@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { appErrorMessage, displayedErrorMessage, errorCodeOf, importGenerationStopMessage, knownAppErrorMessage } from '../app-errors'
+import { translate } from '../core'
 
 describe('localized application errors', () => {
   it('maps stable error codes to localized messages', () => {
@@ -25,6 +26,25 @@ describe('localized application errors', () => {
 it.each(['KNOWLEDGE_BASE_NATIVE_UNAVAILABLE','LEGACY_VECTOR_MIGRATION_BLOCKED'])('maps knowledge preparation IPC error %s without exposing internal details', code => {
  expect(appErrorMessage('en-US',new Error(`Error invoking remote method 'generation:prepare-draft-context': Error: ${code}`)))
    .toBe(appErrorMessage('en-US',{errorCode:code}))
+})
+
+it.each([
+  'GENERATION_IMPORT_QUERY_REQUIRED', 'GENERATION_IMPORT_QUERY_INVALID', 'GENERATION_IMPORT_QUERY_PLAN_CONFLICT',
+  'GENERATION_IMPORT_QUERY_ROOT_CHANGED', 'GENERATION_IMPORT_QUERY_RECOVERY_UNKNOWN', 'GENERATION_IMPORT_QUERY_RECEIPT_INVALID',
+  'GENERATION_IMPORT_QUERY_PERSISTENCE_FAILED', 'GENERATION_IMPORT_QUERY_HISTORY_FROZEN',
+])('localizes query barrier %s without claiming a result or inviting a resend', code => {
+  const errors = [code, new Error(`Error invoking remote method 'import-generation:v1:query-materials': ImportQueryBarrierError: ${code}`), { errorCode: code }]
+  for (const locale of ['zh-CN', 'en-US'] as const) {
+    const expected = translate(locale, 'error.unknown', { message: code })
+    for (const error of errors) {
+      expect(knownAppErrorMessage(locale, error)).toBe(expected)
+      expect(appErrorMessage(locale, error)).toBe(expected)
+      expect(displayedErrorMessage(locale, error)).toBe(expected)
+      expect(errorCodeOf(error)).toBe(code)
+    }
+    expect(expected).not.toContain('{message}')
+    expect(expected).not.toMatch(/retry|try again|generate again|continue import|重试|重新生成|继续导入/iu)
+  }
 })
 
 describe('generation error codes from the main process', () => {

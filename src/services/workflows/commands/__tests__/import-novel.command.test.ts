@@ -13,6 +13,9 @@ import { importGenerationStopMessage } from '../../../../i18n/app-errors'
 import { contextLengthRejectingDependencies } from './context-length-runtime.fixture'
 import { isWorkflowCancellation } from '../../workflow-cancellation'
 import { GenerationHarnessError } from '../../../generation/generation-harness'
+import { getImportInferenceTopics, formatImportInferenceSample } from '../../../../shared/import-inference-materials'
+import { assertImportQueryMaterialsRequest } from '../../../../shared/import-generation'
+import type { GenerationTask } from '../../../generation/generation-harness'
 
 class InferBlueprintsPerChapterCommand extends RuntimeInferBlueprintsPerChapterCommand {
   constructor() { super(workflowRuntimeDependencies) }
@@ -1104,6 +1107,7 @@ describe('导入 slot 的输出没通过校验', () => {
     const invoke = stubIpcInvoke((channel, ...args) => {
       if (channel === 'generation:read') return { handle, candidates: [{ ...handle, artifactId: 'artifact-1', status: 'completed' }, { ...handle, artifactId: 'artifact-2', status: 'completed' }] }
       if (channel === 'generation:discard-candidate') return { handle, candidates: [] }
+      if (channel === 'import-generation:v1:query-materials') return { version: 1, run: { handle }, topics: getImportInferenceTopics('zh-CN').map(topic => ({ key: topic.key, results: [] })) }
       return handler(channel, ...args)
     })
     const receipt = { purpose: 'import-inference', finishReason: 'stop', budget: { requestedOutputTokens: 1 } }
@@ -1112,6 +1116,103 @@ describe('导入 slot 的输出没通过校验', () => {
     const discarded = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:discard-candidate').map(([, ...args]) => args.find(arg => typeof arg === 'string'))
     return { runtime, session, invoke, discarded, context: { ...createContext(), mainGenerationRunHandle: handle } }
   }
+
+  function managedGlobal(language: 'zh-CN' | 'en-US') {
+    const topics = getImportInferenceTopics(language).map((topic, index) => ({ key: topic.key,
+      results: index === 3 ? null : index === 2 ? [] : [
+        { text: `full original ${topic.key} first`, score: 0.736, fileName: 'same-source.txt' },
+        { text: `full original ${topic.key} second`, score: 0.264, fileName: 'same-source.txt' },
+      ] }))
+    const f = mainOwnedImport(JSON.stringify(validInference()), (channel, request) => {
+      if (channel === 'db:character-roster-read') return { status: 'ready', revision: 1 }
+      if (channel === 'db:import-global-facts-commit') {
+        const candidate = request as import('../../../../shared/import-global-facts').ImportGlobalFactsRequest
+        const { generationRunHandle: _handle, ...domain } = candidate
+        void _handle
+        return { success: true, receipt: { operationId: domain.operationId, payloadHash: 'f'.repeat(64), idempotent: false,
+          core: domain.core, characterProposal: { proposalBatchId: 'managed-proposal', sourceHash: 'a'.repeat(64) }, proposalSource: domain } }
+      }
+      throw new Error(`Unexpected managed IPC ${channel}`)
+    })
+    const original = f.invoke.getMockImplementation()!
+    f.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel !== 'import-generation:v1:query-materials') return original(channel, ...args)
+      assertImportQueryMaterialsRequest(args[0])
+      return { version: 1, run: { handle: { ...handle, epoch: 'resumed-query-epoch' } }, topics }
+    })
+    f.context.writingLanguage = language
+    f.context.data.importRunExecution = { owner: 'fictional-import-owner', epoch: 1, expiresAt: Date.now() + 60_000 }
+    f.context.data.importGenerationSlot = { runId: 'fictional-managed-import', stage: 'global', batchId: 'done' }
+    f.context.data.importGenerationContext = {
+      slot: { runId: 'fictional-managed-import', stage: 'global', batchId: 'done' }, manifestFingerprint: 'a'.repeat(64),
+      totalChapters: 701, totalWords: 20,
+      core: { ...useProjectStore.getState().currentProject!.novelConfig, writingLanguage: language, narrativePov: 'third_limited' },
+      chapters: [{ number: 1, content: 'Fictional opening chapter.' }, { number: 701, content: 'Fictional final chapter.' }],
+      prompts: { infer_novel_config_with_vectors: { id: 'infer_novel_config_with_vectors', systemRole: 'Fictional editor.',
+        content: '{{sampled_worldview}}\n{{sampled_protagonist}}\n{{sampled_conflict}}\n{{sampled_style}}\n{{first_chapter}}\n{{latest_chapter}}\n{{total_chapters}}' } },
+    }
+    return { ...f, topics }
+  }
+
+  it.each(['zh-CN', 'en-US'] as const)('consumes ordered main-owned %s materials without legacy search or dropping full hits', async language => {
+    const f = managedGlobal(language)
+    await new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => f.runtime } as never)
+      .execute({ step: {}, context: f.context, callbacks })
+    const calls = f.invoke.mock.calls.filter(([channel]) => String(channel).startsWith('import-generation:'))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toEqual(['import-generation:v1:query-materials', { handle, execution: { owner: 'fictional-import-owner', epoch: 1 } }, f.context.projectSession])
+    expect(f.invoke.mock.calls.some(([channel]) => String(channel).startsWith('kb:search'))).toBe(false)
+    expect(f.context.mainGenerationRunHandle.epoch).toBe('resumed-query-epoch')
+    const task = (f.session.complete.mock.calls as unknown as [GenerationTask][])[0][0]
+    const prompt = task.messages.find(message => message.role === 'user')!.content
+    for (const topic of f.topics) expect(prompt).toContain(formatImportInferenceSample(topic.results ?? 'unavailable', language))
+    expect(prompt.indexOf('worldview first')).toBeLessThan(prompt.indexOf('worldview second'))
+    expect(prompt).toContain('Fictional opening chapter.')
+    expect(prompt).toContain('Fictional final chapter.')
+    expect(prompt).toContain('701')
+    expect(callbacks.setProgress).toHaveBeenCalledWith(5)
+    expect(callbacks.setProgress).toHaveBeenCalledWith(20)
+    expect(f.context.data.importGlobalFactsReceipt).toBeDefined()
+  })
+
+  it('keeps a frozen author-manuscript slot on reference-excluding writing-context search', async () => {
+    const f = managedGlobal('en-US'), original = f.invoke.getMockImplementation()!
+    f.context.data.importRunPurpose = 'author-manuscript'
+    f.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'kb:search-writing-context'
+      ? [{ text: 'Fictional author-only passage.', score: 0.9, fileName: 'author.txt' }] : original(channel, ...args))
+    await new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => f.runtime } as never, undefined, true)
+      .execute({ step: {}, context: f.context, callbacks })
+    expect(f.invoke.mock.calls.filter(([channel]) => String(channel).startsWith('kb:search')).map(([channel]) => channel))
+      .toEqual(Array(4).fill('kb:search-writing-context'))
+    expect(f.invoke.mock.calls.some(([channel]) => channel === 'import-generation:v1:query-materials')).toBe(false)
+    expect(f.session.complete).toHaveBeenCalledTimes(1)
+    const task = (f.session.complete.mock.calls as unknown as [GenerationTask][])[0][0]
+    expect(task.messages.find(message => message.role === 'user')!.content).toContain('Fictional author-only passage.')
+    expect(f.context.mainGenerationRunHandle).toEqual(handle)
+  })
+
+  it.each(['ROOT_BUDGET_EXHAUSTED', 'GENERATION_IMPORT_QUERY_RECOVERY_UNKNOWN', 'KNOWLEDGE_BASE_REFERENCE_RESOURCES_CHANGED'])(
+    'does not downgrade main query barrier %s into topic fallback or dispatch a model', async code => {
+      const f = managedGlobal('en-US'), original = f.invoke.getMockImplementation()!
+      f.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+        if (channel === 'import-generation:v1:query-materials') throw new Error(code)
+        return original(channel, ...args)
+      })
+      await expect(new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => f.runtime } as never)
+        .execute({ step: {}, context: f.context, callbacks })).rejects.toThrow(code)
+      expect(f.session.complete).not.toHaveBeenCalled()
+      expect(f.invoke.mock.calls.some(([channel]) => String(channel).startsWith('kb:search') || channel === 'db:import-global-facts-commit')).toBe(false)
+    },
+  )
+
+  it('rejects unordered main query receipts before building a prompt', async () => {
+    const f = managedGlobal('en-US'), original = f.invoke.getMockImplementation()!
+    f.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'import-generation:v1:query-materials'
+      ? { version: 1, run: { handle }, topics: [...f.topics].reverse() } : original(channel, ...args))
+    await expect(new RuntimeInferGlobalSettingsCommand({ createRuntime: async () => f.runtime } as never)
+      .execute({ step: {}, context: f.context, callbacks })).rejects.toThrow('GENERATION_IMPORT_QUERY_RECEIPT_INVALID')
+    expect(f.session.complete).not.toHaveBeenCalled()
+  })
 
   it('蓝图输出缺章被拒：丢弃这个运行的全部候选，「继续导入」才会重新请求这一批', async () => {
     const { runtime, discarded, context } = mainOwnedImport(JSON.stringify({ blueprints: [] }))
@@ -1214,7 +1315,7 @@ describe('导入 slot 的输出没通过校验', () => {
       },
     }
     context.data.importGenerationSlot = slot
-    context.data.importRunExecution = { ownerId: 'execution-global-1' }
+    context.data.importRunExecution = { owner: 'execution-global-1', epoch: 1 }
     context.data.importGenerationContext = frozen
 
     useProjectStore.setState({

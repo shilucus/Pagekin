@@ -127,6 +127,15 @@ const ERROR_KEYS = {
   GENERATION_IMPORT_EXECUTION_STALE: 'error.generationStopped',
   GENERATION_PARENT_INVALID: 'error.generationParentInvalid',
   GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE: 'error.importPreviousAttemptIncomplete',
+  // Query integrity barriers do not prove an outcome or permit a retry. Keep the diagnostic in the existing generic copy.
+  GENERATION_IMPORT_QUERY_REQUIRED: 'error.unknown',
+  GENERATION_IMPORT_QUERY_INVALID: 'error.unknown',
+  GENERATION_IMPORT_QUERY_PLAN_CONFLICT: 'error.unknown',
+  GENERATION_IMPORT_QUERY_ROOT_CHANGED: 'error.unknown',
+  GENERATION_IMPORT_QUERY_RECOVERY_UNKNOWN: 'error.unknown',
+  GENERATION_IMPORT_QUERY_RECEIPT_INVALID: 'error.unknown',
+  GENERATION_IMPORT_QUERY_PERSISTENCE_FAILED: 'error.unknown',
+  GENERATION_IMPORT_QUERY_HISTORY_FROZEN: 'error.unknown',
   GENERATION_WORKFLOW_SESSION_BUSY: 'error.generationBusy',
   GENERATION_PLOT_OUTLINE_AUTHOR_IN_FLIGHT: 'error.generationBusy',
   GENERATION_KNOWLEDGE_BUSY: 'error.generationKnowledgeBusy',
@@ -357,7 +366,7 @@ function readMessage(error: unknown): string {
 /** 已登记错误码的可读文案；未登记时返回 undefined，由调用方保留原有说明。 */
 export function knownAppErrorMessage(locale: Locale, error: unknown): string | undefined {
   const code = readCode(error)
-  return code ? translate(locale, ERROR_KEYS[code]) : undefined
+  return code ? translate(locale, ERROR_KEYS[code], { message: code }) : undefined
 }
 
 const IMPORT_BLOCKED_CODES = new Set(['GENERATION_DISPATCH_BLOCKED', 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED', 'GENERATION_PARENT_INVALID'])

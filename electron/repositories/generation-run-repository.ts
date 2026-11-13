@@ -38,6 +38,8 @@ export interface GenerationBudgetReceipt {
     activeElapsedMs: number;
     attempts: PhysicalAttempt[];
     blockedCode: string | null;
+    /** Query physical marks; unlike generation reservation occupancy, these are already dispatched. */
+    auxiliaryRequestCount?: number;
 }
 export interface GenerationUsageReceipt {
     policy: ProviderUsagePolicy;
@@ -93,6 +95,13 @@ export const textHash = (text: string) => createHash('sha256').update(text, 'utf
 const encode = (value: unknown): string => JSON.stringify(value);
 const authorEffectPath = '$."$runEffects"';
 function fail(code: string): never { throw new Error(code); }
+interface PhysicalActivity {
+    holds: Map<string, object>;
+    closedAttempts: Set<string>;
+    poison?: string;
+    lastClock?: number;
+}
+const physicalDatabases = new WeakMap<Database.Database, Map<string, PhysicalActivity>>();
 const completeHandle = (handle: DirectoryGenerationProgress['sourceHandle']) => handle && typeof handle === 'object'
     && Object.keys(handle).length === 4 && ['projectId', 'epoch', 'rootActionId', 'runId'].every(key => typeof handle[key as keyof typeof handle] === 'string' && handle[key as keyof typeof handle].trim());
 function binding(request: RunBinding): RunBinding {
@@ -115,6 +124,114 @@ export class GenerationRunRepository {
         return this.database;
     }
     private transaction<T>(fn: () => T): T { return this.db().transaction(fn).immediate(); }
+    assertDatabaseIdentity(database: Database.Database): void {
+        if (this.db() !== database) fail('GENERATION_IMPORT_QUERY_INVALID');
+    }
+    private physical(rootId: string): PhysicalActivity {
+        const database = this.database;
+        if (!database) fail('GENERATION_DATABASE_NOT_READY');
+        let roots = physicalDatabases.get(database);
+        if (!roots) { roots = new Map(); physicalDatabases.set(database, roots); }
+        let root = roots.get(rootId);
+        if (!root) { root = { holds: new Map(), closedAttempts: new Set() }; roots.set(rootId, root); }
+        return root;
+    }
+    private hasQueryTables(): boolean {
+        return !!this.db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_query_topics'").get();
+    }
+    auxiliaryRequestCount(rootId: string): number {
+        if (!this.hasQueryTables()) return 0;
+        return this.db().prepare(`SELECT count(*) FROM import_query_topics t JOIN import_query_plans p
+            ON p.import_root_run_id=t.import_root_run_id WHERE p.root_action_id=? AND t.marked_at_ms IS NOT NULL`).pluck().get(rootId) as number;
+    }
+    hasPhysicalFlight(rootId: string, identity?: string): boolean {
+        const holds = this.physical(rootId).holds;
+        return identity === undefined ? holds.size > 0 : holds.has(identity);
+    }
+    private hasUnclosedQuery(rootId: string): boolean {
+        return this.hasQueryTables() && !!this.db().prepare(`SELECT 1 FROM import_query_topics t JOIN import_query_plans p
+            ON p.import_root_run_id=t.import_root_run_id WHERE p.root_action_id=? AND t.marked_at_ms IS NOT NULL
+            AND t.physical_closed_at_ms IS NULL LIMIT 1`).get(rootId);
+    }
+    private physicalBusy(rootId: string): boolean {
+        const local = this.physical(rootId);
+        if (local.holds.size) return true;
+        const attempts = this.db().prepare('SELECT attempt_id,attempt_json FROM generation_attempts WHERE root_action_id=?').all(rootId) as { attempt_id: string; attempt_json: string }[];
+        if (attempts.some(row => JSON.parse(row.attempt_json).status === 'dispatch-marked' && !local.closedAttempts.has(row.attempt_id))) return true;
+        return this.hasUnclosedQuery(rootId);
+    }
+    /** Poison is DB/root shared, and must not prevent recording an already-issued outcome. */
+    poisonPhysicalActivity(rootId: string, code = 'GENERATION_IMPORT_QUERY_RECOVERY_UNKNOWN'): void {
+        const local = this.physical(rootId);
+        local.poison ??= code;
+        if (!this.database?.open) return;
+        try {
+            this.db().prepare('UPDATE generation_roots SET blocked_code=COALESCE(blocked_code,?) WHERE root_action_id=?').run(local.poison, rootId);
+            if (this.hasQueryTables()) this.db().prepare("UPDATE import_query_plans SET state='recovery_unknown' WHERE root_action_id=?").run(rootId);
+        } catch { local.poison = 'GENERATION_IMPORT_QUERY_PERSISTENCE_FAILED'; }
+    }
+    /** Called outside admission transactions so a durable recovery fence cannot roll back with refusal. */
+    preflightPhysicalActivity(rootId: string): void {
+        if (this.db().inTransaction) fail('GENERATION_IMPORT_QUERY_INVALID');
+        this.transaction(() => {
+            const since = this.db().prepare('SELECT active_since_ms FROM generation_roots WHERE root_action_id=?').pluck().get(rootId) as number | null | undefined;
+            if (since === undefined) fail('GENERATION_ROOT_MISSING');
+            if (since !== null && !this.hasPhysicalFlight(rootId)) this.poisonPhysicalActivity(rootId);
+            this.budget(rootId);
+            if (this.physical(rootId).poison) this.poisonPhysicalActivity(rootId);
+        });
+        const poison = this.physical(rootId).poison;
+        if (poison) fail(poison);
+    }
+    assertAuxiliaryEffect(rootId: string): void {
+        if (this.hasQueryTables() && this.db().prepare('SELECT 1 FROM import_query_plans WHERE root_action_id=?').get(rootId)
+            && this.db().prepare('SELECT active_since_ms FROM generation_roots WHERE root_action_id=?').pluck().get(rootId) !== null
+            && !this.hasPhysicalFlight(rootId)) this.poisonPhysicalActivity(rootId);
+        const budget = this.budget(rootId);
+        if (budget.blockedCode) fail(budget.blockedCode);
+        if (budget.root.status === 'cancelled') fail('GENERATION_ACTION_CANCELLED');
+        if (budget.root.status !== 'active' || this.frozenRoot(rootId)) fail('GENERATION_DISPATCH_BLOCKED');
+        if (budget.activeElapsedMs >= budget.policy.maxActiveElapsedMs) fail('ROOT_BUDGET_EXHAUSTED');
+    }
+    private holdPhysical(rootId: string, identity: string, attempt = false): () => void {
+        const local = this.physical(rootId), token = {};
+        if (local.holds.has(identity) || attempt && local.closedAttempts.has(identity)) fail('GENERATION_IMPORT_QUERY_INVALID');
+        local.holds.set(identity, token);
+        let closed = false;
+        return () => {
+            if (closed) return;
+            closed = true;
+            if (local.holds.get(identity) !== token) { this.poisonPhysicalActivity(rootId); return; }
+            local.holds.delete(identity);
+            if (attempt) local.closedAttempts.add(identity);
+            // A fenced, closed handle may finish transport cleanup but must never issue SQL.
+            if (!this.database?.open) { local.poison ??= 'GENERATION_IMPORT_QUERY_PERSISTENCE_FAILED'; return; }
+            try { this.transaction(() => { if (local.poison) this.poisonPhysicalActivity(rootId); this.stopClockIfIdle(rootId); }); }
+            catch { this.poisonPhysicalActivity(rootId, 'GENERATION_IMPORT_QUERY_PERSISTENCE_FAILED'); }
+        };
+    }
+    /** The owner invokes this at recorded dispatch and releases only at provider physical-finally. */
+    openPhysicalFlight(attemptId: string): () => void {
+        const receipt = this.receipt(attemptId);
+        if (receipt.attempt.status !== 'dispatch-marked' || this.frozenRoot(receipt.run.rootActionId)) fail('GENERATION_DISPATCH_BLOCKED');
+        return this.holdPhysical(receipt.run.rootActionId, attemptId, true);
+    }
+    markAuxiliaryDispatch(runId: string, queryId: string, mark: () => void): () => void {
+        const rootId = this.transaction(() => {
+            const run = this.get(runId);
+            this.assertAuxiliaryEffect(run.rootActionId);
+            if (run.status !== 'running' || !sameProjectEpoch(run.binding, this.budget(run.rootActionId).root)) fail('GENERATION_DISPATCH_BLOCKED');
+            const budget = this.budget(run.rootActionId);
+            if (budget.attempts.filter(a => a.status !== 'cancelled-before-dispatch').length + (budget.auxiliaryRequestCount ?? 0) >= budget.policy.maxPhysicalRequests)
+                fail('ROOT_BUDGET_EXHAUSTED');
+            const before = this.auxiliaryRequestCount(run.rootActionId);
+            mark();
+            if (this.auxiliaryRequestCount(run.rootActionId) !== before + 1) fail('GENERATION_IMPORT_QUERY_INVALID');
+            this.db().prepare('UPDATE generation_roots SET active_since_ms=COALESCE(active_since_ms,?) WHERE root_action_id=?').run(this.now(), run.rootActionId);
+            return run.rootActionId;
+        });
+        return this.holdPhysical(rootId, queryId);
+    }
     get(runId: string): DurableGenerationRun {
         const row = this.db().prepare('SELECT * FROM generation_runs WHERE run_id=?').get(runId) as {
             run_id: string;
@@ -247,7 +364,16 @@ export class GenerationRunRepository {
         const attempts = this.db().prepare('SELECT attempt_json FROM generation_attempts WHERE root_action_id=? ORDER BY rowid').all(rootId) as {
             attempt_json: string;
         }[];
-        return { root: JSON.parse(row.action_json), policy: JSON.parse(row.budget_json), activeElapsedMs: row.active_elapsed_ms + (row.active_since_ms === null ? 0 : Math.max(0, this.now() - row.active_since_ms)), attempts: attempts.map(row => JSON.parse(row.attempt_json)), blockedCode: row.blocked_code };
+        const local = this.physical(rootId), now = this.now();
+        if (local.poison) this.poisonPhysicalActivity(rootId);
+        let elapsed = row.active_elapsed_ms;
+        if (!Number.isSafeInteger(elapsed) || elapsed < 0 || row.active_since_ms !== null
+            && (!Number.isSafeInteger(now) || now < row.active_since_ms || local.lastClock !== undefined && now < local.lastClock
+                || !Number.isSafeInteger(elapsed + now - row.active_since_ms))) this.poisonPhysicalActivity(rootId);
+        else if (row.active_since_ms !== null && !local.poison) { elapsed += now - row.active_since_ms; local.lastClock = now; }
+        return { root: JSON.parse(row.action_json), policy: JSON.parse(row.budget_json), activeElapsedMs: elapsed,
+            attempts: attempts.map(row => JSON.parse(row.attempt_json)), blockedCode: local.poison ?? row.blocked_code,
+            auxiliaryRequestCount: this.auxiliaryRequestCount(rootId) };
     }
     attemptCount(runId: string): number {
         return this.db().prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(runId) as number;
@@ -341,7 +467,7 @@ export class GenerationRunRepository {
                 fail('GENERATION_EPOCH_STALE');
             this.assertPlotOutlineRequest(runId, purpose, replayTask);
             const attempt: PhysicalAttempt = { attemptId: randomUUID(), reservationId: randomUUID(), rootActionId: run.rootActionId, status: 'reserved', reservedTokens, requestedOutputTokens };
-            assertReservation(budget.root, budget.policy, budget.attempts, attempt, budget.activeElapsedMs);
+            assertReservation(budget.root, budget.policy, budget.attempts, attempt, budget.activeElapsedMs, budget.auxiliaryRequestCount);
             this.db().prepare('INSERT INTO generation_attempts VALUES(?,?,?,?,?,?,?)').run(attempt.attemptId, attempt.reservationId, runId, run.rootActionId, encode(attempt), encode({ requestHash, usagePolicy: usagePolicy ?? null }), nonce);
             const artifact: VisibleArtifact = { artifactId: randomUUID(), attemptId: attempt.attemptId, rootActionId: run.rootActionId, projectId: run.binding.projectId, epoch: run.binding.epoch, fingerprint: run.binding.fingerprint, revision: 0, text: '', textHash: textHash('') };
             this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ requestHash, usagePolicy: usagePolicy ?? null, ...(purpose ? { purpose } : {}), ...(replayTask ? { replayTask } : {}), ...(budgetDecision ? { budgetDecision } : {}), ...(reconciliationInjected ? { reconciliationInjected: true } : {}), artifactIdentity: { artifactId: artifact.artifactId, epoch: artifact.epoch, fingerprint: artifact.fingerprint } }), attempt.attemptId);
@@ -736,10 +862,13 @@ export class GenerationRunRepository {
         });
     }
     private stopClockIfIdle(rootId: string): void {
-        if (this.budget(rootId).attempts.some(a => a.status === 'dispatch-marked'))
+        if (this.physical(rootId).poison) { this.poisonPhysicalActivity(rootId); return; }
+        if (this.physicalBusy(rootId))
             return;
         const elapsed = this.budget(rootId).activeElapsedMs;
+        if (this.physical(rootId).poison) return;
         this.db().prepare('UPDATE generation_roots SET active_elapsed_ms=?,active_since_ms=NULL WHERE root_action_id=?').run(elapsed, rootId);
+        this.physical(rootId).lastClock = undefined;
     }
     snapshot(attemptId: string, expectedRevision: number, text: string): VisibleArtifact {
         return this.transaction(() => {
@@ -771,7 +900,14 @@ export class GenerationRunRepository {
             if (['cancelled', 'sealed'].includes(budget.root.status))
                 return;
             budget.root.status = cancel ? 'cancelled' : 'paused';
-            this.db().prepare('UPDATE generation_roots SET action_json=?,active_elapsed_ms=?,active_since_ms=NULL WHERE root_action_id=?').run(encode(budget.root), budget.activeElapsedMs, rootId);
+            // Legacy direct mark/pause callers have no native transport hold.
+            // Actual owner/query holds, including cancelled drains, must keep their clock open.
+            if (this.hasPhysicalFlight(rootId) || this.hasUnclosedQuery(rootId) || this.physical(rootId).poison)
+                this.db().prepare('UPDATE generation_roots SET action_json=? WHERE root_action_id=?').run(encode(budget.root), rootId);
+            else {
+                this.db().prepare('UPDATE generation_roots SET action_json=?,active_elapsed_ms=?,active_since_ms=NULL WHERE root_action_id=?').run(encode(budget.root), budget.activeElapsedMs, rootId);
+                this.physical(rootId).lastClock = undefined;
+            }
             this.db().prepare('UPDATE generation_runs SET status=? WHERE root_action_id=?').run(cancel ? 'cancelled' : 'paused', rootId);
             for (const attempt of budget.attempts)
                 if (attempt.status === 'reserved') {
@@ -787,7 +923,7 @@ export class GenerationRunRepository {
             this.assertPlotOutlineWritable(runId);
             const run = this.get(runId), budget = this.budget(run.rootActionId);
             binding(next);
-            if (budget.attempts.some(a => a.status === 'dispatch-marked') || budget.root.status !== 'paused' || budget.blockedCode || next.projectId !== run.binding.projectId)
+            if (this.physicalBusy(run.rootActionId) || budget.root.status !== 'paused' || budget.blockedCode || next.projectId !== run.binding.projectId)
                 fail('GENERATION_RESUME_REFUSED');
             budget.root.epoch = next.epoch;
             budget.root.status = 'active';
@@ -810,6 +946,9 @@ export class GenerationRunRepository {
             }[];
             for (const { root_action_id: id } of roots) {
                 if (this.frozenRoot(id) || driverRoot?.get(id) || batchDriverRoot?.get(id) || grantRoot?.get(id) && !runtimeRoots.includes(id)) continue;
+                if (this.hasQueryTables() && this.db().prepare('SELECT 1 FROM import_query_plans WHERE root_action_id=?').get(id)
+                    && this.db().prepare('SELECT active_since_ms FROM generation_roots WHERE root_action_id=?').pluck().get(id) !== null
+                    && !this.hasPhysicalFlight(id)) this.poisonPhysicalActivity(id);
                 for (const attempt of this.budget(id).attempts)
                     if (attempt.status === 'dispatch-marked') {
                         attempt.status = 'unknown';

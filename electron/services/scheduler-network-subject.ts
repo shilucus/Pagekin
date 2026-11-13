@@ -33,7 +33,7 @@ export class SchedulerNetworkSubjectRegistry {
     this.#maxSubjects = maxSubjects
   }
 
-  capture(model: ModelProfile): SchedulerNetworkSubjectLease {
+  capture<T extends Pick<ModelProfile, 'baseUrl' | 'apiKey' | 'modelName'>>(model: T): SchedulerNetworkSubjectLease {
     let endpoint: URL
     try {
       endpoint = new URL(model.baseUrl.trim())

@@ -70,7 +70,7 @@ export function tokenLiability(attempt: PhysicalAttempt): number {
     : attempt.status === 'settled' && attempt.actualTokens !== undefined ? attempt.actualTokens : attempt.reservedTokens
 }
 /** Must run in the root ledger transaction before inserting a unique reservation. */
-export function assertReservation(root: RootAction, policy: RootBudget, attempts: readonly PhysicalAttempt[], next: PhysicalAttempt, elapsedMs: number): void {
+export function assertReservation(root: RootAction, policy: RootBudget, attempts: readonly PhysicalAttempt[], next: PhysicalAttempt, elapsedMs: number, auxiliaryRequestCount = 0): void {
   rootActionIdempotencyKey(root)
   const integers = [policy.maxPhysicalRequests, policy.maxTokenLiability, policy.maxOutputPerRequest, policy.maxActiveElapsedMs, next.reservedTokens, next.requestedOutputTokens]
   if (integers.some(value => !Number.isSafeInteger(value) || value <= 0) || !Number.isSafeInteger(elapsedMs) || elapsedMs < 0) throw new Error('INVALID_BUDGET')
@@ -82,11 +82,12 @@ export function assertReservation(root: RootAction, policy: RootBudget, attempts
   if (new Set(attempts.map(item => item.attemptId)).size !== attempts.length
     || new Set(attempts.map(item => item.reservationId)).size !== attempts.length
     || attempts.some(item => !['reserved', 'dispatch-marked', 'settled', 'unknown', 'cancelled-before-dispatch'].includes(item.status))) throw new Error('INVALID_LEDGER')
-  if (rootBudgetExhausted(policy, attempts, elapsedMs)) throw new Error('ROOT_BUDGET_EXHAUSTED')
+  if (rootBudgetExhausted(policy, attempts, elapsedMs, auxiliaryRequestCount)) throw new Error('ROOT_BUDGET_EXHAUSTED')
 }
-export function rootBudgetExhausted(policy: RootBudget, attempts: readonly PhysicalAttempt[], elapsedMs: number): boolean {
+export function rootBudgetExhausted(policy: RootBudget, attempts: readonly PhysicalAttempt[], elapsedMs: number, auxiliaryRequestCount = 0): boolean {
+  if (!Number.isSafeInteger(auxiliaryRequestCount) || auxiliaryRequestCount < 0) throw new Error('INVALID_LEDGER')
   // token 只记账不刹车（ADR-0023）。
-  return attempts.filter(item => item.status !== 'cancelled-before-dispatch').length >= policy.maxPhysicalRequests
+  return attempts.filter(item => item.status !== 'cancelled-before-dispatch').length + auxiliaryRequestCount >= policy.maxPhysicalRequests
     || elapsedMs >= policy.maxActiveElapsedMs
 }
 export function assertAttemptTransition(before: PhysicalAttempt['status'], after: PhysicalAttempt['status']): void {

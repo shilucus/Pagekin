@@ -52,7 +52,7 @@ import type { ReferenceImportKnowledgeSnapshot } from './services/reference-impo
 import { assertIssuedReferenceImportAdmission, type ReferenceImportAdmission } from './services/reference-import-admission'
 import { assertNoReferenceEmbeddingDispatches, prepareReferenceEmbeddingDocument,
   type ReferenceEmbeddingDispatchFlight } from './services/reference-embedding-dispatch'
-import { EmbeddingDispatchBarrierError } from './services/reference-embedding-dispatch-contract'
+import { EmbeddingDispatchBarrierError, type EmbeddingBatchObserver } from './services/reference-embedding-dispatch-contract'
 
 // ===== 迁移状态跟踪 =====
 
@@ -405,6 +405,8 @@ export async function captureReferenceImportKnowledgeSnapshot(input: {
   configuration: { protocol: 'openai' | 'gemini'; model: EmbeddingModel } | null
   topK?: number
   assertAuthority: () => void
+  signal?: AbortSignal
+  observer?: EmbeddingBatchObserver
 }): Promise<ReferenceImportKnowledgeSnapshot> {
   const assertActive = () => { input.resources.assertResources(); input.assertAuthority() }
   assertActive()
@@ -416,9 +418,13 @@ export async function captureReferenceImportKnowledgeSnapshot(input: {
     if (input.configuration && hasRequiredApiKey(input.configuration.model) && input.query.trim()) {
       try {
         const [vector] = await generateEmbeddings([input.query], input.configuration.protocol,
-          input.configuration.model, input.configuration.model.embeddingOptions?.batchSize)
+        input.configuration.model, input.configuration.model.embeddingOptions?.batchSize,
+        assertActive, input.signal, 1, input.observer)
         if (vector?.length) queryVector = vector
-      } catch { /* Ordinary query-embedding errors keep the existing FTS fallback. */ }
+    } catch (error) {
+      if (error instanceof EmbeddingDispatchBarrierError) throw error
+      // Known query-embedding failures keep the existing FTS fallback.
+    }
       // Resource and grant failures are outside the embedding fallback's catch.
       assertActive()
     }
@@ -449,6 +455,29 @@ export async function verifyReferenceImportKnowledgeSnapshot(input: {
     assertActive()
     await verifyReferenceImportKnowledge({ projectPath: input.resources.canonicalRoot,
       runtimeEpoch: input.resources.executionEpoch, snapshot: input.snapshot, assertActive })
+    assertActive()
+  } finally { release() }
+}
+
+/** Verify replay-safe material against the current store without restoring an old runtime epoch. */
+export async function verifyDurableReferenceImportKnowledgeSnapshot(input: {
+  snapshot: Omit<ReferenceImportKnowledgeSnapshot, 'projectStorageRoot' | 'runtimeEpoch'>
+  resources: ReferenceImportResources
+  assertAuthority: () => void
+}): Promise<void> {
+  const assertActive = () => { input.resources.assertResources(); input.assertAuthority() }
+  assertActive()
+  const release = input.resources.acquireWork()
+  try {
+    await ensureMigration(input.resources.canonicalRoot)
+    assertActive()
+    const { verifyDurableReferenceImportKnowledge } = await import('./services/reference-import-knowledge-source')
+    assertActive()
+    await verifyDurableReferenceImportKnowledge({
+      projectPath: input.resources.canonicalRoot,
+      snapshot: input.snapshot,
+      assertActive,
+    })
     assertActive()
   } finally { release() }
 }

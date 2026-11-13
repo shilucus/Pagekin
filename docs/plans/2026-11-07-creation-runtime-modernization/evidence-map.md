@@ -70,3 +70,9 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 | 质量/驱动 | 现行质量协议、`.claude/skills/verify/SKILL.md` 下驱动 | 先读隔离/命令合同、另授权；驱动非生产headless；性能/文学/平台分开 |
 
 这是存在入口及覆盖方向，不声称已有全部新断言或本轮通过。新 API/driver/多运行时/跨批依赖需要相应新测试与执行授权。
+
+## Stage62 增量证据
+
+- 实际四主题入口、调用端与来源提交门：`electron/controllers/generation-controller.ts`、`electron/services/main-generation-owner.ts`、`electron/services/import-query-materials.ts`、`electron/controllers/db-controller.ts`、`src/services/workflows/commands/import-novel.command.ts`。版本化请求只接受 handle 与 owner/epoch，保留作者原稿独立检索和原始主题材料顺序。
+- 同根预算、物理活动时长与恢复：`electron/repositories/import-query-repository.ts`、`electron/repositories/generation-run-repository.ts`、`electron/services/import-generation.ts`；M18/schema19 的 history、排除字段、闭合 receipt 投影及双代新副本恢复沿现有便携链处理。
+- 本轮最终实际证据及全部失败链见 [Stage62 evidence](stage-62-evidence.md)：service578、persistence370、controller186、consumer/error196 各报告独立通过且有非实施者复审，不相加为新分母。源码/原始报告/构建身份由 [Stage62 manifest](stage-62-source-manifest.json) 绑定。仅为 SCHED-001、IMPORT-001/002 部分证据，35 项功能状态不提升；无真实模型、Electron、平台或四主题并行提速结论。

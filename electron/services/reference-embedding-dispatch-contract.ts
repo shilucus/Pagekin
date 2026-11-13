@@ -1,5 +1,6 @@
 import { assertReferenceImportGrantId } from '../../src/shared/reference-import-grant'
 import { isContentHash } from '../../src/shared/source-ref'
+import type { ImportQueryErrorCode } from './import-query-contract'
 import type { ReferenceEmbeddingBudgetErrorCode } from './reference-embedding-budget-contract'
 
 export type EmbeddingRequestOutcome =
@@ -24,6 +25,7 @@ export type EmbeddingDispatchBarrierCode =
   | 'REFERENCE_EMBEDDING_DISPATCH_INVALID'
   | 'REFERENCE_EMBEDDING_DISPATCH_FROZEN'
   | ReferenceEmbeddingBudgetErrorCode
+  | ImportQueryErrorCode
 
 /** This hard boundary must not become ordinary network-error FTS fallback. */
 export class EmbeddingDispatchBarrierError extends Error {

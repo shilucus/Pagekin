@@ -611,7 +611,7 @@ describe('portable project export service', { timeout: 20_000 }, () => {
       originProjectId: f.projectId,
       snapshotGeneration: 'generation-test-1',
       requiresRuntimeFreezeGuard: true,
-      sourceEvidence: { schemaVersion: CURRENT_DESKTOP_SCHEMA_VERSION, tableCount: 69, fieldCount: 654 },
+      sourceEvidence: { schemaVersion: CURRENT_DESKTOP_SCHEMA_VERSION, tableCount: 71, fieldCount: 672 },
     })
     expect(contextCalls).toEqual(['lease-current', 'lease-current', 'lease-current'])
     expect(fs.readFileSync(f.databasePath)).toEqual(before)
@@ -671,7 +671,7 @@ describe('portable project export service', { timeout: 20_000 }, () => {
     const before = fs.readFileSync(f.databasePath)
 
     const receipt = await exportPortableProject(input(f))
-    expect(receipt.sourceEvidence).toMatchObject({ schemaVersion: CURRENT_DESKTOP_SCHEMA_VERSION, tableCount: 69, fieldCount: 655 })
+    expect(receipt.sourceEvidence).toMatchObject({ schemaVersion: CURRENT_DESKTOP_SCHEMA_VERSION, tableCount: 71, fieldCount: 673 })
     const targetProjectRoot = path.join(f.base, 'restored-donor')
     await restorePortableProject({ archivePath: f.target, targetProjectRoot })
 

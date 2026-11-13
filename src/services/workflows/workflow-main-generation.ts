@@ -183,6 +183,12 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
       callbacks.setGenerationActivity?.({ operation })
       try {
         if (importStage) {
+          const preparedHandle = context.mainGenerationRunHandle
+          if (preparedHandle && preparedHandle.epoch !== view.handle.epoch) {
+            if (preparedHandle.projectId !== view.handle.projectId || preparedHandle.rootActionId !== view.handle.rootActionId
+              || preparedHandle.runId !== view.handle.runId) throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
+            view = await transport.read(preparedHandle)
+          }
           const receipt = await ipc.invokeWithProjectSession(projectSession, 'import-generation:execute', { handle: view.handle, ordinal: importOrdinal, task,
             execution: context.data.importRunExecution as import('../../shared/import-run').ImportRunExecutionAuthority | undefined })
           importOrdinal += 1

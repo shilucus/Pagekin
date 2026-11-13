@@ -3,7 +3,7 @@ import { isProjectSessionContext } from '../../src/shared/project-session-contex
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
-import { assertGenerationSourcesCurrent, assertGenerationSynopsisCommit, commitGenerationPlotOutlineAuthorEdit, commitGenerationBlueprintAuthorEdit, assertImportGenerationSourcesCurrent, recordGenerationDirectoryCommit, withGenerationAgentChildEffect } from './generation-controller'
+import { assertGenerationSourcesCurrent, assertGenerationSynopsisCommit, commitGenerationPlotOutlineAuthorEdit, commitGenerationBlueprintAuthorEdit, assertImportGenerationSourcesCurrent, withImportGenerationQuerySources, recordGenerationDirectoryCommit, withGenerationAgentChildEffect } from './generation-controller'
 import { projectAccess } from '../services/project-access'
 import { getProjectDataRoot } from '../services/project-data-locator'
 import { readPortableCurrentAuthority } from '../services/portable-current-authority'
@@ -260,7 +260,9 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return { success: true, receipt: ImportGlobalFactsRepository.commit(request) }
+    const commit = () => ({ success: true, receipt: ImportGlobalFactsRepository.commit(request) })
+    if (!request.generationRunHandle || ImportGlobalFactsRepository.readHistoricalCommittedOperation(request.operationId)) return commit()
+    return withImportGenerationQuerySources(request.generationRunHandle, commit)
   })
 
   ipcMain.handle('db:project-clear-generated-data', async (
@@ -452,7 +454,11 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return { success: true, receipt: ImportRunRepository.prepareEffectReceipt(request, execution, Date.now(), assertImportGenerationSourcesCurrent) }
+    const prepare = () => ({ success: true, receipt: ImportRunRepository.prepareEffectReceipt(request, execution, Date.now(), assertImportGenerationSourcesCurrent) })
+    const handle = request.stage === 'global' && request.payload && typeof request.payload === 'object'
+      ? (request.payload as { generationRunHandle?: MainGenerationRunHandle }).generationRunHandle : undefined
+    if (!handle || ImportRunRepository.getEffectReceipt(request.runId, request.stage, request.batchId)) return prepare()
+    return withImportGenerationQuerySources(handle, prepare)
   })
 
   ipcMain.handle('db:import-run-effect-receipt-commit', async (
@@ -464,7 +470,11 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return { success: true, result: ImportRunRepository.commitEffectReceipt(runId, stage, batchId, execution, Date.now(), (handle, slot) => assertImportGenerationSourcesCurrent(handle, slot, true)) }
+    const commit = () => ({ success: true, result: ImportRunRepository.commitEffectReceipt(runId, stage, batchId, execution, Date.now(), (handle, slot) => assertImportGenerationSourcesCurrent(handle, slot, true)) })
+    const receipt = stage === 'global' ? ImportRunRepository.getEffectReceipt(runId, stage, batchId) : null
+    const handle = receipt?.state === 'prepared'
+      ? (receipt.payload as { generationRunHandle?: MainGenerationRunHandle }).generationRunHandle : undefined
+    return handle ? withImportGenerationQuerySources(handle, commit) : commit()
   })
 
   ipcMain.handle('db:import-run-start-resume', async (

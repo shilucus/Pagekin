@@ -7,6 +7,7 @@ import { CHARACTER_STATE_TEXT_FIELDS } from '../../src/shared/character-roster'
 import { parsePlanningFeedbackScope, parsePlanningFeedbackSource, type PlanningFeedbackSource } from '../../src/shared/planning-feedback'
 import { parseWorkflowDriverRecipe, parseWorkflowDriverStepInput } from '../../src/shared/workflow-driver-contract'
 import { parseWorkflowBatchRecipe, parseWorkflowBatchStepInput } from '../../src/shared/workflow-batch-contract'
+import { projectImportQueryOutcome, projectImportQueryReceipt } from './portable-import-query-projection'
 import { materializeOrdinaryReviewHistory, parseOrdinarySemanticHistory, readOrdinaryHistoryDomainRecords,
   assertOrdinaryHistoryFreezeCoverage } from '../migrations/ordinary-review-history'
 import { readPortableCurrentAuthority } from './portable-current-authority'
@@ -86,6 +87,8 @@ const REQUIRED_JSON_PROJECTORS = new Set([
   'workflow_batch_tasks.recipe_json',
   'workflow_batch_steps.input_json',
   'workflow_batch_effects.semantic_history_json',
+  'import_query_topics.outcome_json',
+  'import_query_topics.receipt_json',
 ])
 const REVIEW_FINGERPRINT_FIELDS = [
   'chapterBriefHash', 'authorGuidanceHash', 'dependencyHash', 'contextSnapshotHash', 'templateHash',
@@ -129,6 +132,8 @@ const HISTORY_ID_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.f
   reference_embedding_dispatches: ['dispatch_id'],
   reference_embedding_budgets: ['root_run_id'],
   reference_import_manifest_chapters: ['import_run_id', 'chapter_number'],
+  import_query_plans: ['import_root_run_id'],
+  import_query_topics: ['query_id'],
   review_cycle_merges: ['cycle_id'],
   review_cycles: ['cycle_id'],
   review_findings: ['cycle_id', 'finding_id'],
@@ -823,6 +828,8 @@ function projectPlanningOrigin(value: unknown): Record<string, unknown> {
 
 function requiredProjection(key: string, value: unknown): unknown {
   switch (key) {
+    case 'import_query_topics.outcome_json': return projectImportQueryOutcome(value)
+    case 'import_query_topics.receipt_json': return projectImportQueryReceipt(value)
     case 'drafts.source_dependencies': return projectSourceDependencies(value)
     case 'generation_artifacts.artifact_json': return projectArtifact(value)
     case 'generation_attempts.attempt_json': return projectGenerationAttempt(value)
@@ -873,7 +880,8 @@ function neutralValue(key: string, column: { type: string; notnull: number }, va
     }
     if (key === 'generation_artifacts.artifact_json') return JSON.stringify(projectArtifact(value, true))
   }
-  if (value === null && (key === 'workflow_batch_effects.semantic_history_json' || key === 'planning_feedback_bases.scope_json'
+  if (value === null && (key === 'import_query_topics.outcome_json' || key === 'import_query_topics.receipt_json'
+    || key === 'workflow_batch_effects.semantic_history_json' || key === 'planning_feedback_bases.scope_json'
     || key === 'planning_feedback_adoptions.adopted_scope_json' || key === 'workflow_steps.input_json')) return null
   if (REQUIRED_JSON_PROJECTORS.has(key)) return JSON.stringify(requiredProjection(key, value))
   if (JSON_NEUTRAL.has(key)) {
@@ -1005,6 +1013,11 @@ export function sanitizePortableDatabase(databasePath: string): {
             safeId(row.source_id)
             safeId(row.snapshot_run_id)
           }
+          if (table === 'import_query_plans') {
+            safeId(row.generation_run_id)
+            safeId(row.root_action_id)
+          }
+          if (table === 'import_query_topics') safeId(row.import_root_run_id)
           const reviewProof = table === 'generation_artifacts' ? reviewRuns.has(String(row.run_id))
             : reviewRoots.has(String(row.root_action_id))
           if (hasProjection || hasHistory || domainHistory.has(`${table}:${recordId(table, row, Number(row.__portable_rowid__))}`)) {

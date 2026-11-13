@@ -33,7 +33,8 @@ async function parseEmbeddingJsonResponse(
 ): Promise<unknown> {
   try {
     return await res.json() as unknown
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
     invalidEmbeddingResponse(
       provider,
       `服务端返回非 JSON 响应（HTTP ${res.status}；响应体无法解析为 JSON）。请检查 Base URL、网关或鉴权页。`,
@@ -245,6 +246,13 @@ function buildOpenAIEmbeddingUrl(baseUrl: string): string {
   return `${base}/embeddings`
 }
 
+/** Shared with transport admission so grouping follows the actual adapter URL. */
+export function embeddingRequestUrl(protocol: 'openai' | 'gemini', model: { baseUrl: string; modelName?: string }): string {
+  return protocol === 'gemini'
+    ? `${model.baseUrl.replace(/\/$/, '')}/v1beta/models/${model.modelName || 'gemini-embedding-001'}:batchEmbedContents`
+    : buildOpenAIEmbeddingUrl(model.baseUrl)
+}
+
 function dispatchBarrier(): never {
   throw new EmbeddingDispatchBarrierError('REFERENCE_EMBEDDING_DISPATCH_PERSISTENCE_FAILED')
 }
@@ -309,6 +317,15 @@ async function requestEmbeddings(
     throw error
   }
   if (!res.ok) {
+    // Headers do not close a physical request. Discard chunks without retaining
+    // a potentially sensitive or unbounded provider error body.
+    const reader = res.body?.getReader()
+    try {
+      if (reader) while (!(await reader.read()).done) { /* drain */ }
+    } catch (error) {
+      lifecycleHook(lifecycle, 'settled', { kind: 'transport_unknown' })
+      throw error
+    } finally { reader?.releaseLock() }
     lifecycleHook(lifecycle, 'settled', { kind: 'http_failed', httpStatus: res.status })
     embeddingHttpError(provider, res.status)
   }
@@ -317,7 +334,8 @@ async function requestEmbeddings(
     const data = await parseEmbeddingJsonResponse(provider, res)
     vectors = provider === 'OpenAI' ? validateOpenAIEmbeddings(data, batchLength) : validateGeminiEmbeddings(data, batchLength)
   } catch (error) {
-    lifecycleHook(lifecycle, 'settled', { kind: 'response_invalid', httpStatus: res.status })
+    lifecycleHook(lifecycle, 'settled', error instanceof EmbeddingResponseValidationError
+      ? { kind: 'response_invalid', httpStatus: res.status } : { kind: 'transport_unknown' })
     throw error
   }
   lifecycleHook(lifecycle, 'settled', { kind: 'response_received', httpStatus: res.status })
@@ -336,7 +354,7 @@ export async function embedOpenAI(
     throw Object.assign(new Error('EMBEDDING_OLLAMA_NATIVE_URL'), { code: 'EMBEDDING_OLLAMA_NATIVE_URL', suggestedBaseUrl: ollamaCompatibleBaseUrl })
   }
   const embeddingModel = model.modelName || 'text-embedding-3-small'
-  const url = buildOpenAIEmbeddingUrl(model.baseUrl)
+  const url = embeddingRequestUrl('openai', model)
   return requestEmbeddings('OpenAI', url, {
     method: 'POST',
     headers: {
@@ -359,10 +377,8 @@ export async function embedGemini(
   lifecycle?: EmbeddingRequestLifecycle,
 ): Promise<number[][]> {
   const embeddingModel = model.modelName || 'gemini-embedding-001'
-  const baseUrl = model.baseUrl.replace(/\/$/, '')
-
   // Gemini batchEmbedContents 支持批量
-  const url = `${baseUrl}/v1beta/models/${embeddingModel}:batchEmbedContents`
+  const url = embeddingRequestUrl('gemini', model)
   const requests = texts.map((text) => ({
     model: `models/${embeddingModel}`,
     content: { parts: [{ text }] },

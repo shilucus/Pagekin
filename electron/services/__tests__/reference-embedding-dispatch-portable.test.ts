@@ -108,7 +108,7 @@ describe('reference embedding dispatch portable history', () => {
     closeProjectDatabase()
     const old = new Database(f.databasePath)
     try {
-      old.exec('DROP TABLE reference_import_manifest_chapters; DROP TABLE reference_embedding_budgets; DROP TABLE reference_embedding_dispatches')
+      old.exec('DROP TABLE import_query_topics; DROP TABLE import_query_plans; DROP TABLE reference_import_manifest_chapters; DROP TABLE reference_embedding_budgets; DROP TABLE reference_embedding_dispatches')
       old.pragma('user_version=16')
       expect(verifySchema(new SqliteSchemaAdapter(old), getDesktopMigrationRegistry(), 16).version).toBe(16)
     } finally { old.close() }

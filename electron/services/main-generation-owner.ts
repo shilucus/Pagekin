@@ -8,11 +8,18 @@ import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerat
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import type { CreativeStrategy } from '../../src/shared/reasoning-types'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
+import { assertImportQueryMaterialsRequest, type ImportQueryMaterialsRequest, type ImportQueryMaterialsResponse } from '../../src/shared/import-generation'
 import { TERMINAL_PROVIDER_FAILURE_CODES, rootBudgetExhausted, safeTransportError, tokenLiability } from '../../src/shared/generation-contract'
 import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock, withoutDraftReconciliationArtifacts } from '../../src/shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
 import { GenerationRecoveryTailRepository } from '../repositories/generation-recovery-tail-repository'
+import { ImportQueryRepository } from '../repositories/import-query-repository'
+import { ImportRunRepository } from '../repositories/import-run-repository'
+import { ImportQueryMaterialsService, type ImportQueryConfiguration } from './import-query-materials'
+import { captureReferenceImportResources } from '../knowledge-base'
+import { captureImportGenerationContext } from './import-generation-source'
+import type { ProjectRuntime } from './project-runtime'
 import { PlanningFeedbackService, type PlanningFeedbackGenerationInput } from './planning-feedback-service'
 import { buildPlanningFeedbackContext, readPlanningFeedbackTask } from './planning-feedback-generation'
 import { assertPlanningFeedbackObject, assertPlanningFeedbackId, assertPlanningFeedbackInstructions, parsePlanningFeedbackScope, type AdoptPlanningFeedbackCandidate, type PlanningFeedbackCaptureTarget, type RelineagePlanningFeedbackCandidate, type StagePlanningFeedbackCandidate } from '../../src/shared/planning-feedback'
@@ -107,6 +114,7 @@ export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt):
     modelRevision: receipt.modelRevision, endpointFingerprint: receipt.endpointFingerprint, capabilityEvidence: structuredClone(receipt.capabilityEvidence) }
 }
 export interface MainGenerationOwnerDependencies {
+  referenceImportQueries?: { runtime: ProjectRuntime; loadConfiguration: () => ImportQueryConfiguration | null }
   /** Main-only captured runtime identity; renderer project identifiers never select scheduler groups. */
   scheduling?: { admission: GenerationSchedulingAdmission; projectKey: string; quarantineAfterMs: number }
   /** Verifies the original KB snapshot after queueing; the synchronous start never awaits provider cleanup. */
@@ -234,6 +242,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const capturedProjectPath = deps.projectPath
   const runtimeFreeze = readPortableRuntimeFreeze(capturedProjectPath)
   const repository = new GenerationRunRepository(() => deps.database, Date.now, (table, recordId) => runtimeFreeze.isFrozen(table, recordId))
+  const queries = new ImportQueryRepository(deps.database, { runs: repository, freeze: runtimeFreeze,
+    assertResources: deps.assertRetirementResources })
   const recoveryTails = new GenerationRecoveryTailRepository(deps.database, repository, (table, id) => runtimeFreeze.isFrozen(table, id))
   const draftEffects = new GenerationDraftEffects(deps.database, repository)
   const runLeases = new Map<string, string>()
@@ -241,6 +251,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const driverPreparations = new Map<string, MainGenerationRunHandle>()
   const volatileReceipts = new Map<string, GenerationExecutionReceipt>()
   const pending = new Map<string, { hash: string; promise: Promise<MainGenerationExecuteReceipt> }>()
+  const pendingQueries = new Map<string, Promise<ImportQueryMaterialsResponse>>()
   const queuedExecutions = new Map<string, { rootId: string; controller: AbortController }>()
   const abortQueuedRoot = (rootId: string) => {
     for (const item of queuedExecutions.values()) if (item.rootId === rootId) item.controller.abort(GENERATION_STOPPED)
@@ -270,7 +281,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (closed || !deps.database.open) throw new Error('GENERATION_OWNER_CLOSED')
     if (deps.assertRetirementResources) deps.assertRetirementResources()
     else deps.assertCurrent()
-    if (physicalDispatches || pending.size || agents.hasActiveToolClaims()) throw new Error('GENERATION_OWNER_BUSY')
+    if (physicalDispatches || pending.size || pendingQueries.size || agents.hasActiveToolClaims()) throw new Error('GENERATION_OWNER_BUSY')
     service.assertRetirable()
     deps.assertNoRuntimeClaims?.()
   }
@@ -399,6 +410,19 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const unrecordedCalls = new Set<() => void>()
   let physicalDispatches = 0
   const physicalIdleWaiters = new Set<() => void>()
+  const startPhysicalWork = () => {
+    physicalDispatches++
+    let finished = false
+    return () => {
+      if (finished) return
+      finished = true
+      physicalDispatches--
+      if (!physicalDispatches) {
+        for (const resolve of physicalIdleWaiters) resolve()
+        physicalIdleWaiters.clear()
+      }
+    }
+  }
   /** 每次真正发出的模型请求都记入运行侧页的 AI 调用记录，每次只记一行；记录只作诊断，写不进去也不改变生成结果。 */
   const recordedDispatch: GenerationRunServiceDependencies['dispatch'] = async (request, options) => {
     const { model, task, scheduling } = request as ProviderRequest, startedAt = Date.now()
@@ -419,17 +443,18 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     const recordCancelled = () => record(false, null, 'cancelled')
     unrecordedCalls.add(recordCancelled)
-    physicalDispatches++
+    const releaseRootActivity = repository.openPhysicalFlight(options.attemptId)
+    const releaseOwnerActivity = startPhysicalWork()
     const finishPhysical = () => {
-      physicalDispatches--
-      if (scheduling) {
-        scheduling.finished = true
-        if (scheduling.quarantineTimer) clearTimeout(scheduling.quarantineTimer)
-        scheduling.permit.finish()
-      }
-      if (!physicalDispatches) {
-        for (const resolve of physicalIdleWaiters) resolve()
-        physicalIdleWaiters.clear()
+      try { releaseRootActivity() }
+      finally {
+        try {
+          if (scheduling) {
+            scheduling.finished = true
+            if (scheduling.quarantineTimer) clearTimeout(scheduling.quarantineTimer)
+            scheduling.permit.finish()
+          }
+        } finally { releaseOwnerActivity() }
       }
     }
     let flight: ProviderFlight | undefined
@@ -522,7 +547,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         maxRequestedOutputTokensPerAttempt: budget.policy.maxOutputPerRequest,
         deadlineAt: Date.now() + Math.max(0, budget.policy.maxActiveElapsedMs - budget.activeElapsedMs) },
       ledger: { policy: budget.policy, tokenLiability: budget.attempts.reduce((sum, attempt) => sum + tokenLiability(attempt), 0),
-        physicalRequests: budget.attempts.filter(attempt => attempt.status !== 'cancelled-before-dispatch').length,
+        physicalRequests: budget.attempts.filter(attempt => attempt.status !== 'cancelled-before-dispatch').length + (budget.auxiliaryRequestCount ?? 0),
         activeElapsedMs: budget.activeElapsedMs, blockedCode: budget.blockedCode }, artifacts, candidates,
       ...(preservedTails.length ? { recoveryTails: preservedTails } : {}),
       unsavedTails: service.readUnsavedTails().filter(tail => budget.attempts.some(attempt => attempt.attemptId === tail.attemptId)) }
@@ -978,7 +1003,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const budget = repository.budget(latest.rootActionId)
       if (latest.status === 'cancelled' || budget.root.status === 'cancelled') throw new Error('GENERATION_ACTION_CANCELLED')
       if (latest.status !== 'running' || budget.root.status !== 'active' || budget.blockedCode) throw new Error('GENERATION_DISPATCH_BLOCKED')
-      if (rootBudgetExhausted(budget.policy, budget.attempts, budget.activeElapsedMs)) throw new Error('ROOT_BUDGET_EXHAUSTED')
+      if (rootBudgetExhausted(budget.policy, budget.attempts, budget.activeElapsedMs, budget.auxiliaryRequestCount)) throw new Error('ROOT_BUDGET_EXHAUSTED')
       if (queuedController?.signal.aborted) throw new Error('GENERATION_CANCELLED')
     }
     if (deps.scheduling) {
@@ -1027,9 +1052,17 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       } } : {}),
       ...(agentExecution ? { agentToolNames: (run.binding.sourceManifest.agentContext as AgentGenerationContext).input.tools.map(tool => tool.name) } : {}) }) }
     }
+    const importContext = importExecution ? imports.context(run) : undefined
+    const referenceGlobal = importContext?.slot.stage === 'global'
+      && deps.database.prepare('SELECT purpose FROM import_runs WHERE id=?').pluck().get(importContext.slot.runId) === 'reference'
+    const startWithImportSources = () => {
+      if (!referenceGlobal || !deps.referenceImportQueries) return startDispatch()
+      if (!queryMaterials || !queries.get(importContext!.slot.runId)) throw new Error('GENERATION_IMPORT_QUERY_REQUIRED')
+      return queryMaterials.withSources({ context: importContext!, rootActionId: run.rootActionId, assertActive: dispatchAdmission }, startDispatch)
+    }
     const started = deps.withDispatchKnowledge
-      ? await deps.withDispatchKnowledge(run.binding.sourceManifest.knowledgeSnapshot as GenerationKnowledgeSnapshot | undefined, startDispatch)
-      : startDispatch()
+      ? await deps.withDispatchKnowledge(run.binding.sourceManifest.knowledgeSnapshot as GenerationKnowledgeSnapshot | undefined, startWithImportSources)
+      : await startWithImportSources()
     const receipt = await started.promise
     snapshotAttemptId = receipt.attempt.attemptId
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)
@@ -1474,6 +1507,21 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }, version)
   })
   const imports = new ImportGeneration(deps.database, repository, deps.projectId, capturedProjectPath)
+  const queryPhysicalStarted = new Map<string, () => () => void>()
+  const queryMaterials = deps.referenceImportQueries ? new ImportQueryMaterialsService({
+    database: deps.database, queries, resources: () => captureReferenceImportResources(deps.referenceImportQueries!.runtime),
+    loadConfiguration: deps.referenceImportQueries.loadConfiguration,
+    scheduling: deps.scheduling ? { ...deps.scheduling, lane: 'background' as const } : undefined,
+    beforeDispatch: deps.beforeDispatch, onPhysicalStart: rootActionId => {
+      const finishOwner = startPhysicalWork()
+      try {
+        const startDeadline = queryPhysicalStarted.get(rootActionId)
+        if (!startDeadline) throw new Error('GENERATION_IMPORT_QUERY_REQUIRED')
+        const finishDeadline = startDeadline()
+        return () => { try { finishDeadline() } finally { finishOwner() } }
+      } catch (error) { finishOwner(); throw error }
+    },
+  }) : undefined
   const legacyRosters = new LegacyRosterGeneration(deps.database, repository, deps.projectId, characters)
   const graphs = new GraphGeneration(deps.database, repository, deps.projectId)
   const finalizations = new FinalizationGeneration(deps.database, repository, deps.projectId, characters, deps.transferOrigin)
@@ -2220,7 +2268,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       }
       // 只查新运行要加入的根（已取消的根不会被加入）：它已阻断或预算用完时新运行也发不出请求，直接报原因，不留空运行。
       const target = authorRetry && parentRootActionId ? repository.budget(parentRootActionId) : undefined
-      const blockedCode = target && (target.blockedCode ?? (rootBudgetExhausted(target.policy, target.attempts, target.activeElapsedMs) ? 'ROOT_BUDGET_EXHAUSTED' : null))
+      const blockedCode = target && (target.blockedCode ?? (rootBudgetExhausted(target.policy, target.attempts, target.activeElapsedMs, target.auxiliaryRequestCount) ? 'ROOT_BUDGET_EXHAUSTED' : null))
       if (blockedCode) throw new Error(blockedCode)
       if (sibling && !finalizations.readEffect(sibling)) throw new Error('GENERATION_FINALIZATION_PREDECESSOR_REQUIRED')
       const prepared = finalizedCharacters.readContext(slot.source.draftId)
@@ -2410,6 +2458,77 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const run = imports.find(slot)
       return run && (run.runId === runId || !imports.retryable(run)) ? { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, frozenContext: imports.context(run) } : null
     },
+    prepareImportQueryMaterials: async (request: ImportQueryMaterialsRequest): Promise<ImportQueryMaterialsResponse> => {
+      assertImportQueryMaterialsRequest(request)
+      if (!queryMaterials) throw new Error('GENERATION_IMPORT_QUERY_REQUIRED')
+      let run = requireRun(request.handle)
+      const context = imports.context(run), slot = context.slot
+      if (slot.stage !== 'global') throw new Error('GENERATION_IMPORT_QUERY_INVALID')
+      const controller = new AbortController()
+      const assertActive = () => {
+        assertAdmission()
+        if (controller.signal.aborted) throw new Error(repository.budget(run.rootActionId).blockedCode === 'ROOT_BUDGET_EXHAUSTED' ? 'ROOT_BUDGET_EXHAUSTED' : 'GENERATION_ACTION_CANCELLED')
+        requireRun(handleOf(run))
+        ImportRunRepository.assertExecutionAuthority(slot.runId, request.execution, undefined, deps.database)
+        const state = deps.database.prepare('SELECT purpose,stage,status,cancel_requested FROM import_runs WHERE id=?').get(slot.runId) as { purpose: string; stage: string; status: string; cancel_requested: number } | undefined
+        if (!state || state.purpose !== 'reference' || state.stage !== 'global' || state.status !== 'running') throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
+        if (state.cancel_requested) throw new Error('GENERATION_ACTION_CANCELLED')
+        if (!isDeepStrictEqual(captureImportGenerationContext(deps.database, slot), { ...context, prompts: {} })
+          || !compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, modelReceipt(run.binding)))) throw new Error('GENERATION_IMPORT_CONTEXT_CHANGED')
+      }
+      assertActive()
+      const importRootId = deps.database.prepare('SELECT root_run_id FROM import_runs WHERE id=?').pluck().get(slot.runId)
+      if (typeof importRootId !== 'string' || !importRootId) throw new Error('GENERATION_IMPORT_QUERY_INVALID')
+      const key = `query:${importRootId}`
+      const pendingQuery = pendingQueries.get(key)
+      if (pendingQuery) {
+        await pendingQuery
+        assertActive()
+        const result = await queryMaterials.prepare({ context, generationRunId: run.runId, rootActionId: run.rootActionId,
+          execution: request.execution, assertActive, signal: controller.signal })
+        return { ...result, run: viewOf(repository.get(run.runId)) }
+      }
+      const work = (async (): Promise<ImportQueryMaterialsResponse> => {
+        queries.preflight(slot.runId)
+        const plan = queries.get(slot.runId)
+        if (!plan || plan.topics.some(topic => topic.state !== 'completed')) {
+          imports.assertMutable(run)
+          imports.assertExecution(run, request.execution)
+          const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
+          run = repository.get(current.handle.runId)
+          assertActive()
+        }
+        queuedExecutions.set(key, { rootId: run.rootActionId, controller })
+        queryPhysicalStarted.set(run.rootActionId, () => {
+          const budget = repository.budget(run.rootActionId)
+          const timer = setTimeout(() => {
+            try { repository.block(run.rootActionId, 'ROOT_BUDGET_EXHAUSTED') }
+            catch { repository.poisonPhysicalActivity(run.rootActionId, 'GENERATION_IMPORT_QUERY_PERSISTENCE_FAILED') }
+            finally { controller.abort(GENERATION_STOPPED) }
+          }, Math.max(0, budget.policy.maxActiveElapsedMs - budget.activeElapsedMs))
+          return () => { clearTimeout(timer) }
+        })
+        try {
+          const result = await queryMaterials.prepare({ context, generationRunId: run.runId, rootActionId: run.rootActionId,
+            execution: request.execution, assertActive, signal: controller.signal })
+          assertActive()
+          return { ...result, run: viewOf(repository.get(run.runId)) }
+        } finally { queuedExecutions.delete(key); queryPhysicalStarted.delete(run.rootActionId) }
+      })()
+      pendingQueries.set(key, work)
+      try { return await work } finally { pendingQueries.delete(key) }
+    },
+    withImportQuerySources: async <T>(handle: MainGenerationRunHandle, operation: () => T): Promise<T> => {
+      const run = requireRun(handle)
+      if (!run.binding.sourceManifest.importSlot) return operation()
+      const context = imports.context(run)
+      if (context.slot.stage !== 'global'
+        || deps.database.prepare('SELECT purpose FROM import_runs WHERE id=?').pluck().get(context.slot.runId) !== 'reference'
+        || !queries.get(context.slot.runId)) return operation()
+      if (!queryMaterials) throw new Error('GENERATION_IMPORT_QUERY_REQUIRED')
+      const assertActive = () => { assertAdmission(); requireRun(handle); repository.assertAuxiliaryEffect(run.rootActionId) }
+      return queryMaterials.withSources({ context, rootActionId: run.rootActionId, assertActive }, operation)
+    },
     assertImportGenerationSources: (handle: MainGenerationRunHandle, slot?: ImportGenerationSlot, allowLegacyStyle = false) => {
       const run = requireRun(handle)
       // Historical standalone style runs predate the checkpoint seam.
@@ -2598,7 +2717,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       volatileReceipts.delete(artifact.attemptId)
       return viewOf(run)
     },
-    hasPhysicalInFlight: () => physicalDispatches > 0 || pending.size > 0 || agents.hasActiveToolClaims(),
+    hasPhysicalInFlight: () => physicalDispatches > 0 || pending.size > 0 || pendingQueries.size > 0 || agents.hasActiveToolClaims(),
     whenPhysicalIdle: () => physicalDispatches === 0 ? Promise.resolve() : new Promise<void>(resolve => { physicalIdleWaiters.add(resolve) }),
     requestProjectClose: () => {
       if (closed) return

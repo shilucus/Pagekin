@@ -158,3 +158,42 @@ describe('recording the pinned model on the run', () => {
     expect(run()?.generationModelId).toBe('reviewer')
   })
 })
+
+describe('import query resume handle handoff', () => {
+  const slot = { runId: 'fictional-import', stage: 'global' as const, batchId: 'done' }
+  const selection: WorkflowMainGenerationSelection = { operation: 'import-global-facts', promptKeys: [], skillStages: [],
+    output: 'structured-data', importSlot: slot, importExecution: { owner: 'fictional-owner', epoch: 1 } }
+  const task = { purpose: 'import-inference', output: 'structured-data' as const, messages: [{ role: 'user' as const, content: 'Fictional material.' }] }
+
+  it('reads the query-resumed handle before sending the first actual import generation request', async () => {
+    const next = { ...view, handle: { ...handle, epoch: 'query-resumed-epoch' } }
+    const read = vi.fn(async (value: typeof handle) => value.epoch === next.handle.epoch ? next : view)
+    mocks.invoke.mockReset().mockImplementation(async (_session: unknown, channel: string) => {
+      if (channel === 'import-generation:read') return { view, modelId: 'writer', frozenContext: { slot } }
+      if (channel === 'import-generation:execute') return { run: next, outcome: { status: 'completed', finishReason: 'stop', content: '{}',
+        receipt: { purpose: task.purpose, finishReason: 'stop', budget: {} } } }
+      throw new Error(`Unexpected IPC ${channel}`)
+    })
+    const workflowContext = context({ data: { importRunExecution: selection.importExecution } }), main = transport({ read })
+    const runtime = await createWorkflowMainGenerationRuntime({ context: workflowContext, callbacks, selection }, main.value)
+    workflowContext.mainGenerationRunHandle = next.handle
+    try { await runtime.execute(({ session: owned }) => owned.complete(task)) }
+    finally { await runtime.close() }
+    expect(read).toHaveBeenCalledWith(next.handle)
+    expect(mocks.invoke).toHaveBeenCalledWith(session, 'import-generation:execute', { handle: next.handle, ordinal: 0, task, execution: selection.importExecution })
+    expect(workflowContext.mainGenerationRunHandle).toEqual(next.handle)
+  })
+
+  it('does not dispatch when a query handoff attempts to replace the captured generation root', async () => {
+    mocks.invoke.mockReset().mockImplementation(async (_session: unknown, channel: string) => {
+      if (channel === 'import-generation:read') return { view, modelId: 'writer', frozenContext: { slot } }
+      throw new Error(`Unexpected IPC ${channel}`)
+    })
+    const workflowContext = context(), main = transport()
+    const runtime = await createWorkflowMainGenerationRuntime({ context: workflowContext, callbacks, selection }, main.value)
+    workflowContext.mainGenerationRunHandle = { ...handle, epoch: 'query-resumed-epoch', rootActionId: 'foreign-root' }
+    try { await expect(runtime.execute(({ session: owned }) => owned.complete(task))).rejects.toThrow('GENERATION_WORKFLOW_ROOT_CHANGED') }
+    finally { await runtime.close() }
+    expect(mocks.invoke.mock.calls.some(([, channel]) => channel === 'import-generation:execute')).toBe(false)
+  })
+})

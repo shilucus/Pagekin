@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3'
 
 import type { PortableRuntimeFreezeGuard } from './portable-runtime-freeze'
 import { PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS, PORTABLE_SOURCE_SCHEMA_VERSION, type PortableSourceSchemaVersion } from './portable-project-format'
+import { projectImportQueryOutcome, projectImportQueryReceipt, stableImportQueryJson } from './portable-import-query-projection'
 
 const HASH = /^[a-f0-9]{64}$/u
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
@@ -257,6 +258,68 @@ export function assertReferenceManifestBindingFreezeCoverage(
   }
 }
 
+/** Query material is readable history, never a transferred execution capability. */
+export function assertImportQueryFreezeCoverage(
+  database: Database.Database,
+  freeze?: PortableRuntimeFreezeGuard,
+  completePortableCopy = false,
+): void {
+  if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_query_plans'").get()) return
+  const plans = database.prepare(`SELECT p.*,i.id AS import_id,i.root_run_id AS import_root,
+    r.run_id AS generation_id,r.root_action_id AS generation_root,g.root_action_id AS root_id
+    FROM import_query_plans p LEFT JOIN import_runs i ON i.id=p.import_root_run_id
+    LEFT JOIN generation_runs r ON r.run_id=p.generation_run_id
+    LEFT JOIN generation_roots g ON g.root_action_id=p.root_action_id`).all() as Array<{
+      import_root_run_id: string; generation_run_id: string; root_action_id: string
+      manifest_fingerprint: string | null; binding_json: string | null; binding_fingerprint: string | null
+      import_id: string | null; import_root: string | null; generation_id: string | null
+      generation_root: string | null; root_id: string | null
+    }>
+  const topics = database.prepare('SELECT query_id,import_root_run_id,topic_key,outcome_json,receipt_json,receipt_fingerprint FROM import_query_topics').all() as Array<{
+    query_id: string; import_root_run_id: string; topic_key: string; receipt_fingerprint: string | null
+    outcome_json: string | null; receipt_json: string | null
+  }>
+  const planIds = new Set(plans.map(row => row.import_root_run_id))
+  const topicIds = new Set(topics.map(row => row.query_id))
+  if (freeze?.recordIds?.('import_query_plans').some(id => !planIds.has(id))
+    || freeze?.recordIds?.('import_query_topics').some(id => !topicIds.has(id))) invalid()
+  if (topics.some(row => !planIds.has(row.import_root_run_id))) invalid()
+  for (const plan of plans) {
+    for (const id of [plan.import_root_run_id, plan.generation_run_id, plan.root_action_id]) {
+      if (!ID.test(id) || /^[a-z]:/iu.test(id)) invalid()
+    }
+    if (plan.import_id !== plan.import_root_run_id || plan.import_root !== plan.import_root_run_id
+      || plan.generation_id !== plan.generation_run_id || plan.generation_root !== plan.root_action_id
+      || plan.root_id !== plan.root_action_id) invalid()
+    const children = topics.filter(row => row.import_root_run_id === plan.import_root_run_id)
+    if (children.some(row => !ID.test(row.query_id) || /^[a-z]:/iu.test(row.query_id))) invalid()
+    if (children.length !== 4 || ['worldview', 'protagonist', 'conflict', 'style']
+      .some(key => children.filter(row => row.topic_key === key).length !== 1)) invalid()
+    const historical = completePortableCopy || plan.manifest_fingerprint === null || plan.binding_json === null
+      || plan.binding_fingerprint === null || freeze?.isFrozen('import_query_plans', plan.import_root_run_id)
+      || freeze?.isFrozen('import_runs', plan.import_root_run_id) || freeze?.isFrozen('generation_runs', plan.generation_run_id)
+      || freeze?.isFrozen('generation_roots', plan.root_action_id)
+      || children.some(row => freeze?.isFrozen('import_query_topics', row.query_id))
+    if (!historical) continue
+    if (!freeze?.active || !freeze.isFrozen('import_query_plans', plan.import_root_run_id)
+      || !freeze.isFrozen('import_runs', plan.import_root_run_id)
+      || !freeze.isFrozen('generation_runs', plan.generation_run_id)
+      || !freeze.isFrozen('generation_roots', plan.root_action_id)
+      || plan.manifest_fingerprint !== null || plan.binding_json !== null || plan.binding_fingerprint !== null
+      || children.some(row => !freeze.isFrozen('import_query_topics', row.query_id) || row.receipt_fingerprint !== null)) invalid()
+    for (const child of children) {
+      try {
+        const outcome = projectImportQueryOutcome(child.outcome_json), receipt = projectImportQueryReceipt(child.receipt_json)
+        const actual = { outcome_json: child.outcome_json === null ? null : JSON.parse(child.outcome_json),
+          receipt_json: child.receipt_json === null ? null : JSON.parse(child.receipt_json) }
+        if (stableImportQueryJson(actual) !== stableImportQueryJson({ outcome_json: outcome, receipt_json: receipt })
+          || stableImportQueryJson(freeze.projection?.('import_query_topics', child.query_id))
+            !== stableImportQueryJson(actual)) invalid()
+      } catch { invalid() }
+    }
+  }
+}
+
 function receiptId(input: Pick<PortableTransferAuthority,
   'originProjectId' | 'snapshotGeneration' | 'portableDatabaseSha256' | 'finalizations' | 'summarySources'>): string {
   return `portable-transfer:${sha256(JSON.stringify({ originProjectId: input.originProjectId,
@@ -377,6 +440,7 @@ export function verifyPortableTransferAuthority(
   assertReferenceEmbeddingDispatchFreezeCoverage(database, freeze, true)
   assertReferenceEmbeddingBudgetFreezeCoverage(database, authority, freeze, true)
   assertReferenceManifestBindingFreezeCoverage(database, authority, freeze, true)
+  assertImportQueryFreezeCoverage(database, freeze, true)
   const facts = currentness(database, false, freeze)
   if (JSON.stringify(facts.finalizations) !== JSON.stringify(authority.finalizations)
     || JSON.stringify(facts.summarySources) !== JSON.stringify(authority.summarySources)) invalid()
@@ -391,6 +455,7 @@ export function verifyPortableTransferAuthorityHistory(
   assertReferenceEmbeddingDispatchFreezeCoverage(database, freeze)
   assertReferenceEmbeddingBudgetFreezeCoverage(database, authority, freeze)
   assertReferenceManifestBindingFreezeCoverage(database, authority, freeze)
+  assertImportQueryFreezeCoverage(database, freeze)
   const deleted = new Set<number>()
   for (const item of authority.finalizations) {
     const row = database.prepare(`

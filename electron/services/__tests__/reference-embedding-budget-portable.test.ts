@@ -9,6 +9,8 @@ import { getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
 import { verifySchema } from '../../migrations/runner'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
+import { getImportInferenceTopics } from '../../../src/shared/import-inference-materials'
+import { importQueryId } from '../import-query-contract'
 import { getPortableFieldPolicy, PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS, type PortableProjectManifestEntry } from '../portable-project-format'
 import { readPortableRuntimeFreeze, type PortableRuntimeFreezeGuard, type PortableRuntimeFreezeTable } from '../portable-runtime-freeze'
 import { assertReferenceEmbeddingBudgetFreezeCoverage, assertReferenceManifestBindingFreezeCoverage, createPortableTransferAuthority, serializePortableTransferAuthority, type PortableTransferAuthority } from '../portable-transfer-authority'
@@ -74,6 +76,35 @@ function seedBudget(db: Database.Database, id: string): void {
     .run(id, hash(`manifest:${id}`), 'reference-embedding-budget-v1', 100, 10, 5, 2, 225000, 1, 5, null, 'ready')
 }
 
+function seedQuery(db: Database.Database, id: string): void {
+  const action = `action-${id}`, run = `generation-${id}`
+  db.prepare('INSERT INTO generation_roots(root_action_id,idempotency_key,action_json,budget_json) VALUES(?,?,?,?)').run(
+    action, `private-${id}`, JSON.stringify({ rootActionId: action, operation: 'import', status: 'active' }),
+    JSON.stringify({ maxPhysicalRequests: 4, maxTokenLiability: 1, maxOutputPerRequest: 1, maxActiveElapsedMs: 1000 }))
+  db.prepare('INSERT INTO generation_runs VALUES(?,?,?,?,?,?)').run(run, action, '{}', 'running', 1, `open-${id}`)
+  const topics = getImportInferenceTopics('en-US').map(({ key, query, topK }) => ({ key, query, topK }))
+  const binding = JSON.stringify({ version: 1, slot: { stage: 'global', batchId: 'global', writingLanguage: 'en-US' },
+    contextFingerprint: hash('context'), configurationFingerprint: hash('private-config'), topics })
+  db.prepare('INSERT INTO import_query_plans VALUES(?,?,?,?,?,?,?,?)')
+    .run(id, run, action, hash(`manifest:${id}`), binding, hash(binding), 'ready', 1)
+  const hit = { text: 'Fictional material', score: 0.75, fileName: 'fiction.txt' }
+  const receipt = JSON.stringify({ version: 1, state: 'available', snapshot: {
+    version: 1, state: 'stored', query: topics[0]!.query, topK: 5, storageState: 'present',
+    canonicalRevision: 1, documentsRevision: 1, tableRevisions: [{ tableName: 'chunks', revision: 1 }],
+    registryHash: hash('private-registry'), results: [hit], items: [{ ...hit, chunkId: 'chunk-1', documentId: 'document-1',
+      chunkIndex: 0, corpusKind: 'reference', contentHash: hash(hit.text), documentChunkSetHash: hash('chunk-set'),
+      documentChunks: [{ chunkId: 'chunk-1', chunkIndex: 0, contentHash: hash(hit.text) }] }],
+  } })
+  const unavailable = JSON.stringify({ version: 1, state: 'unavailable' })
+  const insert = db.prepare('INSERT INTO import_query_topics VALUES(?,?,?,?,?,?,?,?,?,?)')
+  topics.forEach((topic, index) => {
+    const material = index === 0 ? receipt : index === 1 ? unavailable : null
+    insert.run(importQueryId(id, topic.key), id, topic.key, index < 2 ? 'completed' : 'prepared',
+      index === 1 ? 2 : null, index === 1 ? JSON.stringify({ kind: 'http_failed', httpStatus: 503 }) : null,
+      index === 1 ? 3 : null, index === 1 ? 4 : null, material, material === null ? null : hash(material))
+  })
+}
+
 async function exportArchive(base: string, root: string, projectId: string, name: string): Promise<string> {
   const attemptParentPath = path.join(base, `${name}-attempt`), archivePath = path.join(base, `${name}.ainovel`)
   fs.mkdirSync(attemptParentPath)
@@ -85,7 +116,7 @@ async function exportArchive(base: string, root: string, projectId: string, name
 }
 
 async function writeTestArchive(input: { base: string; databasePath: string; projectId: string; name: string;
-  sourceVersion: 17 | 18; authorityVersion: 17 | 18; records: ReturnType<typeof sanitizePortableDatabase>['history'] }): Promise<string> {
+  sourceVersion: 17 | 18 | 19; authorityVersion: 17 | 18 | 19; records: ReturnType<typeof sanitizePortableDatabase>['history'] }): Promise<string> {
   const bytes = fs.readFileSync(input.databasePath), generation = `generation-${input.name}`
   const db = new Database(input.databasePath, { readonly: true })
   let authority: PortableTransferAuthority
@@ -241,7 +272,7 @@ describe('portable reference embedding budgets', () => {
     closeProjectDatabase()
     const old = new Database(f.databasePath)
     try {
-      old.exec('DROP TABLE reference_import_manifest_chapters; DROP TABLE reference_embedding_budgets')
+      old.exec('DROP TABLE import_query_topics; DROP TABLE import_query_plans; DROP TABLE reference_import_manifest_chapters; DROP TABLE reference_embedding_budgets')
       old.pragma('user_version=17')
       expect(verifySchema(new SqliteSchemaAdapter(old), getDesktopMigrationRegistry(), 17).version).toBe(17)
     } finally { old.close() }
@@ -259,7 +290,7 @@ describe('portable reference embedding budgets', () => {
     expect(fs.readFileSync(archivePath)).toEqual(originalArchive)
     initProjectDatabase(target)
     const db = getProjectDb()!, guard = readPortableRuntimeFreeze(target)
-    expect(db.pragma('user_version', { simple: true })).toBe(18)
+    expect(db.pragma('user_version', { simple: true })).toBe(19)
     expect(db.prepare('SELECT * FROM reference_embedding_budgets WHERE root_run_id=?').get('legacy-root')).toEqual({
       root_run_id: 'legacy-root', manifest_fingerprint: null, policy_version: 'reference-embedding-budget-v1',
       initial_chunk_size: null, initial_chunk_overlap: null, initial_batch_size: null, request_limit: null,
@@ -309,27 +340,27 @@ describe('portable reference embedding budgets', () => {
     const sanitized = sanitizePortableDatabase(copyPath)
     const records = sanitized.history.filter(item => item.table !== 'reference_embedding_budgets')
     const incomplete = await writeTestArchive({ ...f, databasePath: copyPath, name: 'missing-budget-freeze',
-      sourceVersion: 18, authorityVersion: 18, records })
+      sourceVersion: 19, authorityVersion: 19, records })
     await expect(restorePortableProject({ archivePath: incomplete, targetProjectRoot: path.join(f.base, 'missing-budget-target') })).rejects.toThrow()
     const noBinding = await writeTestArchive({ ...f, databasePath: copyPath, name: 'missing-binding-freeze',
-      sourceVersion: 18, authorityVersion: 18, records: sanitized.history.filter(item => item.table !== 'reference_import_manifest_chapters') })
+      sourceVersion: 19, authorityVersion: 19, records: sanitized.history.filter(item => item.table !== 'reference_import_manifest_chapters') })
     await expect(restorePortableProject({ archivePath: noBinding, targetProjectRoot: path.join(f.base, 'missing-binding-target') })).rejects.toThrow()
     const noBindingRowPath = path.join(f.base, 'missing-binding-row.db')
     fs.copyFileSync(copyPath, noBindingRowPath, fs.constants.COPYFILE_EXCL)
     const noBindingRow = new Database(noBindingRowPath)
     try { noBindingRow.prepare('DELETE FROM reference_import_manifest_chapters').run() } finally { noBindingRow.close() }
     const noBindingRowArchive = await writeTestArchive({ ...f, databasePath: noBindingRowPath, name: 'missing-binding-row',
-      sourceVersion: 18, authorityVersion: 18, records: sanitized.history })
+      sourceVersion: 19, authorityVersion: 19, records: sanitized.history })
     await expect(restorePortableProject({ archivePath: noBindingRowArchive, targetProjectRoot: path.join(f.base, 'missing-binding-row-target') })).rejects.toThrow()
     const noBindingOrFreeze = await writeTestArchive({ ...f, databasePath: noBindingRowPath, name: 'missing-binding-and-freeze',
-      sourceVersion: 18, authorityVersion: 18, records: sanitized.history.filter(item => item.table !== 'reference_import_manifest_chapters') })
+      sourceVersion: 19, authorityVersion: 19, records: sanitized.history.filter(item => item.table !== 'reference_import_manifest_chapters') })
     await expect(restorePortableProject({ archivePath: noBindingOrFreeze, targetProjectRoot: path.join(f.base, 'missing-binding-and-freeze-target') })).rejects.toThrow()
     const partialLineagePath = path.join(f.base, 'partial-lineage.db')
     fs.copyFileSync(copyPath, partialLineagePath, fs.constants.COPYFILE_EXCL)
     const partialLineage = new Database(partialLineagePath)
     try { partialLineage.prepare("DELETE FROM reference_import_manifest_chapters WHERE import_run_id='budget-child'").run() } finally { partialLineage.close() }
     const partialLineageArchive = await writeTestArchive({ ...f, databasePath: partialLineagePath, name: 'partial-lineage',
-      sourceVersion: 18, authorityVersion: 18, records: sanitized.history.filter(item =>
+      sourceVersion: 19, authorityVersion: 19, records: sanitized.history.filter(item =>
         item.table !== 'reference_import_manifest_chapters' || item.recordId !== 'budget-child:1') })
     await expect(restorePortableProject({ archivePath: partialLineageArchive, targetProjectRoot: path.join(f.base, 'partial-lineage-target') })).rejects.toThrow()
     const wrongSizePath = path.join(f.base, 'wrong-manifest-size.db')
@@ -337,7 +368,7 @@ describe('portable reference embedding budgets', () => {
     const wrongSize = new Database(wrongSizePath)
     try { wrongSize.prepare('UPDATE import_runs SET manifest_content_size=manifest_content_size+1').run() } finally { wrongSize.close() }
     const wrongSizeArchive = await writeTestArchive({ ...f, databasePath: wrongSizePath, name: 'wrong-manifest-size',
-      sourceVersion: 18, authorityVersion: 18, records: sanitized.history })
+      sourceVersion: 19, authorityVersion: 19, records: sanitized.history })
     await expect(restorePortableProject({ archivePath: wrongSizeArchive, targetProjectRoot: path.join(f.base, 'wrong-manifest-size-target') })).rejects.toThrow()
     const brokenPath = path.join(f.base, 'broken-reference.db')
     fs.copyFileSync(copyPath, brokenPath, fs.constants.COPYFILE_EXCL)
@@ -347,7 +378,7 @@ describe('portable reference embedding budgets', () => {
       broken.prepare("UPDATE reference_import_manifest_chapters SET snapshot_run_id='missing-snapshot'").run()
     } finally { broken.close() }
     const brokenArchive = await writeTestArchive({ ...f, databasePath: brokenPath, name: 'broken-reference',
-      sourceVersion: 18, authorityVersion: 18, records: sanitized.history })
+      sourceVersion: 19, authorityVersion: 19, records: sanitized.history })
     await expect(restorePortableProject({ archivePath: brokenArchive, targetProjectRoot: path.join(f.base, 'broken-reference-target') })).rejects.toThrow()
     const disguised = await writeTestArchive({ ...f, databasePath: copyPath, name: 'disguised-schema',
       sourceVersion: 17, authorityVersion: 17, records })
@@ -367,6 +398,138 @@ describe('portable reference embedding budgets', () => {
       expect(getProjectDb()!.pragma('foreign_key_check')).toEqual([])
       expect(() => guard.assertMutable('reference_embedding_budgets', 'budget-root')).toThrow('PORTABLE_RUNTIME_FROZEN')
       expect(readPortableCurrentAuthority({ database: getProjectDb()!, projectStorageRoot: path.join(target, '.ai-novel'), projectId: restored.targetProjectId })).not.toBeNull()
+      closeProjectDatabase()
+      sourceRoot = target
+      sourceProjectId = restored.targetProjectId
+    }
+    expect(fs.readFileSync(f.databasePath)).toEqual(sourceBytes)
+  })
+
+  it('restores schema18 history without inventing a query plan', async () => {
+    const f = fixture()
+    seedRoot(getProjectDb()!, 'old-query-root')
+    closeProjectDatabase()
+    const sourceBytes = fs.readFileSync(f.databasePath), copyPath = path.join(f.base, 'schema18.db')
+    fs.copyFileSync(f.databasePath, copyPath, fs.constants.COPYFILE_EXCL)
+    const sanitized = sanitizePortableDatabase(copyPath)
+    const old = new Database(copyPath)
+    try {
+      old.exec('DROP TABLE import_query_topics; DROP TABLE import_query_plans')
+      old.pragma('user_version=18')
+      expect(verifySchema(new SqliteSchemaAdapter(old), getDesktopMigrationRegistry(), 18).version).toBe(18)
+    } finally { old.close() }
+    const archive = await writeTestArchive({ ...f, databasePath: copyPath, name: 'query-old', sourceVersion: 18,
+      authorityVersion: 18, records: sanitized.history })
+    const target = path.join(f.base, 'query-old-target')
+    await restorePortableProject({ archivePath: archive, targetProjectRoot: target })
+    initProjectDatabase(target)
+    expect(getProjectDb()!.prepare('SELECT * FROM import_query_plans').all()).toEqual([])
+    expect(getProjectDb()!.prepare('SELECT * FROM import_query_topics').all()).toEqual([])
+    expect(readPortableRuntimeFreeze(target).isFrozen('import_runs', 'old-query-root')).toBe(true)
+    expect(fs.readFileSync(f.databasePath)).toEqual(sourceBytes)
+  })
+
+  it('rejects a query topic removed from the database while its freeze remains', async () => {
+    const f = fixture(), db = getProjectDb()!
+    seedRoot(db, 'query-root')
+    seedQuery(db, 'query-root')
+    closeProjectDatabase()
+    const sourceBytes = fs.readFileSync(f.databasePath), copyPath = path.join(f.base, 'query-orphan-freeze.db')
+    fs.copyFileSync(f.databasePath, copyPath, fs.constants.COPYFILE_EXCL)
+    const sanitized = sanitizePortableDatabase(copyPath)
+    const broken = new Database(copyPath)
+    try { broken.prepare("DELETE FROM import_query_topics WHERE topic_key='style'").run() } finally { broken.close() }
+    const archive = await writeTestArchive({ ...f, databasePath: copyPath, name: 'query-orphan-freeze',
+      sourceVersion: 19, authorityVersion: 19, records: sanitized.history })
+    await expect(restorePortableProject({ archivePath: archive, targetProjectRoot: path.join(f.base, 'query-orphan-freeze-target') })).rejects.toThrow()
+    expect(fs.readFileSync(f.databasePath)).toEqual(sourceBytes)
+  })
+
+  it('rejects orphan query freezes after the entire plan and its topics are removed', async () => {
+    const f = fixture(), db = getProjectDb()!
+    seedRoot(db, 'query-root')
+    seedQuery(db, 'query-root')
+    closeProjectDatabase()
+    const sourceBytes = fs.readFileSync(f.databasePath), copyPath = path.join(f.base, 'query-orphan-plan.db')
+    fs.copyFileSync(f.databasePath, copyPath, fs.constants.COPYFILE_EXCL)
+    const sanitized = sanitizePortableDatabase(copyPath)
+    expect(sanitized.history.filter(item => item.table === 'import_query_plans')).toHaveLength(1)
+    expect(sanitized.history.filter(item => item.table === 'import_query_topics')).toHaveLength(4)
+    const broken = new Database(copyPath)
+    try {
+      broken.exec('DELETE FROM import_query_topics; DELETE FROM import_query_plans')
+      expect(broken.prepare('SELECT count(*) FROM import_query_plans').pluck().get()).toBe(0)
+      expect(broken.prepare('SELECT count(*) FROM import_query_topics').pluck().get()).toBe(0)
+      expect(verifySchema(new SqliteSchemaAdapter(broken), getDesktopMigrationRegistry(), 19).version).toBe(19)
+    } finally { broken.close() }
+    const archive = await writeTestArchive({ ...f, databasePath: copyPath, name: 'query-orphan-plan',
+      sourceVersion: 19, authorityVersion: 19, records: sanitized.history })
+    await expect(restorePortableProject({ archivePath: archive, targetProjectRoot: path.join(f.base, 'query-orphan-plan-target') }))
+      .rejects.toThrow('PORTABLE_TRANSFER_AUTHORITY_INVALID')
+    expect(fs.readFileSync(f.databasePath)).toEqual(sourceBytes)
+  })
+
+  it('projects query history through two actual restores and rejects missing topic or parent freezes', async () => {
+    const f = fixture(), db = getProjectDb()!
+    seedRoot(db, 'query-root')
+    seedQuery(db, 'query-root')
+    closeProjectDatabase()
+    const sourceBytes = fs.readFileSync(f.databasePath), copyPath = path.join(f.base, 'query-sanitized.db')
+    fs.copyFileSync(f.databasePath, copyPath, fs.constants.COPYFILE_EXCL)
+    const sanitized = sanitizePortableDatabase(copyPath)
+    for (const missing of ['import_query_plans', 'import_query_topics', 'generation_runs', 'generation_roots', 'import_runs']) {
+      const archive = await writeTestArchive({ ...f, databasePath: copyPath, name: `query-missing-${missing}`,
+        sourceVersion: 19, authorityVersion: 19, records: sanitized.history.filter(item => item.table !== missing) })
+      await expect(restorePortableProject({ archivePath: archive, targetProjectRoot: path.join(f.base, `target-${missing}`) })).rejects.toThrow()
+    }
+    const missingPath = path.join(f.base, 'query-missing-row.db')
+    fs.copyFileSync(copyPath, missingPath, fs.constants.COPYFILE_EXCL)
+    const broken = new Database(missingPath)
+    try { broken.prepare("DELETE FROM import_query_topics WHERE topic_key='style'").run() } finally { broken.close() }
+    const missingArchive = await writeTestArchive({ ...f, databasePath: missingPath, name: 'query-missing-row',
+      sourceVersion: 19, authorityVersion: 19, records: sanitized.history.filter(item => item.recordId !== importQueryId('query-root', 'style')) })
+    await expect(restorePortableProject({ archivePath: missingArchive, targetProjectRoot: path.join(f.base, 'query-missing-row-target') })).rejects.toThrow()
+    const unsafePath = path.join(f.base, 'query-unsafe-receipt.db')
+    fs.copyFileSync(copyPath, unsafePath, fs.constants.COPYFILE_EXCL)
+    const unsafe = new Database(unsafePath)
+    try { unsafe.prepare("UPDATE import_query_topics SET receipt_json=json_set(receipt_json,'$.snapshot.registryHash',?) WHERE topic_key='worldview'").run(hash('private-registry')) }
+    finally { unsafe.close() }
+    const unsafeArchive = await writeTestArchive({ ...f, databasePath: unsafePath, name: 'query-unsafe-receipt',
+      sourceVersion: 19, authorityVersion: 19, records: sanitized.history })
+    await expect(restorePortableProject({ archivePath: unsafeArchive, targetProjectRoot: path.join(f.base, 'query-unsafe-target') })).rejects.toThrow()
+    let sourceRoot = f.root, sourceProjectId: string = f.projectId
+    for (let generation = 0; generation < 2; generation += 1) {
+      const archive = await exportArchive(f.base, sourceRoot, sourceProjectId, `query-${generation}`)
+      const target = path.join(f.base, `query-target-${generation}`)
+      const restored = await restorePortableProject({ archivePath: archive, targetProjectRoot: target })
+      initProjectDatabase(target)
+      const restoredDb = getProjectDb()!, guard = readPortableRuntimeFreeze(target)
+      expect(restoredDb.prepare('SELECT manifest_fingerprint,binding_json,binding_fingerprint FROM import_query_plans WHERE import_root_run_id=?').get('query-root'))
+        .toEqual({ manifest_fingerprint: null, binding_json: null, binding_fingerprint: null })
+      const topics = restoredDb.prepare('SELECT topic_key,receipt_json,receipt_fingerprint FROM import_query_topics WHERE import_root_run_id=? ORDER BY topic_key').all('query-root') as Array<{
+        topic_key: string; receipt_json: string | null; receipt_fingerprint: string | null
+      }>
+      expect(topics).toHaveLength(4)
+      const material = JSON.parse(topics.find(topic => topic.topic_key === 'worldview')!.receipt_json!)
+      expect(material.snapshot.results[0].text).toBe('Fictional material')
+      expect(material.snapshot).not.toHaveProperty('registryHash')
+      expect(material.snapshot).not.toHaveProperty('projectStorageRoot')
+      expect(material.snapshot).not.toHaveProperty('runtimeEpoch')
+      expect(JSON.parse(topics.find(topic => topic.topic_key === 'protagonist')!.receipt_json!)).toEqual({ version: 1, state: 'unavailable' })
+      expect(topics.every(topic => topic.receipt_fingerprint === null)).toBe(true)
+      for (const [table, id] of [['import_runs', 'query-root'], ['generation_runs', 'generation-query-root'],
+        ['generation_roots', 'action-query-root'], ['import_query_plans', 'query-root'],
+        ['import_query_topics', importQueryId('query-root', 'worldview')]] as const) expect(guard.isFrozen(table, id)).toBe(true)
+      if (generation === 0) {
+        seedRoot(restoredDb, 'fresh-query-root')
+        seedQuery(restoredDb, 'fresh-query-root')
+        expect(guard.isFrozen('import_query_plans', 'fresh-query-root')).toBe(false)
+        expect(readPortableCurrentAuthority({ database: restoredDb, projectStorageRoot: path.join(target, '.ai-novel'),
+          projectId: restored.targetProjectId })).not.toBeNull()
+      } else {
+        expect(restoredDb.prepare('SELECT count(*) FROM import_query_topics WHERE import_root_run_id=?').pluck().get('fresh-query-root')).toBe(4)
+        expect(guard.isFrozen('import_query_plans', 'fresh-query-root')).toBe(true)
+      }
       closeProjectDatabase()
       sourceRoot = target
       sourceProjectId = restored.targetProjectId

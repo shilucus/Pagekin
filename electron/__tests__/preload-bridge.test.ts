@@ -5,6 +5,7 @@ import { RUNTIME_FEEDBACK_CHANNELS } from '../../src/shared/runtime-feedback-con
 import { WORKFLOW_DRIVER_CHANNELS } from '../../src/shared/workflow-driver-contract'
 import { WORKFLOW_BATCH_CHANNELS } from '../../src/shared/workflow-batch-contract'
 import { REFERENCE_KNOWLEDGE_CHANNELS } from '../../src/shared/reference-knowledge-contract'
+import { IMPORT_GENERATION_CHANNELS } from '../../src/shared/import-generation'
 
 const electron = vi.hoisted(() => ({
   contextBridge: { exposeInMainWorld: vi.fn() },
@@ -15,6 +16,20 @@ vi.mock('electron', () => electron)
 await import('../preload')
 
 describe('桌面预加载接口', () => {
+  it('forwards the closed import generation family without adding query or budget authority', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const request = Object.freeze({ handle: Object.freeze({ projectId: 'fictional', epoch: 'view', rootActionId: 'root', runId: 'run' }),
+      execution: Object.freeze({ owner: 'owner', epoch: 1 }) })
+    const session = Object.freeze({ projectId: 'fictional', leaseId: 'view', projectPath: 'C:/fictional' })
+    for (const channel of IMPORT_GENERATION_CHANNELS) {
+      await bridge.invoke(channel, request, session)
+      expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, request, session)
+    }
+    const calls = electron.ipcRenderer.invoke.mock.calls.length
+    await expect(bridge.invoke('import-generation:v2:query-materials', request, session)).rejects.toThrow('GENERATION_IMPORT_CHANNEL_NOT_ALLOWED')
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)
+    expect(Object.keys(request)).toEqual(['handle', 'execution'])
+  })
   it('forwards only the closed reference knowledge family without issuing or expanding authority', async () => {
     const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
     const request = Object.freeze({ projectId: 'fictional-project', runId: 'fictional-run',

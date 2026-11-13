@@ -394,7 +394,7 @@ it('rejects M13-only target contamination after asset migration and preserves th
   expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
 })
 
-it.each([8, 9, 10, 11, 12, 13, 14, 15, 16, 17].flatMap(sourceVersion =>
+it.each([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].flatMap(sourceVersion =>
   (['valid', 'missing', 'tampered', 'grant-pollution', 'tail-pollution', 'workflow-pollution',
     ...(sourceVersion === 14 ? ['reference-grant-pollution' as const] : [])] as const)
     .map(mode => ({ sourceVersion, mode })),
@@ -404,7 +404,8 @@ it.each([8, 9, 10, 11, 12, 13, 14, 15, 16, 17].flatMap(sourceVersion =>
     : sourceVersion === 9 ? 'preFeedbackRangesDomain' : sourceVersion === 10 ? 'preGrantsDomain'
       : sourceVersion === 11 ? 'preRecoveryTailsDomain' : sourceVersion === 12 ? 'preWorkflowDriverDomain'
         : sourceVersion === 13 ? 'preWorkflowBatchDomain' : sourceVersion === 14 ? 'preReferenceImportGrantsDomain'
-          : sourceVersion === 15 ? 'preBlueprintFeedbackDomain' : sourceVersion === 16 ? 'preEmbeddingDispatchDomain' : 'preEmbeddingBudgetDomain'
+          : sourceVersion === 15 ? 'preBlueprintFeedbackDomain' : sourceVersion === 16 ? 'preEmbeddingDispatchDomain'
+            : sourceVersion === 17 ? 'preEmbeddingBudgetDomain' : 'preImportQueryDomain'
   let tailInput: PreserveGenerationTailInput | undefined
   let workflowRunId: string | undefined
   const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')

@@ -39,6 +39,17 @@ afterEach(() => {
 })
 
 describe('project-scoped IPC session transport', () => {
+  it('keeps the fixed import query entry on its captured project lease', async () => {
+    const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
+    const request = { handle: { projectId: 'project-A', epoch: 'lease-A', rootActionId: 'root-A', runId: 'run-A' },
+      execution: { owner: 'fictional-owner', epoch: 1 } }
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    await ipc.invokeWithProjectSession(frozen, 'import-generation:v1:query-materials', request)
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('import-generation:v1:query-materials', request, frozen)
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('import-generation:v1:query-materials', request)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
   it('keeps foreground reference issuance and effects view-bound while allowing only private revoke without a view', async () => {
     const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
     const reference = { projectId: 'project-A', runId: 'fictional-run', grantId: '11111111-1111-4111-8111-111111111111', revision: 1 }
