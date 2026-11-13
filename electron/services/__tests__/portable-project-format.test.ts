@@ -70,19 +70,19 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
-describe('portable v17 field policy', () => {
-  it('与实际当前registry双向精确匹配67表636字段，放行M07的四个live视图，并包含两个lazy表', () => {
+describe('portable v18 field policy', () => {
+  it('与实际当前registry双向精确匹配69表654字段，放行M07的四个live视图，并包含两个lazy表', () => {
     const { database } = openCurrent()
     expect(database.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
     const tables = database.prepare("SELECT name FROM pragma_table_list WHERE schema='main' AND type='table' AND name NOT LIKE 'sqlite_%'")
       .all() as Array<{ name: string }>
     const fieldCount = tables.reduce((count, table) => count
       + (database.prepare(`PRAGMA table_info("${table.name}")`).all() as unknown[]).length, 0)
-    expect({ tables: tables.length, fields: fieldCount }).toEqual({ tables: 67, fields: 636 })
+    expect({ tables: tables.length, fields: fieldCount }).toEqual({ tables: 69, fields: 654 })
     expect(database.prepare("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name").pluck().all()).toEqual([
       'drafts', 'finalization_outbox', 'narrative_thread_confirmations', 'summary_snapshots',
     ])
-    expect(assertPortableSourceSchema(database)).toEqual({ tables: 67, fields: 636 })
+    expect(assertPortableSourceSchema(database)).toEqual({ tables: 69, fields: 654 })
     for (const field of ['deletion_id', 'deleted_from_status', 'deleted_at']) {
       expect(getPortableFieldPolicy('drafts', field)).toMatchObject({ disposition: 'preserve-domain', origin: 'm07-delta', signedDisposition: null })
     }
@@ -114,8 +114,8 @@ describe('portable v17 field policy', () => {
     const baseline = new Set(signed.fieldDispositions.map(field => `${field.table}.${field.field}`))
     const baselineTables = new Set(signed.fieldDispositions.map(field => field.table))
     const added = listPortableFieldPolicyKeys().filter(key => !baseline.has(key))
-    expect(added).toHaveLength(281)
-    expect(added.filter(key => !['m13-delta', 'm14-delta', 'm15-delta', 'm16-delta'].includes(
+    expect(added).toHaveLength(299)
+    expect(added.filter(key => !['m13-delta', 'm14-delta', 'm15-delta', 'm16-delta', 'm17-delta'].includes(
       getPortableFieldPolicy(...key.split('.') as [string, string]).origin))).toHaveLength(224)
     expect(getPortableFieldPolicy('characters', 'avatar')).toMatchObject({
       origin: 'registered-donor', disposition: 'exclude-machine-authority', signedDisposition: null,
@@ -255,7 +255,7 @@ describe('portable v17 field policy', () => {
     },
   )
 
-  it('按包声明版本分别核验schema 7至17，不混用列集合和DDL', () => {
+  it('按包声明版本分别核验schema 7至18，不混用列集合和DDL', () => {
     const database = new Database(':memory:')
     try {
       database.transaction(() => initializeLegacyBaselineSchema(database))()
@@ -294,12 +294,16 @@ describe('portable v17 field policy', () => {
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), 16)
       expect(assertPortableSourceSchema(database, 16)).toEqual({ tables: 66, fields: 627 })
       expect(() => assertPortableSourceSchema(database)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
+      migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), 17)
+      expect(assertPortableSourceSchema(database, 17)).toEqual({ tables: 67, fields: 636 })
+      expect(() => assertPortableSourceSchema(database)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
       expect(() => assertPortableSourceSchema(database, 12)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
       expect(() => assertPortableSourceSchema(database, 14)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
       expect(() => assertPortableSourceSchema(database, 15)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
       expect(() => assertPortableSourceSchema(database, 16)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
-      expect(assertPortableSourceSchema(database)).toEqual({ tables: 67, fields: 636 })
+      expect(() => assertPortableSourceSchema(database, 17)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
+      expect(assertPortableSourceSchema(database)).toEqual({ tables: 69, fields: 654 })
     } finally { database.close() }
   })
 
@@ -322,7 +326,7 @@ describe('portable v17 field policy', () => {
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), 10)
       expect(assertPortableSourceSchema(database, 10)).toEqual({ tables: 56, fields: variant === 'normal' ? 531 : 532 })
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
-      expect(assertPortableSourceSchema(database)).toEqual({ tables: 67, fields: variant === 'normal' ? 636 : 637 })
+      expect(assertPortableSourceSchema(database)).toEqual({ tables: 69, fields: variant === 'normal' ? 654 : 655 })
     } finally { database.close() }
   })
 
@@ -343,7 +347,7 @@ describe('portable v17 field policy', () => {
         : '1d6c2f83c2f5047b46952e1485bd10591140de7c888431fe5d24f18456be0a53')
       expect(assertPortableSourceSchema(database, 11)).toEqual({ tables: 57, fields: variant === 'normal' ? 546 : 547 })
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
-      expect(assertPortableSourceSchema(database)).toEqual({ tables: 67, fields: variant === 'normal' ? 636 : 637 })
+      expect(assertPortableSourceSchema(database)).toEqual({ tables: 69, fields: variant === 'normal' ? 654 : 655 })
     } finally { database.close() }
   })
 
@@ -364,7 +368,7 @@ describe('portable v17 field policy', () => {
         : '188a053ae4383277590ee57e35c7ec514ecddc6d025225cc1bf8e88b6c1d9900')
       expect(assertPortableSourceSchema(database, 12)).toEqual({ tables: 58, fields: variant === 'normal' ? 553 : 554 })
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
-      expect(assertPortableSourceSchema(database)).toEqual({ tables: 67, fields: variant === 'normal' ? 636 : 637 })
+      expect(assertPortableSourceSchema(database)).toEqual({ tables: 69, fields: variant === 'normal' ? 654 : 655 })
     } finally { database.close() }
   })
 
@@ -385,7 +389,7 @@ describe('portable v17 field policy', () => {
         : '56add2e81a7516281abe9f25091632d441b8c2b55228aeba448cce7feb136e00')
       expect(assertPortableSourceSchema(database, 13)).toEqual({ tables: 61, fields: variant === 'normal' ? 579 : 580 })
       migrateSchema(new SqliteSchemaAdapter(database), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
-      expect(assertPortableSourceSchema(database)).toEqual({ tables: 67, fields: variant === 'normal' ? 636 : 637 })
+      expect(assertPortableSourceSchema(database)).toEqual({ tables: 69, fields: variant === 'normal' ? 654 : 655 })
     } finally { database.close() }
   })
 
@@ -401,7 +405,7 @@ describe('portable v17 field policy', () => {
         .all() as Array<{ name: string }>
       const fields = tables.reduce((count, table) => count
         + (database.prepare(`PRAGMA table_info("${table.name}")`).all() as unknown[]).length, 0)
-      expect({ tables: tables.length, fields }).toEqual({ tables: 67, fields: 636 })
+      expect({ tables: tables.length, fields }).toEqual({ tables: 69, fields: 654 })
       expect(() => assertPortableSourceSchema(database)).toThrow('PORTABLE_SCHEMA_UNSUPPORTED')
     } finally { database.close() }
     expect(fs.readFileSync(project.databasePath)).toEqual(before)
@@ -454,6 +458,7 @@ describe('portable manifest v1', () => {
     expect(parsePortableProjectManifest(manifest({ sourceSchemaVersion: 15 })).sourceSchemaVersion).toBe(15)
     expect(parsePortableProjectManifest(manifest({ sourceSchemaVersion: 16 })).sourceSchemaVersion).toBe(16)
     expect(parsePortableProjectManifest(manifest({ sourceSchemaVersion: 17 })).sourceSchemaVersion).toBe(17)
+    expect(parsePortableProjectManifest(manifest({ sourceSchemaVersion: 18 })).sourceSchemaVersion).toBe(18)
   })
 
   it('接受有界的大型中文项目声明与引用标识', () => {

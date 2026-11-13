@@ -50,6 +50,8 @@ export function prepareReferenceEmbeddingDocument(input: {
   assertIssuedReferenceImportAdmission(input.admission)
   try { assertReferenceImportGrantId(input.runId) } catch { invalid() }
   const { resources, admission, runId, assertAuthority } = input
+  const budget = admission.budget
+  if (!budget) throw new EmbeddingDispatchBarrierError('KNOWLEDGE_BASE_REFERENCE_BUDGET_REQUIRED')
   const document = Object.freeze({ ...input.document })
   if (![document.documentId, document.keyHash, document.contentHash, document.chunkSetHash].every(isContentHash)
     || !Number.isSafeInteger(document.chunkCount) || document.chunkCount < 1) invalid()
@@ -78,6 +80,7 @@ export function prepareReferenceEmbeddingDocument(input: {
     && receipt.corpus_kind === 'reference'
   let release = () => {}
   let issued: ReferenceEmbeddingDispatchFlight | null = null
+  let budgetFlight: ReturnType<NonNullable<ReferenceImportAdmission['budget']>['openFlight']> | null = null
   try {
     return admission.withTransaction(resources, runId, () => {
       assertNative()
@@ -96,6 +99,8 @@ export function prepareReferenceEmbeddingDocument(input: {
       if (inserted.changes !== 1 || fresh.length !== 1 || !matches(fresh[0]!) || fresh[0]!.state !== 'prepared') {
         throw new EmbeddingDispatchBarrierError('REFERENCE_EMBEDDING_DISPATCH_PERSISTENCE_FAILED')
       }
+      budget.assertEffect()
+      budgetFlight = budget.openFlight()
       release = projectRuntimeHost.acquireWork(runtime)
       let nextBatch = 0
       let nextDispatch = 0
@@ -117,7 +122,8 @@ export function prepareReferenceEmbeddingDocument(input: {
                 synchronous(assertAuthority)
                 const current = readReceipts()
                 if (current.length !== 1 || !matches(current[0]!) || current[0]!.state !== 'prepared') invalid()
-                return recorder.mark({ runId, documentId: document.documentId, batchOrdinal, inputCount })
+                return budget.beforeDispatch(budgetFlight!,
+                  () => recorder.mark({ runId, documentId: document.documentId, batchOrdinal, inputCount }))
               })
               marks.add(token)
               pending += 1
@@ -126,7 +132,10 @@ export function prepareReferenceEmbeddingDocument(input: {
             settled(outcome: EmbeddingRequestOutcome) {
               if (!flights.has(flight) || !marks.has(token) || !mark) invalid()
               marks.delete(token)
-              try { persist(() => database.transaction(() => { assertNative(); recorder.settle(mark!, outcome) }).immediate()) }
+              try { persist(() => database.transaction(() => {
+                assertNative()
+                budget.settle(budgetFlight!, mark!, () => recorder.settle(mark!, outcome))
+              }).immediate()) }
               finally { pending -= 1 }
             },
           })
@@ -134,8 +143,11 @@ export function prepareReferenceEmbeddingDocument(input: {
         finish() {
           if (!flights.has(flight) || pending !== 0) invalid()
           flights.delete(flight)
-          release()
-          release = () => {}
+          try { budget.finish(budgetFlight!) }
+          finally {
+            release()
+            release = () => {}
+          }
         },
       })
       issued = flight
@@ -144,6 +156,9 @@ export function prepareReferenceEmbeddingDocument(input: {
     })
   } catch (error) {
     if (issued) flights.delete(issued)
+    if (budgetFlight) {
+      try { budget.finish(budgetFlight) } catch { /* Preserve the issuance failure; no request escaped its rolled-back admission. */ }
+    }
     release()
     throw error
   }

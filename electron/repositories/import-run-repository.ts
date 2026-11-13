@@ -1248,6 +1248,58 @@ function completedChapterManifest(
   }]))
 }
 
+function completedManifestSnapshot(
+  purpose: ImportPurpose,
+  chapter: Pick<NormalizedImportRunChapter, 'number' | 'sourceId' | 'sourceChapterNumber' | 'title' | 'contentFingerprint' | 'contentSize'>,
+): { snapshotRunId: string; snapshotChapterNumber: number } {
+  const selected = db().prepare(`
+    SELECT chapters.run_id AS snapshot_run_id, chapters.chapter_number AS snapshot_chapter_number,
+           chapters.title, chapters.content_fingerprint, chapters.content_size,
+           chapters.content_snapshot, chapters.source_id, chapters.source_chapter_number
+    FROM import_run_chapters AS chapters
+    JOIN import_runs AS runs ON runs.id = chapters.run_id
+    JOIN import_source_chapter_map AS source_map
+      ON source_map.purpose = runs.purpose
+      AND source_map.source_id = ?
+      AND source_map.source_chapter_number = ?
+      AND source_map.chapter_number = ?
+    WHERE runs.purpose = ? AND runs.status = 'completed'
+      AND chapters.source_id = ? AND chapters.source_chapter_number = ?
+    ORDER BY runs.completed_at DESC, runs.rowid DESC, chapters.chapter_number DESC
+    LIMIT 1
+  `).get(chapter.sourceId, chapter.sourceChapterNumber, chapter.number, purpose,
+    chapter.sourceId, chapter.sourceChapterNumber) as {
+      snapshot_run_id: string
+      snapshot_chapter_number: number
+      title: string
+      content_fingerprint: string
+      content_size: number
+      content_snapshot: string
+      source_id: string
+      source_chapter_number: number
+    } | undefined
+  if (!selected
+    || selected.source_id !== chapter.sourceId
+    || selected.source_chapter_number !== chapter.sourceChapterNumber
+    || selected.title !== chapter.title
+    || selected.content_fingerprint !== chapter.contentFingerprint
+    || selected.content_size !== chapter.contentSize) throw new Error('IMPORT_RUN_SNAPSHOT_CORRUPT')
+  assertFrozenChapterSnapshot(selected)
+  return { snapshotRunId: selected.snapshot_run_id, snapshotChapterNumber: selected.snapshot_chapter_number }
+}
+
+function insertManifestSnapshotBinding(
+  runId: string,
+  chapter: Pick<NormalizedImportRunChapter, 'number' | 'sourceId' | 'sourceChapterNumber'>,
+  snapshotRunId: string,
+  snapshotChapterNumber: number,
+): void {
+  db().prepare(`INSERT INTO reference_import_manifest_chapters(
+    import_run_id,chapter_number,snapshot_run_id,snapshot_chapter_number,source_id,source_chapter_number
+  ) VALUES(?,?,?,?,?,?)`).run(runId, chapter.number, snapshotRunId, snapshotChapterNumber,
+    chapter.sourceId, chapter.sourceChapterNumber)
+}
+
 function assignStableChapterNumbers(
   purpose: ImportPurpose,
   chapters: NormalizedImportRunChapter[],
@@ -1996,6 +2048,15 @@ export class ImportRunRepository {
       for (const chapter of newChapters) {
         insertChapter.run(runId, chapter.number, runId, chapter.sourceId, chapter.sourceChapterNumber)
       }
+      if (run.purpose === 'reference') {
+        const newChapterNumbers = new Set(newChapters.map(chapter => chapter.number))
+        for (const chapter of chapters) {
+          const snapshot = newChapterNumbers.has(chapter.number)
+            ? { snapshotRunId: runId, snapshotChapterNumber: chapter.number }
+            : completedManifestSnapshot(run.purpose, chapter)
+          insertManifestSnapshotBinding(runId, chapter, snapshot.snapshotRunId, snapshot.snapshotChapterNumber)
+        }
+      }
       db().prepare(`
         UPDATE import_runs
         SET stage = 'prepared', status = 'ready', manifest_fingerprint = ?,
@@ -2304,6 +2365,15 @@ export class ImportRunRepository {
           )
         }
       }
+      if (candidate.purpose === 'reference') {
+        const newChapterNumbers = new Set(chaptersToPersist.map(chapter => chapter.number))
+        for (const chapter of chapters) {
+          const snapshot = newChapterNumbers.has(chapter.number)
+            ? { snapshotRunId: runId, snapshotChapterNumber: chapter.number }
+            : completedManifestSnapshot(candidate.purpose, chapter)
+          insertManifestSnapshotBinding(runId, chapter, snapshot.snapshotRunId, snapshot.snapshotChapterNumber)
+        }
+      }
       const created = readRunRow(runId)
       if (!created) throw new Error('IMPORT_RUN_CREATE_FAILED')
       return {
@@ -2343,6 +2413,61 @@ export class ImportRunRepository {
       throw new Error('IMPORT_RUN_GRANT_SCOPE_INVALID')
     }
     return { runId: row.id, manifestFingerprint: row.manifest_fingerprint, status: row.status, stage: row.stage }
+  }
+
+  /** Revalidates the complete immutable reference manifest while releasing each chapter after its callback. */
+  static streamValidatedReferenceManifest(
+    runId: string,
+    context: CapturedImportRunContext,
+    onChapter?: (chapter: ImportRunChapterSnapshot) => void,
+  ): { runId: string; rootRunId: string; manifestFingerprint: string; chapterCount: number } {
+    const database = db(context)
+    const run = readRunRow(runId, database)
+    if (!run || run.purpose !== 'reference' || run.root_run_id === '') throw new Error('IMPORT_RUN_REFERENCE_UNBOUND')
+    assertCapturedReference(run, context)
+    readPortableRuntimeFreeze(context.canonicalRoot).assertMutable('import_runs', run.id)
+    if (!SHA256.test(run.manifest_fingerprint) || !Number.isSafeInteger(run.manifest_chapter_count)
+      || run.manifest_chapter_count < 1) throw new Error('IMPORT_RUN_GRANT_SCOPE_INVALID')
+
+    const hash = createHash('sha256').update('{"purpose":"reference","chapters":[', 'utf8')
+    const statement = database.prepare(`SELECT binding.chapter_number AS chapter_number, binding.source_id,
+      binding.source_chapter_number, snapshot.title, snapshot.content_fingerprint,
+      snapshot.content_size, snapshot.content_snapshot, binding.snapshot_run_id,
+      snapshot_run.purpose AS snapshot_purpose, snapshot_run.status AS snapshot_status,
+      snapshot_run.root_run_id AS snapshot_root_run_id
+      FROM reference_import_manifest_chapters AS binding
+      JOIN import_run_chapters AS snapshot
+        ON snapshot.run_id=binding.snapshot_run_id AND snapshot.chapter_number=binding.snapshot_chapter_number
+      JOIN import_runs AS snapshot_run ON snapshot_run.id=binding.snapshot_run_id
+      WHERE binding.import_run_id=? ORDER BY binding.chapter_number ASC`)
+    let count = 0
+    let totalSize = 0
+    let previousChapterNumber = 0
+    for (const row of statement.iterate(runId) as Iterable<ImportRunChapterRow & {
+      snapshot_run_id: string; snapshot_purpose: string; snapshot_status: string; snapshot_root_run_id: string
+    }>) {
+      const chapter = chapterRowToSnapshot(row)
+      count += 1
+      if (!Number.isSafeInteger(chapter.number) || chapter.number < 1
+        || chapter.number <= previousChapterNumber) throw new Error('IMPORT_RUN_SNAPSHOT_CORRUPT')
+      if (row.snapshot_purpose !== 'reference'
+        || row.snapshot_root_run_id !== run.root_run_id && row.snapshot_status !== 'completed') {
+        throw new Error('IMPORT_RUN_SNAPSHOT_CORRUPT')
+      }
+      previousChapterNumber = chapter.number
+      totalSize += chapter.contentSize
+      if (!Number.isSafeInteger(totalSize)) throw new Error('IMPORT_RUN_SNAPSHOT_CORRUPT')
+      if (count > 1) hash.update(',', 'utf8')
+      hash.update(JSON.stringify({ number: chapter.number, sourceId: row.source_id,
+        sourceChapterNumber: row.source_chapter_number, title: chapter.title,
+        contentFingerprint: chapter.contentFingerprint, contentSize: chapter.contentSize }), 'utf8')
+      onChapter?.(chapter)
+    }
+    hash.update(']}', 'utf8')
+    if (count !== run.manifest_chapter_count || totalSize !== run.manifest_content_size
+      || hash.digest('hex') !== run.manifest_fingerprint) throw new Error('IMPORT_RUN_SNAPSHOT_CORRUPT')
+    return { runId: run.id, rootRunId: run.root_run_id,
+      manifestFingerprint: run.manifest_fingerprint, chapterCount: count }
   }
 
   static listResumable(): ImportRunSnapshot[] {
@@ -2601,7 +2726,20 @@ export class ImportRunRepository {
 
   /** Persisted grant history cannot fall back to an unissued legacy executor. */
   static assertLegacyReferenceImportAllowed(runId: string, database: Database.Database = db()): void {
-    if (database.prepare('SELECT 1 FROM reference_import_grants WHERE import_run_id=? LIMIT 1').get(runId)) {
+    const row = database.prepare('SELECT root_run_id FROM import_runs WHERE id=? AND purpose=?').get(runId, 'reference') as
+      { root_run_id: string } | undefined
+    if (!row) return
+    const history = database.prepare(`SELECT 1 FROM import_runs r WHERE r.root_run_id=? AND (
+      r.execution_epoch>0 OR
+      (r.stage NOT IN ('parsing','prepared') AND NOT (
+        r.stage='knowledge' AND r.status='ready' AND r.execution_epoch=0
+      )) OR
+      EXISTS(SELECT 1 FROM reference_import_grants g WHERE g.import_run_id=r.id) OR
+      EXISTS(SELECT 1 FROM reference_embedding_dispatches d WHERE d.import_run_id=r.id) OR
+      EXISTS(SELECT 1 FROM import_run_knowledge_receipts k WHERE k.run_id=r.id)
+    ) LIMIT 1`).get(row.root_run_id)
+    const budget = database.prepare('SELECT 1 FROM reference_embedding_budgets WHERE root_run_id=? LIMIT 1').get(row.root_run_id)
+    if (history || budget) {
       throw new Error('IMPORT_RUN_REFERENCE_UNBOUND')
     }
   }
@@ -2743,6 +2881,13 @@ export class ImportRunRepository {
                  title, content_fingerprint, content_size, content_snapshot
           FROM import_run_chapters WHERE run_id = ? ORDER BY chapter_number
         `).run(normalizedNextId, runId)
+        if (source.purpose === 'reference') {
+          db().prepare(`INSERT INTO reference_import_manifest_chapters(
+            import_run_id,chapter_number,snapshot_run_id,snapshot_chapter_number,source_id,source_chapter_number
+          ) SELECT ?,chapter_number,snapshot_run_id,snapshot_chapter_number,source_id,source_chapter_number
+            FROM reference_import_manifest_chapters WHERE import_run_id=? ORDER BY chapter_number`)
+            .run(normalizedNextId, runId)
+        }
       }
       return this.get(normalizedNextId)!
     })()

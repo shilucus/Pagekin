@@ -6,7 +6,7 @@ import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeProjectDatabase, createProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
-import { getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
 import { migrateSchema, verifySchema } from '../../migrations/runner'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
@@ -108,14 +108,15 @@ describe('reference embedding dispatch portable history', () => {
     closeProjectDatabase()
     const old = new Database(f.databasePath)
     try {
-      old.exec('DROP TABLE reference_embedding_dispatches')
+      old.exec('DROP TABLE reference_import_manifest_chapters; DROP TABLE reference_embedding_budgets; DROP TABLE reference_embedding_dispatches')
       old.pragma('user_version=16')
       expect(verifySchema(new SqliteSchemaAdapter(old), getDesktopMigrationRegistry(), 16).version).toBe(16)
     } finally { old.close() }
     const before = probeProjectSqlite({ databasePath: f.databasePath })
     initProjectDatabase(f.root)
-    expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(17)
+    expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
     expect(getProjectDb()!.prepare('SELECT * FROM reference_embedding_dispatches').all()).toEqual([])
+    expect(getProjectDb()!.prepare('SELECT * FROM reference_embedding_budgets').all()).toEqual([])
     expect(probeProjectSqlite({ databasePath: f.databasePath }).preEmbeddingDispatchDomain).toEqual(before.domain)
   })
 
@@ -240,8 +241,9 @@ describe('reference embedding dispatch portable history', () => {
     expect(fs.readFileSync(databasePath)).toEqual(bytes)
     expect(fs.readFileSync(archivePath)).toEqual(archiveBytes)
     initProjectDatabase(target)
-    expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(17)
+    expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
     expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM reference_embedding_dispatches').pluck().get()).toBe(0)
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM reference_embedding_budgets').pluck().get()).toBe(0)
     expect(getProjectDb()!.prepare('SELECT state FROM import_reference_documents WHERE document_id=?').pluck().get(documentId)).toBe('prepared')
     expect(getProjectDb()!.prepare("SELECT core_outline FROM project_core WHERE id='main'").pluck().get()).toBe('Fictional schema16 outline')
     expect(getProjectDb()!.prepare('SELECT title,notes FROM blueprints WHERE chapter_number=3').get()).toEqual({ title: 'Fictional schema16 blueprint', notes: 'Author note' })

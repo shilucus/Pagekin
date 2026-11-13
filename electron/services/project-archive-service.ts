@@ -127,6 +127,8 @@ const HISTORY_ID_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.f
   runtime_feedback_grants: ['grant_id'],
   reference_import_grants: ['grant_id'],
   reference_embedding_dispatches: ['dispatch_id'],
+  reference_embedding_budgets: ['root_run_id'],
+  reference_import_manifest_chapters: ['import_run_id', 'chapter_number'],
   review_cycle_merges: ['cycle_id'],
   review_cycles: ['cycle_id'],
   review_findings: ['cycle_id', 'finding_id'],
@@ -999,6 +1001,10 @@ export function sanitizePortableDatabase(databasePath: string): {
           ? db.prepare(`UPDATE ${quote(physical)} SET ${updates.map(column => `${quote(column.name)}=?`).join(',')} WHERE rowid=?`)
           : null
         for (const row of rows) {
+          if (table === 'reference_import_manifest_chapters') {
+            safeId(row.source_id)
+            safeId(row.snapshot_run_id)
+          }
           const reviewProof = table === 'generation_artifacts' ? reviewRuns.has(String(row.run_id))
             : reviewRoots.has(String(row.root_action_id))
           if (hasProjection || hasHistory || domainHistory.has(`${table}:${recordId(table, row, Number(row.__portable_rowid__))}`)) {

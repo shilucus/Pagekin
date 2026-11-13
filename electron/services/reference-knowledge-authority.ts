@@ -5,11 +5,14 @@ import { ReferenceImportGrantRepository } from '../repositories/reference-import
 import { assertReferenceImportGrantOperationId, type ReferenceImportGrant, type ReferenceImportGrantRef } from '../../src/shared/reference-import-grant'
 import type { ImportRunExecutionLease, ImportRunStartResult } from '../../src/shared/import-run'
 import { normalizeEmbeddingOptions, type EmbeddingModel } from '../../src/shared/embedding-options'
+import { chunkText } from '../embedding'
+import { ReferenceEmbeddingBudgetRepository, type ReferenceEmbeddingBudgetCapability } from '../repositories/reference-embedding-budget-repository'
 import type { PrepareReferenceKnowledgeRequest, ReferenceKnowledgeImportResult,
   ReferenceKnowledgeReference } from '../../src/shared/reference-knowledge-contract'
 import { captureReferenceImportAdmission, type ReferenceImportAdmission } from './reference-import-admission'
 import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 import { projectRuntimeHost, type ProjectRuntime } from './project-runtime'
+import { referenceEmbeddingBudgetFailure, type ReferenceEmbeddingBudgetPlan } from './reference-embedding-budget-contract'
 
 interface Subject {
   isDestroyed(): boolean
@@ -40,6 +43,7 @@ interface Issuance {
   embedding: FrozenEmbedding
   requestHash: string
   admission: ReferenceImportAdmission
+  budget: ReferenceEmbeddingBudgetCapability
   inFlight: number
   lifecycle: { revoked: boolean; destroyed: boolean }
   destroyedListener: (() => void) | null
@@ -98,6 +102,7 @@ export class ReferenceKnowledgeAuthority {
   private readonly runtime: ProjectRuntime
   private readonly resources: ReferenceImportResources
   private readonly context: CapturedImportRunContext
+  private readonly budgets: ReferenceEmbeddingBudgetRepository
   private readonly issuances = new Map<string, Issuance>()
   private readonly cleanupFailures = new Map<string, Error>()
   private retired = false
@@ -106,6 +111,10 @@ export class ReferenceKnowledgeAuthority {
     this.runtime = runtime
     this.resources = options.resources
     this.context = Object.freeze({ database: runtime.database, canonicalRoot: runtime.canonicalRoot, projectId: runtime.projectId })
+    this.budgets = new ReferenceEmbeddingBudgetRepository(runtime.database, {
+      assertCurrent: () => this.assertRuntime(false),
+      isFrozen: id => readPortableRuntimeFreeze(runtime.canonicalRoot).isFrozen('reference_embedding_budgets', id),
+    })
     this.assertRuntime(false)
   }
 
@@ -220,10 +229,36 @@ export class ReferenceKnowledgeAuthority {
     const scope = ImportRunRepository.captureReferenceGrantScope(request.runId, this.context)
     if (scope.status === 'completed') throw failure('KNOWLEDGE_BASE_REFERENCE_RUN_COMPLETED')
     const embedding = cloneEmbedding(this.options.captureEmbedding())
+    this.budgets.preflight(request.runId)
+    const currentBudget = this.budgets.get(request.runId)
+    let requestLimit = 0
+    const options = normalizeEmbeddingOptions(embedding.model.embeddingOptions)
+    const validatedManifest = ImportRunRepository.streamValidatedReferenceManifest(
+      request.runId, this.context, currentBudget ? undefined : chapter => {
+        const chunks = chunkText(chapter.content, options.chunkSize, options.chunkOverlap).length
+        const requests = Math.ceil(chunks / options.batchSize)
+        requestLimit += requests
+        if (!Number.isSafeInteger(requestLimit)) referenceEmbeddingBudgetFailure('KNOWLEDGE_BASE_REFERENCE_BUDGET_INVALID')
+      })
+    if (validatedManifest.manifestFingerprint !== scope.manifestFingerprint) {
+      referenceEmbeddingBudgetFailure('KNOWLEDGE_BASE_REFERENCE_BUDGET_PLAN_CONFLICT')
+    }
+    const plan: ReferenceEmbeddingBudgetPlan | undefined = currentBudget ? undefined : {
+      chunkSize: options.chunkSize, chunkOverlap: options.chunkOverlap, batchSize: options.batchSize, requestLimit,
+    }
+    if (!currentBudget && requestLimit < 1) referenceEmbeddingBudgetFailure('KNOWLEDGE_BASE_REFERENCE_BUDGET_INVALID')
     const grantId = randomUUID()
     const reference = Object.freeze({ projectId: this.runtime.projectId, runId: request.runId, grantId, revision: 1 })
     const lifecycle = { revoked: false, destroyed: false }
     const started = this.context.database.transaction(() => {
+      const rechecked = ImportRunRepository.streamValidatedReferenceManifest(request.runId, this.context)
+      if (rechecked.rootRunId !== validatedManifest.rootRunId
+        || rechecked.manifestFingerprint !== validatedManifest.manifestFingerprint
+        || rechecked.chapterCount !== validatedManifest.chapterCount) {
+        referenceEmbeddingBudgetFailure('KNOWLEDGE_BASE_REFERENCE_BUDGET_PLAN_CONFLICT')
+      }
+      const budget = this.budgets.prepare({ runId: request.runId,
+        manifestFingerprint: scope.manifestFingerprint, ...(plan ? { plan } : {}) })
       const execution = ImportRunRepository.startOrResume(request.runId, request.executionOwner, Date.now(), undefined, this.context)
       const hash = requestHash({ projectId: this.runtime.projectId, root: this.runtime.canonicalRoot,
         nativeIdentity: this.resources.databaseIdentity, epoch: this.resources.executionEpoch, runId: request.runId, owner: execution.execution.owner,
@@ -244,8 +279,8 @@ export class ReferenceKnowledgeAuthority {
       }
       const admission = captureReferenceImportAdmission(this.runtime, grantRef(reference), hash, () => {
         if (this.retired || lifecycle.revoked || lifecycle.destroyed) throw failure('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REVOKED')
-      })
-      return { execution: execution.execution, reference, grant, hash, admission, lifecycle, revoked }
+      }, { repository: this.budgets, capability: budget })
+      return { execution: execution.execution, reference, grant, hash, admission, budget, lifecycle, revoked }
     }).immediate()
     for (const old of started.revoked) {
       old.lifecycle.revoked = true
@@ -254,7 +289,7 @@ export class ReferenceKnowledgeAuthority {
     }
     const issuance: Issuance = { sender: subject, reference: started.reference, operationId: request.operationId, runId: request.runId,
       manifestFingerprint: scope.manifestFingerprint, execution: started.execution, embedding, requestHash: started.hash,
-      admission: started.admission, lifecycle: started.lifecycle, inFlight: 0, destroyedListener: null, resumed: false }
+      admission: started.admission, budget: started.budget, lifecycle: started.lifecycle, inFlight: 0, destroyedListener: null, resumed: false }
     this.issuances.set(started.reference.grantId, issuance)
     const destroyedListener = () => {
       issuance.lifecycle.destroyed = true
@@ -297,8 +332,11 @@ export class ReferenceKnowledgeAuthority {
       if (result.success) {
         if (!result.docId) throw failure('KNOWLEDGE_BASE_REFERENCE_DOCUMENT_INCOMPLETE')
         issuance.admission.withTransaction(this.resources, issuance.runId,
-          () => ImportRunRepository.commitReferenceImportReceipt(issuance.runId, issuance.execution,
-            request.chapterNumber, result!.docId!, this.context.database))
+          () => {
+            issuance.admission.budget!.assertEffect()
+            ImportRunRepository.commitReferenceImportReceipt(issuance.runId, issuance.execution,
+              request.chapterNumber, result!.docId!, this.context.database)
+          })
       }
     } catch (error) { primaryFailure = safeFailure(error) }
     finally {

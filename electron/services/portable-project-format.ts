@@ -8,7 +8,7 @@ import fieldPolicyDocument from './portable-project-field-policy.json'
 export const PORTABLE_PROJECT_FORMAT_VERSION = 1 as const
 export const PORTABLE_SOURCE_SCHEMA_VERSION = CURRENT_DESKTOP_SCHEMA_VERSION
 /** Old packages are verified at their declared version before the isolated restore copy is migrated. */
-export const PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS = Object.freeze([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, PORTABLE_SOURCE_SCHEMA_VERSION] as const)
+export const PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS = Object.freeze([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, PORTABLE_SOURCE_SCHEMA_VERSION] as const)
 export type PortableSourceSchemaVersion = typeof PORTABLE_READABLE_SOURCE_SCHEMA_VERSIONS[number]
 
 export type PortableFieldDisposition = 'preserve-domain' | 'historical-nonreplayable'
@@ -19,7 +19,7 @@ export interface PortableFieldPolicy {
   disposition: PortableFieldDisposition
   validator: string
   consumer: string
-  origin: 'signed-s01' | 'm01-m05-delta' | 'm06-delta' | 'm07-delta' | 'm08-delta' | 'm09-delta' | 'm10-delta' | 'm11-delta' | 'm12-delta' | 'm13-delta' | 'm14-delta' | 'm15-delta' | 'm16-delta' | 'registered-donor'
+  origin: 'signed-s01' | 'm01-m05-delta' | 'm06-delta' | 'm07-delta' | 'm08-delta' | 'm09-delta' | 'm10-delta' | 'm11-delta' | 'm12-delta' | 'm13-delta' | 'm14-delta' | 'm15-delta' | 'm16-delta' | 'm17-delta' | 'registered-donor'
   signedDisposition: string | null
 }
 
@@ -43,6 +43,7 @@ const m13Tables = new Set<string>(fieldPolicyDocument.m13Tables)
 const m14Tables = new Set<string>(fieldPolicyDocument.m14Tables)
 const m15Tables = new Set<string>(fieldPolicyDocument.m15Tables)
 const m16Tables = new Set<string>(fieldPolicyDocument.m16Tables)
+const m17Tables = new Set<string>(fieldPolicyDocument.m17Tables)
 const deltaCharacterFields = new Set<string>(fieldPolicyDocument.deltaCharacterFields)
 const optionalFields = new Set<string>(fieldPolicyDocument.optionalFields)
 const signedOverrides = fieldPolicyDocument.signedOverrides as Record<string, string>
@@ -63,7 +64,7 @@ function loadFieldPolicy(): ReadonlyMap<string, PortableFieldPolicy> {
       const key = `${table}.${field}`
       const delta = optionalFields.has(key) || deltaTables.has(table) || m06Tables.has(table) || m07Fields.has(key) || m08Tables.has(table)
         || m09Tables.has(table) || m09Fields.has(key) || m10Tables.has(table) || m11Tables.has(table) || m12Tables.has(table) || m13Tables.has(table) || m14Tables.has(table)
-        || m15Tables.has(table) || m16Tables.has(table) || table === 'characters' && deltaCharacterFields.has(field)
+        || m15Tables.has(table) || m16Tables.has(table) || m17Tables.has(table) || table === 'characters' && deltaCharacterFields.has(field)
       const signedDisposition = delta ? null : signedOverrides[key] ?? signedDefaults[code]
       if (!field || !rule || rule.length !== 3 || !PORTABLE_FIELD_DISPOSITIONS.has(rule[0])
         || typeof rule[1] !== 'string' || !rule[1] || typeof rule[2] !== 'string' || !rule[2]
@@ -72,7 +73,7 @@ function loadFieldPolicy(): ReadonlyMap<string, PortableFieldPolicy> {
       }
       result.set(key, Object.freeze({ disposition: rule[0], validator: rule[1], consumer: rule[2],
         origin: optionalFields.has(key) ? 'registered-donor'
-          : m16Tables.has(table) ? 'm16-delta' : m15Tables.has(table) ? 'm15-delta' : m14Tables.has(table) ? 'm14-delta' : m13Tables.has(table) ? 'm13-delta' : m12Tables.has(table) ? 'm12-delta' : m11Tables.has(table) ? 'm11-delta' : m10Tables.has(table) ? 'm10-delta' : m09Tables.has(table) || m09Fields.has(key) ? 'm09-delta'
+          : m17Tables.has(table) ? 'm17-delta' : m16Tables.has(table) ? 'm16-delta' : m15Tables.has(table) ? 'm15-delta' : m14Tables.has(table) ? 'm14-delta' : m13Tables.has(table) ? 'm13-delta' : m12Tables.has(table) ? 'm12-delta' : m11Tables.has(table) ? 'm11-delta' : m10Tables.has(table) ? 'm10-delta' : m09Tables.has(table) || m09Fields.has(key) ? 'm09-delta'
             : m08Tables.has(table) ? 'm08-delta' : m06Tables.has(table) ? 'm06-delta'
             : m07Fields.has(key) ? 'm07-delta' : delta ? 'm01-m05-delta' : 'signed-s01', signedDisposition }))
     }
@@ -104,7 +105,7 @@ const liveRowViews = new Set<string>(LIVE_ROW_VIEWS.map(item => item.view))
  * A schema-7 source predates M07: no views, the managed tables under their original names, and none of M07's drafts columns.
  * Schema 8 includes M07, 9 adds field feedback, 10 adds outline ranges, 11 adds runtime grants, 12 adds recovery tails,
  * 13 adds historical workflow driver tasks, 14 batch effects, 15 import grants, 16 local blueprint revision fences,
- * and 17 reference embedding dispatch history.
+ * 17 reference embedding dispatch history, and 18 embedding budget history.
  * Policy uses original logical names on all readable versions.
  */
 export function assertPortableSourceSchema(database: Database.Database,
@@ -122,7 +123,8 @@ export function assertPortableSourceSchema(database: Database.Database,
     && (version >= 14 || !m13Tables.has(key.split('.')[0]!))
     && (version >= 15 || !m14Tables.has(key.split('.')[0]!))
     && (version >= 16 || !m15Tables.has(key.split('.')[0]!))
-    && (version >= 17 || !m16Tables.has(key.split('.')[0]!))))
+    && (version >= 17 || !m16Tables.has(key.split('.')[0]!))
+    && (version >= 18 || !m17Tables.has(key.split('.')[0]!))))
   const admittedViews = version >= 8 ? liveRowViews : new Set<string>()
   const actual = new Set<string>()
   const objects = database.prepare("SELECT name,type FROM pragma_table_list WHERE schema='main' AND name NOT LIKE 'sqlite_%' ORDER BY name")

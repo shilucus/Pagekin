@@ -576,9 +576,48 @@ it.each(['standard','donor'] as const)('preserves schema16 %s domain and bytes a
  expect(probeProjectSqlite({databasePath:f.target})).toEqual(before)
  expect(fs.readFileSync(f.target)).toEqual(original)
  const upgraded=upgradeProjectSqlite({databasePath:f.target})
- expect(upgraded.schemaVersion).toBe(17)
+ expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
  expect(upgraded.preEmbeddingDispatchDomain).toEqual(before.domain)
  expect(upgraded.domain.tableCounts.reference_embedding_dispatches).toBeUndefined()
+ expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
+})
+it.each(['standard','donor'] as const)('preserves schema17 %s bytes/domain across failed M17 and unknown-history retry', async variant => {
+ const f=fixture()
+ if(variant==='donor') {
+  const row=f.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='characters'").get() as {sql:string}
+  f.db.exec('ALTER TABLE characters RENAME TO characters_without_avatar')
+  f.db.exec(row.sql.replace("      cs_location TEXT DEFAULT '',", "      avatar TEXT NOT NULL DEFAULT '',\n      cs_location TEXT DEFAULT '',"))
+  f.db.exec('DROP TABLE characters_without_avatar')
+ }
+ await backupProjectSqlite({sourceDatabasePath:f.source,targetDatabasePath:f.target,targetVersion:17})
+ const source=new Database(f.target)
+ try {
+  source.prepare(`INSERT INTO import_runs
+   (id,purpose,root_run_id,effect_namespace,source_fingerprint,manifest_fingerprint,locale,stage,status,execution_epoch,total_chapters,manifest_chapter_count)
+   VALUES('legacy-budget-root','reference','legacy-budget-root','import:reference:legacy-budget-root',?,?,'en-US','knowledge','failed',1,1,1)`)
+   .run('a'.repeat(64),'b'.repeat(64))
+  source.prepare(`INSERT INTO import_run_chapters
+   (run_id,chapter_number,source_id,source_chapter_number,title,content_fingerprint,content_size,content_snapshot)
+   VALUES('legacy-budget-root',7,'fictional-source',3,'Fictional chapter',?,9,'Fictional')`).run('c'.repeat(64))
+ } finally { source.close() }
+ const before=probeProjectSqlite({databasePath:f.target}), original=fs.readFileSync(f.target), registry=getDesktopMigrationRegistry()
+ const failing={...registry,implementations:registry.implementations.map(step=>step.id==='M17'
+  ? {...step,migrate:(reader: Parameters<typeof step.migrate>[0])=>{step.migrate(reader);throw new Error('embedding-budget-migration-interruption')}} : step)}
+ expect(()=>upgradeProjectSqlite({databasePath:f.target,registry:failing})).toThrow('embedding-budget-migration-interruption')
+ expect(probeProjectSqlite({databasePath:f.target})).toEqual(before)
+ expect(fs.readFileSync(f.target)).toEqual(original)
+ const upgraded=upgradeProjectSqlite({databasePath:f.target})
+ expect(upgraded.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
+ expect(upgraded.preEmbeddingBudgetDomain).toEqual(before.domain)
+ expect(upgraded.domain.tableCounts.reference_embedding_budgets).toBe(1)
+ expect(upgraded.domain.tableCounts.reference_import_manifest_chapters).toBe(1)
+ const installed=new Database(f.target,{readonly:true})
+ try {
+  expect(installed.prepare('SELECT state,spent_requests,active_elapsed_ms,request_limit,active_limit_ms FROM reference_embedding_budgets').all())
+   .toEqual([{state:'legacy_unbudgeted',spent_requests:null,active_elapsed_ms:null,request_limit:null,active_limit_ms:null}])
+  expect(installed.prepare('SELECT * FROM reference_import_manifest_chapters').all())
+   .toEqual([{import_run_id:'legacy-budget-root',chapter_number:7,snapshot_run_id:'legacy-budget-root',snapshot_chapter_number:7,source_id:'fictional-source',source_chapter_number:3}])
+ } finally { installed.close() }
  expect(verifyProjectSqlite({databasePath:f.target})).toEqual(upgraded)
 })
 it('resolves a trusted system scratch junction before validating its private snapshot', () => {

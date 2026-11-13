@@ -34,6 +34,8 @@ export type PortableRuntimeFreezeTable =
   | 'runtime_feedback_grants'
   | 'reference_import_grants'
   | 'reference_embedding_dispatches'
+  | 'reference_embedding_budgets'
+  | 'reference_import_manifest_chapters'
   | 'import_reference_documents'
   | 'workflow_tasks'
   | 'workflow_steps'
@@ -54,6 +56,7 @@ export class PortableRuntimeFreezeError extends Error {
 export interface PortableRuntimeFreezeGuard {
   readonly active: boolean
   isFrozen(table: PortableRuntimeFreezeTable, recordId: string): boolean
+  recordIds?(table: PortableRuntimeFreezeTable): readonly string[]
   projection?(table: string, recordId: string): Readonly<Record<string, unknown>> | null
   assertMutable(table: PortableRuntimeFreezeTable, recordId: string): void
 }
@@ -61,6 +64,7 @@ export interface PortableRuntimeFreezeGuard {
 const inactive: PortableRuntimeFreezeGuard = Object.freeze({
   active: false,
   isFrozen: () => false,
+  recordIds: () => [],
   assertMutable: () => {},
 })
 
@@ -177,6 +181,10 @@ export function parsePortableRuntimeFreeze(bytes: Buffer): PortableRuntimeFreeze
   return Object.freeze({
     active: true,
     isFrozen: (table: PortableRuntimeFreezeTable, recordId: string) => frozen.has(`${table}\u0000${recordId}`),
+    recordIds: (table: PortableRuntimeFreezeTable) => {
+      const prefix = `${table}\u0000`
+      return Object.freeze([...frozen].filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length)))
+    },
     projection: (table: string, recordId: string) => {
       const encoded = projections.get(`${table}\u0000${recordId}`)
       return encoded === undefined ? null : Object.freeze(JSON.parse(encoded) as Record<string, unknown>)

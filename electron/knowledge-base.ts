@@ -567,6 +567,7 @@ async function performReferenceTextImport(
     if (!resources) throw new Error('KNOWLEDGE_BASE_REFERENCE_ADMISSION_RESOURCES_REQUIRED')
     return admission.withTransaction(resources, runId, () => {
       assertAuthority()
+      admission.budget?.assertEffect()
       return operation()
     })
   }
@@ -688,6 +689,7 @@ async function performReferenceTextImport(
       }
       assertAuthority()
     }
+    admission?.budget?.assertEffect()
     const result = await addChunks(
       projectPath,
       documentId,

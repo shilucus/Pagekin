@@ -998,6 +998,22 @@
           "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; actual controller/KB and isolated fictional SQLite/Lance, controlled fetch only",
           "result": "Two zero-overlap retention expressions repaired after actual independent-golden red4/6; focused green6/6 and final serial10-file212/212, zero failed/pending/todo. Restored multiline controller29 passes with frozen default1/explicit2 and ordered vectors. Actual legacy FTS-only receipt/projection/chunks stay unchanged on incompatible corrected layout, zero fetch and B isolation; source/runtime independently accepted. Fresh typecheck/lint/color/i18n/build exit0.",
           "limitations": "Partial SCHED-001 correctness only; root/request/active-duration budget policy and dispatch/commit budget checks remain open. Legacy preservation does not prove embedded-vector migration or unmanaged IPC. Filtered legacy green1passed/40name-filtered and prior red are retained, not added to212. No browser/Electron/provider/platform run, full import migration, global registry37 pass or all35 final review. Feature remains in_progress/false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "ffa31e335c63cc907f7fdbc71f980be16c0cc676 + stage-60-source-manifest.json frozen source/test/ADR SHA256",
+          "artifactOrReceipt": "stage-60-evidence.md; .runtime/creation-runtime-modernization/stage60/six-field-integrated-final.json",
+          "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; actual registered foreground authority/KB, fictional SQLite/Lance and controlled fetch only",
+          "result": "ADR0071 adds first complete-manifest root budget, atomic physical mark/debit/activity-union and document/run effect guards, six-field logical-to-physical snapshot binding, same-root restart/no-refund, unknown/legacy fencing and schema18 portable history. Final12-file311/311 includes controller40/M1762/admission29; focused102/102, core186/186, migration252/252, portable132/132, import-repository191/191 and added11-file direct-consumer145/145 overlap and are not summed. Focused managed receipt9/9 is included in145. Fresh typecheck/lint/color/i18n/source build exit0; independent source/raw review accepted the narrow increment.",
+          "limitations": "Partial SCHED-001,still in_progress/false. Actual four-topic queries remain outside the new foreground-document budget and must share their existing generation-root budget after the separate same-slot unknown/new-begin nonce repair. Earlier failed runs,uncollected-controller209/exit1,244/249,consumer137/143 and focused2/9,7/9,8/9 are retained. Legacy started IPC refusal is a real compatibility change; managed tests do not prove every external legacy consumer migrated. No browser/Electron/provider/platform,literary-quality,whole import/adoption,registry-wide or all35 cumulative final qualification."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "ffa31e335c63cc907f7fdbc71f980be16c0cc676 + stage-60-source-manifest.json frozen source/test SHA256",
+          "artifactOrReceipt": "stage-60-evidence.md; .runtime/creation-runtime-modernization/stage60/six-field-integrated-final.console.log",
+          "environment": "Same311-assertion package; actual generateEmbeddings with eight fictional texts,four local fake-fetch batches per configuration,manual gates and10ms controlled delay",
+          "result": "One included observation case records request/completion4/4,peak1 versus2,ordered complete vectors and completion order0,1,2,3 versus1,0,2,3; elapsed75.8902/45.6669ms.",
+          "limitations": "Already included in311,not extra independent tests. Not production/controller/provider latency,responsiveness,statistical speedup or SLA. No new four-topic production performance qualification; feature remains in_progress/false."
         }
       ]
     },

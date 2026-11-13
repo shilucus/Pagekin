@@ -778,6 +778,7 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
     }
     if (authority.targetProjectId !== null || authority.originProjectId !== extracted.manifest.originProjectId
       || authority.snapshotGeneration !== extracted.manifest.snapshotGeneration
+      || authority.sourceSchemaVersion !== extracted.manifest.sourceSchemaVersion
       || authority.portableDatabaseSha256 !== databaseEntry.sha256
       || !extracted.manifest.transferReceiptIds.includes(authority.receiptId)
       || await hashFile(databasePath) !== authority.portableDatabaseSha256) fail('PORTABLE_RESTORE_INVALID')

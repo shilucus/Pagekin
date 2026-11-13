@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { openCanonicalProjectFixture } from '../../../test/helpers/canonical-project-fixture'
 import { captureReferenceImportResources, type ReferenceImportResources } from '../../knowledge-base'
 import { ImportRunRepository } from '../../repositories/import-run-repository'
+import { ReferenceEmbeddingBudgetRepository } from '../../repositories/reference-embedding-budget-repository'
 import { ReferenceImportGrantRepository, type ReferenceImportGrant, type ReferenceImportGrantRef } from '../../repositories/reference-import-grant-repository'
+import { chunkText } from '../../embedding'
 import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 import { projectRuntimeHost, type ProjectRuntime } from '../project-runtime'
 import { assertIssuedReferenceImportAdmission, captureReferenceImportAdmission } from '../reference-import-admission'
@@ -66,7 +68,7 @@ afterEach(() => {
   roots.length = 0
 })
 
-function fixture() {
+function fixture(withBudget = false) {
   const root = fs.mkdtempSync(path.join(parent, prefix))
   roots.push(root)
   openCanonicalProjectFixture(root)
@@ -76,17 +78,30 @@ function fixture() {
   ImportRunRepository.prepare({ runId, purpose: 'reference', sourceFingerprint: hash(`source:${content}`), locale: 'en-US',
     sourceDisplay: [{ displayName: 'Fictional reference.txt', mediaType: 'text/plain', size: Buffer.byteLength(content) }],
     chapters: [{ number: 1, title: 'One', content, contentSize: Buffer.byteLength(content), contentFingerprint: hash(content) }] })
-  const execution = ImportRunRepository.startOrResume(runId, 'fictional-owner', Date.now(), 60_000, runtime).execution
   const resources = captureReferenceImportResources(runtime)
   const grants = new ReferenceImportGrantRepository(runtime.database, { projectId: runtime.projectId, context: runtime,
     assertCurrent: () => projectRuntimeHost.assertOpen(runtime),
     isFrozen: grantId => readPortableRuntimeFreeze(root).isFrozen('reference_import_grants', grantId) })
   const scope = ImportRunRepository.captureReferenceGrantScope(runId, runtime)
-  const grant = grants.issue({ grantId: randomUUID(), operationKey: randomUUID(), runId,
-    manifestFingerprint: scope.manifestFingerprint, requestHash })
+  const budgets = withBudget ? new ReferenceEmbeddingBudgetRepository(runtime.database, {
+    assertCurrent: () => projectRuntimeHost.assertOpen(runtime),
+    isFrozen: id => readPortableRuntimeFreeze(root).isFrozen('reference_embedding_budgets', id),
+  }) : undefined
+  budgets?.preflight(runId)
+  const start = () => {
+    const chunkSize = 100, chunkOverlap = 0, batchSize = 1
+    const capability = budgets?.prepare({ runId, manifestFingerprint: scope.manifestFingerprint,
+      plan: { chunkSize, chunkOverlap, batchSize,
+        requestLimit: Math.ceil(chunkText(content, chunkSize, chunkOverlap).length / batchSize) } })
+    const execution = ImportRunRepository.startOrResume(runId, 'fictional-owner', Date.now(), 60_000, runtime).execution
+    const grant = grants.issue({ grantId: randomUUID(), operationKey: randomUUID(), runId,
+      manifestFingerprint: scope.manifestFingerprint, requestHash })
+    return { execution, grant, budget: budgets && capability ? { repository: budgets, capability } : undefined }
+  }
+  const { execution, grant, budget } = budgets ? runtime.database.transaction(start).immediate() : start()
   const ref: ReferenceImportGrantRef = { grantId: grant.grantId, revision: grant.revision, runId }
   runtime.database.exec('CREATE TEMP TABLE admission_effects(value TEXT NOT NULL)')
-  return { root, runtime, resources, grants, grant, ref, execution }
+  return { root, runtime, resources, grants, grant, ref, execution, budget }
 }
 
 function freeze(book: ReturnType<typeof fixture>, table: 'reference_import_grants' | 'import_runs') {
@@ -121,6 +136,52 @@ describe('main-only reference import admission', () => {
     expect(() => admission.assertCurrent(a.resources, runId)).not.toThrow()
     expect(a.runtime.database.serialize()).toEqual(before)
     expect(a.grants.listByRun(runId)).toEqual([a.grant])
+  })
+
+  it.each(['outside', 'inside'] as const)('captures a budget-bound grant %s a native transaction', location => {
+    const a = fixture(true), budget = a.budget!, database = a.runtime.database
+    const before = database.serialize(), activeTransactions: boolean[] = []
+    const original = ReferenceImportGrantRepository.prototype.assertActive
+    vi.spyOn(ReferenceImportGrantRepository.prototype, 'assertActive').mockImplementation(function (this: ReferenceImportGrantRepository, ref) {
+      activeTransactions.push(database.inTransaction)
+      return original.call(this, ref)
+    })
+    const capture = () => captureReferenceImportAdmission(a.runtime, a.ref, requestHash, undefined, budget)
+    const admission = location === 'inside' ? database.transaction(capture).immediate() : capture()
+    expect(activeTransactions.length).toBeGreaterThan(0)
+    expect(activeTransactions.every(Boolean)).toBe(true)
+    expect(() => admission.assertCurrent(a.resources, runId)).not.toThrow()
+    expect(() => admission.budget!.assertEffect()).not.toThrow()
+    expect(database.serialize()).toEqual(before)
+    expect(database.prepare('SELECT COUNT(*) FROM reference_embedding_dispatches').pluck().get()).toBe(0)
+    expect(database.prepare('SELECT * FROM admission_effects').all()).toEqual([])
+  })
+
+  it.each(['runId', 'manifestFingerprint'] as const)('rejects a budget capability with a mismatched %s', field => {
+    const a = fixture(true), budget = a.budget!, database = a.runtime.database
+    const before = database.serialize(), activeTransactions: boolean[] = []
+    const original = ReferenceImportGrantRepository.prototype.assertActive
+    vi.spyOn(ReferenceImportGrantRepository.prototype, 'assertActive').mockImplementation(function (this: ReferenceImportGrantRepository, ref) {
+      activeTransactions.push(database.inTransaction)
+      return original.call(this, ref)
+    })
+    const capability = { ...budget.capability, [field]: field === 'runId' ? 'another-run' : hash('another-manifest') }
+    expect(() => captureReferenceImportAdmission(a.runtime, a.ref, requestHash, undefined,
+      { repository: budget.repository, capability })).toThrow('REFERENCE_IMPORT_ADMISSION_INVALID')
+    expect(activeTransactions.length).toBeGreaterThan(0)
+    expect(activeTransactions.every(Boolean)).toBe(true)
+    expect(database.serialize()).toEqual(before)
+    expect(database.prepare('SELECT COUNT(*) FROM reference_embedding_dispatches').pluck().get()).toBe(0)
+    expect(database.prepare('SELECT * FROM admission_effects').all()).toEqual([])
+  })
+
+  it('still rejects a structurally identical forged budget capability at effect authorization', () => {
+    const a = fixture(true), budget = a.budget!, before = a.runtime.database.serialize()
+    const admission = captureReferenceImportAdmission(a.runtime, a.ref, requestHash, undefined,
+      { repository: budget.repository, capability: { ...budget.capability } })
+    expect(() => admission.budget!.assertEffect()).toThrow('KNOWLEDGE_BASE_REFERENCE_BUDGET_INVALID')
+    expect(a.runtime.database.serialize()).toEqual(before)
+    expect(a.runtime.database.prepare('SELECT COUNT(*) FROM reference_embedding_dispatches').pluck().get()).toBe(0)
   })
 
   it('rejects forged, spread, inherited and proxied admission objects', () => {

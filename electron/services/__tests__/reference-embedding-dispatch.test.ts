@@ -7,6 +7,7 @@ import { openCanonicalProjectFixture } from '../../../test/helpers/canonical-pro
 import { captureReferenceImportResources } from '../../knowledge-base'
 import { ImportRunRepository } from '../../repositories/import-run-repository'
 import { ReferenceImportGrantRepository } from '../../repositories/reference-import-grant-repository'
+import { ReferenceEmbeddingBudgetRepository } from '../../repositories/reference-embedding-budget-repository'
 import { readReferenceEmbeddingDispatches, ReferenceEmbeddingDispatchRepository } from '../../repositories/reference-embedding-dispatch-repository'
 import { captureReferenceImportAdmission } from '../reference-import-admission'
 import { assertNoReferenceEmbeddingDispatches, prepareReferenceEmbeddingDocument,
@@ -36,14 +37,25 @@ function book(name: string) {
     isFrozen: id => readPortableRuntimeFreeze(root).isFrozen('reference_import_grants', id) })
   const scope = ImportRunRepository.captureReferenceGrantScope(runId, runtime)
   const requestHash = hash(`request:${name}`)
-  const grant = grants.issue({ grantId: randomUUID(), operationKey: randomUUID(), runId,
-    manifestFingerprint: scope.manifestFingerprint, requestHash })
+  const budgets = new ReferenceEmbeddingBudgetRepository(runtime.database, {
+    assertCurrent: () => { projectRuntimeHost.assertOpen(runtime) },
+    isFrozen: id => readPortableRuntimeFreeze(root).isFrozen('reference_embedding_budgets', id),
+  })
+  budgets.preflight(runId)
+  const { grant, budget, execution } = runtime.database.transaction(() => {
+    // This recorder fixture explicitly exercises two batches, not the production plan calculator.
+    const budget = budgets.prepare({ runId, manifestFingerprint: scope.manifestFingerprint,
+      plan: { chunkSize: 100, chunkOverlap: 0, batchSize: 1, requestLimit: 2 } })
+    const grant = grants.issue({ grantId: randomUUID(), operationKey: randomUUID(), runId,
+      manifestFingerprint: scope.manifestFingerprint, requestHash })
+    const execution = ImportRunRepository.startOrResume(runId, `owner:${name}`, Date.now(), 60_000, runtime).execution
+    return { grant, budget, execution }
+  }).immediate()
   const ref = { grantId: grant.grantId, runId, revision: grant.revision }
-  const execution = ImportRunRepository.startOrResume(runId, `owner:${name}`, Date.now(), 60_000, runtime).execution
   const authority = { owner: execution.owner, epoch: execution.epoch }
   const binding = ImportRunRepository.resolveReferenceImportAuthority(runId, authority, 1, undefined, runtime.database)
   const resources = captureReferenceImportResources(runtime)
-  const admission = captureReferenceImportAdmission(runtime, ref, requestHash)
+  const admission = captureReferenceImportAdmission(runtime, ref, requestHash, undefined, { repository: budgets, capability: budget })
   const assertAuthority = () => {
     ImportRunRepository.resolveReferenceImportAuthority(runId, authority, 1, undefined, runtime.database)
   }
@@ -139,6 +151,14 @@ describe('native reference embedding dispatch recorder', () => {
     expect(() => prepareReferenceEmbeddingDocument(input)).toThrow('REFERENCE_IMPORT_ADMISSION_INVALID')
     expect(() => a.runtime.database.transaction(() => prepare())()).toThrow('REFERENCE_EMBEDDING_DISPATCH_INVALID')
     expect(a.runtime.database.prepare('SELECT COUNT(*) FROM import_reference_documents').pluck().get()).toBe(0)
+  })
+
+  it('rejects an issued admission without a budget before document insertion', () => {
+    const admission = captureReferenceImportAdmission(a.runtime, a.ref, hash('request:A'))
+    expect(() => prepareReferenceEmbeddingDocument({ resources: a.resources, admission, runId,
+      document: a.document, assertAuthority: a.assertAuthority })).toThrow('KNOWLEDGE_BASE_REFERENCE_BUDGET_REQUIRED')
+    expect(a.runtime.database.prepare('SELECT COUNT(*) FROM import_reference_documents').pluck().get()).toBe(0)
+    expect(rows()).toEqual([])
   })
 
   it('rejects cross-wired captured resources before any receipt or dispatch write', () => {

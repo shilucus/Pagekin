@@ -429,6 +429,86 @@ describe('ImportRunRepository', () => {
     `).get()).toEqual({ chapter_number: 1 })
     })
 
+    it('historical fixture normalization (not production admission): keeps colliding old snapshot numbers separate from stable source mappings', () => {
+      const firstRunId = 'legacy-collision-a'
+      const secondRunId = 'legacy-collision-b'
+      const first = chapter(1, 'First old source body.')
+      const second = chapter(1, 'Second old source body.')
+      ImportRunRepository.prepare(request([first], { runId: firstRunId }))
+      markRunCompleted(firstRunId)
+      ImportRunRepository.prepare(request([second], {
+        runId: secondRunId,
+        sourceFingerprint: 'b'.repeat(64),
+      }))
+      markRunCompleted(secondRunId)
+      expect(getProjectDb()!.prepare(`
+        SELECT chapter_number FROM import_run_chapters WHERE run_id = ?
+      `).get(secondRunId)).toEqual({ chapter_number: 2 })
+      closeProjectDatabase()
+
+      const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
+      legacy.pragma('foreign_keys = OFF')
+      legacy.exec(`
+        DROP TABLE import_source_chapter_map;
+        ALTER TABLE import_run_chapters RENAME TO import_run_chapters_current;
+        CREATE TABLE import_run_chapters (
+          run_id TEXT NOT NULL,
+          chapter_number INTEGER NOT NULL,
+          title TEXT NOT NULL DEFAULT '',
+          content_fingerprint TEXT NOT NULL,
+          content_size INTEGER NOT NULL,
+          content_snapshot TEXT NOT NULL,
+          PRIMARY KEY (run_id, chapter_number)
+        );
+      `)
+      legacy.prepare(`
+        INSERT INTO import_run_chapters (
+          run_id, chapter_number, title, content_fingerprint, content_size, content_snapshot
+        )
+        SELECT run_id, CASE WHEN run_id = ? THEN 1 ELSE chapter_number END,
+               title, content_fingerprint, content_size, content_snapshot
+        FROM import_run_chapters_current
+      `).run(secondRunId)
+      legacy.exec('DROP TABLE import_run_chapters_current')
+      legacy.close()
+
+      normalizeHistoricalFixture(root)
+      const database = getProjectDb()!
+      const readState = () => ({
+        mappings: database.prepare(`
+          SELECT purpose, source_id, source_chapter_number, chapter_number
+          FROM import_source_chapter_map ORDER BY chapter_number
+        `).all(),
+        snapshots: database.prepare(`
+          SELECT run_id, chapter_number, source_id, source_chapter_number,
+                 title, content_fingerprint, content_size, content_snapshot
+          FROM import_run_chapters ORDER BY run_id
+        `).all(),
+      })
+      const expected = {
+        mappings: [
+          { purpose: 'reference', source_id: `legacy:${'a'.repeat(64)}`, source_chapter_number: 1, chapter_number: 1 },
+          { purpose: 'reference', source_id: `legacy:${'b'.repeat(64)}`, source_chapter_number: 1, chapter_number: 2 },
+        ],
+        snapshots: [first, second].map((item, index) => ({
+          run_id: index === 0 ? firstRunId : secondRunId,
+          chapter_number: 1,
+          source_id: `legacy:${(index === 0 ? 'a' : 'b').repeat(64)}`,
+          source_chapter_number: 1,
+          title: item.title,
+          content_fingerprint: item.contentFingerprint,
+          content_size: item.contentSize,
+          content_snapshot: item.content,
+        })),
+      }
+      expect(readState()).toEqual(expected)
+
+      dropLiveRowViews(database)
+      initializeLegacyBaselineSchema(database)
+      createLiveRowViews(database)
+      expect(readState()).toEqual(expected)
+    })
+
     it('backfills a legacy manifest word count from its frozen chapter snapshots', () => {
       installLegacyRun(['甲😀', 'second'], 2)
 

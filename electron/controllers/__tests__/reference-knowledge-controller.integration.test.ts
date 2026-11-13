@@ -38,9 +38,11 @@ vi.mock('../../services/knowledge-base-loader', () => {
 import { createProjectDatabase, getProjectDb } from '../../database'
 import { openCanonicalProjectFixture } from '../../../test/helpers/canonical-project-fixture'
 import { ImportRunRepository } from '../../repositories/import-run-repository'
+import { chunkText } from '../../embedding'
 import { ReferenceImportGrantRepository } from '../../repositories/reference-import-grant-repository'
 import { projectAccess } from '../../services/project-access'
 import { projectRuntimeHost } from '../../services/project-runtime'
+import { getProjectDatabasePath } from '../../services/project-data-locator'
 import { ReferenceKnowledgeAuthority } from '../../services/reference-knowledge-authority'
 import { readPortableRuntimeFreeze } from '../../services/portable-runtime-freeze'
 import { translate } from '../../../src/i18n/core'
@@ -158,6 +160,36 @@ async function denied(operation: Promise<unknown>): Promise<void> {
   expect(result).toMatchObject({ success: false })
 }
 function count(table: string): number { return Number(db.prepare(`SELECT COUNT(*) FROM ${table}`).pluck().get()) }
+function removeUnstartedDefaultReferenceRun(): void {
+  expect(db.prepare('SELECT status,stage,execution_epoch FROM import_runs WHERE id=?').get(RUN))
+    .toEqual({ status: 'ready', stage: 'knowledge', execution_epoch: 0 })
+  const chapters = db.prepare(`SELECT source_id,source_chapter_number FROM import_run_chapters WHERE run_id=?`).all(RUN) as Array<{
+    source_id: string; source_chapter_number: number
+  }>
+  expect(chapters).toHaveLength(1)
+  const chapter = chapters[0]!
+  const mappings = db.prepare(`SELECT purpose,source_id,source_chapter_number,chapter_number
+    FROM import_source_chapter_map WHERE purpose='reference' AND source_id=? AND source_chapter_number=?`)
+    .all(chapter.source_id, chapter.source_chapter_number)
+  expect(mappings).toEqual([{ purpose: 'reference', source_id: chapter.source_id,
+    source_chapter_number: chapter.source_chapter_number, chapter_number: 1 }])
+  expect(db.prepare(`SELECT 1 FROM import_run_chapters WHERE run_id<>? AND source_id=? AND source_chapter_number=? LIMIT 1`)
+    .get(RUN, chapter.source_id, chapter.source_chapter_number)).toBeUndefined()
+  expect(db.prepare('SELECT 1 FROM import_runs WHERE base_run_id=? LIMIT 1').get(RUN)).toBeUndefined()
+  for (const [table, key] of [
+    ['reference_import_grants', 'import_run_id'],
+    ['reference_embedding_dispatches', 'import_run_id'],
+    ['import_run_knowledge_receipts', 'run_id'],
+    ['reference_embedding_budgets', 'root_run_id'],
+  ] as const) {
+    expect(db.prepare(`SELECT 1 FROM ${table} WHERE ${key}=? LIMIT 1`).get(RUN)).toBeUndefined()
+  }
+  expect(db.prepare('DELETE FROM import_runs WHERE id=?').run(RUN).changes).toBe(1)
+  expect(db.prepare(`DELETE FROM import_source_chapter_map
+    WHERE purpose=? AND source_id=? AND source_chapter_number=? AND chapter_number=?`)
+    .run('reference', chapter.source_id, chapter.source_chapter_number,
+      (mappings[0] as { chapter_number: number }).chapter_number).changes).toBe(1)
+}
 
 beforeEach(() => {
   mock.handlers.clear(); mock.selected = 'fictional-a'; mock.afterImport = null
@@ -190,6 +222,247 @@ afterEach(() => {
 })
 
 describe('registered reference knowledge controller with real native storage', () => {
+  it.each(['missing-binding', 'different-completed-snapshot', 'same-body-unfinished-cross-root'] as const)(
+    'rejects a corrupted full manifest before budget or grant creation (%s)', async corruption => {
+      const logicalChapter = ImportRunRepository.listChapterBatch(RUN, { afterChapterNumber: 0, limit: 10 })[0]!
+
+      if (corruption === 'missing-binding') {
+        expect(db.prepare('DELETE FROM reference_import_manifest_chapters WHERE import_run_id=? AND chapter_number=?')
+          .run(RUN, logicalChapter.number).changes).toBe(1)
+      } else {
+        const snapshotRunId = `fictional-manifest-snapshot-${randomUUID()}`
+        const content = corruption === 'different-completed-snapshot'
+          ? 'A different fictional manifest body.' : logicalChapter.content
+        const snapshot = ImportRunRepository.prepare({ runId: snapshotRunId, purpose: 'reference',
+          sourceFingerprint: hash(snapshotRunId), locale: 'en-US',
+          sourceDisplay: [{ displayName: 'snapshot.txt', mediaType: 'text/plain', size: Buffer.byteLength(content) }],
+          chapters: [{ number: 1, title: logicalChapter.title, content, contentSize: Buffer.byteLength(content),
+            contentFingerprint: hash(content) }] })
+        expect(snapshot.classification).toBe('new')
+        const physicalChapter = ImportRunRepository.listChapterBatch(snapshotRunId, { afterChapterNumber: 0, limit: 10 })[0]!
+        if (corruption === 'different-completed-snapshot') {
+          db.prepare(`UPDATE import_runs SET stage='completed',status='completed',resumable=0,completed_at=datetime('now') WHERE id=?`)
+            .run(snapshotRunId)
+        }
+        expect(db.prepare(`UPDATE reference_import_manifest_chapters
+          SET snapshot_run_id=?,snapshot_chapter_number=? WHERE import_run_id=? AND chapter_number=?`)
+          .run(snapshotRunId, physicalChapter.number, RUN, logicalChapter.number).changes).toBe(1)
+      }
+
+      const before = db.prepare('SELECT status,stage,execution_epoch FROM import_runs WHERE id=?').get(RUN)
+      await expect(prepare()).rejects.toThrow('IMPORT_RUN_SNAPSHOT_CORRUPT')
+      expect(fetch).not.toHaveBeenCalled()
+      expect(count('reference_embedding_budgets')).toBe(0)
+      expect(count('reference_import_grants')).toBe(0)
+      expect(count('reference_embedding_dispatches')).toBe(0)
+      expect(count('import_run_knowledge_receipts')).toBe(0)
+      expect(db.prepare('SELECT status,stage,execution_epoch FROM import_runs WHERE id=?').get(RUN)).toEqual(before)
+      expect(before).toEqual({ status: 'ready', stage: 'knowledge', execution_epoch: 0 })
+    })
+
+  it('binds a full incremental manifest when baseline-shaped sources reuse local chapter number one', async () => {
+    removeUnstartedDefaultReferenceRun()
+    const sourceA = randomUUID(), sourceB = randomUUID(), sourceC = randomUUID()
+    const firstIdA = `fictional-completed-a-${randomUUID()}`
+    const firstIdB = `fictional-completed-b-${randomUUID()}`
+    const firstA = ImportRunRepository.prepare({ runId: firstIdA, purpose: 'reference',
+      sourceFingerprint: hash('fictional-completed-source-a'), sourceIds: [sourceA], locale: 'en-US',
+      sourceDisplay: [{ displayName: 'a.txt', mediaType: 'text/plain', size: Buffer.byteLength(CONTENT) }],
+      chapters: [{ number: 1, title: 'One', content: CONTENT, contentSize: Buffer.byteLength(CONTENT), contentFingerprint: hash(CONTENT) }] })
+    expect(firstA.classification).toBe('new')
+    db.prepare(`UPDATE import_runs SET stage='completed',status='completed',resumable=0,completed_at=datetime('now') WHERE id=?`)
+      .run(firstIdA)
+    const firstB = ImportRunRepository.prepare({ runId: firstIdB, purpose: 'reference',
+      sourceFingerprint: hash('fictional-completed-source-b'), sourceIds: [sourceB], locale: 'en-US',
+      sourceDisplay: [{ displayName: 'b.txt', mediaType: 'text/plain', size: Buffer.byteLength('Other chapter.') }],
+      chapters: [{ number: 1, title: 'Other', content: 'Other chapter.', contentSize: Buffer.byteLength('Other chapter.'), contentFingerprint: hash('Other chapter.') }] })
+    expect(firstB.classification).toBe('new')
+    db.prepare('DELETE FROM reference_import_manifest_chapters WHERE import_run_id=? AND chapter_number=2').run(firstIdB)
+    db.prepare('UPDATE import_run_chapters SET chapter_number=1 WHERE run_id=? AND chapter_number=2').run(firstIdB)
+    db.prepare(`UPDATE import_runs SET stage='completed',status='completed',resumable=0,completed_at=datetime('now') WHERE id=?`)
+      .run(firstIdB)
+
+    const runId = `fictional-incremental-${randomUUID()}`
+    const incremental = ImportRunRepository.prepare({ runId, purpose: 'reference',
+      sourceFingerprint: hash('fictional-incremental-source'), sourceIds: [sourceA, sourceB, sourceC], locale: 'en-US',
+      sourceDisplay: [
+        { displayName: 'a.txt', mediaType: 'text/plain', size: Buffer.byteLength(CONTENT) },
+        { displayName: 'b.txt', mediaType: 'text/plain', size: Buffer.byteLength('Other chapter.') },
+        { displayName: 'c.txt', mediaType: 'text/plain', size: Buffer.byteLength('New chapter.') },
+      ],
+      chapters: [
+        { number: 1, sourceIndex: 0, title: 'One', content: CONTENT, contentSize: Buffer.byteLength(CONTENT), contentFingerprint: hash(CONTENT) },
+        { number: 1, sourceIndex: 1, title: 'Other', content: 'Other chapter.', contentSize: Buffer.byteLength('Other chapter.'), contentFingerprint: hash('Other chapter.') },
+        { number: 1, sourceIndex: 2, title: 'New', content: 'New chapter.', contentSize: Buffer.byteLength('New chapter.'), contentFingerprint: hash('New chapter.') },
+      ] })
+    expect(incremental.classification).toBe('new')
+    expect(incremental.run).toMatchObject({ totalChapters: 1, manifestChapterCount: 3 })
+    expect(db.prepare(`SELECT chapter_number,snapshot_run_id,snapshot_chapter_number,source_id,source_chapter_number
+      FROM reference_import_manifest_chapters WHERE import_run_id=? ORDER BY chapter_number`).all(runId))
+      .toEqual([
+        { chapter_number: 1, snapshot_run_id: firstIdA, snapshot_chapter_number: 1, source_id: sourceA, source_chapter_number: 1 },
+        { chapter_number: 2, snapshot_run_id: firstIdB, snapshot_chapter_number: 1, source_id: sourceB, source_chapter_number: 1 },
+        { chapter_number: 3, snapshot_run_id: runId, snapshot_chapter_number: 3, source_id: sourceC, source_chapter_number: 1 },
+      ])
+    const runtime = projectRuntimeHost.getActiveView()!
+    const context = { database: runtime.database, canonicalRoot: runtime.canonicalRoot, projectId: runtime.projectId }
+    const streamed: Array<{ number: number; title: string; content: string }> = []
+    const validatedManifest = ImportRunRepository.streamValidatedReferenceManifest(
+      runId, context, chapter => streamed.push(chapter),
+    )
+    expect(validatedManifest).toMatchObject({ chapterCount: 3 })
+    expect(streamed.map(({ number, title, content }) => ({ number, title, content }))).toEqual([
+      { number: 1, title: 'One', content: CONTENT },
+      { number: 2, title: 'Other', content: 'Other chapter.' },
+      { number: 3, title: 'New', content: 'New chapter.' },
+    ])
+
+    const issuance = await prepare(randomUUID(), randomUUID(), runId)
+    const initialBudget = db.prepare('SELECT * FROM reference_embedding_budgets').get()
+    expect(initialBudget).toMatchObject({ root_run_id: runId, manifest_fingerprint: validatedManifest.manifestFingerprint,
+      request_limit: 3, spent_requests: 0 })
+    await expect(invoke('reference-knowledge:v1:revoke', issuance.reference, subject, false))
+      .resolves.toMatchObject({ state: 'revoked' })
+
+    db.prepare("UPDATE import_runs SET status='failed',resumable=1 WHERE id=?").run(runId)
+    const restarted = ImportRunRepository.restart(runId, `fictional-incremental-restart-${randomUUID()}`)
+    expect(ImportRunRepository.streamValidatedReferenceManifest(restarted.id, context)).toMatchObject({
+      rootRunId: runId, manifestFingerprint: validatedManifest.manifestFingerprint, chapterCount: 3,
+    })
+    expect(db.prepare(`SELECT chapter_number,snapshot_run_id,snapshot_chapter_number,source_id,source_chapter_number
+      FROM reference_import_manifest_chapters WHERE import_run_id=? ORDER BY chapter_number`).all(restarted.id))
+      .toEqual(db.prepare(`SELECT chapter_number,snapshot_run_id,snapshot_chapter_number,source_id,source_chapter_number
+        FROM reference_import_manifest_chapters WHERE import_run_id=? ORDER BY chapter_number`).all(runId))
+    const resumed = await prepare(randomUUID(), randomUUID(), restarted.id)
+    expect(resumed.reference.runId).toBe(restarted.id)
+    expect(db.prepare('SELECT * FROM reference_embedding_budgets').get()).toEqual(initialBudget)
+    const fetchMock = vi.fn(async () => response())
+    vi.stubGlobal('fetch', fetchMock)
+    for (const chapterNumber of [1, 2]) {
+      await expect(importChapter(resumed, subject, chapterNumber)).resolves.toMatchObject({
+        success: false, errorCode: 'IMPORT_RUN_REFERENCE_UNBOUND',
+      })
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(count('import_reference_documents')).toBe(0)
+      expect(count('import_run_knowledge_receipts')).toBe(0)
+      expect(count('reference_embedding_dispatches')).toBe(0)
+      expect(db.prepare('SELECT spent_requests,active_since_ms FROM reference_embedding_budgets').get())
+        .toEqual({ spent_requests: 0, active_since_ms: null })
+    }
+    await expect(importChapter(resumed, subject, 3)).resolves.toMatchObject({ success: true })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(db.prepare('SELECT run_id,chapter_number,state FROM import_run_knowledge_receipts').all())
+      .toEqual([{ run_id: restarted.id, chapter_number: 3, state: 'committed' }])
+    expect(db.prepare('SELECT import_run_id,state FROM reference_embedding_dispatches').all())
+      .toEqual([{ import_run_id: restarted.id, state: 'response_received' }])
+    expect(db.prepare('SELECT state FROM import_reference_documents').all()).toEqual([{ state: 'committed' }])
+    expect(db.prepare('SELECT request_limit,spent_requests FROM reference_embedding_budgets').get())
+      .toEqual({ request_limit: 3, spent_requests: 1 })
+  })
+  it('binds worker-finalized duplicate snapshots from baseline-shaped local chapter numbering', async () => {
+    removeUnstartedDefaultReferenceRun()
+    const legacyFingerprint = hash('fictional-legacy-source')
+    const legacyRunId = `fictional-legacy-${randomUUID()}`
+    const legacy = ImportRunRepository.prepare({ runId: legacyRunId, purpose: 'reference',
+      sourceFingerprint: legacyFingerprint, locale: 'en-US',
+      sourceDisplay: [{ displayName: 'legacy.txt', mediaType: 'text/plain', size: Buffer.byteLength(CONTENT) }],
+      chapters: [{ number: 7, title: 'Legacy one', content: CONTENT, contentSize: Buffer.byteLength(CONTENT), contentFingerprint: hash(CONTENT) }] })
+    expect(legacy.classification).toBe('new')
+    db.prepare(`UPDATE import_runs SET stage='completed',status='completed',resumable=0,completed_at=datetime('now') WHERE id=?`)
+      .run(legacyRunId)
+
+    const sourceA = randomUUID(), sourceB = randomUUID(), sourceC = randomUUID(), runId = randomUUID()
+    const secondLegacyRunId = `fictional-legacy-second-${randomUUID()}`
+    ImportRunRepository.prepare({ runId: secondLegacyRunId, purpose: 'reference',
+      sourceFingerprint: hash('fictional-legacy-second-source'), sourceIds: [sourceB], locale: 'en-US',
+      sourceDisplay: [{ displayName: 'second-legacy.txt', mediaType: 'text/plain', size: Buffer.byteLength('Other chapter.') }],
+      chapters: [{ number: 1, title: 'Legacy two', content: 'Other chapter.', contentSize: Buffer.byteLength('Other chapter.'), contentFingerprint: hash('Other chapter.') }] })
+    db.prepare('DELETE FROM reference_import_manifest_chapters WHERE import_run_id=? AND chapter_number=2').run(secondLegacyRunId)
+    db.prepare('UPDATE import_run_chapters SET chapter_number=1 WHERE run_id=? AND chapter_number=2').run(secondLegacyRunId)
+    db.prepare(`UPDATE import_runs SET stage='completed',status='completed',resumable=0,completed_at=datetime('now') WHERE id=?`)
+      .run(secondLegacyRunId)
+
+    const worker = ImportRunRepository.beginParsing({ runId, purpose: 'reference',
+      sourceFingerprint: hash('fictional-worker-source'), sourceIds: [sourceA, sourceB, sourceC],
+      sourceFingerprints: [hash('fictional-worker-a'), hash('fictional-worker-b'), hash('fictional-worker-c')],
+      legacySourceFingerprints: [legacyFingerprint, '', ''], locale: 'en-US',
+      sourceDisplay: [
+        { displayName: 'legacy.txt', mediaType: 'text/plain', size: Buffer.byteLength(CONTENT) },
+        { displayName: 'second-legacy.txt', mediaType: 'text/plain', size: Buffer.byteLength('Other chapter.') },
+        { displayName: 'new.txt', mediaType: 'text/plain', size: Buffer.byteLength('New chapter.') },
+      ] })
+    expect(worker.stage).toBe('parsing')
+    ImportRunRepository.commitParsedSource(runId, sourceA, [
+      { number: 1, sourceChapterNumber: 7, title: 'Legacy one', content: CONTENT, contentSize: Buffer.byteLength(CONTENT), contentFingerprint: hash(CONTENT) },
+    ])
+    ImportRunRepository.commitParsedSource(runId, sourceB, [
+      { number: 1, title: 'Legacy two', content: 'Other chapter.', contentSize: Buffer.byteLength('Other chapter.'), contentFingerprint: hash('Other chapter.') },
+    ])
+    ImportRunRepository.commitParsedSource(runId, sourceC, [
+      { number: 1, title: 'New', content: 'New chapter.', contentSize: Buffer.byteLength('New chapter.'), contentFingerprint: hash('New chapter.') },
+    ])
+    const finalized = ImportRunRepository.finalizeParsing(runId)
+    expect(finalized.classification).toBe('new')
+    expect(finalized.run).toMatchObject({ totalChapters: 1, manifestChapterCount: 3 })
+    expect(db.prepare(`SELECT chapter_number,snapshot_run_id,snapshot_chapter_number,source_id,source_chapter_number
+      FROM reference_import_manifest_chapters WHERE import_run_id=? ORDER BY chapter_number`).all(runId))
+      .toEqual([
+        { chapter_number: 1, snapshot_run_id: legacyRunId, snapshot_chapter_number: 1, source_id: sourceA, source_chapter_number: 7 },
+        { chapter_number: 2, snapshot_run_id: secondLegacyRunId, snapshot_chapter_number: 1, source_id: sourceB, source_chapter_number: 1 },
+        { chapter_number: 3, snapshot_run_id: runId, snapshot_chapter_number: 3, source_id: sourceC, source_chapter_number: 1 },
+      ])
+    expect(db.prepare('SELECT source_id FROM import_run_chapters WHERE run_id=?').get(legacyRunId))
+      .toEqual({ source_id: sourceA })
+    const runtime = projectRuntimeHost.getActiveView()!
+    const context = { database: runtime.database, canonicalRoot: runtime.canonicalRoot, projectId: runtime.projectId }
+    expect(ImportRunRepository.streamValidatedReferenceManifest(legacyRunId, context)).toMatchObject({ chapterCount: 1 })
+    const streamed: Array<{ number: number; title: string; content: string }> = []
+    const validatedManifest = ImportRunRepository.streamValidatedReferenceManifest(
+      runId, context, chapter => streamed.push(chapter),
+    )
+    expect(validatedManifest).toMatchObject({ chapterCount: 3 })
+    expect(streamed.map(({ number, title, content }) => ({ number, title, content }))).toEqual([
+      { number: 1, title: 'Legacy one', content: CONTENT },
+      { number: 2, title: 'Legacy two', content: 'Other chapter.' },
+      { number: 3, title: 'New', content: 'New chapter.' },
+    ])
+    const issuance = await prepare(randomUUID(), randomUUID(), runId)
+    const initialBudget = db.prepare('SELECT * FROM reference_embedding_budgets').get()
+    expect(initialBudget).toMatchObject({ root_run_id: runId, manifest_fingerprint: validatedManifest.manifestFingerprint,
+      request_limit: 3, spent_requests: 0 })
+    await expect(invoke('reference-knowledge:v1:revoke', issuance.reference, subject, false))
+      .resolves.toMatchObject({ state: 'revoked' })
+    db.prepare("UPDATE import_runs SET status='failed',resumable=1 WHERE id=?").run(runId)
+    const restarted = ImportRunRepository.restart(runId, `fictional-worker-restart-${randomUUID()}`)
+    expect(ImportRunRepository.streamValidatedReferenceManifest(restarted.id, context)).toMatchObject({
+      rootRunId: runId, manifestFingerprint: validatedManifest.manifestFingerprint, chapterCount: 3,
+    })
+    const resumed = await prepare(randomUUID(), randomUUID(), restarted.id)
+    expect(resumed.reference.runId).toBe(restarted.id)
+    expect(db.prepare('SELECT * FROM reference_embedding_budgets').get()).toEqual(initialBudget)
+    const fetchMock = vi.fn(async () => response())
+    vi.stubGlobal('fetch', fetchMock)
+    for (const chapterNumber of [1, 2]) {
+      await expect(importChapter(resumed, subject, chapterNumber)).resolves.toMatchObject({
+        success: false, errorCode: 'IMPORT_RUN_REFERENCE_UNBOUND',
+      })
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(count('import_reference_documents')).toBe(0)
+      expect(count('import_run_knowledge_receipts')).toBe(0)
+      expect(count('reference_embedding_dispatches')).toBe(0)
+      expect(db.prepare('SELECT spent_requests,active_since_ms FROM reference_embedding_budgets').get())
+        .toEqual({ spent_requests: 0, active_since_ms: null })
+    }
+    await expect(importChapter(resumed, subject, 3)).resolves.toMatchObject({ success: true })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(db.prepare('SELECT run_id,chapter_number,state FROM import_run_knowledge_receipts').all())
+      .toEqual([{ run_id: restarted.id, chapter_number: 3, state: 'committed' }])
+    expect(db.prepare('SELECT import_run_id,state FROM reference_embedding_dispatches').all())
+      .toEqual([{ import_run_id: restarted.id, state: 'response_received' }])
+    expect(db.prepare('SELECT state FROM import_reference_documents').all()).toEqual([{ state: 'committed' }])
+    expect(db.prepare('SELECT request_limit,spent_requests FROM reference_embedding_budgets').get())
+      .toEqual({ request_limit: 3, spent_requests: 1 })
+  })
   it('freezes the selected model and replays a successful receipt without a second fetch', async () => {
     const fetchMock = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => response())
     vi.stubGlobal('fetch', fetchMock)
@@ -209,6 +482,131 @@ describe('registered reference knowledge controller with real native storage', (
     expect(new Headers(init.headers).get('authorization')).toBe('Bearer fictional-key-a')
     expect(count('import_reference_documents')).toBe(1)
     expect(count('import_run_knowledge_receipts')).toBe(1)
+    expect(db.prepare('SELECT initial_chunk_size, initial_chunk_overlap, initial_batch_size, request_limit, spent_requests, active_elapsed_ms, active_since_ms FROM reference_embedding_budgets').get())
+      .toMatchObject({ initial_chunk_size: 1000, initial_chunk_overlap: 0, initial_batch_size: 1,
+        request_limit: Math.ceil(chunkText(CONTENT, 1000, 0).length / 1), spent_requests: 1, active_since_ms: null })
+  })
+  it('keeps the root budget when a restart explicitly selects different embedding options', async () => {
+    const profile = mock.profiles[0]!, saved = profile.embeddingOptions
+    const fetchMock = vi.fn(async () => response())
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      Object.defineProperty(profile, 'embeddingOptions', { value: { chunkSize: 1000, chunkOverlap: 0, batchSize: 50 }, writable: true, configurable: true })
+      const first = await prepare()
+      const initial = db.prepare('SELECT * FROM reference_embedding_budgets').get()
+      expect(initial).toMatchObject({ initial_chunk_size: 1000, initial_batch_size: 50, request_limit: 1, spent_requests: 0 })
+      await expect(invoke('reference-knowledge:v1:revoke', first.reference, subject, false)).resolves.toMatchObject({ state: 'revoked' })
+      const descendant = ImportRunRepository.restart(RUN, `fictional-restart-${randomUUID()}`).id
+      mock.selected = 'fictional-b'
+      const resumed = await prepare(randomUUID(), randomUUID(), descendant)
+      expect(resumed.reference.runId).toBe(descendant)
+      expect(db.prepare('SELECT * FROM reference_embedding_budgets').get()).toEqual(initial)
+      const result = await importChapter(resumed) as { success: boolean; errorCode: string }
+      expect(result).toMatchObject({ success: false, errorCode: 'KNOWLEDGE_BASE_REFERENCE_BUDGET_EXHAUSTED' })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(db.prepare('SELECT spent_requests, active_since_ms FROM reference_embedding_budgets').get())
+        .toEqual({ spent_requests: 1, active_since_ms: null })
+      expect(count('import_run_knowledge_receipts')).toBe(0)
+    } finally { profile.embeddingOptions = saved }
+  })
+  it('enforces the active-time cap before the KB document effect', async () => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const gate = deferred<Response>()
+    const fetchMock = vi.fn(() => gate.promise)
+    vi.stubGlobal('fetch', fetchMock)
+    const first = await prepare()
+    const activeLimit = (db.prepare('SELECT active_limit_ms FROM reference_embedding_budgets').get() as { active_limit_ms: number }).active_limit_ms
+    const pending = importChapter(first)
+    void pending.catch(() => {})
+    try {
+      await waitForBatchStarts(fetchMock, pending, 1)
+      now += activeLimit
+      gate.resolve(response())
+      await expect(pending).resolves.toMatchObject({
+        success: false, errorCode: 'KNOWLEDGE_BASE_REFERENCE_BUDGET_ACTIVE_TIME_EXHAUSTED',
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(db.prepare("SELECT state FROM import_reference_documents WHERE corpus_kind='reference'").all())
+        .toEqual([{ state: 'prepared' }])
+      expect(count('import_run_knowledge_receipts')).toBe(0)
+      expect(dispatchRows()).toEqual([expect.objectContaining({ state: 'response_received', settled_at: expect.any(Number) })])
+      expect(db.prepare('SELECT spent_requests,active_elapsed_ms,active_since_ms,state FROM reference_embedding_budgets').get())
+        .toEqual({ spent_requests: 1, active_elapsed_ms: activeLimit, active_since_ms: null, state: 'ready' })
+      expect(await vectorStore.listDocuments(root)).toEqual([])
+    } finally {
+      gate.resolve(response())
+      await Promise.allSettled([pending])
+    }
+  })
+  it('keeps the KB commit but refuses the final run receipt after another same-root flight exhausts active time', async () => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const gates = [deferred<Response>(), deferred<Response>()]
+    let fetchIndex = 0
+    const fetchMock = vi.fn(() => gates[fetchIndex++]!.promise)
+    vi.stubGlobal('fetch', fetchMock)
+    const sourceFingerprint = hash('fictional-two-chapter-source')
+    const runId = `fictional-two-chapter-${randomUUID()}`
+    const secondContent = 'A second fictional chapter for the reference import.'
+    ImportRunRepository.prepare({ runId, purpose: 'reference', sourceFingerprint, locale: 'en-US',
+      sourceDisplay: [{ displayName: 'two.txt', mediaType: 'text/plain',
+        size: Buffer.byteLength(CONTENT) + Buffer.byteLength(secondContent) }],
+      chapters: [
+        { number: 1, title: 'One', content: CONTENT, contentSize: Buffer.byteLength(CONTENT), contentFingerprint: hash(CONTENT) },
+        { number: 2, title: 'Two', content: secondContent, contentSize: Buffer.byteLength(secondContent), contentFingerprint: hash(secondContent) },
+      ] })
+    let afterImportCalls = 0
+    const atReceiptBoundary = deferred<void>(), releaseReceipt = deferred<void>()
+    mock.afterImport = async () => {
+      afterImportCalls += 1
+      if (afterImportCalls === 1) {
+        atReceiptBoundary.resolve()
+        await releaseReceipt.promise
+      }
+    }
+    let firstImport: Promise<unknown> | undefined
+    let secondImport: Promise<unknown> | undefined
+    try {
+      const chapters = ImportRunRepository.listChapterBatch(runId, { afterChapterNumber: 0, limit: 10 })
+      expect(chapters).toHaveLength(2)
+      const first = await prepare(randomUUID(), randomUUID(), runId)
+      const activeLimit = (db.prepare('SELECT active_limit_ms FROM reference_embedding_budgets').get() as { active_limit_ms: number }).active_limit_ms
+      firstImport = importChapter(first, subject, chapters[0]!.number)
+      secondImport = importChapter(first, subject, chapters[1]!.number)
+      void firstImport.catch(() => {})
+      void secondImport.catch(() => {})
+      await waitForBatchStarts(fetchMock, firstImport, 2)
+      gates[0]!.resolve(response())
+      await atReceiptBoundary.promise
+      expect(db.prepare("SELECT state FROM import_reference_documents WHERE state='committed'").all()).toHaveLength(1)
+      expect(db.prepare('SELECT active_since_ms,active_elapsed_ms FROM reference_embedding_budgets').get())
+        .toMatchObject({ active_since_ms: now, active_elapsed_ms: 0 })
+      now += activeLimit
+      releaseReceipt.resolve()
+      await expect(firstImport).resolves.toMatchObject({
+        success: false, errorCode: 'KNOWLEDGE_BASE_REFERENCE_BUDGET_ACTIVE_TIME_EXHAUSTED',
+      })
+      expect(db.prepare("SELECT state FROM import_reference_documents WHERE state='committed'").all()).toHaveLength(1)
+      expect(count('import_run_knowledge_receipts')).toBe(0)
+      gates[1]!.resolve(response())
+      await expect(secondImport).resolves.toMatchObject({
+        success: false, errorCode: 'KNOWLEDGE_BASE_REFERENCE_BUDGET_ACTIVE_TIME_EXHAUSTED',
+      })
+      expect(count('import_run_knowledge_receipts')).toBe(0)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(db.prepare("SELECT COUNT(*) AS count FROM reference_embedding_dispatches WHERE state='dispatch_marked'").get())
+        .toEqual({ count: 0 })
+      expect(db.prepare('SELECT spent_requests,active_elapsed_ms,active_since_ms,state FROM reference_embedding_budgets').get())
+        .toEqual({ spent_requests: 2, active_elapsed_ms: activeLimit, active_since_ms: null, state: 'ready' })
+      expect(db.prepare("SELECT state FROM import_reference_documents WHERE state='committed'").all()).toHaveLength(1)
+    } finally {
+      releaseReceipt.resolve()
+      gates.forEach(gate => gate.resolve(response()))
+      const pending = [firstImport, secondImport].filter((value): value is Promise<unknown> => value !== undefined)
+      await Promise.allSettled(pending)
+      mock.afterImport = null
+    }
   })
   it('requires the same actual WebContents object even when numeric ids match', async () => {
     const first = await prepare(), impostor = sender()
@@ -227,6 +625,14 @@ describe('registered reference knowledge controller with real native storage', (
     await denied(oldImport({ sender: subject }, 1, RUN, first.execution, session))
     expect(count('reference_import_grants')).toBe(1)
     expect(count('import_run_knowledge_receipts')).toBe(0)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it('does not allocate a first budget after the legacy start-resume path has already executed the root', async () => {
+    const oldStart = mock.handlers.get('db:import-run-start-resume')!
+    await oldStart({ sender: subject }, RUN, randomUUID(), root, session)
+    await denied(prepare(randomUUID(), randomUUID(), RUN))
+    expect(count('reference_embedding_budgets')).toBe(0)
+    expect(count('reference_import_grants')).toBe(0)
     expect(fetch).not.toHaveBeenCalled()
   })
   it('detaches sender destruction listeners after repeated revokes and project close', async () => {
@@ -266,9 +672,9 @@ describe('registered reference knowledge controller with real native storage', (
     }
   })
   it.each([false, true])('later-stage revoke preserves the execution lease only after resume: %s', async resumed => {
-    // Seed a later-stage resumable run; this test exercises issuance ownership, not stage progression.
-    db.prepare("UPDATE import_runs SET stage='global' WHERE id=?").run(RUN)
+    // Issue the managed root budget first, then simulate its durable later-stage state.
     const first = await prepare()
+    db.prepare("UPDATE import_runs SET stage='global' WHERE id=?").run(RUN)
     if (resumed) await invoke('reference-knowledge:v1:resume', first.reference)
     await expect(invoke('reference-knowledge:v1:revoke', first.reference, subject, false)).resolves.toMatchObject({ state: 'revoked' })
     const row = db.prepare('SELECT status, stage, cancel_requested, execution_owner, execution_epoch, lease_expires_at FROM import_runs WHERE id=?')
@@ -524,6 +930,74 @@ describe('registered reference knowledge controller with real native storage', (
     expect(count('reference_import_grants')).toBe(1)
     expect(count('import_run_knowledge_receipts')).toBe(0)
     expect(fetch).not.toHaveBeenCalled()
+  })
+  it('durably refuses an open budget interval after a native reopen without replaying its request', async () => {
+    const gate = deferred<Response>()
+    const fetchMock = vi.fn(() => gate.promise)
+    vi.stubGlobal('fetch', fetchMock)
+    const issuance = await prepare()
+    const runtime = projectRuntimeHost.getActiveView()!
+    const databasePath = getProjectDatabasePath(root)
+    const pending = importChapter(issuance)
+    void pending.catch(() => {})
+    try {
+      await waitForBatchStarts(fetchMock, pending, 1)
+      const crashSnapshot = Buffer.from(runtime.database.serialize())
+      const atSnapshot = db.prepare('SELECT spent_requests,active_elapsed_ms,active_since_ms,state FROM reference_embedding_budgets').get() as {
+        spent_requests: number; active_elapsed_ms: number; active_since_ms: number | null; state: string
+      }
+      expect(atSnapshot).toMatchObject({ spent_requests: 1, active_elapsed_ms: 0, state: 'ready' })
+      expect(atSnapshot.active_since_ms).not.toBeNull()
+
+      gate.resolve(response())
+      await expect(pending).resolves.toMatchObject({ success: true })
+      vectorStore.closeConnection(runtime.canonicalRoot)
+      await projectRuntimeHost.requestClose(runtime)
+      fs.writeFileSync(databasePath, crashSnapshot)
+
+      openCanonicalProjectFixture(root, Buffer.alloc(32, 44))
+      const reopened = projectRuntimeHost.getActiveView()!
+      expect(reopened.database).not.toBe(runtime.database)
+      const lease = projectAccess.beginViewSession(reopened)
+      session = { projectId: lease.projectId, leaseId: lease.leaseId, projectPath: root }
+      db = reopened.database
+      registerReferenceKnowledgeController()
+      await expect(prepare()).rejects.toThrow('KNOWLEDGE_BASE_REFERENCE_BUDGET_RECOVERY_UNKNOWN')
+      expect(db.prepare('SELECT spent_requests,active_elapsed_ms,active_since_ms,state FROM reference_embedding_budgets').get())
+        .toMatchObject({ spent_requests: 1, active_elapsed_ms: 0, active_since_ms: atSnapshot.active_since_ms, state: 'recovery_unknown' })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(dispatchRows()).toEqual([expect.objectContaining({ state: 'dispatch_marked', settled_at: null })])
+      expect(count('import_run_knowledge_receipts')).toBe(0)
+    } finally {
+      gate.resolve(response())
+      await Promise.allSettled([pending])
+    }
+  })
+  it('preserves closed-interval budget consumption across a fresh grant and native reopen', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(response()))
+    vi.stubGlobal('fetch', fetchMock)
+    const first = await prepare()
+    await expect(importChapter(first)).resolves.toMatchObject({ success: true })
+    await expect(invoke('reference-knowledge:v1:revoke', first.reference, subject, false))
+      .resolves.toMatchObject({ state: 'revoked' })
+    const restarted = ImportRunRepository.restart(RUN, `fictional-closed-restart-${randomUUID()}`)
+    await prepare(randomUUID(), randomUUID(), restarted.id)
+    const beforeClose = db.prepare('SELECT spent_requests,active_elapsed_ms,active_since_ms,state FROM reference_embedding_budgets').get()
+    expect(beforeClose).toMatchObject({ spent_requests: 1, active_since_ms: null, state: 'ready' })
+
+    const runtime = projectRuntimeHost.getActiveView()!
+    vectorStore.closeConnection(runtime.canonicalRoot)
+    await projectRuntimeHost.requestClose(runtime)
+    openCanonicalProjectFixture(root, Buffer.alloc(32, 44))
+    const reopened = projectRuntimeHost.getActiveView()!
+    const lease = projectAccess.beginViewSession(reopened)
+    session = { projectId: lease.projectId, leaseId: lease.leaseId, projectPath: root }
+    db = reopened.database
+    registerReferenceKnowledgeController()
+    await prepare(randomUUID(), randomUUID(), restarted.id)
+    expect(db.prepare('SELECT spent_requests,active_elapsed_ms,active_since_ms,state FROM reference_embedding_budgets').get())
+      .toEqual(beforeClose)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
   it.each([['zh-CN', 'response_received'], ['en-US', 'response_received'],
     ['zh-CN', 'transport_unknown'], ['en-US', 'transport_unknown']] as const)(

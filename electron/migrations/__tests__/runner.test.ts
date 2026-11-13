@@ -49,7 +49,7 @@ class FixtureDatabase implements SchemaWriter {
   }
 }
 
-const identities = Array.from({ length: 18 }, (_, version) => ({ version, fingerprint: `fixture-schema-${version}` }))
+const identities = Array.from({ length: 19 }, (_, version) => ({ version, fingerprint: `fixture-schema-${version}` }))
 function implementations(): MigrationImplementation[] {
   return MIGRATION_LANE.map(slot => ({ ...slot,
     migrate(db) {
@@ -86,7 +86,7 @@ describe('desktop single schema lane', () => {
     }
   })
 
-  it('reserves exactly seventeen consecutive versions with a single declared owner for each', () => {
+  it('reserves exactly eighteen consecutive versions with a single declared owner for each', () => {
     expect(MIGRATION_LANE.map(s => [s.id, s.from, s.to, s.owner])).toEqual([
       ['M00', 0, 1, 'S04'], ['M01', 1, 2, 'S05'], ['M02', 2, 3, 'S08'],
       ['M03', 3, 4, 'S11'], ['M04', 4, 5, 'S12'], ['M05', 5, 6, 'F03'],
@@ -100,6 +100,7 @@ describe('desktop single schema lane', () => {
       ['M14', 14, 15, 'reference-import-grants'],
       ['M15', 15, 16, 'planning-feedback'],
       ['M16', 16, 17, 'reference-embedding-dispatches'],
+      ['M17', 17, 18, 'reference-embedding-budgets'],
     ])
     expect(migrationRegistry.implementations).toEqual([])
     expect(migrationRegistry.recognizedSchemas).toEqual([])
@@ -201,13 +202,29 @@ describe('desktop single schema lane', () => {
     const db = new FixtureDatabase(), steps = implementations()
     db.version = 16
     db.fingerprint = 'fixture-schema-16'
-    const oldRegistry = createMigrationRegistry(steps.slice(0, -1), identities)
+    const oldRegistry = createMigrationRegistry(steps.filter(step => step.id !== 'M16'), identities)
     expect(verifySchema(db, oldRegistry, 16).version).toBe(16)
+    expect(() => migrateSchema(db, oldRegistry, 17)).toThrow('MIGRATION_NOT_INSTALLED')
+    expect(db.transactions).toBe(0)
+    expect(db.writes).toBe(0)
+    const registry = createMigrationRegistry(steps, identities)
+    expect(migrateSchema(db, registry, 17).completedSteps).toEqual(['M16'])
+    const writes = db.writes
+    expect(migrateSchema(db, registry, 17).completedSteps).toEqual([])
+    expect(db.writes).toBe(writes)
+  })
+
+  it('requires M17 before schema17 upgrade and verifies schema18 reopen without another backfill', () => {
+    const db = new FixtureDatabase(), steps = implementations()
+    db.version = 17
+    db.fingerprint = 'fixture-schema-17'
+    const oldRegistry = createMigrationRegistry(steps.filter(step => step.id !== 'M17'), identities)
+    expect(verifySchema(db, oldRegistry, 17).version).toBe(17)
     expect(() => migrateSchema(db, oldRegistry)).toThrow('MIGRATION_NOT_INSTALLED')
     expect(db.transactions).toBe(0)
     expect(db.writes).toBe(0)
     const registry = createMigrationRegistry(steps, identities)
-    expect(migrateSchema(db, registry).completedSteps).toEqual(['M16'])
+    expect(migrateSchema(db, registry).completedSteps).toEqual(['M17'])
     const writes = db.writes
     expect(migrateSchema(db, registry).completedSteps).toEqual([])
     expect(db.writes).toBe(writes)
@@ -217,9 +234,9 @@ describe('desktop single schema lane', () => {
     const db = new FixtureDatabase()
     const registry = createMigrationRegistry(implementations(), identities)
     const result = migrateSchema(db, registry)
-    expect(result.version).toBe(17)
-    expect(result.completedSteps.at(-1)).toBe('M16')
-    expect(verifySchema(db, registry, 17)).toEqual({ version: 17, fingerprint: 'fixture-schema-17' })
+    expect(result.version).toBe(18)
+    expect(result.completedSteps.at(-1)).toBe('M17')
+    expect(verifySchema(db, registry, 18)).toEqual({ version: 18, fingerprint: 'fixture-schema-18' })
     expect(() => migrateSchema(db, registry, 5)).toThrow('SCHEMA_DOWNGRADE_REFUSED')
     expect(() => verifySchema(db, registry, 5)).toThrow('SCHEMA_VERSION_MISMATCH')
     expect(result.sessionFenced).toBe(false)

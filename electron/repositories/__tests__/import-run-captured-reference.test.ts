@@ -198,6 +198,10 @@ describe('captured reference-import SQLite seam', () => {
   ])('rejects invalid captured A (%s) even when current B remains valid', (_name, sql, code) => {
     seedDocument(a.database, a.binding)
     const beforeB = referenceState(b.database)
+    if (_name === 'missing chapter') {
+      expect(() => a.database.exec(sql)).toThrow('FOREIGN KEY constraint failed')
+      a.database.prepare('DELETE FROM reference_import_manifest_chapters WHERE import_run_id=? AND chapter_number=1').run(RUN_ID)
+    }
     a.database.exec(sql)
     const invalidA = referenceState(a.database)
 

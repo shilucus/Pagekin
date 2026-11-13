@@ -5,11 +5,13 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openCanonicalProjectFixture } from '../../test/helpers/canonical-project-fixture'
 import type { ReferenceImportGrantRef } from '../../src/shared/reference-import-grant'
-import type { EmbeddingModel } from '../../src/shared/embedding-options'
+import { normalizeEmbeddingOptions, type EmbeddingModel } from '../../src/shared/embedding-options'
 import { getProjectDb } from '../database'
 import { captureReferenceImportResources, importReferenceText } from '../knowledge-base'
+import { chunkText } from '../embedding'
 import { ImportRunRepository } from '../repositories/import-run-repository'
 import { ReferenceImportGrantRepository } from '../repositories/reference-import-grant-repository'
+import { ReferenceEmbeddingBudgetRepository } from '../repositories/reference-embedding-budget-repository'
 import { captureReferenceImportAdmission } from '../services/reference-import-admission'
 import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { projectRuntimeHost } from '../services/project-runtime'
@@ -25,7 +27,7 @@ const embeddingModel = { ...ftsModel, baseUrl: 'https://embedding.example/v1', a
 let temporaryParent = ''
 let parent = ''
 
-function book(name: string, content = `Fictional ${name} courier waits beside a harbor.`) {
+function book(name: string, content = `Fictional ${name} courier waits beside a harbor.`, initialModel: EmbeddingModel | null = ftsModel) {
   const root = path.join(parent, name)
   fs.mkdirSync(root)
   openCanonicalProjectFixture(root)
@@ -37,14 +39,26 @@ function book(name: string, content = `Fictional ${name} courier waits beside a 
     assertCurrent: () => { projectRuntimeHost.assertOpen(runtime) },
     isFrozen: id => readPortableRuntimeFreeze(root).isFrozen('reference_import_grants', id) })
   const scope = ImportRunRepository.captureReferenceGrantScope(RUN, runtime)
-  const grant = grants.issue({ grantId: randomUUID(), operationKey: randomUUID(), runId: RUN,
-    manifestFingerprint: scope.manifestFingerprint, requestHash })
+  const budgets = new ReferenceEmbeddingBudgetRepository(runtime.database, {
+    assertCurrent: () => { projectRuntimeHost.assertOpen(runtime) },
+    isFrozen: id => readPortableRuntimeFreeze(root).isFrozen('reference_embedding_budgets', id),
+  })
+  if (initialModel) budgets.preflight(RUN)
+  const { grant, execution, budget } = runtime.database.transaction(() => {
+    const options = initialModel ? normalizeEmbeddingOptions(initialModel.embeddingOptions) : null
+    const capability = options ? budgets.prepare({ runId: RUN, manifestFingerprint: scope.manifestFingerprint,
+      plan: { chunkSize: options.chunkSize, chunkOverlap: options.chunkOverlap, batchSize: options.batchSize,
+        requestLimit: Math.ceil(chunkText(content, options.chunkSize, options.chunkOverlap).length / options.batchSize) } }) : undefined
+    const grant = grants.issue({ grantId: randomUUID(), operationKey: randomUUID(), runId: RUN,
+      manifestFingerprint: scope.manifestFingerprint, requestHash })
+    const execution = ImportRunRepository.startOrResume(RUN, 'fictional-owner', Date.now(), 60_000, runtime).execution
+    return { grant, execution, budget: capability ? { repository: budgets, capability } : undefined }
+  }).immediate()
   const ref = { grantId: grant.grantId, revision: grant.revision, runId: RUN }
-  const execution = ImportRunRepository.startOrResume(RUN, 'fictional-owner', Date.now(), 60_000, runtime).execution
   const authority = { owner: execution.owner, epoch: execution.epoch }
   const binding = ImportRunRepository.resolveReferenceImportAuthority(RUN, authority, 1, undefined, runtime.database)
-  return { root, runtime, content, grants, grant, ref, execution, authority, binding,
-    resources: captureReferenceImportResources(runtime), admission: captureReferenceImportAdmission(runtime, ref, requestHash) }
+  return { root, runtime, content, grants, grant, ref, execution, authority, binding, budget,
+    resources: captureReferenceImportResources(runtime), admission: captureReferenceImportAdmission(runtime, ref, requestHash, undefined, budget) }
 }
 
 type Book = ReturnType<typeof book>
@@ -180,7 +194,7 @@ afterEach(() => {
 describe('actual reference knowledge grant admission', () => {
   it('preserves a committed zero-overlap legacy chunk set when the corrected set conflicts', async () => {
     const first = 'A'.repeat(60), second = 'B'.repeat(60)
-    const value = book('LegacyZeroOverlap', `${first}\n\n${second}`)
+    const value = book('LegacyZeroOverlap', `${first}\n\n${second}`, null)
     projectRuntimeHost.activateView(b.runtime)
     const legacyChunks = [first, `${first}\n\n${second.slice(0, 38)}`, second.slice(38)]
     const correctedChunks = [first, second]
@@ -196,6 +210,7 @@ describe('actual reference knowledge grant admission', () => {
       ImportRunRepository.commitReferenceImportReceipt(RUN, value.authority, 1, id, value.runtime.database)
     })
     const documents = documentRows(value), receipts = knowledgeRows(value), dispatches = dispatchRows(value)
+    expect(value.runtime.database.prepare('SELECT COUNT(*) FROM reference_embedding_budgets').pluck().get()).toBe(0)
     const projection = await store.listDocuments(value.root)
     expect(projection).toHaveLength(1)
     const integrity = await store.getDocumentIntegrity(value.root, id)
@@ -215,6 +230,10 @@ describe('actual reference knowledge grant admission', () => {
       const fts = await store.search(value.root, second.slice(0, 22))
       expect(fts.length).toBeGreaterThan(0)
       await expect(importBook(value, { model: batchModel(1) })).resolves.toMatchObject({
+        success: false, error: 'KNOWLEDGE_BASE_REFERENCE_BUDGET_REQUIRED',
+      })
+      await expect(importReferenceText(value.content, 'Chapter 1.txt', value.binding.stableKey, 1, RUN,
+        value.authority, value.root, 'openai', batchModel(1), value.resources)).resolves.toMatchObject({
         success: false, error: 'KNOWLEDGE_BASE_REFERENCE_RECEIPT_CONFLICT',
       })
       expect(fetch).not.toHaveBeenCalled()
@@ -378,7 +397,7 @@ describe('actual reference knowledge grant admission', () => {
       a.runtime.database.prepare('UPDATE import_runs SET lease_expires_at=0 WHERE id=?').run(RUN)
       const execution = ImportRunRepository.startOrResume(RUN, 'fictional-takeover', Date.now(), 60_000, a.runtime).execution
       current = importBook(a, { model: embeddingModel, authority: { owner: execution.owner, epoch: execution.epoch },
-        admission: captureReferenceImportAdmission(a.runtime, a.ref, requestHash) })
+        admission: captureReferenceImportAdmission(a.runtime, a.ref, requestHash, undefined, a.budget) })
       held.finish()
       await expect(Promise.all([old, current])).resolves.toEqual([
         expect.objectContaining({ success: true, docId: documentId(a) }), expect.objectContaining({ success: true, docId: documentId(a) }),
@@ -422,7 +441,7 @@ describe('actual reference knowledge grant admission', () => {
         const grant = a.grants.issue({ grantId: randomUUID(), operationKey: randomUUID(), runId: RUN,
           manifestFingerprint: a.grant.manifestFingerprint!, requestHash: nextHash })
         current = importBook(a, { admission: captureReferenceImportAdmission(a.runtime,
-          { grantId: grant.grantId, revision: grant.revision, runId: RUN }, nextHash) })
+          { grantId: grant.grantId, revision: grant.revision, runId: RUN }, nextHash, undefined, a.budget) })
       }
       let currentSettled = false
       void current.then(() => { currentSettled = true }, () => { currentSettled = true })
@@ -514,7 +533,7 @@ describe('actual reference knowledge grant admission', () => {
   })
 
   it('keeps the real multi-batch KB default serial and replays a fully embedded document without another request', async () => {
-    const value = book('DefaultBatching', BATCH_TEXT)
+    const value = book('DefaultBatching', BATCH_TEXT, batchModel())
     projectRuntimeHost.activateView(b.runtime)
     let inFlight = 0, peakInFlight = 0
     const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
@@ -550,7 +569,7 @@ describe('actual reference knowledge grant admission', () => {
   })
 
   it('persists explicit-two out-of-order real KB batches in original vector order', async () => {
-    const value = book('ExplicitTwoBatching', BATCH_TEXT)
+    const value = book('ExplicitTwoBatching', BATCH_TEXT, batchModel(2))
     projectRuntimeHost.activateView(b.runtime)
     const gates = [deferred<Response>(), deferred<Response>(), deferred<Response>()]
     const completed: number[] = []
@@ -616,8 +635,8 @@ describe('actual reference knowledge grant admission', () => {
     ['http', 0], ['http', 1], ['invalid', 0], ['invalid', 1],
   ] as const)('matches serial outcome when ordinal zero is %s and ordinal %i returns first', async (ordinalZeroKind, firstCompletedOrdinal) => {
     const content = `${'A'.repeat(100)}${'B'.repeat(100)}`
-    const serial = book(`Serial-${ordinalZeroKind}`, content)
-    const parallel = book(`Parallel-${ordinalZeroKind}`, content)
+    const serial = book(`Serial-${ordinalZeroKind}`, content, batchModel(1))
+    const parallel = book(`Parallel-${ordinalZeroKind}`, content, batchModel(2))
     projectRuntimeHost.activateView(b.runtime)
     const kindAtOrdinal = [ordinalZeroKind, ordinalZeroKind === 'http' ? 'invalid' : 'http'] as const
     const responseFor = (kind: typeof kindAtOrdinal[number]) => kind === 'http'
@@ -734,7 +753,7 @@ describe('actual reference knowledge grant admission', () => {
     a.grants.revoke(a.ref)
     const grant = a.grants.issue({ grantId: randomUUID(), operationKey: randomUUID(), runId: RUN,
       manifestFingerprint: a.grant.manifestFingerprint!, requestHash })
-    const admission = captureReferenceImportAdmission(a.runtime, { grantId: grant.grantId, revision: grant.revision, runId: RUN }, requestHash)
+    const admission = captureReferenceImportAdmission(a.runtime, { grantId: grant.grantId, revision: grant.revision, runId: RUN }, requestHash, undefined, a.budget)
     await expect(importBook(a, { model: embeddingModel, admission })).resolves.toMatchObject({ success: false, error: 'REFERENCE_EMBEDDING_PRIOR_DISPATCH_BLOCKED' })
     await expectBUnchanged()
     store.closeConnection(b.root)
@@ -768,7 +787,7 @@ describe('actual reference knowledge grant admission', () => {
   })
 
   it('drains a sibling request before reporting a later settlement fence despite an earlier ordinary HTTP failure', async () => {
-    const value = book('Batches', 'x'.repeat(150))
+    const value = book('Batches', 'x'.repeat(150), batchModel(2))
     projectRuntimeHost.activateView(b.runtime)
     const model = { ...embeddingModel, embeddingOptions: { chunkSize: 100, chunkOverlap: 0, batchSize: 1, concurrencyLimit: 2 } }
     const first = deferred<Response>(), second = deferred<Response>(), both = deferred<void>()
@@ -801,7 +820,7 @@ describe('actual reference knowledge grant admission', () => {
   })
 
   it('stops a revoked three-batch import after two dispatches and drains its sibling before close', async () => {
-    const value = book('RevokedThreeBatch', BATCH_TEXT)
+    const value = book('RevokedThreeBatch', BATCH_TEXT, batchModel(2))
     projectRuntimeHost.activateView(b.runtime)
     const gates = [deferred<Response>(), deferred<Response>(), deferred<Response>()]
     let starts = 0, importSettled = false, closeSettled = false

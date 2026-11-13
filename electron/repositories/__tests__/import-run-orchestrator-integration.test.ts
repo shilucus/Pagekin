@@ -289,6 +289,11 @@ describe('ImportRunOrchestrator with the real import repository', () => {
       chapters: [chapter(1), chapter(2)],
     })
     getProjectDb()!.transaction(() => {
+      const binding = getProjectDb()!.prepare(`SELECT source_id,source_chapter_number FROM reference_import_manifest_chapters
+        WHERE import_run_id='sparse-run' AND chapter_number=4 AND snapshot_run_id='sparse-run' AND snapshot_chapter_number=4`)
+        .get() as { source_id: string; source_chapter_number: number } | undefined
+      expect(binding).toBeDefined()
+      getProjectDb()!.prepare("DELETE FROM reference_import_manifest_chapters WHERE import_run_id='sparse-run' AND chapter_number=4").run()
       getProjectDb()!.prepare(`
         UPDATE import_source_chapter_map
         SET chapter_number = 5
@@ -298,6 +303,9 @@ describe('ImportRunOrchestrator with the real import repository', () => {
         UPDATE import_run_chapters SET chapter_number = 5
         WHERE run_id = 'sparse-run' AND chapter_number = 4
       `).run()
+      getProjectDb()!.prepare(`INSERT INTO reference_import_manifest_chapters
+        (import_run_id,chapter_number,snapshot_run_id,snapshot_chapter_number,source_id,source_chapter_number)
+        VALUES ('sparse-run',5,'sparse-run',5,?,?)`).run(binding!.source_id, binding!.source_chapter_number)
     })()
     const imported: number[] = []
     const dependencies = realDependencies([], { current: false })

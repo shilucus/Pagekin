@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { applyM04ImportEffectLedger, verifyM04ImportEffectLedger } from '../../migrations/m04-import-effect-ledger'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
+import { migrateSchema } from '../../migrations/runner'
+import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { createImportRunChapterBatchCheckpointId, type ImportRunPrepareRequest } from '../../../src/shared/import-run'
 
 const fixture = vi.hoisted(() => ({ db: null as import('better-sqlite3').Database | null }))
@@ -144,7 +147,7 @@ describe('M04 import effect ledger', () => {
 
   it('keeps prepared effects incomplete and returns the same committed effect to repeated or late callers', () => {
     const db = fixture.db!
-    db.transaction(() => applyM04ImportEffectLedger(db))()
+    migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
     ImportRunRepository.prepare(request('effect-run'))
     const execution = ImportRunRepository.startOrResume('effect-run', 'worker', 1_000, 10_000).execution
     db.prepare("UPDATE import_runs SET stage='style' WHERE id='effect-run'").run()
@@ -182,7 +185,7 @@ describe('M04 import effect ledger', () => {
 
   it('authorizes writes by owner, epoch, and server TTL instead of a stale client expiresAt echo', () => {
     const db = fixture.db!
-    db.transaction(() => applyM04ImportEffectLedger(db))()
+    migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
     ImportRunRepository.prepare(request('heartbeat-run'))
     const now = Date.now()
     const execution = ImportRunRepository.startOrResume('heartbeat-run', 'worker', now, 10_000).execution

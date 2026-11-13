@@ -268,7 +268,8 @@ function lifecycleHook(lifecycle: EmbeddingRequestLifecycle | undefined, phase: 
         && typeof (result as { then?: unknown }).then === 'function') void Promise.resolve(result).catch(() => {})
       dispatchBarrier()
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof EmbeddingDispatchBarrierError) throw error
     dispatchBarrier()
   }
 }
@@ -286,7 +287,8 @@ function batchLifecycle(observer: EmbeddingBatchObserver | undefined, ordinal: n
     }
     assertLifecycle(lifecycle)
     return lifecycle
-  } catch {
+  } catch (error) {
+    if (error instanceof EmbeddingDispatchBarrierError) throw error
     dispatchBarrier()
   }
 }

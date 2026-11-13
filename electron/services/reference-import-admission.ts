@@ -4,11 +4,21 @@ import { ReferenceImportGrantRepository } from '../repositories/reference-import
 import { assertReferenceImportGrantId, assertReferenceImportGrantRef,
   type ReferenceImportGrantRef } from '../../src/shared/reference-import-grant'
 import { isContentHash } from '../../src/shared/source-ref'
+import type { ReferenceEmbeddingBudgetCapability, ReferenceEmbeddingBudgetFlight,
+  ReferenceEmbeddingBudgetRepository } from '../repositories/reference-embedding-budget-repository'
+import type { ReferenceEmbeddingDispatchRecord } from './reference-embedding-dispatch-contract'
 import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 import { projectRuntimeHost, type ProjectRuntime } from './project-runtime'
 
 export interface ReferenceImportAdmission {
   readonly bindingKey: string
+  readonly budget?: {
+    assertEffect(): void
+    openFlight(): ReferenceEmbeddingBudgetFlight
+    beforeDispatch(flight: ReferenceEmbeddingBudgetFlight, mark: () => ReferenceEmbeddingDispatchRecord): ReferenceEmbeddingDispatchRecord
+    settle(flight: ReferenceEmbeddingBudgetFlight, mark: ReferenceEmbeddingDispatchRecord, settle: () => void): void
+    finish(flight: ReferenceEmbeddingBudgetFlight): void
+  }
   assertCurrent(resources: ReferenceImportResources, runId: string): void
   withTransaction<T>(resources: ReferenceImportResources, runId: string, operation: () => T): T
 }
@@ -37,6 +47,7 @@ export function captureReferenceImportAdmission(
   ref: ReferenceImportGrantRef,
   expectedRequestHash: string,
   assertLocallyCurrent?: () => void,
+  budget?: { repository: ReferenceEmbeddingBudgetRepository; capability: ReferenceEmbeddingBudgetCapability },
 ): ReferenceImportAdmission {
   assertReferenceImportGrantRef(ref)
   if (typeof expectedRequestHash !== 'string' || !isContentHash(expectedRequestHash)) fail('REQUEST_HASH_INVALID')
@@ -60,6 +71,8 @@ export function captureReferenceImportAdmission(
     // A failed durable revoke must not revive an issuer's already retired local capability.
     if (assertLocallyCurrent && synchronous(assertLocallyCurrent) !== undefined) fail('ASYNC_GUARD_INVALID')
     const grant = synchronous(() => grants.assertActive(capturedRef))
+    if (budget && (budget.capability.runId !== capturedRef.runId
+      || budget.capability.manifestFingerprint !== grant.manifestFingerprint)) fail('INVALID')
     if (grant.requestHash !== expectedRequestHash) fail('REQUEST_MISMATCH')
     if (assertLocallyCurrent && synchronous(assertLocallyCurrent) !== undefined) fail('ASYNC_GUARD_INVALID')
   }
@@ -83,6 +96,15 @@ export function captureReferenceImportAdmission(
   const admission: ReferenceImportAdmission = Object.freeze({
     bindingKey: createHash('sha256').update(JSON.stringify([projectId, canonicalRoot, executionEpoch,
       capturedRef.grantId, capturedRef.revision, capturedRef.runId, expectedRequestHash])).digest('hex'),
+    ...(budget ? { budget: Object.freeze({
+      assertEffect: () => transaction(() => { assertGrant(); budget.repository.assertEffect(budget.capability) }),
+      openFlight: () => budget.repository.openFlight(budget.capability),
+      beforeDispatch: (flight: ReferenceEmbeddingBudgetFlight, mark: () => ReferenceEmbeddingDispatchRecord) =>
+        budget.repository.beforeDispatch(flight, mark),
+      settle: (flight: ReferenceEmbeddingBudgetFlight, mark: ReferenceEmbeddingDispatchRecord, settle: () => void) =>
+        budget.repository.settle(flight, mark, settle),
+      finish: (flight: ReferenceEmbeddingBudgetFlight) => flight.finish(),
+    }) } : {}),
     assertCurrent(resources: ReferenceImportResources, runId: string): void {
       transaction(() => { assertResources(resources, runId); assertGrant() })
     },

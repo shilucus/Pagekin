@@ -178,6 +178,85 @@ export function assertReferenceEmbeddingDispatchFreezeCoverage(
   }
 }
 
+/** Budget history cannot be used as execution authority after transfer. */
+export function assertReferenceEmbeddingBudgetFreezeCoverage(
+  database: Database.Database,
+  authority: PortableTransferAuthority,
+  freeze?: PortableRuntimeFreezeGuard,
+  completePortableCopy = false,
+): void {
+  if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reference_embedding_budgets'").get()) return
+  const rows = database.prepare(`SELECT root_run_id,manifest_fingerprint,policy_version,initial_chunk_size,
+    initial_chunk_overlap,initial_batch_size,request_limit,active_limit_ms,spent_requests,active_elapsed_ms,active_since_ms,state
+    FROM reference_embedding_budgets`).all() as Array<{
+      root_run_id: string; manifest_fingerprint: string | null; policy_version: string; initial_chunk_size: number | null
+      initial_chunk_overlap: number | null; initial_batch_size: number | null; request_limit: number | null
+      active_limit_ms: number | null; spent_requests: number | null; active_elapsed_ms: number | null
+      active_since_ms: number | null; state: string
+    }>
+  for (const row of rows) {
+    const rootFrozen = freeze?.isFrozen('import_runs', row.root_run_id) === true
+    const budgetFrozen = freeze?.isFrozen('reference_embedding_budgets', row.root_run_id) === true
+    const historical = completePortableCopy || rootFrozen || budgetFrozen || row.manifest_fingerprint === null
+    if (!historical) continue
+    const migratedLegacy = authority.sourceSchemaVersion < 18 && row.state === 'legacy_unbudgeted'
+      && row.policy_version === 'reference-embedding-budget-v1'
+      && [row.manifest_fingerprint, row.initial_chunk_size, row.initial_chunk_overlap, row.initial_batch_size,
+        row.request_limit, row.active_limit_ms, row.spent_requests, row.active_elapsed_ms, row.active_since_ms]
+        .every(value => value === null)
+    if (!freeze?.active || !rootFrozen || row.manifest_fingerprint !== null || (!budgetFrozen && !migratedLegacy)) invalid()
+  }
+}
+
+/** A snapshot reference does not freeze a new local import's own binding. */
+export function assertReferenceManifestBindingFreezeCoverage(
+  database: Database.Database,
+  authority: PortableTransferAuthority,
+  freeze?: PortableRuntimeFreezeGuard,
+  completePortableCopy = false,
+): void {
+  if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reference_import_manifest_chapters'").get()) return
+  const rows = database.prepare(`SELECT b.import_run_id,b.chapter_number,b.snapshot_run_id,b.snapshot_chapter_number,b.source_id,b.source_chapter_number,
+    c.run_id AS snapshot_owner,c.source_id AS snapshot_source_id,c.source_chapter_number AS snapshot_source_chapter_number
+    FROM reference_import_manifest_chapters b LEFT JOIN import_run_chapters c
+      ON c.run_id=b.snapshot_run_id AND c.chapter_number=b.snapshot_chapter_number`).all() as Array<{
+    import_run_id: string; chapter_number: number; snapshot_run_id: string; snapshot_chapter_number: number; source_id: string; source_chapter_number: number
+    snapshot_owner: string | null; snapshot_source_id: string | null; snapshot_source_chapter_number: number | null
+  }>
+  const ids = new Set(rows.map(row => `${row.import_run_id}:${row.chapter_number}`))
+  if (freeze?.recordIds?.('reference_import_manifest_chapters').some(id => !ids.has(id))) invalid()
+  for (const row of rows) {
+    const runFrozen = freeze?.isFrozen('import_runs', row.import_run_id) === true
+    const bindingFrozen = freeze?.isFrozen('reference_import_manifest_chapters', `${row.import_run_id}:${row.chapter_number}`) === true
+    if (!(completePortableCopy || runFrozen || bindingFrozen)) continue
+    // Pre-M17 packages cannot contain binding projections: migration backfills from their verified snapshots.
+    if (!freeze?.active || !runFrozen) invalid()
+    if (!bindingFrozen && (authority.sourceSchemaVersion >= 18 || row.snapshot_run_id !== row.import_run_id
+      || row.snapshot_chapter_number !== row.chapter_number
+      || row.snapshot_owner !== row.import_run_id || row.source_id !== row.snapshot_source_id
+      || row.source_chapter_number !== row.snapshot_source_chapter_number)) invalid()
+  }
+  const roots = database.prepare("SELECT root_run_id FROM reference_embedding_budgets WHERE state IN ('ready','recovery_unknown')")
+    .all() as Array<{ root_run_id: string }>
+  const manifests = database.prepare(`SELECT r.id,r.manifest_chapter_count,r.manifest_content_size,
+    COUNT(b.chapter_number) AS binding_count,COUNT(c.run_id) AS snapshot_count,COALESCE(SUM(c.content_size),0) AS snapshot_size
+    FROM import_runs r LEFT JOIN reference_import_manifest_chapters b ON b.import_run_id=r.id
+    LEFT JOIN import_run_chapters c ON c.run_id=b.snapshot_run_id AND c.chapter_number=b.snapshot_chapter_number
+    WHERE r.root_run_id=? AND r.purpose='reference' AND r.stage<>'parsing' GROUP BY r.id`)
+  for (const root of roots) {
+    if (!freeze?.isFrozen('import_runs', root.root_run_id)) continue
+    const candidates = manifests.all(root.root_run_id) as Array<{
+      id: string; manifest_chapter_count: number; manifest_content_size: number
+      binding_count: number; snapshot_count: number; snapshot_size: number
+    }>
+    if (candidates.length === 0 || !candidates.every(row => freeze.isFrozen('import_runs', row.id)
+      && Number.isSafeInteger(row.manifest_chapter_count) && row.manifest_chapter_count > 0
+      && Number.isSafeInteger(row.manifest_content_size) && row.manifest_content_size >= 0
+      && row.binding_count === row.manifest_chapter_count && row.snapshot_count === row.binding_count
+      && row.snapshot_size === row.manifest_content_size)) invalid()
+  }
+}
+
 function receiptId(input: Pick<PortableTransferAuthority,
   'originProjectId' | 'snapshotGeneration' | 'portableDatabaseSha256' | 'finalizations' | 'summarySources'>): string {
   return `portable-transfer:${sha256(JSON.stringify({ originProjectId: input.originProjectId,
@@ -296,6 +375,8 @@ export function verifyPortableTransferAuthority(
 ): void {
   assertReferenceImportGrantFreezeCoverage(database, freeze)
   assertReferenceEmbeddingDispatchFreezeCoverage(database, freeze, true)
+  assertReferenceEmbeddingBudgetFreezeCoverage(database, authority, freeze, true)
+  assertReferenceManifestBindingFreezeCoverage(database, authority, freeze, true)
   const facts = currentness(database, false, freeze)
   if (JSON.stringify(facts.finalizations) !== JSON.stringify(authority.finalizations)
     || JSON.stringify(facts.summarySources) !== JSON.stringify(authority.summarySources)) invalid()
@@ -308,6 +389,8 @@ export function verifyPortableTransferAuthorityHistory(
 ): void {
   assertReferenceImportGrantFreezeCoverage(database, freeze)
   assertReferenceEmbeddingDispatchFreezeCoverage(database, freeze)
+  assertReferenceEmbeddingBudgetFreezeCoverage(database, authority, freeze)
+  assertReferenceManifestBindingFreezeCoverage(database, authority, freeze)
   const deleted = new Set<number>()
   for (const item of authority.finalizations) {
     const row = database.prepare(`
