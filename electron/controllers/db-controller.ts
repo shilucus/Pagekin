@@ -3,7 +3,7 @@ import { isProjectSessionContext } from '../../src/shared/project-session-contex
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
 import { assertReferenceKnowledgeUnmanagedMutationAllowed } from '../services/reference-knowledge-authority'
-import { assertImportStageUnmanagedMutationAllowed } from '../services/import-stage-flight'
+import { assertImportStageUnmanagedMutationAllowed, assertImportBlueprintOperationUnmanagedMutationAllowed, assertImportBlueprintSyncUnmanagedMutationAllowed } from '../services/import-stage-flight'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import { assertGenerationSourcesCurrent, assertGenerationSynopsisCommit, commitGenerationPlotOutlineAuthorEdit, commitGenerationBlueprintAuthorEdit, assertImportGenerationSourcesCurrent, withImportGenerationQuerySources, recordGenerationDirectoryCommit, withGenerationAgentChildEffect } from './generation-controller'
 import { projectAccess } from '../services/project-access'
@@ -160,6 +160,18 @@ function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabas
     let mayReadDatabase = false
     try {
       const runtime = projectAccess.assertViewContext(context)
+      if (channel === 'db:blueprint-commit-range') {
+        const request = args[0] as { operationId?: unknown; generationRunHandle?: { runId?: unknown } } | undefined
+        assertImportBlueprintOperationUnmanagedMutationAllowed(runtime.database, request?.operationId)
+        if (typeof request?.generationRunHandle?.runId === 'string') {
+          const row = runtime.database.prepare("SELECT json_extract(binding_json,'$.sourceManifest.importSlot.runId') AS import_run_id FROM generation_runs WHERE run_id=?")
+            .get(request.generationRunHandle.runId) as { import_run_id: unknown } | undefined
+          assertImportStageUnmanagedMutationAllowed(runtime.database, row?.import_run_id)
+        }
+      }
+      if (channel === 'db:blueprint-character-sync-complete') {
+        assertImportBlueprintSyncUnmanagedMutationAllowed(runtime.database, args[0])
+      }
       if (channel === 'db:import-global-facts-commit') {
         const request = args[0]
         if (request && typeof request === 'object') {

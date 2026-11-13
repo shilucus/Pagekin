@@ -104,3 +104,10 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 - 原 global 契约不同于 style：只有自动 opened-readiness ACK，解码后 roster revision CAS 与提交后 unsaved-edits 投影保留，不增 whole-config precommit 拒绝。renderer 保留全文快照、reasoning、原双语日志/进度/候选、当前 core 重放、dirty/session 隔离；trusted diagnostics/bounded completion 的闭合元数据仅恢复原安全解释。
 - [Stage66 evidence](stage-66-evidence.md) 记录 final24文件697/697（native39/unit4/Skill7/contract26/renderer146）、独立4文件428/428及 fresh typecheck/lint/colors/i18n/build 全0；真实 unknown/persistence 查询竞争和 workflow-store 日志 RED/GREEN 全部保留。报告不相加，[manifest](stage-66-source-manifest.json) 绑定来源、38raw、28reported paths 与本轮16个实际构建入口。
 - 仅 IMPORT001/002 各补 contract_review/deterministic 部分证据，全部35项状态、门禁、依赖和既有记录不变，仍11completed/24in_progress。无完整拆书/仿写、蓝图/refresh 完整迁移、目标采用、A-to-B/background、Electron 进程、真实模型/文学质量、视觉、性能提升、平台或累计终审资格。
+
+## Stage67 增量证据
+
+- [ADR0077](../../adr/0077-main-owned-foreground-reference-blueprints.md) 仅接受 issued foreground reference blueprints 的完整主进程循环：原 page100/contiguous-max5/checkpoint 分组、每 range 空 prefix、原任务/Skill/root/model/ordinal、结构化拆分及一次语法修复、canonical commit/sync/blueprints-to-refresh、heartbeat/终态和物理 drain；保留所有未知请求、预算和来源保护。
+- `reference-blueprint-contract.ts`、`reference-blueprint-foreground.ts`、`reference-blueprint-driver.ts` 与现有 orchestrator/workflow 维持精确 handle 的自动 readiness、原全文快照/reasoning、原日志/进度/receipt/context/刷新顺序。角色同步仍只形成待采用提议；prepared/committed/completed-null 恢复不补发请求或重建权限。长度例外仅允许同 reference-blueprints run/root 已知 length 的后续有界 ordinal，length 本身不成为可提交输出。
+- [Stage67 evidence](stage-67-evidence.md) 记录 final20文件620/620（native39/unit8/renderer161）、独立8文件528/528、fresh type/lint/colors/i18n/build 全0，以及所有初始失败/RED/GREEN；报告不相加。[manifest](stage-67-source-manifest.json) 绑定当前源码、原始报告及本轮实际构建入口。Sol 独立接受 bounded source/runtime，Terra 另审非自有 native/DB/artifacts。
+- 仅 IMPORT001/002 各追加 contract_review/deterministic 部分证据，所有状态、passes、依赖、门禁、required evidence 和旧记录不变，仍11completed/24in_progress。无完整拆书/仿写、refresh 所有权、目标采用、A-to-B/background、Electron 进程、真实模型/文学质量、视觉、提速、平台或累计终审资格。

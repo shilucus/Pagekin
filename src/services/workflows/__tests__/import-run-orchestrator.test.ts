@@ -122,6 +122,41 @@ afterEach(() => {
 })
 
 describe('ImportRunOrchestrator', () => {
+  it.each(['blueprints', 'refresh', 'completed'] as const)('delegates issued reference blueprints at %s without renderer writers', async stage => {
+    const { deps } = harness(1, { stage, status: stage === 'completed' ? 'completed' : 'running' })
+    deps.executeReferenceBlueprints = vi.fn(async () => {})
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks)
+    expect(deps.executeReferenceBlueprints).toHaveBeenCalledOnce()
+    expect(deps.startOrResume).not.toHaveBeenCalled()
+    expect(deps.renewExecution).not.toHaveBeenCalled()
+    expect(deps.listChapters).not.toHaveBeenCalled()
+    expect(deps.inferBlueprints).not.toHaveBeenCalled()
+    expect(deps.prepareEffectReceipt).not.toHaveBeenCalled()
+    expect(deps.commitEffectReceipt).not.toHaveBeenCalled()
+    expect(deps.advanceStage).not.toHaveBeenCalled()
+    expect(deps.fail).not.toHaveBeenCalled()
+    expect(deps.cancelAtBoundary).not.toHaveBeenCalled()
+  })
+
+  it('preserves a delegated blueprint failure without renderer terminal writers', async () => {
+    const { deps } = harness(1, { stage: 'blueprints' })
+    deps.executeReferenceBlueprints = vi.fn(async () => { throw new Error('main blueprint failure') })
+    await expect(new ImportRunOrchestrator(deps).executeStage('run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks)).rejects.toThrow('main blueprint failure')
+    expect(deps.startOrResume).not.toHaveBeenCalled()
+    expect(deps.fail).not.toHaveBeenCalled()
+    expect(deps.cancelAtBoundary).not.toHaveBeenCalled()
+  })
+
+  it('keeps the author blueprint path on the existing renderer orchestrator', async () => {
+    const { deps } = harness(1, { purpose: 'author-manuscript', authorInference: true, stage: 'blueprints' })
+    deps.listBlueprintChapterNumbers = vi.fn(async () => new Set<number>())
+    deps.executeReferenceBlueprints = vi.fn(async () => {})
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks)
+    expect(deps.executeReferenceBlueprints).not.toHaveBeenCalled()
+    expect(deps.inferBlueprints).toHaveBeenCalledOnce()
+    expect(deps.advanceStage).toHaveBeenCalledOnce()
+  })
+
   it.each(['global', 'style', 'blueprints', 'completed'] as const)('delegates issued reference global at %s without legacy writers', async stage => {
     const { deps } = harness(1, { stage, status: stage === 'completed' ? 'completed' : 'running' })
     deps.executeReferenceGlobal = vi.fn(async () => {})

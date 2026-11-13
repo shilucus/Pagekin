@@ -53,7 +53,10 @@ import { assertReferenceGlobalRequest, assertReferenceGlobalAckRequest } from '.
 import { ReferenceGlobalForeground } from './reference-global-foreground'
 import { ReferenceGlobalFailure } from '../services/reference-global-driver'
 import { ReferenceStyleFailure } from '../services/reference-style-driver'
-import { assertImportStageUnmanagedMutationAllowed } from '../services/import-stage-flight'
+import { assertReferenceBlueprintRequest, assertReferenceBlueprintAckRequest } from '../../src/shared/reference-blueprint-contract'
+import { ReferenceBlueprintForeground } from './reference-blueprint-foreground'
+import { ReferenceBlueprintFailure } from '../services/reference-blueprint-driver'
+import { assertImportStageUnmanagedMutationAllowed, assertImportBlueprintSyncUnmanagedMutationAllowed } from '../services/import-stage-flight'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
 type OwnerChannels = PlanningFeedbackChannels & LegacyRosterGenerationChannels & GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
@@ -170,12 +173,14 @@ export function registerGenerationController(options: {
   const activeHandlers = new Map<ProjectRuntime, number>()
   const referenceStyles = new ReferenceStyleForeground()
   const referenceGlobals = new ReferenceGlobalForeground()
+  const referenceBlueprints = new ReferenceBlueprintForeground()
   const hasPhysical = (entry: OwnerEntry | undefined) => entry?.mode === 'legacy'
     ? entry.owner.hasPhysicalInFlight() : entry?.authority.hasPhysicalInFlight() ?? false
   projectRuntimeHost.registerBusyPredicate(runtime => (activeHandlers.get(runtime) ?? 0) > 0 || hasPhysical(owners.get(runtime.database)))
   projectRuntimeHost.onCloseRequested(runtime => {
     referenceStyles.requestClose(runtime)
     referenceGlobals.requestClose(runtime)
+    referenceBlueprints.requestClose(runtime)
     revokeAgentGlobalToolExecutions(runtime)
     const failures: unknown[] = []
     const entry = owners.get(runtime.database)
@@ -200,6 +205,7 @@ export function registerGenerationController(options: {
   onProjectDatabaseBeforeClose(({ database }) => {
     referenceStyles.release(database)
     referenceGlobals.release(database)
+    referenceBlueprints.release(database)
     const entry = owners.get(database)
     if (entry) {
       if (entry.mode === 'legacy') entry.owner.suspendForProjectClose()
@@ -704,6 +710,11 @@ export function registerGenerationController(options: {
       for (const slot of slots) assertImportStageUnmanagedMutationAllowed(database, slot.import_run_id)
     }
     if (channel === 'generation:begin') { selection(args[0]); return }
+    if (channel === 'character-proposal:stage') {
+      const request = args[0] as { source?: { kind?: unknown; operationId?: unknown } } | undefined
+      if (request?.source?.kind === 'directory') assertImportBlueprintSyncUnmanagedMutationAllowed(database, request.source.operationId)
+      return
+    }
     if (!['import-generation:execute', 'import-generation:v1:query-materials', 'generation:pause', 'generation:cancel', 'generation:resume',
       'generation:restart', 'generation:discard-candidate', 'generation:compose-visible'].includes(channel)) return
     const first = args[0]
@@ -714,6 +725,40 @@ export function registerGenerationController(options: {
       if (row) root(row.root_action_id)
     }
     if (channel === 'generation:restart') selection(args[1])
+  }
+  for (const channel of ['import-generation:v1:blueprints', 'import-generation:v1:blueprints-ack'] as const) {
+    ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
+      try {
+        const session = raw[1]
+        if (raw.length !== 2 || !isProjectSessionContext(session)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
+        if (channel === 'import-generation:v1:blueprints') assertReferenceBlueprintRequest(raw[0])
+        else assertReferenceBlueprintAckRequest(raw[0])
+        const owner = authorizedOwner(session, event)
+        const runtime = ownerRuntimes.get(owner)!
+        return await withRuntimeHandler(runtime, async () => {
+          if (channel === 'import-generation:v1:blueprints-ack') {
+            assertReferenceBlueprintAckRequest(raw[0])
+            return referenceBlueprints.acknowledge(runtime, event.sender, session, raw[0])
+          }
+          assertReferenceBlueprintRequest(raw[0])
+          try {
+            const result = await referenceBlueprints.execute(runtime, owner, event.sender, session, raw[0], () => {
+              if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+            })
+            return { success: true, ...result }
+          } catch (error) {
+            if (error instanceof ReferenceBlueprintFailure) {
+              if (error.secondaryErrors.length) console.error('[generation] reference blueprint terminal bookkeeping failed', {
+                channel, errorCode: error.errorCode, secondaryErrorCodes: error.secondaryErrors,
+              })
+              return { success: false, errorCode: error.errorCode, error: error.displayMessage,
+                ...(error.postCommitSyncBatchId ? { postCommitSyncBatchId: error.postCommitSyncBatchId } : {}) }
+            }
+            throw error
+          }
+        })
+      } catch (error) { throw new Error(generationIpcErrorCode(channel, error)) }
+    })
   }
   for (const channel of ['import-generation:v1:global', 'import-generation:v1:global-ack'] as const) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {

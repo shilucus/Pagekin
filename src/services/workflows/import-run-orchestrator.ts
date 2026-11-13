@@ -47,6 +47,7 @@ export interface ImportRunOrchestratorDependencies {
   executeReferenceKnowledge?: (run: ImportRunSnapshot, executionOwner: string) => Promise<ImportRunStartResult>
   executeReferenceGlobal?: (run: ImportRunSnapshot, executionOwner: string) => Promise<void>
   executeReferenceStyle?: (run: ImportRunSnapshot, executionOwner: string) => Promise<void>
+  executeReferenceBlueprints?: (run: ImportRunSnapshot, executionOwner: string) => Promise<void>
   startOrResume: (runId: string, owner: string) => Promise<ImportRunStartResult>
   renewExecution: (runId: string, execution: ImportRunExecutionLease) => Promise<ImportRunExecutionLease>
   getEffectReceipt: (
@@ -308,6 +309,21 @@ export class ImportRunOrchestrator {
       stopIfCancelled(context, existing.locale)
       try {
         await this.dependencies.executeReferenceStyle(existing, executionOwner)
+        stopIfCancelled(context, existing.locale)
+      } catch (error) {
+        if (cancellationRequested(context) && isWorkflowCancellation(error)) {
+          await context.cancellationRequest?.catch(() => undefined)
+          stopIfCancelled(context, existing.locale)
+        }
+        throw error
+      }
+      return
+    }
+    if (existing.purpose === 'reference' && requestedStage === 'blueprints' && this.dependencies.executeReferenceBlueprints
+      && (existing.stage === 'blueprints' || stageIndex(existing, existing.stage) > requestedIndex)) {
+      stopIfCancelled(context, existing.locale)
+      try {
+        await this.dependencies.executeReferenceBlueprints(existing, executionOwner)
         stopIfCancelled(context, existing.locale)
       } catch (error) {
         if (cancellationRequested(context) && isWorkflowCancellation(error)) {

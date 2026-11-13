@@ -16,6 +16,25 @@ vi.mock('electron', () => electron)
 await import('../preload')
 
 describe('桌面预加载接口', () => {
+  it('forwards only blueprints execution and batch readiness,not commit/sync/approval authority', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const session = { projectId: 'fictional-project', leaseId: 'fictional-view', projectPath: 'C:/fictional' }
+    const execution = { owner: 'fictional-owner', epoch: 1 }
+    const requests = [
+      ['import-generation:v1:blueprints', { runId: 'fictional-run', execution, modelId: 'fictional-model' }],
+      ['import-generation:v1:blueprints-ack', { runId: 'fictional-run', execution, batchId: '1-1-12345678', token: 'fictional-token', decision: 'accept' }],
+    ] as const
+    for (const [channel, request] of requests) {
+      await bridge.invoke(channel, request, session)
+      expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, request, session)
+    }
+    const calls = electron.ipcRenderer.invoke.mock.calls.length
+    for (const channel of ['import-generation:v1:blueprints-progress', 'import-generation:v1:blueprints-commit',
+      'import-generation:v1:blueprints-sync', 'import-generation:v1:blueprints-approve', 'import-generation:v2:blueprints']) {
+      await expect(bridge.invoke(channel, requests[0][1], session)).rejects.toThrow('GENERATION_IMPORT_CHANNEL_NOT_ALLOWED')
+    }
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)
+  })
   it('forwards only global execution and readiness ACK, never a commit or approval verb', async () => {
     const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
     const session = { projectId: 'fictional-project', leaseId: 'fictional-view', projectPath: 'C:/fictional' }

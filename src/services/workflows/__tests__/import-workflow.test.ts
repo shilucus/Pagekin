@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
@@ -33,6 +34,13 @@ vi.mock('../directory-character-sync-recovery', () => ({
   retryDirectoryCharacterSync: characterSyncMocks.retry,
 }))
 vi.mock('../commands/import-novel.command', () => ({
+  ImportBlueprintPostCommitSyncError: class extends Error {
+    readonly retryOperationId: string
+    constructor(readonly commitReceipt: { characterSyncOperation: { operationId: string } }) {
+      super('blueprint sync failed after commit')
+      this.retryOperationId = commitReceipt.characterSyncOperation.operationId
+    }
+  },
   InferGlobalSettingsCommand: class {
     constructor(_unused: unknown, private commit: (payload: unknown) => Promise<unknown>, private fillEmpty: boolean) {}
     async execute(params: { context: WorkflowContext }): Promise<void> {
@@ -137,6 +145,180 @@ afterEach(() => {
 })
 
 describe('createImportWorkflow', () => {
+  it('delegates multiple blueprint ranges with readiness, filtered identity and canonical sync projection', async () => {
+    const snapshot = run({ stage: 'blueprints', totalChapters: 2 })
+    const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+    const authority = { owner: executionOwner, epoch: 1 }
+    const batches = ['1-1-aaaaaaaa', '2-2-bbbbbbbb']
+    const handles = batches.map((_, index) => ({ projectId: session.projectId, epoch: session.leaseId, rootActionId: 'root', runId: `generation-${index}` }))
+    const receipts = batches.map((batchId, index): ImportRunEffectReceipt => ({ schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+      runId: snapshot.id, effectNamespace: snapshot.effectNamespace, effectKey: `blueprints:${batchId}`, stage: 'blueprints', batchId,
+      kind: 'chapter-blueprint-range', payloadHash: 'a'.repeat(64), state: 'committed', payload: {},
+      effectReceipt: { operationId: `op-${index}`, snapshot: [{}], characterSyncOperation: { operationId: `sync-${index}` } }, createdAt: 'now', updatedAt: 'now' }))
+    const listeners = new Map<string, (event: unknown) => void>()
+    ipcMocks.on.mockImplementation((channel, listener) => { listeners.set(channel, listener); return () => listeners.delete(channel) })
+    const acks: Array<() => void> = []
+    const waits = batches.map(() => new Promise<void>(resolve => { acks.push(resolve) }))
+    const order: string[] = []
+    const refresh = vi.spyOn(globalEventBus, 'emit').mockImplementation(() => { order.push('refresh') })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'generation:read') {
+        const handle = args[0] as typeof handles[number]
+        const text = `raw-${handle.runId}`
+        return { handle, artifacts: [{ ...handle, artifactId: handle.runId, attemptId: handle.runId,
+          text, textHash: createHash('sha256').update(text).digest('hex'), revision: 1, durableRevision: 1, status: 'running' }], budget: {} }
+      }
+      if (channel === 'import-generation:v1:blueprints-ack') {
+        const ack = args[0] as { batchId: string; decision: string }
+        const index = batches.indexOf(ack.batchId)
+        expect(ack.decision).toBe('accept')
+        expect(ipcMocks.actual.mock.calls.some(call => call[1] === 'generation:read' && (call[2] as { runId?: string }).runId === handles[index]!.runId)).toBe(true)
+        acks[index]!(); return { version: 1 }
+      }
+      if (channel === 'db:import-run-effect-receipt-get') return receipts[batches.indexOf(args[2] as string)]
+      if (channel === 'db:blueprint-character-sync-get') {
+        const operationId = args[0] as string, index = Number(operationId.at(-1))
+        return { operationId, status: 'completed', completionReceipt: { operationId, blueprintCommitOperationId: `op-${index}`, status: 'proposal-staged' } }
+      }
+      if (channel === 'import-generation:v1:blueprints') {
+        expect(args[0]).toEqual({ runId: snapshot.id, execution: authority, modelId: 'chosen' })
+        const emit = listeners.get('import-generation:v1:blueprints-progress')!
+        const identity = { projectId: session.projectId, leaseId: session.leaseId, runId: snapshot.id, execution: authority }
+        emit({ ...identity, execution: { ...authority, epoch: 2 }, sequence: 99, kind: 'progress', progress: 99 })
+        for (let index = 0; index < 2; index++) {
+          const sequence = index * 6
+          emit({ ...identity, sequence: sequence + 1, kind: 'opened', batchId: batches[index], token: `token-${index}`, handle: handles[index], modelId: 'chosen' })
+          await waits[index]
+          if (index === 1) useProjectStore.setState({ currentProject: { ...useProjectStore.getState().currentProject!, id: 'other-project', sessionLease: 'other-lease' } })
+          emit({ ...identity, sequence: sequence + 2, kind: 'range-committed', batchId: batches[index] })
+          emit({ ...identity, sequence: sequence + 3, kind: 'range-synced', batchId: batches[index] })
+          emit({ ...identity, sequence: sequence + 4, kind: 'log', value: { key: 'complete', count: 1 } })
+          emit({ ...identity, sequence: sequence + 5, kind: 'progress', progress: 100 })
+          emit({ ...identity, sequence: sequence + 6, kind: 'progress', progress: index === 0 ? 50 : 99 })
+        }
+        return { success: true, version: 1, run: { ...snapshot, stage: 'refresh' }, execution, receipt: receipts[1], handle: handles[1], modelId: 'chosen', replayed: false }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const ctx = context(); ctx.generationModelId = 'chosen'
+    ctx.data = new Proxy(ctx.data, { set(target, key, value) {
+      if (key === 'blueprintCommitReceipt') order.push('commit')
+      if (key === 'blueprintCharacterSyncReceipt') order.push('sync')
+      return Reflect.set(target, key, value)
+    } })
+    const local = {
+      log: vi.fn((message: string) => { order.push(message.includes('蓝图推演完成') ? 'complete' : 'other-project') }),
+      setProgress: vi.fn((progress: number) => { order.push(`progress:${progress}`) }), appendText: vi.fn(),
+    }
+    await createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner }).steps[3].executor({} as never, ctx, local)
+    expect(ctx.data.blueprintCommitReceipt).toEqual(receipts[1]!.effectReceipt)
+    expect(ctx.data.blueprintCharacterSyncReceipt).toMatchObject({ operationId: 'sync-1' })
+    expect(local.setProgress.mock.calls.map(call => call[0])).toEqual([100, 50, 100, 99])
+    expect(local.log).toHaveBeenCalledTimes(3)
+    expect(local.log).toHaveBeenCalledWith('蓝图推演完成：1 章已一次提交')
+    expect(local.log).toHaveBeenCalledWith('当前正在查看其他作品，蓝图事实已安全保存至目标作品库')
+    expect(local.appendText.mock.calls.map(call => call[0]).filter(Boolean)).toEqual(['raw-generation-0', 'raw-generation-1'])
+    expect(refresh).toHaveBeenCalledTimes(2)
+    expect(refresh).toHaveBeenCalledWith('REFRESH_RESOURCE', { resources: ['fileTree', 'blueprints'], projectPath: session.projectPath, projectSession: session })
+    expect(order).toEqual([
+      'commit', 'sync', 'complete', 'progress:100', 'refresh', 'progress:50',
+      'commit', 'sync', 'complete', 'progress:100', 'other-project', 'refresh', 'progress:99',
+    ])
+    expect(ipcMocks.actual.mock.calls.some(call => ['db:import-run-fail', 'db:import-run-advance-stage', 'db:blueprint-character-sync-complete'].includes(call[1]))).toBe(false)
+    expect(listeners.size).toBe(0)
+  })
+
+  it.each([null, { projectId: session.projectId, epoch: 'old-lease', rootActionId: 'old-root', runId: 'old-generation' }])(
+    'keeps historical blueprint replay read-only and clears the completed lease with handle %s', async historicalHandle => {
+    const snapshot = run({ stage: 'completed', status: 'completed' })
+    const batchId = '1-1-aaaaaaaa'
+    const receipt: ImportRunEffectReceipt = { schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION, runId: snapshot.id,
+      effectNamespace: snapshot.effectNamespace, effectKey: `blueprints:${batchId}`, stage: 'blueprints', batchId, kind: 'chapter-blueprint-range',
+      payloadHash: 'a'.repeat(64), state: 'committed', payload: {}, effectReceipt: { operationId: 'old', snapshot: [{}], characterSyncOperation: { operationId: 'sync-old' } }, createdAt: 'now', updatedAt: 'now' }
+    const refresh = vi.spyOn(globalEventBus, 'emit')
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-effect-receipt-get') return receipt
+      if (channel === 'import-generation:v1:blueprints') return { success: true, version: 1, run: snapshot, execution: null, receipt, handle: historicalHandle, modelId: null, replayed: true }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const ctx = context(); ctx.data.importRunExecution = { owner: executionOwner, epoch: 1, expiresAt: 1 }
+    ctx.data.blueprintCommitReceipt = 'existing'; ctx.data.blueprintCharacterSyncReceipt = 'existing-sync'
+    await createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner }).steps[3].executor({} as never, ctx, callbacks)
+    expect(ctx.data.blueprintCommitReceipt).toBe('existing')
+    expect(ctx.data.blueprintCharacterSyncReceipt).toBe('existing-sync')
+    expect(ctx.data.importRunExecution).toBeUndefined()
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { stage: 'refresh' as const, status: 'running' as const, replayed: true },
+    { stage: 'completed' as const, status: 'completed' as const, replayed: false },
+  ])('rejects null blueprint execution outside completed replay: $stage/$replayed', async ({ stage, status, replayed }) => {
+    const snapshot = run({ stage: 'blueprints' })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:blueprints') return { success: true, version: 1,
+        run: { ...snapshot, stage, status }, execution: null, receipt: { batchId: '1-1-aaaaaaaa' }, handle: null, modelId: null, replayed }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    await expect(createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner }).steps[3]
+      .executor({} as never, context(), callbacks)).rejects.toThrow('GENERATION_REQUEST_FAILED')
+    expect(ipcMocks.actual.mock.calls.some(call => call[1] === 'db:import-run-fail')).toBe(false)
+  })
+
+  it.each([
+    { errorCode: 'GENERATION_REQUEST_FAILED', postCommitSyncBatchId: undefined },
+    { errorCode: 'GENERATION_REQUEST_FAILED', postCommitSyncBatchId: 'not-a-batch' },
+    { errorCode: 'GENERATION_PROVIDER_FAILED', postCommitSyncBatchId: '1-1-aaaaaaaa' },
+  ])('rejects invalid postcommit metadata: $errorCode/$postCommitSyncBatchId', async failure => {
+    const snapshot = run({ stage: 'blueprints' })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:blueprints') return { success: false, error: 'failure', ...failure }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    await expect(createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner }).steps[3]
+      .executor({} as never, context(), callbacks)).rejects.toThrow('GENERATION_REQUEST_FAILED')
+  })
+
+  it('reconstructs postcommit sync failure from the canonical blueprint receipt without a renderer writer', async () => {
+    const snapshot = run({ stage: 'blueprints' }), batchId = '1-1-aaaaaaaa'
+    const receipt: ImportRunEffectReceipt = { schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION, runId: snapshot.id,
+      effectNamespace: snapshot.effectNamespace, effectKey: `blueprints:${batchId}`, stage: 'blueprints', batchId, kind: 'chapter-blueprint-range',
+      payloadHash: 'a'.repeat(64), state: 'committed', payload: {}, effectReceipt: { operationId: 'op-1', snapshot: [{}], characterSyncOperation: { operationId: 'sync-1' } }, createdAt: 'now', updatedAt: 'now' }
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-effect-receipt-get') return receipt
+      if (channel === 'import-generation:v1:blueprints') return { success: false, errorCode: 'GENERATION_REQUEST_FAILED', error: 'main sync failure', postCommitSyncBatchId: batchId }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const ctx = context()
+    await expect(createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner }).steps[3].executor({} as never, ctx, callbacks))
+      .rejects.toMatchObject({ retryOperationId: 'sync-1', commitReceipt: receipt.effectReceipt })
+    expect(ctx.data.blueprintCommitReceipt).toEqual(receipt.effectReceipt)
+    expect(ipcMocks.actual.mock.calls.some(call => ['db:import-run-fail', 'db:import-run-cancel-at-boundary', 'db:blueprint-character-sync-complete'].includes(call[1]))).toBe(false)
+  })
+
+  it('keeps the main blueprint failure ahead of a prior receipt projection error', async () => {
+    const snapshot = run({ stage: 'blueprints' })
+    let emit: ((event: unknown) => void) | undefined
+    ipcMocks.on.mockImplementation((channel, listener) => { if (channel === 'import-generation:v1:blueprints-progress') emit = listener; return () => {} })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-effect-receipt-get') throw new Error('projection failure')
+      if (channel === 'import-generation:v1:blueprints') {
+        emit?.({ projectId: session.projectId, leaseId: session.leaseId, runId: snapshot.id, execution: { owner: executionOwner, epoch: 1 }, sequence: 1, kind: 'range-committed', batchId: '1-1-aaaaaaaa' })
+        return { success: false, errorCode: 'GENERATION_PROVIDER_FAILED', error: 'provider failure' }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    await expect(createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner }).steps[3].executor({} as never, context(), callbacks))
+      .rejects.toMatchObject({ message: 'provider failure', code: 'GENERATION_PROVIDER_FAILED' })
+    expect(ipcMocks.actual.mock.calls.some(call => call[1] === 'db:import-run-fail')).toBe(false)
+  })
+
   it('delegates issued global after snapshot readiness and projects committed facts without a draft gate', async () => {
     const snapshot = run({ stage: 'global' })
     useEditorStore.setState({ tabs: [{ id: 'config', name: 'config', type: 'config', projectKey: session.projectPath }], activeTabId: 'config', draftLedgers: {} })
@@ -695,8 +877,8 @@ describe('createImportWorkflow', () => {
     expect(workflow.steps[0].name).toBe('Import reference text and build the knowledge base')
   })
 
-  it('builds blueprint prompt context in the frozen project writing language, not the UI locale', async () => {
-    const snapshot = run({ stage: 'blueprints' })
+  it('builds author blueprint prompt context in the frozen project writing language, not the UI locale', async () => {
+    const snapshot = run({ purpose: 'author-manuscript', authorInference: true, effectNamespace: 'import:author-manuscript:import-run-1', stage: 'blueprints' })
     useProjectStore.setState({
       currentProject: {
         ...useProjectStore.getState().currentProject!,
@@ -722,6 +904,7 @@ describe('createImportWorkflow', () => {
         success: true,
         execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
       }
+      if (channel === 'db:blueprint-get-all') return []
       if (channel === 'db:import-run-list-chapters') {
         return (args[1] as number) === 0 ? [{
           number: 1, title: 'Start', content: 'frozen reference',
@@ -732,12 +915,12 @@ describe('createImportWorkflow', () => {
       if (channel === 'db:import-run-fail') return { success: true, run: { ...snapshot, status: 'failed' } }
       throw new Error(`Unexpected channel ${channel}`)
     })
-    const workflow = createImportWorkflow({
-      projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner,
+    const workflow = createActualWorkflow({
+      projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner, authorChapterNumbers: [1],
     })
     const frozenContext = { ...context(), writingLanguage: 'en-US' as const, uiLocale: 'zh-CN' as const }
 
-    await expect(workflow.steps[3].executor({} as never, frozenContext, callbacks))
+    await expect(workflow.steps[5].executor({} as never, frozenContext, callbacks))
       .rejects.toThrow('stop-after-blueprint-prompt-context')
 
     expect(commandMocks.blueprintContext?.data.novelConfigSummary).toContain('Genre: Mystery')
@@ -920,7 +1103,7 @@ describe('createImportWorkflow', () => {
 
   it('resumes a checkpointed blueprint batch by completing its pending character sync without generation', async () => {
     const checkpoint = '1-1-cccccccc'
-    let snapshot = run({
+    const snapshot = run({
       stage: 'blueprints',
       completedBatches: { blueprints: [checkpoint] },
     })
@@ -935,46 +1118,18 @@ describe('createImportWorkflow', () => {
       payloadHash: 'c'.repeat(64),
       state: 'committed',
       payload: { blueprints: [{ chapterNumber: 1 }] },
-      effectReceipt: { characterSyncOperation: { operationId: 'sync-1' } },
+      effectReceipt: { operationId: 'op-1', snapshot: [{}], characterSyncOperation: { operationId: 'sync-1' } },
       createdAt: '2026-01-01',
       updatedAt: '2026-01-01',
     }
-    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
       if (channel === 'db:import-run-get') return snapshot
-      if (channel === 'db:import-run-start-resume') return {
-        success: true,
-        start: {
-          run: snapshot,
-          execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
-        },
-      }
-      if (channel === 'db:import-run-renew-execution') return {
-        success: true,
+      if (channel === 'import-generation:v1:blueprints') return {
+        success: true, version: 1, run: { ...snapshot, stage: 'refresh' },
         execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
-      }
-      if (channel === 'db:import-run-list-chapters') {
-        const after = args[1] as number
-        return after === 0 ? [{
-          number: 1,
-          title: 'Start',
-          content: 'frozen reference',
-          contentFingerprint: 'c'.repeat(64),
-          contentSize: 16,
-        }] : []
+        receipt, handle: null, modelId: null, replayed: true,
       }
       if (channel === 'db:import-run-effect-receipt-get') return receipt
-      if (channel === 'db:import-run-effect-receipt-commit') return {
-        success: true,
-        result: { receipt, run: snapshot, cancelApplied: false },
-      }
-      if (channel === 'db:import-run-advance-stage') {
-        snapshot = { ...snapshot, stage: 'refresh' }
-        return { success: true, run: snapshot }
-      }
-      if (channel === 'db:import-run-fail') return {
-        success: true,
-        run: { ...snapshot, status: 'failed' },
-      }
       throw new Error(`Unexpected channel ${channel}`)
     })
     const workflow = createImportWorkflow({
@@ -986,9 +1141,10 @@ describe('createImportWorkflow', () => {
 
     await workflow.steps[3].executor({} as never, context(), callbacks)
 
-    expect(characterSyncMocks.retry).toHaveBeenCalledWith('sync-1', session.projectPath, session, 'zh-CN')
-    expect(snapshot.stage).toBe('refresh')
-    expect(ipcMocks.invoke.mock.calls.map(call => call[1])).not.toContain('llm:generate')
+    expect(characterSyncMocks.retry).not.toHaveBeenCalled()
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).toEqual([
+      'db:import-run-get', 'import-generation:v1:blueprints', 'db:import-run-effect-receipt-get',
+    ])
   })
 
   it('creates an author-only finalization plan without reference analysis stages', () => {

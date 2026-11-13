@@ -594,7 +594,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
             fail('GENERATION_SKILL_INCOMPATIBLE');
         skills.push({ stage, identity: id, hash: hash(bundled.length ? JSON.stringify([text, ...bundled]) : text) });
         if (planningFeedbackContext && stage === 'planning') planningFeedbackSkillText = inspected.content;
-        if (input.importSlot?.stage === 'global' && stage === 'planning') {
+        if (input.importSlot && ['global', 'blueprints'].includes(input.importSlot.stage) && stage === 'planning') {
             const builtinMetadata = scope === 'builtin' ? getBuiltinWritingSkills().find(item => item.metadata.name === name)?.metadata : undefined;
             const registeredName = inspected.metadata.name === 'unnamed-writing-skill' ? name : inspected.metadata.name;
             importPlanningSkill = { name: builtinMetadata?.displayName ?? builtinMetadata?.name ?? inspected.metadata.displayName ?? registeredName, content: inspected.content };
@@ -679,7 +679,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     const context: ContextSnapshot = { projectId: input.projectId, epoch: input.epoch, id: `context:${contextHash}`, hash: contextHash, ...(transferAuthority ? { transferAuthority } : {}), sources: contextSources, omissions: [], estimate: { methodVersion: 'utf8-bytes-v1', inputUnits: materials.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0) } };
     const fingerprint = { chapterBriefHash: hash(stable(facts.brief)), authorGuidanceHash: hash(stable(authorInputs.length ? [facts.core, authorInputs] : facts.core)), dependencyHash: hash(stable(materials.filter(item => /^(draft|finalized):/.test(item.ref.sourceId)).map(item => ({ ...item.ref, epoch: undefined })))), contextSnapshotHash: contextHash, templateHash: hash(stable(assets)), skillSnapshotHash: hash(stable(skills)), modelLeaseRevision: hash(stable(modelReceipt)), policyHash: hash(stable(input.policy)), outputContractHash: hash(stable(input.outputContract)) };
     return { binding: { projectId: input.projectId, epoch: input.epoch, fingerprint, contextSnapshotId: context.id, sourceRefs: materials.map(item => item.ref), sourceManifest }, context, materials,
-        ...(importContext?.slot.stage === 'global' ? { importPlanningSkill } : {}) };
+        ...(importContext && ['global', 'blueprints'].includes(importContext.slot.stage) ? { importPlanningSkill } : {}) };
 }
 export function rebuildGenerationSourceBinding(deps: GenerationSourceBindingDependencies, previous: RunBinding, nextEpoch: string, modelReceipt?: SafeGenerationModelReceipt, policy?: Readonly<Record<string, unknown>>, outputContract?: GenerationSourceBindingInput['outputContract']): GenerationSourceBindingResult {
     const manifest = previous.sourceManifest as unknown as GenerationSourceBindingInput & {

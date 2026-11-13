@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3'
 import { isDeepStrictEqual } from 'node:util'
 import type { BeginGenerationRequest } from '../../src/shared/generation-owner-contract'
 import type { ImportGenerationContext, ImportGenerationSlot } from '../../src/shared/import-generation'
-import { GenerationRunRepository, type DurableGenerationRun, type GenerationBudgetReceipt } from '../repositories/generation-run-repository'
+import { GenerationRunRepository, type DurableGenerationRun, type GenerationBudgetReceipt, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
 import { ImportRunRepository } from '../repositories/import-run-repository'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { captureImportGenerationContext, importGenerationSlotKey } from './import-generation-source'
@@ -61,17 +61,28 @@ export class ImportGeneration {
   private attemptIds(run: DurableGenerationRun): string[] {
     return this.db.prepare('SELECT attempt_id FROM generation_attempts WHERE run_id=?').pluck().all(run.runId) as string[]
   }
-  /** 空白回复没有可提交的内容，结构化批次会拆开重发，所以它不单独拒收运行；只有空白、没有一份可用输出时才拒收。 */
+  isReferenceBlueprintLength(run: DurableGenerationRun, receipt: GenerationExecutionReceipt): boolean {
+    if (receipt.result?.finishReason !== 'length' || receipt.failureCode
+      || run.binding.sourceManifest.operation !== 'import-blueprints'
+      || receipt.run.runId !== run.runId || receipt.run.rootActionId !== run.rootActionId
+      || receipt.attempt.rootActionId !== run.rootActionId
+      || !['settled', 'unknown'].includes(receipt.attempt.status)) return false
+    const slot = this.context(run).slot
+    return slot.stage === 'blueprints'
+      && this.db.prepare('SELECT purpose FROM import_runs WHERE id=?').pluck().get(slot.runId) === 'reference'
+  }
+  /** 已结束的蓝图 length 和空白回复不能提交，但拆批后的有效 STOP 可完成同一范围；计费 unknown 不等于远端结果未知。 */
   rejected(run: DurableGenerationRun): boolean {
     const budget = this.runs.budget(run.rootActionId)
-    const outputs = this.attemptIds(run).map((attemptId): 'usable' | 'blank' | 'rejected' => {
+    const outputs = this.attemptIds(run).map((attemptId): 'usable' | 'blank' | 'split' | 'rejected' => {
       const receipt = this.runs.receipt(attemptId, budget)
       const artifact = receipt.artifact
+      if (this.isReferenceBlueprintLength(run, receipt)) return 'split'
       if (receipt.result?.finishReason !== 'stop') return 'rejected'
       if (!artifact?.text.trim()) return 'blank'
       return this.db.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) === 1 ? 'usable' : 'rejected'
     })
-    return outputs.includes('rejected') || outputs.includes('blank') && !outputs.includes('usable')
+    return outputs.includes('rejected') || (outputs.includes('blank') || outputs.includes('split')) && !outputs.includes('usable')
   }
   private hasRemoteUnknown(slot: ImportGenerationSlot): boolean {
     for (const run of this.slotRuns(slot)) {

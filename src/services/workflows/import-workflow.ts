@@ -36,6 +36,7 @@ import { routeModelId } from '../model-routing'
 import { pinWorkflowModel } from './workflow-main-generation'
 import { useWorkflowReasoningStore } from '../../stores/workflow-reasoning-store'
 import { isReferenceGlobalCompletionFailureCode, isReferenceGlobalProgress, type ReferenceGlobalLog } from '../../shared/reference-global-contract'
+import { isReferenceBlueprintBatchId, isReferenceBlueprintProgress, type ReferenceBlueprintLog } from '../../shared/reference-blueprint-contract'
 import { BoundedCompletionFailure } from './bounded-completion'
 import { getImportInferenceTopics } from '../../shared/import-inference-materials'
 import { globalEventBus } from '../../shared/event-bus'
@@ -173,6 +174,17 @@ function globalLog(locale: ImportRunSnapshot['locale'], language: WritingLanguag
       const en = value.relationships.map(item => `${item.source}→${item.target} (${item.relation})`).join(', ')
       return t(`已丢弃 ${value.relationships.length} 条关系，关系对象没有角色卡：${zh}。这是导入推演的内部限制（最多 8 张角色卡，只补卡一次），不是你的设置。导入完成后可以在「角色名单」里手动补上这些角色和关系。`, `Dropped ${value.relationships.length} relationship(s) whose target has no character card: ${en}. This is an internal import-inference limit (at most 8 character cards and one card-recovery request), not one of your settings. After the import, you can add these characters and relationships on the Cast page.`)
     }
+  }
+}
+
+function blueprintLog(locale: ImportRunSnapshot['locale'], value: ReferenceBlueprintLog): string {
+  const t = (zh: string, en: string) => textForLocale(locale, zh, en)
+  switch (value.key) {
+    case 'begin': return t(`开始分批推演蓝图（共 ${value.count} 章，预计至多 ${value.estimatedCalls} 次调用）...`, `Inferring blueprints in batches (${value.count} ${value.count === 1 ? 'chapter' : 'chapters'}; at most ${value.estimatedCalls} model ${value.estimatedCalls === 1 ? 'call' : 'calls'})...`)
+    case 'inferring': return t(`  正在推演第 ${value.startChapter}–${value.endChapter} 章...`, `  Inferring Chapters ${value.startChapter}–${value.endChapter}...`)
+    case 'complete': return t(`蓝图推演完成：${value.count} 章已一次提交`, `Blueprint inference complete: ${value.count} ${value.count === 1 ? 'chapter was' : 'chapters were'} committed in one operation`)
+    case 'stop-reason': return t(`蓝图推演停止原因：${value.code}`, `Blueprint inference stop reason: ${value.code}`)
+    case 'discard-failed': { const reason = displayedErrorMessage(locale, value.code); return t(`丢弃没通过校验的导入输出失败：${reason}`, `Could not discard the rejected import output: ${reason}`) }
   }
 }
 
@@ -327,6 +339,167 @@ function productionDependencies(
           unsubscribeReasoning?.()
           unsubscribeProject()
           clearReasoning()
+          try { await runtime?.close() } finally { context.requestMainGenerationCancellation = previousCancellation }
+        }
+      },
+      executeReferenceBlueprints: async (run: ImportRunSnapshot, owner: string) => {
+        const captured = context.data.importRunExecution as ImportRunExecutionLease | undefined
+        const lease = captured ?? referenceKnowledge.execution
+        if (referenceKnowledge.reference.runId !== run.id || referenceKnowledge.reference.projectId !== session.projectId
+          || lease.owner !== owner || lease.epoch !== referenceKnowledge.execution.epoch) throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
+        const execution = { owner: lease.owner, epoch: lease.epoch }
+        const modelId = context.generationModelId?.trim() || routeModelId('import-blueprints') || null
+        const transport = createMainGenerationTransport(() => session)
+        const displayed = new Map<string, string>()
+        const openedBatches = new Set<string>()
+        let runtime: Awaited<ReturnType<typeof createMainOwnedGenerationRuntime>> | undefined
+        let unsubscribeReasoning: (() => void) | undefined
+        let handle: MainGenerationRunHandle | undefined
+        let sequence = 0
+        let active = true
+        let syncedRangeAwaitingCompletion = false
+        let syncedRangeCompleted = false
+        let projectionError: unknown
+        let queue = Promise.resolve()
+        const previousCancellation = context.requestMainGenerationCancellation
+        context.requestMainGenerationCancellation = async () => {
+          const result = await ipc.invokeWithProjectSession(session, 'db:import-run-request-cancel', run.id, lease, projectPath)
+          if (!result.success) throw new Error(result.error || 'IMPORT_RUN_CANCEL_REQUEST_FAILED')
+        }
+        const readReceipt = async (batchId: string) => {
+          const receipt = await ipc.invokeWithProjectSession(session, 'db:import-run-effect-receipt-get', run.id, 'blueprints', batchId, projectPath)
+          if (!receipt || receipt.state !== 'committed' || receipt.stage !== 'blueprints' || receipt.batchId !== batchId
+            || receipt.kind !== 'chapter-blueprint-range' || !receipt.effectReceipt) throw new Error('GENERATION_REQUEST_FAILED')
+          assertImportRunEffectReceiptMetadata(receipt, run)
+          const committed = receipt.effectReceipt as BlueprintRangeCommitReceipt
+          if (!committed.characterSyncOperation?.operationId || !Array.isArray(committed.snapshot)) throw new Error('GENERATION_REQUEST_FAILED')
+          return { receipt, committed }
+        }
+        const projectSynced = async (batchId: string) => {
+          const { committed } = await readReceipt(batchId)
+          const operation = await ipc.invokeWithProjectSession(session, 'db:blueprint-character-sync-get', committed.characterSyncOperation.operationId, projectPath)
+          if (!operation || operation.status !== 'completed' || !operation.completionReceipt
+            || operation.operationId !== committed.characterSyncOperation.operationId
+            || operation.completionReceipt.blueprintCommitOperationId !== committed.operationId) throw new Error('GENERATION_REQUEST_FAILED')
+          context.data.blueprintCharacterSyncReceipt = operation.completionReceipt
+          syncedRangeAwaitingCompletion = true
+          syncedRangeCompleted = false
+        }
+        const refreshSyncedRange = () => {
+          syncedRangeAwaitingCompletion = false
+          syncedRangeCompleted = false
+          const current = useProjectStore.getState().currentProject
+          if (!current || !sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
+            callbacks.log(textForLocale(run.locale, '当前正在查看其他作品，蓝图事实已安全保存至目标作品库', 'Viewing another project; blueprint facts saved safely to the target project database.'))
+          }
+          globalEventBus.emit('REFRESH_RESOURCE', { resources: ['fileTree', 'blueprints'], projectPath, projectSession: session })
+        }
+        const unsubscribeProject = useProjectStore.subscribe(state => {
+          if (!sameProjectSessionContext(session, projectSessionContextFromProject(state.currentProject))) useWorkflowReasoningStore.getState().clear(context.runId)
+        })
+        const unsubscribe = ipc.on('import-generation:v1:blueprints-progress', event => {
+          if (!active || !isReferenceBlueprintProgress(event) || event.projectId !== session.projectId || event.leaseId !== session.leaseId
+            || event.runId !== run.id || event.execution.owner !== execution.owner || event.execution.epoch !== execution.epoch
+            || event.sequence <= sequence) return
+          sequence = event.sequence
+          queue = queue.then(async () => {
+            if (event.kind === 'log') {
+              callbacks.log(blueprintLog(run.locale, event.value))
+              if (syncedRangeAwaitingCompletion && event.value.key === 'complete') syncedRangeCompleted = true
+              return
+            }
+            if (event.kind === 'progress') {
+              callbacks.setProgress(event.progress)
+              if (event.progress === 100 && syncedRangeCompleted) refreshSyncedRange()
+              return
+            }
+            if (event.kind === 'prompt-budget') { callbacks.setPromptBudgetReport?.(event.report); return }
+            if (event.kind === 'range-committed') { context.data.blueprintCommitReceipt = (await readReceipt(event.batchId)).committed; return }
+            if (event.kind === 'range-synced') { await projectSynced(event.batchId); return }
+            if (event.kind !== 'opened') return
+            let acknowledged = false
+            const ack = (decision: 'accept' | 'cancelled' | 'projection-failed') => ipc.invokeWithProjectSession(
+              session, 'import-generation:v1:blueprints-ack', { runId: run.id, execution, batchId: event.batchId, token: event.token, decision },
+            )
+            try {
+              if (projectionError || openedBatches.has(event.batchId)) throw new Error('GENERATION_REQUEST_FAILED')
+              if (runtime) { await runtime.read(); await runtime.close(); runtime = undefined }
+              unsubscribeReasoning?.(); unsubscribeReasoning = undefined
+              useWorkflowReasoningStore.getState().clear(context.runId)
+              openedBatches.add(event.batchId)
+              handle = Object.freeze({ ...event.handle })
+              context.mainGenerationRunHandle = handle
+              context.mainGenerationRootHandle = handle
+              context.generationModelId = event.modelId
+              pinWorkflowModel(context, event.modelId)
+              unsubscribeReasoning = transport.subscribeReasoning?.(handle, reasoning => {
+                if (!active || context.cancelled || !reasoning.attemptId || !reasoning.text
+                  || !sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
+                useWorkflowReasoningStore.getState().append(context.runId, reasoning.attemptId, reasoning.text)
+              })
+              runtime = await createMainOwnedGenerationRuntime({ runHandle: handle, onSnapshot: snapshot => {
+                if (!active) return
+                if (snapshot.diagnostics) callbacks.setGenerationActivity?.({ operation: 'import-blueprints', diagnostics: snapshot.diagnostics })
+                if (callbacks.replaceText) callbacks.replaceText(snapshot.text)
+                else {
+                  const previous = displayed.get(snapshot.artifactId) ?? ''
+                  if (snapshot.text.startsWith(previous)) callbacks.appendText(snapshot.text.slice(previous.length))
+                }
+                displayed.set(snapshot.artifactId, snapshot.text)
+              } }, transport)
+              callbacks.setGenerationActivity?.({ operation: 'import-blueprints' })
+              acknowledged = true
+              await ack(context.cancelled || context.cancelRequested ? 'cancelled' : 'accept')
+            } catch (error) {
+              projectionError ??= error
+              if (!acknowledged) await ack(context.cancelled || context.cancelRequested ? 'cancelled' : 'projection-failed')
+            }
+          }).catch(error => { projectionError ??= error })
+        })
+        try {
+          const result = await ipc.invokeWithProjectSession(session, 'import-generation:v1:blueprints', { runId: run.id, execution, modelId }).catch(async error => { await queue; throw error })
+          await queue
+          if (!result || typeof result.success !== 'boolean') throw new Error('GENERATION_REQUEST_FAILED')
+          if (!result.success) {
+            if (typeof result.error !== 'string' || typeof result.errorCode !== 'string' || !result.errorCode) throw new Error('GENERATION_REQUEST_FAILED')
+            if (Object.hasOwn(result, 'postCommitSyncBatchId')) {
+              if (result.errorCode !== 'GENERATION_REQUEST_FAILED' || !isReferenceBlueprintBatchId(result.postCommitSyncBatchId)) throw new Error('GENERATION_REQUEST_FAILED')
+              const { committed } = await readReceipt(result.postCommitSyncBatchId)
+              context.data.blueprintCommitReceipt = committed
+              const { ImportBlueprintPostCommitSyncError } = await import('./commands/import-novel.command')
+              throw new ImportBlueprintPostCommitSyncError(committed, (zh, en) => textForLocale(run.locale, zh, en))
+            }
+            if (result.errorCode === 'GENERATION_REQUEST_FAILED') throw new Error(result.error)
+            throw Object.assign(new Error(result.error), { code: result.errorCode })
+          }
+          const completedReplay = result.replayed === true && result.run?.status === 'completed' && result.run.stage === 'completed'
+          const validExecution = result.execution === null ? completedReplay : !!result.execution
+            && result.execution.owner === execution.owner && result.execution.epoch === execution.epoch
+            && Number.isSafeInteger(result.execution.expiresAt) && result.execution.expiresAt > 0
+          if (result.version !== 1 || !result.run || result.run.id !== run.id || result.run.rootRunId !== run.rootRunId
+            || result.run.purpose !== 'reference' || !['refresh', 'completed'].includes(result.run.stage)
+            || !validExecution || typeof result.replayed !== 'boolean' || !result.receipt
+            || !isReferenceBlueprintBatchId(result.receipt.batchId)
+            || (result.modelId !== null && (typeof result.modelId !== 'string' || !result.modelId.trim()))
+            || (handle && (!result.handle || !sameGenerationHandle(handle, result.handle)))
+            || (result.handle && (result.handle.projectId !== session.projectId
+              || typeof result.handle.epoch !== 'string' || !result.handle.epoch.trim()
+              || (!result.replayed && result.handle.epoch !== session.leaseId)
+              || typeof result.handle.rootActionId !== 'string' || !result.handle.rootActionId.trim()
+              || typeof result.handle.runId !== 'string' || !result.handle.runId.trim()))
+            || (!result.replayed && !handle)) throw new Error('GENERATION_REQUEST_FAILED')
+          const canonical = await readReceipt(result.receipt.batchId)
+          if (JSON.stringify(canonical.receipt) !== JSON.stringify(result.receipt)) throw new Error('GENERATION_REQUEST_FAILED')
+          if (result.execution === null) delete context.data.importRunExecution
+          else context.data.importRunExecution = result.execution
+          if (projectionError) throw projectionError
+          if (runtime) await runtime.read()
+        } finally {
+          active = false
+          unsubscribe()
+          unsubscribeReasoning?.()
+          unsubscribeProject()
+          useWorkflowReasoningStore.getState().clear(context.runId)
           try { await runtime?.close() } finally { context.requestMainGenerationCancellation = previousCancellation }
         }
       },

@@ -39,6 +39,21 @@ afterEach(() => {
 })
 
 describe('project-scoped IPC session transport', () => {
+  it('keeps multirange blueprint entry/readiness on the captured view without adding authority', async () => {
+    const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
+    const execution = { owner: 'fictional-owner', epoch: 1 }
+    const entry = { runId: 'fictional-import', execution, modelId: 'fictional-model' }
+    const ack = { runId: entry.runId, execution, batchId: '1-1-12345678', token: 'fictional-token', decision: 'accept' as const }
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    await ipc.invokeWithProjectSession(frozen, 'import-generation:v1:blueprints', entry)
+    expect(invoke).toHaveBeenLastCalledWith('import-generation:v1:blueprints', entry, frozen)
+    await ipc.invokeWithProjectSession(frozen, 'import-generation:v1:blueprints-ack', ack)
+    expect(invoke).toHaveBeenLastCalledWith('import-generation:v1:blueprints-ack', ack, frozen)
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('import-generation:v1:blueprints', entry)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    await expect(ipc.invoke('import-generation:v1:blueprints-ack', ack)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
   it('keeps global execution and readiness ACK on the captured session without commit authority', async () => {
     const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
     const execution = { owner: 'fictional-owner', epoch: 1 }

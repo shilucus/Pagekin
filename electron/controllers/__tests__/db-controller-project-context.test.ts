@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   runtimeCount: 1,
   runtimeBusy: false,
   legacyHeld: false,
-  explicitDatabase: { project: 'A' },
+  explicitDatabase: { project: 'A', prepare: vi.fn() },
   requestClose: vi.fn(),
   acquireWork: vi.fn(),
   releaseWork: vi.fn(),
@@ -308,6 +308,11 @@ beforeAll(() => {
 beforeEach(() => {
   mocks.currentProjectPath = 'C:/projects/A'
   vi.clearAllMocks()
+  mocks.explicitDatabase.prepare.mockReset().mockImplementation((sql: string) => {
+    if (sql.includes('FROM import_run_receipts')) return { all: () => [] }
+    if (sql.includes('FROM blueprint_character_sync_operations')) return { get: () => undefined }
+    throw new Error('UNEXPECTED_EXPLICIT_DATABASE_QUERY')
+  })
   mocks.runtimeCount = 1
   mocks.runtimeBusy = false
   mocks.legacyHeld = false
@@ -1002,6 +1007,9 @@ describe('database controller project context guard', () => {
     expect(mocks.blueprintCompleteCharacterSync).toHaveBeenCalledWith(
       'blueprint-sync-directory-A',
     )
+    expect(mocks.explicitDatabase.prepare).toHaveBeenCalledWith(expect.stringContaining(
+      'FROM blueprint_character_sync_operations',
+    ))
 
     mocks.blueprintCompleteCharacterSync.mockClear()
     const forgedReceipt = {
@@ -1256,6 +1264,9 @@ describe('database controller project context guard', () => {
     expect(result).toEqual({ success: true, receipt })
     expect(mocks.blueprintCommitRange).toHaveBeenCalledOnce()
     expect(mocks.blueprintCommitRange).toHaveBeenCalledWith(request)
+    expect(mocks.explicitDatabase.prepare).toHaveBeenCalledWith(expect.stringContaining(
+      'FROM import_run_receipts',
+    ))
   })
 
   it('keeps the same draft id isolated between project A and B and rejects a stale A write', async () => {
