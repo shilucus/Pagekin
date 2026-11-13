@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
+import { createMainNetworkScheduler } from '../generation-scheduler'
 import { ModelDiscoveryService } from '../model-discovery-service'
 import { applyModelProfileSelection } from '../../../src/shared/model-profile-draft'
 import { resolveGenerationParameters } from '../../llm/generation-parameter-policy'
@@ -46,6 +47,52 @@ afterEach(async () => {
 })
 
 describe('ModelDiscoveryService', () => {
+  it('shares app-level admission and waits for non-success response-body cleanup before releasing capacity', async () => {
+    let releaseBody!: () => void
+    const bodyCleanup = new Promise<void>(resolve => { releaseBody = resolve })
+    const cancelBody = vi.fn(() => bodyCleanup)
+    const body = new ReadableStream<Uint8Array>({ cancel: cancelBody })
+    const permit = { finish: vi.fn(), quarantine: vi.fn(() => true) }
+    const scheduler = createMainNetworkScheduler()
+    const acquire = vi.spyOn(scheduler, 'acquireNetwork').mockResolvedValue(permit)
+    const fetchImpl = vi.fn(async () => new Response(body, { status: 401 }))
+    const dependencies = { fetchImpl, scheduler } as ConstructorParameters<typeof ModelDiscoveryService>[0]
+    const service = new ModelDiscoveryService(dependencies)
+    const pending = service.discoverModels(profile({ baseUrl: 'https://example.test/v1' }))
+
+    await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce())
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({
+      projectKey: 'application-outbound-network', lane: 'interactive',
+      endpoint: 'https://example.test/v1/models',
+    }))
+    await vi.waitFor(() => expect(cancelBody).toHaveBeenCalledOnce())
+    expect(permit.finish).not.toHaveBeenCalled()
+
+    releaseBody()
+    await expect(pending).resolves.toEqual({ success: false, errorCode: 'auth' })
+    expect(permit.finish).toHaveBeenCalledOnce()
+  })
+
+  it('awaits cancellation of non-success HTTP response bodies before returning the existing classification', async () => {
+    let releaseBody!: () => void
+    const bodyCleanup = new Promise<void>(resolve => { releaseBody = resolve })
+    const cancelBody = vi.fn(() => bodyCleanup)
+    const body = new ReadableStream<Uint8Array>({ cancel: cancelBody })
+    const service = new ModelDiscoveryService({
+      fetchImpl: vi.fn(async () => new Response(body, { status: 503 })),
+    })
+
+    const pending = service.discoverModels(profile({ baseUrl: 'https://example.test/v1' }))
+    await vi.waitFor(() => expect(cancelBody).toHaveBeenCalledOnce())
+    let settled = false
+    void pending.then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    releaseBody()
+    await expect(pending).resolves.toEqual({ success: false, errorCode: 'network' })
+  })
+
   it('keeps explicit capacity fields but does not infer context from max_tokens', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [
       { id: 'new-model', context_length: 64000, max_output_tokens: 12000, capabilities: { reasoning: true } },

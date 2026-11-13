@@ -47,6 +47,66 @@ afterEach(async () => {
 })
 
 describe('project runtime close and maintenance admission', () => {
+  it('notifies application cancellation after sealing an empty host but waits for real physical work', async () => {
+    const host = new ProjectRuntimeHost()
+    hosts.push(host)
+    const release = track(host.acquireApplicationOperation())
+    const cancel = vi.fn(() => {
+      expect(() => host.acquireApplicationOperation()).toThrow('PROJECT_RUNTIME_HOST_CLOSING')
+    })
+    track(host.onApplicationCloseRequested(cancel))
+    const operation = host.requestCloseAll({ timeoutMs: 1000, shutdown: false })
+    expect(host.requestCloseAll({ shutdown: false })).toBe(operation)
+    let settled = false
+    void operation.then(() => { settled = true })
+    await Promise.resolve()
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(settled).toBe(false)
+    release()
+    await operation
+    host.finishWindowClose()
+    track(host.acquireApplicationOperation())()
+  })
+
+  it('does not cancel application network operations when only one book closes', async () => {
+    const f = fixture(), cancel = vi.fn()
+    track(f.host.onApplicationCloseRequested(cancel))
+    await f.host.requestClose(f.runtime)
+    expect(cancel).not.toHaveBeenCalled()
+    track(f.host.acquireApplicationOperation())()
+  })
+
+  it('notifies all application listeners and retains physical work after a quiesce failure', async () => {
+    const host = new ProjectRuntimeHost(), failure = new Error('fictional quiesce failure')
+    hosts.push(host)
+    const release = track(host.acquireApplicationOperation())
+    const remove = track(host.onApplicationCloseRequested(() => { throw failure }))
+    const other = vi.fn()
+    track(host.onApplicationCloseRequested(other))
+    await expect(host.requestCloseAll({ timeoutMs: 0, shutdown: false })).rejects.toBe(failure)
+    expect(other).toHaveBeenCalledOnce()
+    expect(() => host.finishWindowClose()).toThrow('PROJECT_RUNTIME_BUSY')
+    remove()
+    await expect(host.requestCloseAll({ timeoutMs: 0, shutdown: false })).rejects.toThrow('PROJECT_RUNTIME_CLOSE_TIMEOUT')
+    release()
+    await host.requestCloseAll({ timeoutMs: 0, shutdown: false })
+    host.finishWindowClose()
+  })
+
+  it('rejects asynchronous application quiesce listeners without force releasing their operation', async () => {
+    const host = new ProjectRuntimeHost()
+    hosts.push(host)
+    const release = track(host.acquireApplicationOperation())
+    const remove = track(host.onApplicationCloseRequested(async () => {}))
+    await expect(host.requestCloseAll({ timeoutMs: 0, shutdown: false }))
+      .rejects.toThrow('PROJECT_RUNTIME_CLOSE_LISTENER_MUST_BE_SYNCHRONOUS')
+    expect(() => host.finishWindowClose()).toThrow('PROJECT_RUNTIME_BUSY')
+    remove()
+    release()
+    await host.requestCloseAll({ timeoutMs: 0, shutdown: false })
+    host.finishWindowClose()
+  })
+
   it.each([false, true])('waits for actual main application work even when has-project=%s, without trusting logical Agent completion', async hasProject => {
     const host = new ProjectRuntimeHost()
     hosts.push(host)

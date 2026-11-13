@@ -19,6 +19,14 @@ import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
 import { getCurrentProjectPath } from '../database'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
 import { projectAccess } from '../services/project-access'
+import { projectRuntimeHost } from '../services/project-runtime'
+import {
+  createMainNetworkScheduler,
+  generationSchedulingEndpoint,
+  type MainGenerationScheduler,
+} from '../services/generation-scheduler'
+import { createNetworkPermitLifetime } from '../services/network-permit-lifetime'
+import type { EmbeddingSchedulingContext } from '../services/embedding-scheduling'
 import {
   ModelExecutionLeaseError,
   ModelExecutionLeaseRegistry,
@@ -169,9 +177,14 @@ function providerConnectionFailure(response: Extract<LLMResponse, { success: fal
   return response.error
 }
 
-export function registerLLMController() {
+export interface LLMControllerOptions {
+  scheduler?: MainGenerationScheduler
+}
+
+export function registerLLMController(options: LLMControllerOptions = {}) {
+  const scheduler = options.scheduler ?? createMainNetworkScheduler()
   const modelExecutionLeases = new ModelExecutionLeaseRegistry({ loadModel: getModelConfig })
-  const modelDiscovery = new ModelDiscoveryService()
+  const modelDiscovery = new ModelDiscoveryService({ scheduler })
   const closedExecutionLeaseTombstones = new Map<string, number>()
 
   const pruneClosedExecutionLeaseTombstones = (now: number) => {
@@ -215,19 +228,66 @@ export function registerLLMController() {
         : getModelConfig(request.modelId)
       if (!model) return { success: false, content: '', finishReason: 'error', error: 'MODEL_NOT_FOUND' }
 
-      const provider = LLMFactory.getProvider(model)
-      const result = await provider.generate(
-        model,
-        request.messages,
-        {
-          ...resolveGenerationParameters(model, request),
-          // One execution lease spans one logical generation run; its id is the
-          // gateway conversation scope so retries keep session affinity.
-          conversationId: request.modelExecutionLeaseId,
-        },
-      )
-      recordProviderOutcome(request, model, startedAt, result)
-      return result
+      let projectKey = 'application-outbound-network'
+      let releaseAppOp: (() => void) | undefined
+      let unlistenClose: (() => void) | undefined
+      const abortController = new AbortController()
+
+      if (request.projectSession) {
+        if (!isProjectSessionContext(request.projectSession)) {
+          throw new Error('LLM_PROJECT_SESSION_INVALID')
+        }
+        const runtime = projectAccess.assertViewContext(request.projectSession)
+        projectRuntimeHost.assertWorkAvailable(runtime)
+        projectKey = runtime.executionEpoch
+      } else {
+        projectRuntimeHost.assertApplicationWorkAvailable()
+        releaseAppOp = projectRuntimeHost.acquireApplicationOperation()
+        unlistenClose = projectRuntimeHost.onApplicationCloseRequested(() => abortController.abort())
+      }
+
+      let lifetime: ReturnType<typeof createNetworkPermitLifetime> | undefined
+      try {
+        const permit = await scheduler.acquireNetwork({
+          projectKey,
+          lane: 'interactive',
+          endpoint: generationSchedulingEndpoint(model),
+          apiKey: model.apiKey,
+          modelName: model.modelName || 'main-model-generate',
+          signal: abortController.signal,
+        })
+        lifetime = createNetworkPermitLifetime(permit, abortController.signal)
+
+        if (request.projectSession) {
+          const currentRuntime = projectAccess.assertViewContext(request.projectSession)
+          projectRuntimeHost.assertWorkAvailable(currentRuntime)
+          if (currentRuntime.executionEpoch !== projectKey) {
+            throw new Error('LLM_PROJECT_SESSION_STALE')
+          }
+        } else {
+          projectRuntimeHost.assertApplicationWorkAvailable()
+          if (abortController.signal.aborted) throw new Error('LLM_CANCELLED')
+        }
+
+        const provider = LLMFactory.getProvider(model)
+        const result = await provider.generate(
+          model,
+          request.messages,
+          {
+            ...resolveGenerationParameters(model, request),
+            // One execution lease spans one logical generation run; its id is the
+            // gateway conversation scope so retries keep session affinity.
+            conversationId: request.modelExecutionLeaseId,
+            signal: abortController.signal,
+          },
+        )
+        recordProviderOutcome(request, model, startedAt, result)
+        return result
+      } finally {
+        lifetime?.finish()
+        unlistenClose?.()
+        releaseAppOp?.()
+      }
     } catch (error) {
       if (model) recordProviderOutcome(request, model, startedAt, { success: false, error: String(error) })
       return { success: false, content: '', finishReason: 'error', error: String(error) }
@@ -252,7 +312,28 @@ export function registerLLMController() {
       conversationId: request.modelExecutionLeaseId,
     }
 
+    let projectKey = 'application-outbound-network'
+    let releaseAppOp: (() => void) | undefined
+    let unlistenClose: (() => void) | undefined
     const abortController = new AbortController()
+
+    try {
+      if (request.projectSession) {
+        if (!isProjectSessionContext(request.projectSession)) {
+          return { requestId, started: false, error: 'LLM_PROJECT_SESSION_INVALID' }
+        }
+        const runtime = projectAccess.assertViewContext(request.projectSession)
+        projectRuntimeHost.assertWorkAvailable(runtime)
+        projectKey = runtime.executionEpoch
+      } else {
+        projectRuntimeHost.assertApplicationWorkAvailable()
+        releaseAppOp = projectRuntimeHost.acquireApplicationOperation()
+        unlistenClose = projectRuntimeHost.onApplicationCloseRequested(() => abortController.abort())
+      }
+    } catch (error) {
+      return { requestId, started: false, error: String(error) }
+    }
+
     const startedAt = Date.now()
     let recorded = false
     const recordOnce = (outcome: { success: boolean; usage?: TokenUsage; error?: string }) => {
@@ -267,39 +348,72 @@ export function registerLLMController() {
     const win = BrowserWindow.fromWebContents(event.sender)
 
     const provider = LLMFactory.getProvider(model)
-    
-    // We do not await this globally since it's streaming independently
-    provider.generateStream(model, request.messages, {
-      ...generationParameters,
-      signal: abortController.signal,
-      onChunk: (chunk: string) => win?.webContents.send('llm:stream-chunk', { requestId, chunk }),
-      onDone: (fullText: string, usage?: TokenUsage, finishReason?: LLMFinishReason) => {
-        const terminalReason: LLMFinishReason = finishReason ?? 'unknown'
-        const success = terminalReason === 'stop'
-        recordOnce({ success, usage, error: success ? undefined : `finish:${terminalReason}` })
-        win?.webContents.send('llm:stream-done', {
-          requestId,
-          fullText,
-          usage,
-          finishReason: terminalReason,
+
+    void (async () => {
+      let lifetime: ReturnType<typeof createNetworkPermitLifetime> | undefined
+      try {
+        const permit = await scheduler.acquireNetwork({
+          projectKey,
+          lane: 'interactive',
+          endpoint: generationSchedulingEndpoint(model),
+          apiKey: model.apiKey,
+          modelName: model.modelName || 'main-model-stream',
+          signal: abortController.signal,
         })
-        activeStreams.delete(requestId)
-      },
-      onError: (error: string, content?: string, usage?: TokenUsage) => {
-        recordOnce({ success: false, usage, error })
-        if (content !== undefined) {
-          win?.webContents.send('llm:stream-done', {
-            requestId,
-            fullText: content,
-            usage,
-            finishReason: 'error',
-          })
+        lifetime = createNetworkPermitLifetime(permit, abortController.signal)
+
+        if (request.projectSession) {
+          const currentRuntime = projectAccess.assertViewContext(request.projectSession)
+          projectRuntimeHost.assertWorkAvailable(currentRuntime)
+          if (currentRuntime.executionEpoch !== projectKey) {
+            throw new Error('LLM_PROJECT_SESSION_STALE')
+          }
         } else {
-          win?.webContents.send('llm:stream-error', { requestId, error })
+          projectRuntimeHost.assertApplicationWorkAvailable()
+          if (abortController.signal.aborted) throw new Error('LLM_CANCELLED')
         }
+
+        await provider.generateStream(model, request.messages, {
+          ...generationParameters,
+          signal: abortController.signal,
+          onChunk: (chunk: string) => win?.webContents.send('llm:stream-chunk', { requestId, chunk }),
+          onDone: (fullText: string, usage?: TokenUsage, finishReason?: LLMFinishReason) => {
+            const terminalReason: LLMFinishReason = finishReason ?? 'unknown'
+            const success = terminalReason === 'stop'
+            recordOnce({ success, usage, error: success ? undefined : `finish:${terminalReason}` })
+            win?.webContents.send('llm:stream-done', {
+              requestId,
+              fullText,
+              usage,
+              finishReason: terminalReason,
+            })
+            activeStreams.delete(requestId)
+          },
+          onError: (error: string, content?: string, usage?: TokenUsage) => {
+            recordOnce({ success: false, usage, error })
+            if (content !== undefined) {
+              win?.webContents.send('llm:stream-done', {
+                requestId,
+                fullText: content,
+                usage,
+                finishReason: 'error',
+              })
+            } else {
+              win?.webContents.send('llm:stream-error', { requestId, error })
+            }
+            activeStreams.delete(requestId)
+          },
+        })
+      } catch (error) {
+        recordOnce({ success: false, error: String(error) })
+        win?.webContents.send('llm:stream-error', { requestId, error: String(error) })
+      } finally {
         activeStreams.delete(requestId)
-      },
-    })
+        lifetime?.finish()
+        unlistenClose?.()
+        releaseAppOp?.()
+      }
+    })()
 
     return { requestId, started: true }
   })
@@ -477,23 +591,45 @@ export function registerLLMController() {
           }
         }
         const { generateEmbeddings } = await import('../embedding')
-        await generateEmbeddings(['hello'], model.protocol, model, undefined, undefined, deadline.signal)
+        const scheduling: EmbeddingSchedulingContext = {
+          admission: scheduler,
+          projectKey: 'application-outbound-network',
+          lane: 'interactive',
+          signal: deadline.signal,
+          assertActive: () => { if (deadline.signal.aborted) throw new Error('EMBEDDING_REQUEST_CANCELLED') },
+          quarantineAfterMs: 5_000,
+        }
+        await generateEmbeddings(['hello'], model.protocol, model, undefined, undefined, deadline.signal, undefined, undefined, scheduling)
       } else {
-        const res = await provider.generate(
-          model,
-          messages,
-          {
-            ...resolveGenerationParameters(model, {
-              // 推理模型可能先消耗 reasoning tokens；预算过小会把可用连接误判为截断失败。
-              maxTokens: CONNECTION_TEST_MAX_TOKENS,
-              reasoningStage: 'general',
-              creativeStrategy,
-            }),
+        let lifetime: ReturnType<typeof createNetworkPermitLifetime> | undefined
+        try {
+          const permit = await scheduler.acquireNetwork({
+            projectKey: 'application-outbound-network',
+            lane: 'interactive',
+            endpoint: generationSchedulingEndpoint(model),
+            apiKey: model.apiKey,
+            modelName: model.modelName || 'main-model-test',
             signal: deadline.signal,
-          },
-        )
-        if (deadline.signal.aborted) return timedOut()
-        result = res.success ? { success: true, error: undefined } : { success: false, error: providerConnectionFailure(res) }
+          })
+          lifetime = createNetworkPermitLifetime(permit, deadline.signal)
+          const res = await provider.generate(
+            model,
+            messages,
+            {
+              ...resolveGenerationParameters(model, {
+                // 推理模型可能先消耗 reasoning tokens；预算过小会把可用连接误判为截断失败。
+                maxTokens: CONNECTION_TEST_MAX_TOKENS,
+                reasoningStage: 'general',
+                creativeStrategy,
+              }),
+              signal: deadline.signal,
+            },
+          )
+          if (deadline.signal.aborted) return timedOut()
+          result = res.success ? { success: true, error: undefined } : { success: false, error: providerConnectionFailure(res) }
+        } finally {
+          lifetime?.finish()
+        }
       }
 
       return { success: result.success, error: result.error }
@@ -504,5 +640,5 @@ export function registerLLMController() {
     }
   })
 
-  return { modelExecutionLeases, loadModel: getModelConfig, applyProxyConfig }
+  return { modelExecutionLeases, loadModel: getModelConfig, applyProxyConfig, scheduler }
 }

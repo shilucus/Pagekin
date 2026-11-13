@@ -17,6 +17,7 @@ import { getEmbeddingConfig, referenceImportDisplayName, explainReferenceImportF
 import { explainImportRunFailure, importRunLocale } from './import-run-failure'
 import type { ReferenceRefreshAckRequest, ReferenceRefreshRequest } from '../../src/shared/reference-refresh-contract'
 import { ReferenceRefreshForeground } from './reference-refresh-foreground'
+import type { GenerationSchedulingAdmission } from '../services/generation-scheduler'
 
 const authorities = new Map<ProjectRuntime, ReferenceKnowledgeAuthority>()
 const refreshForeground = new ReferenceRefreshForeground()
@@ -41,7 +42,7 @@ function capability(reference: ReferenceKnowledgeReference): ReferenceKnowledgeA
   throw new Error('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
 }
 
-async function authorized(runtime: ProjectRuntime, fresh: () => void): Promise<ReferenceKnowledgeAuthority> {
+async function authorized(runtime: ProjectRuntime, fresh: () => void, scheduler?: GenerationSchedulingAdmission): Promise<ReferenceKnowledgeAuthority> {
   const retained = authorities.get(runtime)
   if (retained) return retained
   // Keep native loading lazy; the enclosing legacy lease prevents a foreground switch while awaiting it.
@@ -58,6 +59,8 @@ async function authorized(runtime: ProjectRuntime, fresh: () => void): Promise<R
         input.binding.content, referenceImportDisplayName(input.binding), input.binding.stableKey,
         input.binding.chapterNumber, input.runId, input.execution, runtime.canonicalRoot,
         input.embedding.protocol, input.embedding.model, input.resources, input.admission,
+        scheduler ? { admission: scheduler, projectKey: runtime.executionEpoch, lane: 'background',
+          assertActive: input.resources.assertResources } : undefined,
       ),
     })
     authorities.set(runtime, authority)
@@ -65,7 +68,7 @@ async function authorized(runtime: ProjectRuntime, fresh: () => void): Promise<R
   return authority
 }
 
-export function registerReferenceKnowledgeController(): void {
+export function registerReferenceKnowledgeController(scheduler?: GenerationSchedulingAdmission): void {
   if (!lifecycleInstalled) {
     projectRuntimeHost.onCloseRequested(runtime => {
       refreshForeground.requestClose(runtime)
@@ -105,7 +108,7 @@ export function registerReferenceKnowledgeController(): void {
         return await withLegacyProjectOperation(channel, async () => {
           fresh()
           if (channel === 'reference-knowledge:v1:prepare') {
-            const authority = await authorized(runtime, fresh)
+            const authority = await authorized(runtime, fresh, scheduler)
             return authority.prepare(event.sender, body as PrepareReferenceKnowledgeRequest, fresh)
           }
           const reference = hasExecution

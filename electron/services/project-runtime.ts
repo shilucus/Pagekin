@@ -155,6 +155,7 @@ export class ProjectRuntimeHost {
   private readonly busyPredicates = new Set<(runtime: ProjectRuntime) => boolean>()
   private readonly releaseListeners = new Set<(runtime: ProjectRuntime) => void>()
   private readonly closeListeners = new Set<(runtime: ProjectRuntime) => void>()
+  private readonly applicationCloseListeners = new Set<() => void>()
   private readonly maintenance = new Map<string, { root: string; token: object }>()
   private readonly closedRuntimes = new WeakSet<ProjectRuntime>()
   private closeAllRequested = false
@@ -418,6 +419,12 @@ export class ProjectRuntimeHost {
     return () => { this.closeListeners.delete(listener) }
   }
 
+  /** Confirmed close-all quiescence, including a host with no open project. */
+  onApplicationCloseRequested(listener: () => void): () => void {
+    this.applicationCloseListeners.add(listener)
+    return () => { this.applicationCloseListeners.delete(listener) }
+  }
+
   requestClose(runtime: ProjectRuntime, options: ProjectRuntimeCloseOptions = {}): Promise<void> {
     try {
       const timeoutMs = this.closeTimeout(options)
@@ -518,6 +525,15 @@ export class ProjectRuntimeHost {
   }
 
   private async drainApplicationOperations(timeoutMs: number): Promise<void> {
+    const failures: unknown[] = []
+    for (const listener of this.applicationCloseListeners) {
+      try {
+        if (Object.prototype.toString.call(listener) === '[object AsyncFunction]') throw new Error('PROJECT_RUNTIME_CLOSE_LISTENER_MUST_BE_SYNCHRONOUS')
+        synchronousResult(listener(), 'PROJECT_RUNTIME_CLOSE_LISTENER_MUST_BE_SYNCHRONOUS')
+      } catch (error) { failures.push(error) }
+    }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length) throw new AggregateError(failures, 'PROJECT_RUNTIME_QUIESCE_FAILED')
     const deadline = performance.now() + timeoutMs
     while (this.applicationOperations) {
       const remaining = deadline - performance.now()

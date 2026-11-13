@@ -2,6 +2,7 @@ import { app, ipcMain } from 'electron'
 import { showOpenDialogInLastDirectory } from '../utils/remembered-dialog'
 import type { IpcMainInvokeEvent } from 'electron'
 import path from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { readJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG, MODELS_CONFIG_PATH } from '../utils/config-utils'
 import { GlobalConfig, ModelProfile } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
@@ -34,6 +35,9 @@ import { ImportRunRepository } from '../repositories/import-run-repository'
 import { explainImportRunFailure, importRunLocale } from './import-run-failure'
 import { externalFileReadFailureText } from './external-file-read-failure'
 import { FinalizationRepository } from '../repositories/finalization-repository'
+import { projectRuntimeHost } from '../services/project-runtime'
+import type { GenerationSchedulingAdmission } from '../services/generation-scheduler'
+import type { EmbeddingSchedulingContext } from '../services/embedding-scheduling'
 
 function text(zhCNText: string, enUSText: string): string {
   return mainText(app.getLocale(), zhCNText, enUSText)
@@ -254,7 +258,34 @@ function registerKnowledgeBaseHandler<Args extends unknown[]>(
 
 export function registerKBController(
   fileSystem: WindowsSafeFileSystem = windowsSafeFileSystem,
+  scheduler?: GenerationSchedulingAdmission,
 ) {
+  const withScheduling = async <T>(event: IpcMainInvokeEvent, configuration: ReturnType<typeof getEmbeddingConfig>,
+    operation: (context: EmbeddingSchedulingContext | undefined) => Promise<T>): Promise<T> => {
+    if (!scheduler || !configuration) return operation(undefined)
+    const session = projectAccess.captureCurrentSession()
+    const runtime = projectRuntimeHost.getActiveView()
+    if (!session || !runtime) throw new Error('PROJECT_SESSION_REQUIRED')
+    const abort = new AbortController()
+    const close = projectRuntimeHost.onCloseRequested(closing => { if (closing === runtime) abort.abort() })
+    const destroyed = () => abort.abort()
+    event.sender.once('destroyed', destroyed)
+    const assertActive = () => {
+      if (abort.signal.aborted || event.sender.isDestroyed()) throw new Error('PROJECT_SESSION_STALE')
+      projectAccess.assertCurrentSession(session)
+      if (projectRuntimeHost.getActiveView() !== runtime) throw new Error('PROJECT_SESSION_STALE')
+      projectRuntimeHost.assertWorkAvailable(runtime)
+      if (!isDeepStrictEqual(getEmbeddingConfig(), configuration)) throw new Error('GENERATION_MODEL_CHANGED')
+    }
+    try {
+      assertActive()
+      return await operation({ admission: scheduler, projectKey: runtime.executionEpoch, lane: 'background',
+        assertActive, signal: abort.signal })
+    } finally {
+      close()
+      event.sender.removeListener('destroyed', destroyed)
+    }
+  }
   // 所有 kb:* 操作需携带同一冻结会话；选择文件/目录仍是外部授权能力。
   const ipcMain = { handle: registerKnowledgeBaseHandler }
   ipcMain.handle('kb:import-document', async (event, grantId: string, expectedProjectPath: string) => {
@@ -281,13 +312,14 @@ export function registerKBController(
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
-    return knowledgeBaseLoader.run((kb) => kb.importText(
+    return withScheduling(event, embConfig, scheduling => knowledgeBaseLoader.run((kb) => kb.importText(
       importedFile.content,
       importedFile.fileName,
       projectPath,
       protocol,
       model,
-    ))
+      { scheduling },
+    )))
   })
 
   ipcMain.handle('kb:import-folder', async (event, grantId: string, expectedProjectPath: string) => {
@@ -319,7 +351,7 @@ export function registerKBController(
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
-    return knowledgeBaseLoader.run(async (kb) => {
+    return withScheduling(event, embConfig, scheduling => knowledgeBaseLoader.run(async (kb) => {
       const failedFiles = [...folder.unreadable]
       let importedCount = 0
       for (const importedFile of folder.files) {
@@ -329,6 +361,7 @@ export function registerKBController(
           projectPath,
           protocol,
           model,
+          { scheduling },
         )
         if (result.success) {
           importedCount++
@@ -337,15 +370,15 @@ export function registerKBController(
         }
       }
       return { success: true, importedCount, failedFiles }
-    })
+    }))
   })
 
-  ipcMain.handle('kb:import-text', async (_event, text: string, fileName: string, expectedProjectPath: string) => {
+  ipcMain.handle('kb:import-text', async (event, text: string, fileName: string, expectedProjectPath: string) => {
     const projectPath = requireProjectPath(expectedProjectPath)
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
     const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
-    return knowledgeBaseLoader.run((kb) => kb.importText(text, fileName, projectPath, protocol, model))
+    return withScheduling(event, embConfig, scheduling => knowledgeBaseLoader.run((kb) => kb.importText(text, fileName, projectPath, protocol, model, { scheduling })))
   })
 
   ipcMain.handle('kb:import-planning-text', async (_event, text: string, fileName: string, expectedProjectPath: string) => {
@@ -364,7 +397,7 @@ export function registerKBController(
   })
 
   ipcMain.handle('kb:import-reference-text', async (
-    _event,
+    event,
     chapterNumber: number,
     runId: string,
     executionAuthority: ImportRunExecutionAuthority,
@@ -383,7 +416,7 @@ export function registerKBController(
       const embConfig = getEmbeddingConfig()
       const protocol = embConfig?.protocol ?? 'openai'
       const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
-      return await knowledgeBaseLoader.run(async (kb) => {
+      return await withScheduling(event, embConfig, scheduling => knowledgeBaseLoader.run(async (kb) => {
         const result = await kb.importReferenceText(
           binding.content,
           fileName,
@@ -394,6 +427,9 @@ export function registerKBController(
           projectPath,
           protocol,
           model,
+          undefined,
+          undefined,
+          scheduling,
         )
         if (result.success && result.docId) {
           ImportRunRepository.commitReferenceImportReceipt(
@@ -401,7 +437,7 @@ export function registerKBController(
           )
         }
         return explainReferenceImportFailure(result, runId)
-      })
+      }))
     } catch (error) {
       // 运行卡片原样显示这条通道的报错：导入运行的授权与收据校验按导入运行的语言写成说明（#474 B1）。
       const importFailure = explainImportRunFailure(error, () => importRunLocale(runId))
@@ -410,23 +446,21 @@ export function registerKBController(
     }
   })
 
-  ipcMain.handle('kb:search', async (_event, query: string, topK: number | undefined, expectedProjectPath: string) => {
+  ipcMain.handle('kb:search', async (event, query: string, topK: number | undefined, expectedProjectPath: string) => {
     const projectPath = requireProjectPath(expectedProjectPath)
     const embConfig = getEmbeddingConfig()
-
-    return knowledgeBaseLoader.run((kb) => {
+    return withScheduling(event, embConfig, scheduling => knowledgeBaseLoader.run((kb) => {
       if (embConfig) {
-        return kb.searchKnowledge(query, projectPath, embConfig.protocol, embConfig.model, topK ?? 5)
+        return kb.searchKnowledge(query, projectPath, embConfig.protocol, embConfig.model, topK ?? 5, [], scheduling)
       }
       return kb.searchKnowledgeFTS(query, projectPath, topK ?? 5)
-    })
+    }))
   })
 
-  ipcMain.handle('kb:search-writing-context', async (_event, query: string, topK: number | undefined, expectedProjectPath: string) => {
+  ipcMain.handle('kb:search-writing-context', async (event, query: string, topK: number | undefined, expectedProjectPath: string) => {
     const projectPath = requireProjectPath(expectedProjectPath)
     const embConfig = getEmbeddingConfig()
-
-    return knowledgeBaseLoader.run((kb) => {
+    return withScheduling(event, embConfig, scheduling => knowledgeBaseLoader.run((kb) => {
       if (embConfig) {
         return kb.searchKnowledge(
           query,
@@ -435,10 +469,11 @@ export function registerKBController(
           embConfig.model,
           topK ?? 5,
           ['reference'],
+          scheduling,
         )
       }
       return kb.searchKnowledgeFTS(query, projectPath, topK ?? 5, ['reference'])
-    })
+    }))
   })
 
   ipcMain.handle('kb:list-documents', async (_event, expectedProjectPath: string) => {
@@ -533,11 +568,11 @@ export function registerKBController(
     })
   })
 
-  ipcMain.handle('kb:backfill-vectors', async (_event, expectedProjectPath: string) => {
+  ipcMain.handle('kb:backfill-vectors', async (event, expectedProjectPath: string) => {
     const projectPath = requireProjectPath(expectedProjectPath)
     const embConfig = getEmbeddingConfig()
     if (!hasUsableEmbeddingConfig(embConfig)) return { success: false, processed: 0, failed: 0, errorCode: 'EMBEDDING_MODEL_NOT_CONFIGURED', error: text('未配置 Embedding 模型', 'No embedding model is configured') }
-    return knowledgeBaseLoader.run((kb) => kb.backfillVectors(projectPath, embConfig.protocol, embConfig.model))
+    return withScheduling(event, embConfig, scheduling => knowledgeBaseLoader.run((kb) => kb.backfillVectors(projectPath, embConfig.protocol, embConfig.model, scheduling)))
   })
 
   ipcMain.handle('dialog:select-knowledge-files', async (event) => {

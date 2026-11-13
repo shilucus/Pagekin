@@ -20,6 +20,7 @@ vi.mock('../services/generation-knowledge-source', async importOriginal => {
 import { captureWritingKnowledgeSnapshot } from '../knowledge-base'
 import { closeProjectDatabase } from '../database'
 import { closeConnection } from '../vector-store'
+import { EmbeddingSchedulingError } from '../services/embedding-scheduling'
 
 const model = { provider: 'openai', baseUrl: 'https://example.invalid/v1', apiKey: 'fictional', modelName: 'fixture' }
 let projectPath = ''
@@ -75,4 +76,21 @@ it('returns the real snapshot while the captured lease remains current', async (
   expect(mocks.embedding).toHaveBeenCalledTimes(1)
   expect(mocks.afterRead).toHaveBeenCalledTimes(1)
   expect(assertCurrent.mock.calls.length).toBeGreaterThan(1)
+})
+
+it('does not turn a scheduler admission failure into a full-text snapshot', async () => {
+  const failure = new EmbeddingSchedulingError(new Error('PROJECT_SESSION_STALE'))
+  mocks.embedding.mockRejectedValueOnce(failure)
+  const scheduling = { admission: {}, projectKey: 'fictional-epoch', lane: 'background' as const, assertActive: vi.fn() }
+  await expect(captureWritingKnowledgeSnapshot('fiction', projectPath, { protocol: 'openai', model }, [], () => {}, scheduling))
+    .rejects.toBe(failure)
+  expect(mocks.afterRead).not.toHaveBeenCalled()
+})
+
+it('retains ordinary network-error full-text fallback with scheduling enabled', async () => {
+  mocks.embedding.mockRejectedValueOnce(new Error('fictional-network-failure'))
+  const scheduling = { admission: {}, projectKey: 'fictional-epoch', lane: 'background' as const, assertActive: vi.fn() }
+  const snapshot = await captureWritingKnowledgeSnapshot('fiction', projectPath, { protocol: 'openai', model }, [], () => {}, scheduling)
+  expect(snapshot).toMatchObject({ version: 1, query: 'fiction', items: [] })
+  expect(mocks.afterRead).toHaveBeenCalledOnce()
 })

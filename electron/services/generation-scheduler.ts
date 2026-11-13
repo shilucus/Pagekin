@@ -32,15 +32,45 @@ export interface EmbeddingSchedulingRequest {
   signal: AbortSignal
 }
 
+export interface NetworkSchedulingRequest {
+  projectKey: string
+  /** Resolved transport URL, not a renderer profile ID or configured base URL. */
+  endpoint: string
+  apiKey: string
+  modelName: string
+  lane: SchedulerLane
+  signal: AbortSignal
+}
+
+export interface MainNetworkSchedulingAdmission extends GenerationSchedulingAdmission {
+  acquireEmbedding(request: EmbeddingSchedulingRequest): Promise<MainProcessSchedulerPermit>
+  acquireNetwork(request: NetworkSchedulingRequest): Promise<MainProcessSchedulerPermit>
+}
+
+const INITIAL_NETWORK_SCHEDULING = Object.freeze({
+  global: 2, provider: 2, credential: 2, model: 2, project: 2,
+  maxQueued: 32, maxQuarantined: 2, interactiveBurst: 1,
+})
+
+/** The composition root shares this instance; isolated consumers may create their own. */
+export function createMainNetworkScheduler(): MainGenerationScheduler {
+  return new MainGenerationScheduler(INITIAL_NETWORK_SCHEDULING,
+    3 * (INITIAL_NETWORK_SCHEDULING.global + INITIAL_NETWORK_SCHEDULING.maxQueued + INITIAL_NETWORK_SCHEDULING.maxQuarantined))
+}
+
+export function generationSchedulingEndpoint(model: ModelProfile): string {
+  return model.protocol === 'anthropic'
+    ? resolveAnthropicMessagesUrl(model.baseUrl)
+    : model.protocol === 'gemini'
+      ? `${model.baseUrl.replace(/\/$/u, '')}/v1beta/models/${model.modelName}:streamGenerateContent?alt=sse`
+      : resolveOpenAIChatCompletionsUrl(model.baseUrl, model.provider)
+}
+
 /** Only the resolved request origin is used for grouping, not redirect targets. */
 function groupingProfile(model: ModelProfile): ModelProfile {
   try {
     const snapshot = structuredClone(model)
-    const requestUrl = snapshot.protocol === 'anthropic'
-      ? resolveAnthropicMessagesUrl(snapshot.baseUrl)
-      : snapshot.protocol === 'gemini'
-        ? `${snapshot.baseUrl.replace(/\/$/u, '')}/v1beta/models/${snapshot.modelName}:streamGenerateContent?alt=sse`
-        : resolveOpenAIChatCompletionsUrl(snapshot.baseUrl, snapshot.provider)
+    const requestUrl = generationSchedulingEndpoint(snapshot)
     const origin = new URL(requestUrl).origin
     return { ...snapshot, baseUrl: origin }
   } catch {
@@ -49,7 +79,7 @@ function groupingProfile(model: ModelProfile): ModelProfile {
 }
 
 /** Main-only admission; this does not replace dispatch authorization checks. */
-export class MainGenerationScheduler implements GenerationSchedulingAdmission {
+export class MainGenerationScheduler implements MainNetworkSchedulingAdmission {
   readonly #subjects: SchedulerNetworkSubjectRegistry
   readonly #scheduler: MainProcessScheduler
 
@@ -88,6 +118,15 @@ export class MainGenerationScheduler implements GenerationSchedulingAdmission {
     catch { throw new Error('SCHEDULER_SUBJECT_ENDPOINT_INVALID') }
     const lease = this.#subjects.capture({ baseUrl: origin, apiKey: request.configuration.model.apiKey,
       modelName: request.configuration.model.modelName || (request.configuration.protocol === 'gemini' ? 'gemini-embedding-001' : 'text-embedding-3-small') })
+    try {
+      return await this.#scheduler.acquire({ projectKey: request.projectKey, subject: lease.subject,
+        lane: request.lane, signal: request.signal, claims: { readResourceKeys: [PROJECT_NETWORK_RESOURCE] } })
+    } finally { lease.release() }
+  }
+
+  async acquireNetwork(request: NetworkSchedulingRequest): Promise<MainProcessSchedulerPermit> {
+    const lease = this.#subjects.capture({ baseUrl: request.endpoint,
+      apiKey: request.apiKey, modelName: request.modelName })
     try {
       return await this.#scheduler.acquire({ projectKey: request.projectKey, subject: lease.subject,
         lane: request.lane, signal: request.signal, claims: { readResourceKeys: [PROJECT_NETWORK_RESOURCE] } })

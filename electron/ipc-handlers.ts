@@ -25,6 +25,7 @@ import { CloudProjectBindingStore } from './services/cloud-project-binding-store
 import { projectRuntimeHost } from './services/project-runtime'
 import { isKnowledgeSourceBusy } from './services/knowledge-source-gate'
 import { closeConnection } from './vector-store'
+import { createMainNetworkScheduler } from './services/generation-scheduler'
 
 let runtimeKnowledgeLifecycleInstalled = false
 
@@ -54,7 +55,8 @@ export function registerIPCHandlers() {
   registerCloudBackupController()
   registerFSController()
   registerExternalFileGrantController()
-  registerGenerationController(registerLLMController())
+  const networkScheduler = createMainNetworkScheduler()
+  registerGenerationController(registerLLMController({ scheduler: networkScheduler }))
   registerDatabaseController()
   registerCharacterAvatarController({
     resolveService(_event, context) {
@@ -71,8 +73,8 @@ export function registerIPCHandlers() {
   })
   registerFinalizationController()
   registerChapterLifecycleController()
-  registerKBController()
-  registerReferenceKnowledgeController()
+  registerKBController(undefined, networkScheduler)
+  registerReferenceKnowledgeController(networkScheduler)
   registerImportController()
 
   console.log('[AI Novel IPC] 所有 Controller 已注册完成')

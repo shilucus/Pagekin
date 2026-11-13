@@ -14,7 +14,6 @@ import { normalizeEmbeddingOptions, type EmbeddingModel } from '../../src/shared
 import { EmbeddingDispatchBarrierError } from './reference-embedding-dispatch-contract'
 import type { GenerationSchedulingAdmission } from './generation-scheduler'
 import type { SchedulerLane } from './main-process-scheduler'
-import type { MainProcessSchedulerPermit } from './main-process-scheduler'
 import { withKnowledgeSourceGate } from './knowledge-source-gate'
 import { getProjectDataRoot } from './project-data-locator'
 
@@ -172,22 +171,10 @@ export class ImportQueryMaterialsService {
         return
       }
 
-      let permit: MainProcessSchedulerPermit | undefined
       let flight: ReturnType<ImportQueryRepository['openFlight']> | undefined
       let releaseOwnerPhysical: (() => void) | undefined
       let repositoryPhysicalReleased = false
-      let permitFinished = false
-      let quarantineTimer: ReturnType<typeof setTimeout> | undefined
-      let abortListener: (() => void) | undefined
-      const finishPermit = () => {
-        if (permitFinished) return
-        permitFinished = true
-        permit?.finish()
-      }
       const releasePhysical = () => {
-        if (quarantineTimer !== undefined) clearTimeout(quarantineTimer)
-        if (abortListener) signal.removeEventListener('abort', abortListener)
-        abortListener = undefined
         try {
           if (flight && !repositoryPhysicalReleased) {
             repositoryPhysicalReleased = true
@@ -196,36 +183,15 @@ export class ImportQueryMaterialsService {
         } finally {
           const release = releaseOwnerPhysical
           releaseOwnerPhysical = undefined
-          try { release?.() }
-          finally {
-            finishPermit()
-          }
+          release?.()
         }
       }
       const canEmbed = !!configuration && hasRequiredApiKey(configuration.model) && topic.query.trim().length > 0
-      if (canEmbed) {
-        const scheduling = this.dependencies.scheduling
-        const acquireEmbedding = scheduling?.admission.acquireEmbedding
-        if (!scheduling || !acquireEmbedding) throw new EmbeddingDispatchBarrierError('GENERATION_IMPORT_QUERY_REQUIRED')
-        try {
-          permit = await acquireEmbedding.call(scheduling.admission, {
-            projectKey: scheduling.projectKey,
-            configuration: { protocol: configuration!.protocol, model: configuration!.model },
-            lane: scheduling.lane,
-            signal: queueSignal,
-          })
-          if (stopped) {
-            finishPermit()
-            return
-          }
-          assertActive()
-          flight = this.dependencies.queries.openFlight(plan, topic.key)
-        } catch (error) {
-          permit?.finish()
-          barrier(error)
-        }
+      const scheduling = this.dependencies.scheduling
+      if (canEmbed && (!scheduling || !scheduling.admission.acquireEmbedding)) {
+        throw new EmbeddingDispatchBarrierError('GENERATION_IMPORT_QUERY_REQUIRED')
       }
-      const observer = flight ? {
+      const observer = canEmbed ? {
         forBatch: (batchOrdinal: number, inputCount: number) => {
           if (batchOrdinal !== 0 || inputCount !== 1) {
             throw new EmbeddingDispatchBarrierError('GENERATION_IMPORT_QUERY_INVALID')
@@ -235,20 +201,13 @@ export class ImportQueryMaterialsService {
               if (stopped) throw STOPPED_BEFORE_DISPATCH
               assertActive()
               this.dependencies.beforeDispatch?.()
-              const release = this.dependencies.onPhysicalStart?.(rootActionId)
               try {
-                this.dependencies.queries.beforeDispatch(flight!, assertActive)
+                flight = this.dependencies.queries.openFlight(plan, topic.key)
+                const release = this.dependencies.onPhysicalStart?.(rootActionId)
                 releaseOwnerPhysical = release
-                const quarantineAfterMs = this.dependencies.scheduling?.quarantineAfterMs
-                if (permit && Number.isSafeInteger(quarantineAfterMs) && quarantineAfterMs! > 0) {
-                  abortListener = () => {
-                    quarantineTimer = setTimeout(() => { permit?.quarantine() }, quarantineAfterMs)
-                  }
-                  signal.addEventListener('abort', abortListener, { once: true })
-                  if (signal.aborted) abortListener()
-                }
+                this.dependencies.queries.beforeDispatch(flight!, assertActive)
               } catch (error) {
-                release?.()
+                releasePhysical()
                 barrier(error)
               }
             },
@@ -273,6 +232,8 @@ export class ImportQueryMaterialsService {
           assertAuthority: assertActive,
           signal,
           observer,
+          ...(canEmbed && scheduling ? { scheduling: { ...scheduling, signal, queueSignal,
+            assertActive: () => { if (stopped) throw STOPPED_BEFORE_DISPATCH; assertActive() } } } : {}),
         })
         releasePhysical()
         const completed = await this.completeAvailable(plan, topic.key, durableSnapshot(snapshot), assertActive)
@@ -280,7 +241,7 @@ export class ImportQueryMaterialsService {
         materials[topicIndex] = { key: topic.key, results: completed.snapshot.results }
       } catch (error) {
         releasePhysical()
-        if (error === STOPPED_BEFORE_DISPATCH || stopped) return
+        if (error === STOPPED_BEFORE_DISPATCH || (stopped && !flight)) return
         if (isSearchUnavailable(error)) {
           const unavailable = this.dependencies.queries.complete(plan, topic.key, { version: 1, state: 'unavailable' }, assertActive)
           if (unavailable.state !== 'unavailable') throw new EmbeddingDispatchBarrierError('GENERATION_IMPORT_QUERY_INVALID')
@@ -298,12 +259,19 @@ export class ImportQueryMaterialsService {
         try {
           await runTopic(topicIndex)
         } catch (error) {
+          const unknownReceipt = error instanceof EmbeddingDispatchBarrierError
+            && (error.code === 'GENERATION_IMPORT_QUERY_RECOVERY_UNKNOWN'
+              || error.code === 'GENERATION_IMPORT_QUERY_PERSISTENCE_FAILED')
           if (!hasPrimaryError) {
             hasPrimaryError = true
             try { barrier(error) }
             catch (primary) { primaryError = primary }
             stopped = true
             queueStop.abort()
+          } else if (unknownReceipt && !(primaryError instanceof EmbeddingDispatchBarrierError
+            && (primaryError.code === 'GENERATION_IMPORT_QUERY_RECOVERY_UNKNOWN'
+              || primaryError.code === 'GENERATION_IMPORT_QUERY_PERSISTENCE_FAILED'))) {
+            primaryError = error
           }
           return
         }

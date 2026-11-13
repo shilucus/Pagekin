@@ -3,10 +3,13 @@ import type {
   ModelDiscoveryRequest,
   ModelDiscoveryResult,
 } from '../../src/shared/ipc-channels'
+import type { MainNetworkSchedulingAdmission } from './generation-scheduler'
+import { createNetworkPermitLifetime } from './network-permit-lifetime'
 
 interface ModelDiscoveryServiceDependencies {
   fetchImpl?: typeof fetch
   timeoutMs?: number
+  scheduler?: MainNetworkSchedulingAdmission
 }
 
 type DiscoveryPurpose = 'generation' | 'embedding'
@@ -223,13 +226,31 @@ export class ModelDiscoveryService {
       : DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS
     const abortController = new AbortController()
     const timeout = setTimeout(() => abortController.abort(), timeoutMs)
+    let lifetime: ReturnType<typeof createNetworkPermitLifetime> | undefined
 
     try {
+      let requestUrl: string
+      if (model.protocol === 'anthropic') requestUrl = resolveAnthropicModelsUrl(model.baseUrl)
+      else if (model.protocol === 'gemini') requestUrl = resolveGeminiModelsUrl(model.baseUrl)
+      else requestUrl = resolveOpenAIModelsUrl(model.baseUrl)
+
+      if (urlContainsCredential(requestUrl, model.apiKey)) {
+        return { success: false, errorCode: 'invalid_response' }
+      }
+
+      if (this.dependencies.scheduler) {
+        const permit = await this.dependencies.scheduler.acquireNetwork({
+          projectKey: 'application-outbound-network',
+          lane: 'interactive',
+          endpoint: requestUrl,
+          apiKey: model.apiKey,
+          modelName: 'main-model-discovery',
+          signal: abortController.signal,
+        })
+        lifetime = createNetworkPermitLifetime(permit, abortController.signal)
+      }
+
       if (model.protocol === 'anthropic') {
-        const requestUrl = resolveAnthropicModelsUrl(model.baseUrl)
-        if (urlContainsCredential(requestUrl, model.apiKey)) {
-          return { success: false, errorCode: 'invalid_response' }
-        }
         const response = await (this.dependencies.fetchImpl ?? fetch)(
           requestUrl,
           {
@@ -245,7 +266,12 @@ export class ModelDiscoveryService {
             },
           },
         )
-        if (!response.ok) return classifyHttpFailure(response.status)
+        if (!response.ok) {
+          if (response.body) {
+            try { await response.body.cancel() } catch { /* ignore */ }
+          }
+          return classifyHttpFailure(response.status)
+        }
 
         let payload: unknown
         try {
@@ -264,10 +290,6 @@ export class ModelDiscoveryService {
       }
 
       if (model.protocol === 'gemini') {
-        const requestUrl = resolveGeminiModelsUrl(model.baseUrl)
-        if (urlContainsCredential(requestUrl, model.apiKey)) {
-          return { success: false, errorCode: 'invalid_response' }
-        }
         const response = await (this.dependencies.fetchImpl ?? fetch)(
           requestUrl,
           {
@@ -280,7 +302,12 @@ export class ModelDiscoveryService {
             },
           },
         )
-        if (!response.ok) return classifyHttpFailure(response.status)
+        if (!response.ok) {
+          if (response.body) {
+            try { await response.body.cancel() } catch { /* ignore */ }
+          }
+          return classifyHttpFailure(response.status)
+        }
 
         let payload: unknown
         try {
@@ -297,10 +324,6 @@ export class ModelDiscoveryService {
         return { success: true, models: parsed.models }
       }
 
-      const requestUrl = resolveOpenAIModelsUrl(model.baseUrl)
-      if (urlContainsCredential(requestUrl, model.apiKey)) {
-        return { success: false, errorCode: 'invalid_response' }
-      }
       const response = await (this.dependencies.fetchImpl ?? fetch)(
         requestUrl,
         {
@@ -313,7 +336,12 @@ export class ModelDiscoveryService {
           },
         },
       )
-      if (!response.ok) return classifyHttpFailure(response.status)
+      if (!response.ok) {
+        if (response.body) {
+          try { await response.body.cancel() } catch { /* ignore */ }
+        }
+        return classifyHttpFailure(response.status)
+      }
 
       let payload: unknown
       try {
@@ -336,6 +364,7 @@ export class ModelDiscoveryService {
       return { success: false, errorCode: 'network' }
     } finally {
       clearTimeout(timeout)
+      lifetime?.finish()
     }
   }
 }

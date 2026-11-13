@@ -10,6 +10,8 @@
 
 import { normalizeEmbeddingOptions, type EmbeddingOptions } from '../src/shared/embedding-options'
 import { EmbeddingResponseValidationError } from './services/embedding-response-error'
+import { EmbeddingSchedulingError, type EmbeddingSchedulingContext } from './services/embedding-scheduling'
+import { createNetworkPermitLifetime } from './services/network-permit-lifetime'
 import {
   EmbeddingDispatchBarrierError,
   type EmbeddingBatchObserver,
@@ -406,6 +408,7 @@ export async function generateEmbeddings(
   signal?: AbortSignal,
   configuredConcurrencyLimit?: number,
   observer?: EmbeddingBatchObserver,
+  scheduling?: EmbeddingSchedulingContext,
 ): Promise<number[][]> {
   // 空文本处理
   if (texts.length === 0) return []
@@ -428,16 +431,59 @@ export async function generateEmbeddings(
     batches.push({ index: batchIdx, texts: texts.slice(i, i + batchSize) })
   }
 
+  const queueStop = new AbortController()
+  const siblingStopped = Symbol('embedding sibling stopped')
+  const externalSignals = [signal, scheduling?.signal].filter((value): value is AbortSignal => value !== undefined)
+  const physicalSignal = externalSignals.length ? AbortSignal.any(externalSignals) : undefined
+  const queueSignal = AbortSignal.any([...externalSignals, ...(scheduling?.queueSignal ? [scheduling.queueSignal] : []), queueStop.signal])
+  const assertBatchActive = () => {
+    if (!scheduling) { assertActive?.(); return }
+    try {
+      if (physicalSignal?.aborted) throw new Error('GENERATION_ACTION_CANCELLED')
+      scheduling.assertActive()
+      assertActive?.()
+    } catch (error) {
+      if (error instanceof EmbeddingDispatchBarrierError || error instanceof EmbeddingSchedulingError) throw error
+      throw new EmbeddingSchedulingError(error)
+    }
+  }
+  const executeBatch = async (batch: { index: number; texts: string[] }) => {
+    assertBatchActive()
+    const lifecycle = batchLifecycle(observer, batch.index, batch.texts.length)
+    let lifetime: ReturnType<typeof createNetworkPermitLifetime> | undefined
+    if (scheduling) {
+      try {
+        const acquire = scheduling.admission.acquireEmbedding
+        if (!acquire) throw new Error('GENERATION_REQUEST_FAILED')
+        const permit = await acquire.call(scheduling.admission, {
+          projectKey: scheduling.projectKey, configuration: { protocol, model: {
+            provider: '', baseUrl: model.baseUrl, apiKey: model.apiKey, modelName: model.modelName,
+          } }, lane: scheduling.lane, signal: queueSignal,
+        })
+        lifetime = createNetworkPermitLifetime(permit, physicalSignal, scheduling.quarantineAfterMs)
+        if (queueStop.signal.aborted) throw new Error('GENERATION_ACTION_CANCELLED')
+        assertBatchActive()
+      } catch (error) {
+        lifetime?.finish()
+        if (queueStop.signal.aborted && !physicalSignal?.aborted) throw siblingStopped
+        if (error instanceof EmbeddingDispatchBarrierError || error instanceof EmbeddingSchedulingError) throw error
+        throw new EmbeddingSchedulingError(error)
+      }
+    }
+    try {
+      const embeddings = protocol === 'gemini'
+        ? await embedGemini(batch.texts, model, physicalSignal, lifecycle)
+        : await embedOpenAI(batch.texts, model, physicalSignal, lifecycle)
+      assertBatchActive()
+      return embeddings
+    } finally { lifetime?.finish() }
+  }
+
   // 若只有一个 batch 或并发限制为 1，直接保序串行执行并返回
   if (batches.length <= 1 || concurrencyLimit === 1) {
     const results: number[][] = []
     for (const batch of batches) {
-      assertActive?.()
-      const lifecycle = batchLifecycle(observer, batch.index, batch.texts.length)
-      const embeddings = protocol === 'gemini'
-        ? await embedGemini(batch.texts, model, signal, lifecycle)
-        : await embedOpenAI(batch.texts, model, signal, lifecycle)
-      assertActive?.()
+      const embeddings = await executeBatch(batch)
       results.push(...embeddings)
     }
     return validateEmbeddingVectors(protocol === 'gemini' ? 'Gemini' : 'OpenAI', results)
@@ -460,20 +506,18 @@ export async function generateEmbeddings(
 
       const batch = batches[current]
       try {
-        assertActive?.()
+        assertBatchActive()
         if (signal?.aborted) {
           throw new Error('EMBEDDING_REQUEST_ABORTED')
         }
-        const lifecycle = batchLifecycle(observer, batch.index, batch.texts.length)
-        const embeddings = protocol === 'gemini'
-          ? await embedGemini(batch.texts, model, signal, lifecycle)
-          : await embedOpenAI(batch.texts, model, signal, lifecycle)
-        assertActive?.()
+        const embeddings = await executeBatch(batch)
         outcomes[current] = { status: 'fulfilled', embeddings }
       } catch (error) {
+        if (error === siblingStopped && stopped) return
         outcomes[current] = { status: 'rejected', error }
         // 标记后续未派发 batch 停止派发，但已在途请求必须等待其自然返回（吸收在途结果）
         stopped = true
+        if (scheduling) queueStop.abort()
       }
     }
   }
@@ -489,7 +533,8 @@ export async function generateEmbeddings(
 
   // A lost dispatch/settlement receipt forbids fallback even if an earlier batch failed normally.
   for (const outcome of outcomes) {
-    if (outcome?.status === 'rejected' && outcome.error instanceof EmbeddingDispatchBarrierError) throw outcome.error
+    if (outcome?.status === 'rejected' && (outcome.error instanceof EmbeddingDispatchBarrierError
+      || outcome.error instanceof EmbeddingSchedulingError)) throw outcome.error
   }
 
   // 按原 batch 序号严格首失败裁决（First-Failure Adjudication by Original Batch Order）

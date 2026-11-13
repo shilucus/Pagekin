@@ -53,6 +53,7 @@ import { assertIssuedReferenceImportAdmission, type ReferenceImportAdmission } f
 import { assertNoReferenceEmbeddingDispatches, prepareReferenceEmbeddingDocument,
   type ReferenceEmbeddingDispatchFlight } from './services/reference-embedding-dispatch'
 import { EmbeddingDispatchBarrierError, type EmbeddingBatchObserver } from './services/reference-embedding-dispatch-contract'
+import { EmbeddingSchedulingError, type EmbeddingSchedulingContext } from './services/embedding-scheduling'
 
 // ===== 迁移状态跟踪 =====
 
@@ -104,16 +105,20 @@ async function canWriteIncrementalVectors(projectPath: string): Promise<boolean>
 /** One initial retrieval; later generation guards re-read identities without another embedding request. */
 export async function captureWritingKnowledgeSnapshot(query: string, projectPath: string,
   configuration: { protocol: 'openai' | 'gemini'; model: EmbeddingModel } | null, excludedDocumentIds: readonly string[] = [],
-  assertCurrent: () => void = () => {}) {
+  assertCurrent: () => void = () => {}, scheduling?: EmbeddingSchedulingContext) {
   assertCurrent()
   await ensureMigration(projectPath)
   assertCurrent()
   let queryVector: number[] | undefined
   if (configuration && hasRequiredApiKey(configuration.model) && query.trim()) {
     try {
-      const [vector] = await generateEmbeddings([query], configuration.protocol, configuration.model, configuration.model.embeddingOptions?.batchSize)
+      const [vector] = await generateEmbeddings([query], configuration.protocol, configuration.model, configuration.model.embeddingOptions?.batchSize,
+        assertCurrent, undefined, undefined, undefined, scheduling)
       if (vector?.length) queryVector = vector
-    } catch { /* The established no-embedding path still uses canonical full-text search. */ }
+    } catch (error) {
+      if (error instanceof EmbeddingSchedulingError || error instanceof EmbeddingDispatchBarrierError) throw error
+      /* The established no-embedding path still uses canonical full-text search. */
+    }
   }
   assertCurrent()
   const { captureGenerationKnowledge } = await import('./services/generation-knowledge-source')
@@ -149,6 +154,7 @@ export async function searchKnowledge(
   model: EmbeddingModel,
   topK: number = 5,
   excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
+  scheduling?: EmbeddingSchedulingContext,
 ): Promise<Array<{ text: string; score: number; fileName: string }>> {
   await ensureMigration(projectPath)
 
@@ -156,15 +162,18 @@ export async function searchKnowledge(
   let queryVector: number[] | undefined
   if (hasRequiredApiKey(model) && query.trim()) {
     try {
-      const [vec] = await generateEmbeddings([query], protocol, model, model.embeddingOptions?.batchSize)
+      const [vec] = await generateEmbeddings([query], protocol, model, model.embeddingOptions?.batchSize,
+        undefined, undefined, undefined, undefined, scheduling)
       if (vec && vec.length > 0) {
         queryVector = vec
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof EmbeddingSchedulingError || error instanceof EmbeddingDispatchBarrierError) throw error
       // Embedding 不可用，降级为 FTS
     }
   }
 
+  scheduling?.assertActive()
   return storeSearch(
     projectPath,
     query,
@@ -288,7 +297,7 @@ async function importTextInternal(
   projectPath: string,
   protocol: 'openai' | 'gemini',
   model: EmbeddingModel,
-  options?: { mode: 'fts-only' },
+  options?: { mode?: 'fts-only'; scheduling?: EmbeddingSchedulingContext },
 ): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
   try {
     if (!text.trim()) return { success: false, error: 'KNOWLEDGE_BASE_TEXT_EMPTY' }
@@ -312,13 +321,15 @@ async function importTextInternal(
       && await canWriteIncrementalVectors(projectPath)
     ) {
       try {
-        vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
+        vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize,
+          undefined, undefined, undefined, undefined, options?.scheduling)
       } catch (e) {
-        if (e instanceof EmbeddingResponseValidationError) throw e
+        if (e instanceof EmbeddingResponseValidationError || e instanceof EmbeddingSchedulingError || e instanceof EmbeddingDispatchBarrierError) throw e
         console.warn('[AI Novel KB] importText Embedding 失败，降级 FTS-only:', e)
       }
     }
 
+    options?.scheduling?.assertActive()
     writeKnowledgeCopy(getProjectDataRoot(projectPath), docId, {
       content: text, indexedHash: createHash('sha256').update(text).digest('hex'), edited: false, indexDirty: false,
     })
@@ -338,6 +349,7 @@ async function importTextInternal(
     }
     return { success: true, docId, chunkCount: chunks.length }
   } catch (error) {
+    if (error instanceof EmbeddingSchedulingError || error instanceof EmbeddingDispatchBarrierError) throw error
     return { success: false, ...knowledgeFailureDetails(error) }
   }
 }
@@ -348,7 +360,7 @@ export async function importText(
   projectPath: string,
   protocol: 'openai' | 'gemini',
   model: EmbeddingModel,
-  options?: { mode: 'fts-only' },
+  options?: { mode?: 'fts-only'; scheduling?: EmbeddingSchedulingContext },
 ): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: typeof LEGACY_VECTOR_MIGRATION_BLOCKED }> {
   return importTextInternal(
     text,
@@ -407,6 +419,7 @@ export async function captureReferenceImportKnowledgeSnapshot(input: {
   assertAuthority: () => void
   signal?: AbortSignal
   observer?: EmbeddingBatchObserver
+  scheduling?: EmbeddingSchedulingContext
 }): Promise<ReferenceImportKnowledgeSnapshot> {
   const assertActive = () => { input.resources.assertResources(); input.assertAuthority() }
   assertActive()
@@ -419,10 +432,10 @@ export async function captureReferenceImportKnowledgeSnapshot(input: {
       try {
         const [vector] = await generateEmbeddings([input.query], input.configuration.protocol,
         input.configuration.model, input.configuration.model.embeddingOptions?.batchSize,
-        assertActive, input.signal, 1, input.observer)
+        assertActive, input.signal, 1, input.observer, input.scheduling)
         if (vector?.length) queryVector = vector
     } catch (error) {
-      if (error instanceof EmbeddingDispatchBarrierError) throw error
+      if (error instanceof EmbeddingDispatchBarrierError || error instanceof EmbeddingSchedulingError) throw error
       // Known query-embedding failures keep the existing FTS fallback.
     }
       // Resource and grant failures are outside the embedding fallback's catch.
@@ -587,6 +600,7 @@ async function performReferenceTextImport(
   model: EmbeddingModel,
   assertAuthority: () => void,
   authority: ReferenceImportAuthorityRequest,
+  scheduling?: EmbeddingSchedulingContext,
 ): Promise<ReferenceImportResult> {
   const { resources, admission, runId } = authority
   let embeddingFlight: ReferenceEmbeddingDispatchFlight | null = null
@@ -710,10 +724,11 @@ async function performReferenceTextImport(
           undefined,
           undefined,
           embeddingFlight ?? undefined,
+          scheduling,
         )
       } catch (error) {
         assertAuthority()
-        if (error instanceof EmbeddingResponseValidationError || error instanceof EmbeddingDispatchBarrierError) throw error
+        if (error instanceof EmbeddingResponseValidationError || error instanceof EmbeddingDispatchBarrierError || error instanceof EmbeddingSchedulingError) throw error
         console.warn('[AI Novel KB] reference import embedding failed; using FTS-only:', error)
       }
       assertAuthority()
@@ -791,6 +806,7 @@ export async function importReferenceText(
   model: EmbeddingModel,
   resources?: ReferenceImportResources,
   admission?: ReferenceImportAdmission,
+  scheduling?: EmbeddingSchedulingContext,
 ): Promise<ReferenceImportResult> {
   const stableKey = stableImportKey.trim()
   if (!stableKey || stableKey.length > 512 || !/^[\w:.-]+$/u.test(stableKey)) {
@@ -842,6 +858,7 @@ export async function importReferenceText(
           model,
           assertCurrentAuthority,
           authority,
+          scheduling,
         )
       },
     )
@@ -871,6 +888,7 @@ export async function backfillVectors(
   projectPath: string,
   protocol: 'openai' | 'gemini',
   model: EmbeddingModel,
+  scheduling?: EmbeddingSchedulingContext,
 ): Promise<{
   success: boolean
   processed: number
@@ -897,6 +915,7 @@ export async function backfillVectors(
       protocol,
       model,
       model.embeddingOptions?.batchSize,
+      undefined, undefined, undefined, undefined, scheduling,
     )
     if (probeVectors.length !== 1) {
       return {
@@ -916,6 +935,7 @@ export async function backfillVectors(
       return { success: true, processed: 0, failed: 0 }
     }
     if (plan.mode === 'activate') {
+      scheduling?.assertActive()
       const activated = await activatePlannedEmbeddingSpace(projectPath, plan)
       return activated.success
         ? { success: true, processed: 0, failed: 0 }
@@ -932,6 +952,7 @@ export async function backfillVectors(
         protocol,
         model,
         model.embeddingOptions?.batchSize,
+        undefined, undefined, undefined, undefined, scheduling,
       )
       if (vectors.length !== remaining.length) {
         return {
@@ -944,6 +965,7 @@ export async function backfillVectors(
       for (const [index, vector] of vectors.entries()) vectorsById.set(remaining[index].id, vector)
     }
 
+    scheduling?.assertActive()
     const result = await rebuildPlannedEmbeddingSpace(
       projectPath,
       plan,

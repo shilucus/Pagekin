@@ -29,7 +29,8 @@ import { projectRuntimeHost, type ProjectRuntime } from '../services/project-run
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from '../services/model-execution-lease'
 import { createMainGenerationOwner, safeGenerationModelReceipt } from '../services/main-generation-owner'
 import type { MainGenerationOwnerDependencies } from '../services/main-generation-owner'
-import { MainGenerationScheduler, type GenerationSchedulingAdmission } from '../services/generation-scheduler'
+import { createMainNetworkScheduler, type GenerationSchedulingAdmission } from '../services/generation-scheduler'
+import type { EmbeddingSchedulingContext } from '../services/embedding-scheduling'
 import { RuntimeFeedbackAuthority, readRuntimeFeedbackReceipt } from '../services/runtime-feedback-authority'
 import { WorkflowDriverAuthority, readWorkflowDriverReceipt } from '../services/workflow-driver-authority'
 import { WorkflowBatchAuthority, readWorkflowBatchReceipt } from '../services/workflow-batch-authority'
@@ -71,12 +72,6 @@ const driverReceiptAuthorities = new Map<Database.Database, Set<WorkflowDriverAu
 const batchReceiptAuthorities = new Map<Database.Database, Set<WorkflowBatchAuthority>>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 const ownerRuntimes = new WeakMap<Owner, ProjectRuntime>()
-// Only explicitly configured independent queries may overlap within one book;
-// ordinary generation retains an exclusive project claim. These are not quotas.
-const INITIAL_GENERATION_SCHEDULING = Object.freeze({
-  global: 2, provider: 2, credential: 2, model: 2, project: 2,
-  maxQueued: 32, maxQuarantined: 2, interactiveBurst: 1,
-})
 // Match the existing runtime's bounded local close-wait scale, not a provider
 // deadline. Keep the permit held throughout cooperative cancellation cleanup.
 const GENERATION_TRANSPORT_CLEANUP_GRACE_MS = 5_000
@@ -168,9 +163,37 @@ export function registerGenerationController(options: {
   /** Trusted main-process composition only, never an IPC request field. */
   scheduler?: GenerationSchedulingAdmission
 }) {
-  const scheduler = options.scheduler ?? new MainGenerationScheduler(INITIAL_GENERATION_SCHEDULING,
-    3 * (INITIAL_GENERATION_SCHEDULING.global + INITIAL_GENERATION_SCHEDULING.maxQueued + INITIAL_GENERATION_SCHEDULING.maxQuarantined))
+  const scheduler = options.scheduler ?? createMainNetworkScheduler()
   const activeHandlers = new Map<ProjectRuntime, number>()
+  const knowledgeRequests = new Map<ProjectRuntime, Set<AbortController>>()
+  const captureScheduledKnowledge = async (
+    kb: Awaited<ReturnType<typeof knowledgeBaseLoader.load>>,
+    runtime: ProjectRuntime,
+    query: string,
+    excludedDocuments: string[],
+    assertCurrent: () => void,
+    lane: 'interactive' | 'background' = 'interactive',
+  ) => {
+    const controller = new AbortController()
+    let requests = knowledgeRequests.get(runtime)
+    if (!requests) { requests = new Set(); knowledgeRequests.set(runtime, requests) }
+    requests.add(controller)
+    const assertActive = () => {
+      assertCurrent()
+      projectRuntimeHost.assertWorkAvailable(runtime)
+      if (controller.signal.aborted) throw new Error('GENERATION_ACTION_CANCELLED')
+    }
+    const scheduling: EmbeddingSchedulingContext = { admission: scheduler, projectKey: runtime.executionEpoch,
+      lane, signal: controller.signal, assertActive, quarantineAfterMs: GENERATION_TRANSPORT_CLEANUP_GRACE_MS }
+    try {
+      assertActive()
+      return await kb.captureWritingKnowledgeSnapshot(query, runtime.canonicalRoot, getEmbeddingConfig(),
+        excludedDocuments, assertActive, scheduling)
+    } finally {
+      requests.delete(controller)
+      if (!requests.size) knowledgeRequests.delete(runtime)
+    }
+  }
   const referenceStyles = new ReferenceStyleForeground()
   const referenceGlobals = new ReferenceGlobalForeground()
   const referenceBlueprints = new ReferenceBlueprintForeground()
@@ -178,6 +201,7 @@ export function registerGenerationController(options: {
     ? entry.owner.hasPhysicalInFlight() : entry?.authority.hasPhysicalInFlight() ?? false
   projectRuntimeHost.registerBusyPredicate(runtime => (activeHandlers.get(runtime) ?? 0) > 0 || hasPhysical(owners.get(runtime.database)))
   projectRuntimeHost.onCloseRequested(runtime => {
+    for (const controller of knowledgeRequests.get(runtime) ?? []) controller.abort()
     referenceStyles.requestClose(runtime)
     referenceGlobals.requestClose(runtime)
     referenceBlueprints.requestClose(runtime)
@@ -540,7 +564,7 @@ export function registerGenerationController(options: {
             const kb = await knowledgeBaseLoader.load()
             fresh()
             projectRuntimeHost.assertWorkAvailable(runtime)
-            const knowledge = await kb.captureWritingKnowledgeSnapshot(request.query, runtime.canonicalRoot, getEmbeddingConfig(),
+            const knowledge = await captureScheduledKnowledge(kb, runtime, request.query,
               [...driverLaterFinalizedDocuments(runtime, request.chapterNumber)], () => {
                 fresh()
                 projectRuntimeHost.assertWorkAvailable(runtime)
@@ -589,11 +613,11 @@ export function registerGenerationController(options: {
         const kb = await knowledgeBaseLoader.load()
         assertResources()
         projectRuntimeHost.assertWorkAvailable(runtime)
-        return kb.captureWritingKnowledgeSnapshot(query, runtime.canonicalRoot, getEmbeddingConfig(),
+        return captureScheduledKnowledge(kb, runtime, query,
           [...driverLaterFinalizedDocuments(runtime, chapterNumber)], () => {
             assertResources()
             projectRuntimeHost.assertWorkAvailable(runtime)
-          })
+          }, 'background')
       },
       withKnowledge: (handle, operation) => guardRuntimeKnowledge(runtime,
         readActionContext(batchOwner, handle).knowledgeSnapshot, operation),
@@ -879,7 +903,7 @@ export function registerGenerationController(options: {
     const kb = await knowledgeBaseLoader.load()
     if (projectAccess.assertViewContext(session) !== ownerRuntimes.get(owner)) throw new Error('GENERATION_DATABASE_CHANGED')
     const runtime = ownerRuntimes.get(owner)!
-    const knowledge = await kb.captureWritingKnowledgeSnapshot(request.query, runtime.canonicalRoot, getEmbeddingConfig(),
+    const knowledge = await captureScheduledKnowledge(kb, runtime, request.query,
       [...laterFinalizedDocuments(owner, request.chapterNumber)], () => {
         if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
       })
