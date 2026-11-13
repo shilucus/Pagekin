@@ -21,17 +21,22 @@ export class ImportGeneration {
       ? { database: this.db, canonicalRoot: this.canonicalRoot, projectId: this.projectId } : undefined
     return ImportRunRepository.getEffectReceipt(slot.runId, slot.stage, slot.batchId, context)
   }
-  find(slot: ImportGenerationSlot): DurableGenerationRun | undefined {
+  private slotRuns(slot: ImportGenerationSlot): DurableGenerationRun[] {
     const key = importGenerationSlotKey(slot)
     const rows = this.db.prepare("SELECT run_id,json_extract(json_extract(open_key,'$[0]'),'$[2]') AS ui_action_nonce FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.importSlotKey')=? ORDER BY rowid").all(key) as { run_id: string; ui_action_nonce: string }[]
     let previous: DurableGenerationRun | undefined
+    const runs: DurableGenerationRun[] = []
     for (const row of rows) {
       const run = this.runs.get(row.run_id)
       if (run.binding.projectId !== this.projectId) continue
       if (previous && row.ui_action_nonce !== importSlotNonce(key, previous)) throw new Error('GENERATION_IMPORT_SLOT_AMBIGUOUS')
       previous = run
+      runs.push(run)
     }
-    return previous
+    return runs
+  }
+  find(slot: ImportGenerationSlot): DurableGenerationRun | undefined {
+    return this.slotRuns(slot).at(-1)
   }
   private rootCanDispatch(rootActionId: string): boolean {
     const budget = this.runs.budget(rootActionId)
@@ -49,8 +54,7 @@ export class ImportGeneration {
   rejected(run: DurableGenerationRun): boolean {
     const budget = this.runs.budget(run.rootActionId)
     const outputs = this.attemptIds(run).map((attemptId): 'usable' | 'blank' | 'rejected' => {
-      let receipt
-      try { receipt = this.runs.receipt(attemptId, budget) } catch { return 'rejected' }
+      const receipt = this.runs.receipt(attemptId, budget)
       const artifact = receipt.artifact
       if (receipt.result?.finishReason !== 'stop') return 'rejected'
       if (!artifact?.text.trim()) return 'blank'
@@ -58,12 +62,44 @@ export class ImportGeneration {
     })
     return outputs.includes('rejected') || outputs.includes('blank') && !outputs.includes('usable')
   }
+  private hasRemoteUnknown(slot: ImportGenerationSlot): boolean {
+    for (const run of this.slotRuns(slot)) {
+      const budget = this.runs.budget(run.rootActionId)
+      for (const attemptId of this.attemptIds(run)) {
+        const receipt = this.runs.receipt(attemptId, budget)
+        if (receipt.attempt.status === 'cancelled-before-dispatch') continue
+        if (receipt.attempt.status === 'reserved' || receipt.attempt.status === 'dispatch-marked') return true
+        if (receipt.attempt.status !== 'settled' && receipt.attempt.status !== 'unknown') return true
+
+        const result = receipt.result
+        if (!result || receipt.failureCode === 'GENERATION_STORAGE_FAILED') return true
+        if (result.finishReason === 'unknown' || result.finishReason === 'cancelled') return true
+        if (result.finishReason === 'stop' || result.finishReason === 'length' || result.finishReason === 'content_filter'
+          || receipt.failureCode === 'GENERATION_CONTEXT_LENGTH_EXCEEDED') continue
+
+        const diagnostics = receipt.diagnostics
+        if (result.finishReason === 'error' && !receipt.failureCode
+          && diagnostics?.phase === 'complete' && diagnostics.endReason === 'completed') continue
+        if (receipt.failureCode !== 'GENERATION_PROVIDER_FAILED') return true
+        if (diagnostics?.phase === 'stream' && diagnostics.endReason === 'failed'
+          && diagnostics.errorCode === 'PROVIDER_STREAM_ERROR') continue
+        if (diagnostics?.phase === 'response' && diagnostics.endReason === 'failed'
+          && diagnostics.errorCode === 'HTTP_ERROR' && Number.isInteger(diagnostics.httpStatus)
+          && diagnostics.httpStatus! >= 100 && diagnostics.httpStatus! <= 599
+          && (diagnostics.httpStatus! < 200 || diagnostics.httpStatus! >= 300)) continue
+
+        return true
+      }
+    }
+    return false
+  }
   hasAttempts(run: DurableGenerationRun): boolean {
     return this.runs.attemptCount(run.runId) > 0
   }
   retryable(run: DurableGenerationRun): boolean {
     const slot = this.context(run).slot
     if (this.effectReceipt(slot)) return false
+    if (this.hasRemoteUnknown(slot)) return false
     const budget = this.runs.budget(run.rootActionId)
     if (budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))) return false
     if (this.rejected(run)) return true
@@ -95,6 +131,7 @@ export class ImportGeneration {
     if (!execution) throw new Error('GENERATION_IMPORT_EXECUTION_REQUIRED')
     ImportRunRepository.assertExecutionAuthority(slot.runId, execution, undefined, this.db)
     this.assertSlotRunning(slot)
+    if (this.hasRemoteUnknown(slot)) throw new Error('GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
     return Object.freeze({ owner: execution.owner, epoch: execution.epoch })
   }
   admit(selection: BeginGenerationRequest): { existing?: DurableGenerationRun; retryOf?: DurableGenerationRun; parentRootActionId?: string; modelId?: string; chapterCount?: number } | undefined {

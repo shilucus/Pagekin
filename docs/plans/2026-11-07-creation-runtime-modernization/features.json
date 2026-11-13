@@ -1014,6 +1014,14 @@
           "environment": "Same311-assertion package; actual generateEmbeddings with eight fictional texts,four local fake-fetch batches per configuration,manual gates and10ms controlled delay",
           "result": "One included observation case records request/completion4/4,peak1 versus2,ordered complete vectors and completion order0,1,2,3 versus1,0,2,3; elapsed75.8902/45.6669ms.",
           "limitations": "Already included in311,not extra independent tests. Not production/controller/provider latency,responsiveness,statistical speedup or SLA. No new four-topic production performance qualification; feature remains in_progress/false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "52b9be5e60febfba93eb49e1beefc4704aca6264 + stage-61-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-61-evidence.md; .runtime/creation-runtime-modernization/stage61/impact-final-2.json",
+          "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; real fictional SQLite/owner/workflow and controlled provider fetch only",
+          "result": "Final24-file610/610 passed,including80 owner/continuation/actual workflow cases,48 physical-provider-close cases and existing budget/controller/consumer regressions. Same-slot full retry lineage is fenced at begin/read and new-ordinal/native dispatch admission; explicit unknown/cancelled and local cancel/deadline cannot be promoted by stale diagnostics. Known terminal retry and usage-unknown completion remain usable. Independent source/raw re-review found no narrow blocker.",
+          "limitations": "Bounded unknown-no-resend correctness increment,not full SCHED-001. Intermediate74/74 was followed by review findings and6/6 RED; all historical failed/fixture reports remain distinct and overlapping counts are not added. Four-topic shared generation-root budget,full import/adoption and registry-wide integration remain open. No real-model/network,Electron,visual,platform or all35 cumulative qualification; status and passes unchanged."
         }
       ]
     },
@@ -1264,6 +1272,14 @@
           "environment": "Windows x64; Node24.13.0/Corepack pnpm11.11.0/Vitest4.1.12; entry SHA plus frozen identities; real fictional SQLite/Lance with controlled fetch and separate isolated browser fixtures",
           "result": "Existing explicit launch now reaches main-only frozen model/sender/runtime/manifest/execution issuance, actual KB admission and post-await run receipt. Final eighteen-file376/376 includes native20/20 with three dynamic error families in both locales and sender-listener cleanup/drain/retry. Unchanged final dialog browser47/47 passed; overlapping reports are not summed.",
           "limitations": "Knowledge-only foreground composition, not full global/style/blueprint analysis migration, background qualification or durable capsule recovery. Global error registry still fails37 historical codes; narrow new-entry mapping is reviewed separately. No actual Electron scene, real-model quality or platform acceptance. IMPORT-001 remains in_progress/passes=false; quality/build and review outcomes are bounded in Stage57 evidence."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "52b9be5e60febfba93eb49e1beefc4704aca6264 + stage-61-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-61-evidence.md; .runtime/creation-runtime-modernization/stage61/impact-final-2.json",
+          "environment": "Same shared24-file610/610 fictional native/consumer report as SCHED-001,not a separate full import run",
+          "result": "Actual workflow recovery retains original run/model/artifact without replacement begin; ordinal replay precedes new-dispatch fencing. Same-slot unknown,new nonce,old retry lineage,queue/native admission,cancel/deadline,corrupt receipt and actual storage-tail preservation are covered; known retry and committed global-to-style root sharing remain valid. Independent review accepted only this bounded repair.",
+          "limitations": "Core80 is included in610 and not added. Owner/epoch reconstruction is not actual OS process kill; actual DB reopen has separate owner cases. Full driver/global/style/blueprint destination/adoption and background migration remain incomplete. No Electron,real-model,platform or full IMPORT-001 qualification; status and passes unchanged."
         }
       ]
     },
@@ -1412,6 +1428,14 @@
           "environment": "Same shared fictional native/contract/workflow376/376, including native20/20, and unchanged final dialog browser47/47 prerequisite reports as IMPORT-001; not a separate imitation run",
           "result": "Shared reference knowledge issuance now has actual production launch/controller consumers, frozen embedding inputs, genuine admission, cancellation/drain and late-receipt fences; independent source review required the retained red-to-green repairs.",
           "limitations": "No imitation target adoption/style consumption or complete workflow qualification; same overlapping reports are not additive. Global error registry still fails37 historical codes and is not reported as passed. No Electron/model/platform evidence. IMPORT-002 remains in_progress/passes=false; ten of35 features remain completed."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "52b9be5e60febfba93eb49e1beefc4704aca6264 + stage-61-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-61-evidence.md; .runtime/creation-runtime-modernization/stage61/impact-final-2.json",
+          "environment": "Same shared24-file610/610 report as IMPORT-001,not a separate imitation workflow qualification",
+          "result": "Shared import-slot generation recovery now prevents replacement nonce/run and new ordinals after remote unknown,including actual OpenAI HTTP400-body cancellation/deadline. Original receipts and known completion/retry remain usable; existing two-book imitation boundary tests are included in the impact package.",
+          "limitations": "Does not establish complete imitation/style-to-target adoption or production background migration. All failed lineage and fixture boundaries remain in Stage61 evidence; overlapping reports are not additive. No literary-quality,real-model,Electron or platform acceptance; status and passes unchanged."
         }
       ]
     },
