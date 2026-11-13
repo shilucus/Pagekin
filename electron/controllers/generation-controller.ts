@@ -61,10 +61,10 @@ const driverReceiptAuthorities = new Map<Database.Database, Set<WorkflowDriverAu
 const batchReceiptAuthorities = new Map<Database.Database, Set<WorkflowBatchAuthority>>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 const ownerRuntimes = new WeakMap<Owner, ProjectRuntime>()
-// F2 starts cross-book pressure testing at two; keep each book sequential and
-// bound waiting/stranded work independently. These are not provider quotas.
+// Only explicitly configured independent queries may overlap within one book;
+// ordinary generation retains an exclusive project claim. These are not quotas.
 const INITIAL_GENERATION_SCHEDULING = Object.freeze({
-  global: 2, provider: 2, credential: 2, model: 2, project: 1,
+  global: 2, provider: 2, credential: 2, model: 2, project: 2,
   maxQueued: 32, maxQuarantined: 2, interactiveBurst: 1,
 })
 // Match the existing runtime's bounded local close-wait scale, not a provider

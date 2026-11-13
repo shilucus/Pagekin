@@ -80,6 +80,7 @@ function isSearchUnavailable(error: unknown): boolean {
 }
 
 function barrier(error: unknown): never {
+  if (error instanceof EmbeddingDispatchBarrierError) throw error
   if (error instanceof ImportQueryBarrierError) throw new EmbeddingDispatchBarrierError(error.code)
   if (error instanceof Error && importQueryErrorCodes.has(error.message as ImportQueryErrorCode)) {
     throw new EmbeddingDispatchBarrierError(error.message as ImportQueryErrorCode)
@@ -93,6 +94,8 @@ const importQueryErrorCodes = new Set<ImportQueryErrorCode>([
   'GENERATION_IMPORT_QUERY_PERSISTENCE_FAILED', 'GENERATION_IMPORT_QUERY_HISTORY_FROZEN', 'ROOT_BUDGET_EXHAUSTED',
   'GENERATION_DISPATCH_BLOCKED', 'GENERATION_ACTION_CANCELLED',
 ])
+
+const STOPPED_BEFORE_DISPATCH = new EmbeddingDispatchBarrierError('GENERATION_ACTION_CANCELLED')
 
 export class ImportQueryMaterialsService {
   constructor(private readonly dependencies: ImportQueryMaterialsDependencies) {}
@@ -140,8 +143,17 @@ export class ImportQueryMaterialsService {
     if (plan.record.root_action_id !== rootActionId) {
       throw new EmbeddingDispatchBarrierError('GENERATION_IMPORT_QUERY_ROOT_CHANGED')
     }
-    const materials: ImportQueryMaterials['topics'] = []
-    for (const topic of topics) {
+    const materials: (ImportQueryMaterials['topics'][number] | undefined)[] = new Array(topics.length)
+    const queueStop = new AbortController()
+    const queueSignal = AbortSignal.any([signal, queueStop.signal])
+    const concurrency = Math.min(topics.length, normalizeEmbeddingOptions(configuration?.model.embeddingOptions).concurrencyLimit ?? 1)
+    let nextTopic = 0
+    let stopped = false
+    let hasPrimaryError = false
+    let primaryError: unknown
+
+    const runTopic = async (topicIndex: number): Promise<void> => {
+      const topic = topics[topicIndex]!
       assertActive()
       const receipt = this.dependencies.queries.readReceipt(plan, topic.key)
       if (receipt) {
@@ -153,11 +165,11 @@ export class ImportQueryMaterialsService {
               assertAuthority: assertActive,
             })
           } catch (error) { barrier(error) }
-          materials.push({ key: topic.key, results: receipt.snapshot.results })
+          materials[topicIndex] = { key: topic.key, results: receipt.snapshot.results }
         } else {
-          materials.push({ key: topic.key, results: null })
+          materials[topicIndex] = { key: topic.key, results: null }
         }
-        continue
+        return
       }
 
       let permit: MainProcessSchedulerPermit | undefined
@@ -167,6 +179,11 @@ export class ImportQueryMaterialsService {
       let permitFinished = false
       let quarantineTimer: ReturnType<typeof setTimeout> | undefined
       let abortListener: (() => void) | undefined
+      const finishPermit = () => {
+        if (permitFinished) return
+        permitFinished = true
+        permit?.finish()
+      }
       const releasePhysical = () => {
         if (quarantineTimer !== undefined) clearTimeout(quarantineTimer)
         if (abortListener) signal.removeEventListener('abort', abortListener)
@@ -181,10 +198,7 @@ export class ImportQueryMaterialsService {
           releaseOwnerPhysical = undefined
           try { release?.() }
           finally {
-            if (!permitFinished) {
-              permitFinished = true
-              permit?.finish()
-            }
+            finishPermit()
           }
         }
       }
@@ -198,8 +212,12 @@ export class ImportQueryMaterialsService {
             projectKey: scheduling.projectKey,
             configuration: { protocol: configuration!.protocol, model: configuration!.model },
             lane: scheduling.lane,
-            signal,
+            signal: queueSignal,
           })
+          if (stopped) {
+            finishPermit()
+            return
+          }
           assertActive()
           flight = this.dependencies.queries.openFlight(plan, topic.key)
         } catch (error) {
@@ -214,6 +232,7 @@ export class ImportQueryMaterialsService {
           }
           return {
             beforeDispatch: () => {
+              if (stopped) throw STOPPED_BEFORE_DISPATCH
               assertActive()
               this.dependencies.beforeDispatch?.()
               const release = this.dependencies.onPhysicalStart?.(rootActionId)
@@ -258,19 +277,42 @@ export class ImportQueryMaterialsService {
         releasePhysical()
         const completed = await this.completeAvailable(plan, topic.key, durableSnapshot(snapshot), assertActive)
         if (completed.state !== 'available') throw new EmbeddingDispatchBarrierError('GENERATION_IMPORT_QUERY_INVALID')
-        materials.push({ key: topic.key, results: completed.snapshot.results })
+        materials[topicIndex] = { key: topic.key, results: completed.snapshot.results }
       } catch (error) {
         releasePhysical()
+        if (error === STOPPED_BEFORE_DISPATCH || stopped) return
         if (isSearchUnavailable(error)) {
           const unavailable = this.dependencies.queries.complete(plan, topic.key, { version: 1, state: 'unavailable' }, assertActive)
           if (unavailable.state !== 'unavailable') throw new EmbeddingDispatchBarrierError('GENERATION_IMPORT_QUERY_INVALID')
-          materials.push({ key: topic.key, results: null })
-          continue
+          materials[topicIndex] = { key: topic.key, results: null }
+          return
         }
-        barrier(error)
+        throw error
       }
     }
-    return { version: 1, topics: materials }
+
+    const worker = async () => {
+      while (!stopped) {
+        const topicIndex = nextTopic++
+        if (topicIndex >= topics.length) return
+        try {
+          await runTopic(topicIndex)
+        } catch (error) {
+          if (!hasPrimaryError) {
+            hasPrimaryError = true
+            try { barrier(error) }
+            catch (primary) { primaryError = primary }
+            stopped = true
+            queueStop.abort()
+          }
+          return
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: concurrency }, () => worker()))
+    if (hasPrimaryError) throw primaryError
+    return { version: 1, topics: materials as ImportQueryMaterials['topics'] }
   }
 
   async withSources<T>(input: { context: ImportGenerationContext; rootActionId: string; assertActive: () => void }, operation: () => T): Promise<T> {

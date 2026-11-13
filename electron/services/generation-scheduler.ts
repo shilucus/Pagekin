@@ -12,6 +12,9 @@ import {
 import { MainResourceClaimRegistry } from './main-resource-claims'
 import { SchedulerNetworkSubjectRegistry } from './scheduler-network-subject'
 
+// Shared only by independent query transports; ordinary generation stays exclusive.
+const PROJECT_NETWORK_RESOURCE = 'generation-network'
+
 export interface GenerationSchedulingAdmission {
   acquire(request: {
     projectKey: string
@@ -66,6 +69,7 @@ export class MainGenerationScheduler implements GenerationSchedulingAdmission {
     try {
       return await this.#scheduler.acquire({
         projectKey: request.projectKey, subject: lease.subject, lane: request.lane, signal: request.signal,
+        claims: { resourceKeys: [PROJECT_NETWORK_RESOURCE] },
       })
     } finally {
       lease.release()
@@ -86,7 +90,7 @@ export class MainGenerationScheduler implements GenerationSchedulingAdmission {
       modelName: request.configuration.model.modelName || (request.configuration.protocol === 'gemini' ? 'gemini-embedding-001' : 'text-embedding-3-small') })
     try {
       return await this.#scheduler.acquire({ projectKey: request.projectKey, subject: lease.subject,
-        lane: request.lane, signal: request.signal })
+        lane: request.lane, signal: request.signal, claims: { readResourceKeys: [PROJECT_NETWORK_RESOURCE] } })
     } finally { lease.release() }
   }
 

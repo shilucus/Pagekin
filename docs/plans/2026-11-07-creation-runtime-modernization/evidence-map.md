@@ -76,3 +76,10 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 - 实际四主题入口、调用端与来源提交门：`electron/controllers/generation-controller.ts`、`electron/services/main-generation-owner.ts`、`electron/services/import-query-materials.ts`、`electron/controllers/db-controller.ts`、`src/services/workflows/commands/import-novel.command.ts`。版本化请求只接受 handle 与 owner/epoch，保留作者原稿独立检索和原始主题材料顺序。
 - 同根预算、物理活动时长与恢复：`electron/repositories/import-query-repository.ts`、`electron/repositories/generation-run-repository.ts`、`electron/services/import-generation.ts`；M18/schema19 的 history、排除字段、闭合 receipt 投影及双代新副本恢复沿现有便携链处理。
 - 本轮最终实际证据及全部失败链见 [Stage62 evidence](stage-62-evidence.md)：service578、persistence370、controller186、consumer/error196 各报告独立通过且有非实施者复审，不相加为新分母。源码/原始报告/构建身份由 [Stage62 manifest](stage-62-source-manifest.json) 绑定。仅为 SCHED-001、IMPORT-001/002 部分证据，35 项功能状态不提升；无真实模型、Electron、平台或四主题并行提速结论。
+
+## Stage63 增量证据
+
+- 单书实际网络准入及有界主题 workers：`electron/services/generation-scheduler.ts`、`electron/controllers/generation-controller.ts`、`electron/services/import-query-materials.ts`；同一 project key 的普通生成 exclusive / 独立查询 shared claims，原始根额度与物理活动时长、KB 来源和提交门保留。默认并发仍为1。
+- 实际注册 IPC、文档原 batch outcome、取消/unknown/drain 与恢复证据见 [Stage63 evidence](stage-63-evidence.md)：controller191、materials232、document104、service588 是分别通过且重叠的报告，不合并计数；所有失败链保留。源码、原始报告与本轮新构建入口由 [Stage63 manifest](stage-63-source-manifest.json) 绑定。
+- SCHED-001 三条 AC、PERF-001 前置、G-IMPLEMENT/G-RUN 和 deterministic/performance 已逐项核定，fresh typecheck/lint/colors/i18n/build 均0，独立 source/runtime review 无范围内阻断。仅 SCHED-001 提升 completed/true，功能总计11 completed/24 in_progress；IMPORT-001/002 仍仅补充前置证据。
+- 三对 query 受控观察显示实际峰值1/2与完整非空材料一致，未证明稳定提速；原文档观察不等于服务商性能。无真实模型、Electron、文学质量、完整导入、视觉、平台或35项累计终审结论。
