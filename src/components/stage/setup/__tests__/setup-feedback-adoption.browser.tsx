@@ -92,6 +92,8 @@ let adoption: ReturnType<typeof deferred<unknown>>
 let committed: NovelConfig
 let capturedBase: PlanningFeedbackFieldBase
 let captureCount: number
+let captureGate: ReturnType<typeof deferred<void>> | null
+let captureIdentityOverride: Partial<Pick<PlanningFeedbackFieldBase, 'projectId' | 'target'>> | null
 let commitBeforeAck: boolean
 let candidateText: string
 let acknowledgeNextAdoption: boolean
@@ -110,6 +112,8 @@ beforeEach(() => {
   adoption = deferred<unknown>()
   committed = { ...CONFIG }
   captureCount = 0
+  captureGate = null
+  captureIdentityOverride = null
   commitBeforeAck = false
   candidateText = CANDIDATE_TEXT
   acknowledgeNextAdoption = false
@@ -133,7 +137,12 @@ beforeEach(() => {
         target = selected[0]
         if (failureAt === 'capture') throw new Error('PLANNING_FEEDBACK_SOURCE_CONFLICT')
         capturedBase = base(target, committed, `feedback-base-${++captureCount}`)
-        return capturedBase
+        if (captureIdentityOverride) capturedBase = { ...capturedBase, ...captureIdentityOverride }
+        const captured = capturedBase
+        const gate = captureGate
+        captureGate = null
+        if (gate) await gate.promise
+        return captured
       }
       case 'planning-feedback:v1:read-history':
         assertPlanningFeedbackRequest(channel, request)
@@ -242,6 +251,19 @@ async function acknowledge() {
   await act(async () => { adoption.resolve({ adoptionId: 'feedback-adoption' }); await adoption.promise })
 }
 
+async function openDeferredCapture(field: FeedbackField = 'coreOutline') {
+  const gate = deferred<void>()
+  captureGate = gate
+  const label = FIELDS.find(([key]) => key === field)![1]
+  await click(`Revise \u201c${label}\u201d with feedback`)
+  await vi.waitFor(() => expect(captureGate).toBeNull())
+  return gate
+}
+
+async function releaseCapture(gate: ReturnType<typeof deferred<void>>) {
+  await act(async () => { gate.resolve(); await gate.promise })
+}
+
 function config() { return useProjectStore.getState().currentProject!.novelConfig }
 function dirty() { return useEditorStore.getState().tabs.some(tab => tab.type === 'config' && tab.dirty) }
 function channels() { return invoke.mock.calls.map(([channel]) => channel) }
@@ -253,6 +275,162 @@ function expectOnlyFeedbackCalls() {
 }
 
 describe('setup feedback acknowledged saved baseline', () => {
+  it.each(FIELDS)('recovers committed %s on reopen without a manual save or a late ACK', async field => {
+    commitBeforeAck = true
+    await beginAdoption(field)
+    await act(async () => userEvent.keyboard('{Escape}'))
+    const label = FIELDS.find(([key]) => key === field)![1]
+    await click(`Revise \u201c${label}\u201d with feedback`)
+    await vi.waitFor(() => expect(channels().filter(channel => channel === 'planning-feedback:v1:read-history')).toHaveLength(2))
+    expect(capturedBase.value).toBe(CANDIDATE_TEXT)
+    await vi.waitFor(() => expect(config()[field]).toBe(CANDIDATE_TEXT))
+    expect(dirty()).toBe(false)
+    expect(channels()).not.toContain('project:save')
+    const dialog = host.querySelector('[role="dialog"]')
+    const callsBeforeAck = publish.mock.calls.length
+    await acknowledge()
+    expect(publish).toHaveBeenCalledTimes(callsBeforeAck)
+    expect(host.querySelector('[role="dialog"]')).toBe(dialog)
+    expect(config()[field]).toBe(CANDIDATE_TEXT)
+    expect(dirty()).toBe(false)
+    act(() => useProjectStore.getState().updateNovelConfig({ [field]: 'Temporary edit' }, SESSION))
+    act(() => useProjectStore.getState().discardNovelConfigDraft(SESSION.projectPath, SESSION))
+    expect(config()[field]).toBe(CANDIDATE_TEXT)
+  })
+
+  it('preserves same-field and other-field edits made during capture and discards to the committed baseline', async () => {
+    commitBeforeAck = true
+    await beginAdoption()
+    await act(async () => userEvent.keyboard('{Escape}'))
+    const gate = await openDeferredCapture()
+    expect(capturedBase.value).toBe(CANDIDATE_TEXT)
+    act(() => useProjectStore.getState().updateNovelConfig({ coreOutline: 'New author outline', referenceWorks: 'New references' }, SESSION))
+    await releaseCapture(gate)
+    await vi.waitFor(() => expect(channels().filter(channel => channel === 'planning-feedback:v1:read-history')).toHaveLength(2))
+    expect(config().coreOutline).toBe('New author outline')
+    expect(config().referenceWorks).toBe('New references')
+    expect(dirty()).toBe(true)
+    act(() => useProjectStore.getState().discardNovelConfigDraft(SESSION.projectPath, SESSION))
+    expect(config().coreOutline).toBe(CANDIDATE_TEXT)
+    expect(config().referenceWorks).toBe(CONFIG.referenceWorks)
+    expect(dirty()).toBe(false)
+    await acknowledge()
+    expect(config().coreOutline).toBe(CANDIDATE_TEXT)
+  })
+
+  it.each(['save', 'same-value save', 'publish', 'discard'] as const)(
+    'does not let a delayed capture overwrite a later %s', async action => {
+      commitBeforeAck = true
+      await beginAdoption()
+      await act(async () => userEvent.keyboard('{Escape}'))
+      const gate = await openDeferredCapture()
+      expect(capturedBase.value).toBe(CANDIDATE_TEXT)
+      let expected = CONFIG.coreOutline
+      if (action === 'save' || action === 'same-value save') {
+        expected = action === 'save' ? 'Later saved outline' : CONFIG.coreOutline
+        act(() => useProjectStore.getState().updateNovelConfig({ coreOutline: expected }, SESSION))
+        let saved = false
+        await act(async () => { saved = await useProjectStore.getState().saveProject(SESSION) })
+        expect(saved).toBe(true)
+      } else if (action === 'publish') {
+        expected = 'Later published outline'
+        committed = { ...committed, coreOutline: expected }
+        act(() => useProjectStore.getState().publishSavedNovelConfig({ coreOutline: expected }, SESSION, 'none'))
+      } else {
+        act(() => useProjectStore.getState().updateNovelConfig({ coreOutline: 'Discard this edit' }, SESSION))
+        act(() => useProjectStore.getState().discardNovelConfigDraft(SESSION.projectPath, SESSION))
+      }
+      await releaseCapture(gate)
+      await vi.waitFor(() => expect(channels().filter(channel => channel === 'planning-feedback:v1:read-history')).toHaveLength(2))
+      expect(config().coreOutline).toBe(expected)
+      expect(dirty()).toBe(false)
+      await acknowledge()
+      expect(config().coreOutline).toBe(expected)
+      act(() => useProjectStore.getState().updateNovelConfig({ coreOutline: 'Another edit' }, SESSION))
+      act(() => useProjectStore.getState().discardNovelConfigDraft(SESSION.projectPath, SESSION))
+      expect(config().coreOutline).toBe(expected)
+    },
+  )
+
+  it('does not publish a closed capture over a newer reopened capture', async () => {
+    commitBeforeAck = true
+    await beginAdoption()
+    await act(async () => userEvent.keyboard('{Escape}'))
+    const gate = await openDeferredCapture()
+    await act(async () => userEvent.keyboard('{Escape}'))
+    committed = { ...committed, coreOutline: 'Newer committed outline' }
+    await openFeedback()
+    await vi.waitFor(() => expect(config().coreOutline).toBe('Newer committed outline'))
+    const dialog = host.querySelector('[role="dialog"]')
+    await releaseCapture(gate)
+    await acknowledge()
+    expect(config().coreOutline).toBe('Newer committed outline')
+    expect(dirty()).toBe(false)
+    expect(host.querySelector('[role="dialog"]')).toBe(dialog)
+  })
+
+  it.each([OTHER, REOPENED])('ignores a delayed capture after session $leaseId becomes current', async nextSession => {
+    commitBeforeAck = true
+    await beginAdoption()
+    await act(async () => userEvent.keyboard('{Escape}'))
+    const gate = await openDeferredCapture()
+    act(() => {
+      setActiveProjectSessionContext(nextSession)
+      useProjectStore.setState({ currentProject: project(nextSession, { ...CONFIG, coreOutline: 'Current session outline' }) })
+    })
+    await releaseCapture(gate)
+    await acknowledge()
+    expect(publish).not.toHaveBeenCalled()
+    expect(config().coreOutline).toBe('Current session outline')
+    expect(useProjectStore.getState().currentProject?.sessionLease).toBe(nextSession.leaseId)
+    expect(channels()).not.toContain('project:save')
+  })
+
+  it('does not publish or perform another adoption or save when a reopened capture fails', async () => {
+    commitBeforeAck = true
+    await beginAdoption()
+    await act(async () => userEvent.keyboard('{Escape}'))
+    failureAt = 'capture'
+    await click('Revise \u201cCore outline\u201d with feedback')
+    await vi.waitFor(() => expect(channels().filter(channel => channel === 'planning-feedback:v1:capture')).toHaveLength(2))
+    await acknowledge()
+    expect(publish).not.toHaveBeenCalled()
+    expect(config().coreOutline).toBe(CONFIG.coreOutline)
+    expect(committed.coreOutline).toBe(CANDIDATE_TEXT)
+    expect(channels().filter(channel => channel === 'planning-feedback:v1:adopt')).toHaveLength(1)
+    expect(channels()).not.toContain('project:save')
+  })
+
+  it.each([
+    ['projectId', { projectId: OTHER.projectId }],
+    ['target', { target: 'writingStyle' as const }],
+  ] as const)('does not publish a reopened capture with a mismatched %s', async (_key, override) => {
+    commitBeforeAck = true
+    await beginAdoption()
+    expect(committed.coreOutline).toBe(CANDIDATE_TEXT)
+    await act(async () => userEvent.keyboard('{Escape}'))
+    captureIdentityOverride = override
+    await click('Revise \u201cCore outline\u201d with feedback')
+    await vi.waitFor(() => expect(channels().filter(channel => channel === 'planning-feedback:v1:read-history')).toHaveLength(2))
+    expect(capturedBase).toMatchObject({ value: CANDIDATE_TEXT, ...override })
+    const dialog = host.querySelector('[role="dialog"]')
+    expect(dialog).not.toBeNull()
+    expect(publish).not.toHaveBeenCalled()
+    expect(config().coreOutline).toBe(CONFIG.coreOutline)
+    expect(dirty()).toBe(false)
+    await acknowledge()
+    expect(publish).not.toHaveBeenCalled()
+    expect(host.querySelector('[role="dialog"]')).toBe(dialog)
+    expect(config().coreOutline).toBe(CONFIG.coreOutline)
+    act(() => useProjectStore.getState().updateNovelConfig({ coreOutline: 'Temporary edit' }, SESSION))
+    act(() => useProjectStore.getState().discardNovelConfigDraft(SESSION.projectPath, SESSION))
+    expect(config().coreOutline).toBe(CONFIG.coreOutline)
+    expect(dirty()).toBe(false)
+    expect(committed.coreOutline).toBe(CANDIDATE_TEXT)
+    expect(channels().filter(channel => channel === 'planning-feedback:v1:adopt')).toHaveLength(1)
+    expect(channels()).not.toContain('project:save')
+  })
+
   it.each(FIELDS)('publishes only committed %s and leaves a clean setup clean', async field => {
     await beginAdoption(field)
     await acknowledge()

@@ -125,3 +125,10 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 - 蓝图 validator/types 原样抽到 browser-safe 模块，旧入口 re-export 同一函数，原 apply/hash 不变；Panel 仅更换 import 和初始 alert 的既有显示转换。MCP false receipt 经现有查询重建状态/registry，不再假清空；失败查询保留旧数据，IPC rejection 原样传播，未声称 store.error 已进入可见 UI。
 - [Stage69 evidence](stage-69-evidence.md) 保留9份 JSON、所有失败/零测试链和 fresh quality/build：最终15文件363/363，另3文件34/34浏览器；完整扫描已实际通过，而非由 check:i18n 替代。Sol 独立接受 bounded source/runtime/quality，[manifest](stage-69-source-manifest.json) 绑定当前来源、原始报告与实际新构建入口；独立非自有工件审计另匹配142/142身份及完整清单语义。
 - 只给 IMPORT001/002、FEEDBACK003、UI003、MCP001 各补一条部分证据，完整35项状态、门禁、依赖和旧记录不变，仍11completed/24in_progress。无完整功能、真实 MCP/model/Electron、文学质量、视觉、提速、安装包/平台或累计终审资格。
+
+## Stage70 增量证据
+
+- 六个设定字段沿既有 capture 和 unsaved-edits 合并投影正式底稿；renderer-only read token 在请求前冻结，实例、完整 session、目标/项目回包身份及本地正式写序列围栏抑制迟到发布。保存超时不冒充物理排空，旧 A 排空不失效新 B token；没有新 writer、IPC、持久状态或可见控件。
+- [Stage70 evidence](stage-70-evidence.md) 保留全部实际失败链、8张浏览器 RED 截图和 fresh quality/build：同16文件620/620，另5文件78/78浏览器；仅补三必填夹具字段后相关3文件50/50，报告不相加，也不冒充再次完整620。主进程取消旧测试只准目标 root 两个已断言时钟字段结算及单条诊断，total_changes 精确+2，全部其它业务事实/取消保护不变。
+- Sol 独立接受当前限定 source/runtime/quality 和夹具修复；typecheck初次exit2保留，随后typecheck/lint/colors/i18n/source build均0。[manifest](stage-70-source-manifest.json) 绑定当前源码、所有原始报告与本轮实际新构建入口，Agent4另核对128/128证据/保护身份、14owned、完整feature语义及报告/构建分母；root exact-path Git/postchecks仍另行执行。
+- 只给 FEEDBACK002/UI002 各补一条部分证据，完整35项状态、门禁、依赖及旧记录保持11completed/24in_progress。无完整功能、dirty-start/历史/架构重入策略、真实 Electron/model/project、文学质量、视觉、提速、安装包/平台或累计终审资格。

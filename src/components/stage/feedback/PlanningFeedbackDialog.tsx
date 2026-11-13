@@ -5,7 +5,7 @@ import type { PlanningFeedbackFieldBase, PlanningFeedbackHistory } from '../../.
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useLLMStore } from '../../../stores/llm-store'
-import { useProjectStore } from '../../../stores/project-store'
+import { useProjectStore, type NovelConfigReadToken } from '../../../stores/project-store'
 import { captureProjectSession, isProjectSessionCurrent } from '../../project-session-gate'
 import { createPlanningFeedbackClient, type PlanningFeedbackClient } from '../../../services/planning-feedback-client'
 import { diffProse } from '../history/version-diff'
@@ -28,6 +28,7 @@ export interface PlanningFeedbackDialogProps {
   isOpen: boolean
   onClose: () => void
   onAdopted: (adoptedText: string, context: PlanningFeedbackAdoptionContext) => void
+  onCaptured?: (value: string, token: NovelConfigReadToken) => void
   projectSession?: ProjectSessionContext | null
   client?: PlanningFeedbackClient
   initialBaseId?: string
@@ -44,6 +45,7 @@ function PlanningFeedbackDialogInner({
   isOpen,
   onClose,
   onAdopted,
+  onCaptured,
   projectSession,
   client: externalClient,
   initialBaseId,
@@ -107,9 +109,19 @@ function PlanningFeedbackDialogInner({
       return
     }
 
+    const readToken = onCaptured && sessionToCheck
+      ? useProjectStore.getState().captureNovelConfigRead(sessionToCheck)
+      : null
+
     void resolvedClient.capture({ target })
       .then(async (base: PlanningFeedbackFieldBase) => {
         if (!active) return
+        if (onCaptured && readToken && sessionToCheck && instanceActive.current
+          && isProjectSessionCurrent(sessionToCheck)
+          && base.projectId === sessionToCheck.projectId
+          && base.target === target) {
+          onCaptured(base.value, readToken)
+        }
         setBaseId(base.baseId)
         setCapturedBaseText(base.value)
         try {
@@ -140,7 +152,7 @@ function PlanningFeedbackDialogInner({
     return () => {
       active = false
     }
-  }, [isOpen, target, resolvedClient, sessionToCheck, initialBaseId, initialCandidates, text])
+  }, [isOpen, target, resolvedClient, sessionToCheck, initialBaseId, initialCandidates, onCaptured, text])
 
   const selectedCandidate = useMemo(() => {
     return candidates.find(c => c.candidateId === selectedCandidateId) ?? null

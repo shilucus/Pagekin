@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { ArrowRight, ChevronUp, LoaderCircle, MessageSquareQuote, RotateCcw, Sparkles } from 'lucide-react'
 import type { NovelConfig } from '../../../shared/ipc-channels'
 import type { PlanningFeedbackCoreTarget } from '../../../shared/planning-feedback'
@@ -18,7 +18,7 @@ import { useLocaleStore } from '../../../stores/locale-store'
 import { displayedErrorMessage } from '../../../i18n/app-errors'
 import { navigate } from '../../../stores/navigation/navigation-intents'
 import { missingSetup, type SetupField } from '../../../stores/navigation/stage-progress'
-import { useProjectStore } from '../../../stores/project-store'
+import { useProjectStore, type NovelConfigReadToken } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import { configFieldsToExpand, startConfigGeneration } from '../../dialogs/config-generation'
 import { AUDIENCE_EN, GENRE_EN } from '../../editor/novel-config-labels'
@@ -36,6 +36,15 @@ import { pluralEn } from '../../../shared/plural-en'
 type Form = ReturnType<typeof useNovelConfigForm>
 type Text = (zh: string, en: string) => string
 type PanelId = MoreField['id'] | 'advanced'
+
+const SETUP_FEEDBACK_CONFIG_FIELDS: Partial<Record<PlanningFeedbackCoreTarget, keyof NovelConfig>> = {
+  coreOutline: 'coreOutline',
+  writingStyle: 'writingStyle',
+  protagonistProfile: 'protagonistProfile',
+  worldSetting: 'worldSetting',
+  goldenFinger: 'goldenFinger',
+  globalGuidance: 'globalGuidance',
+}
 
 /** 作者此刻在哪：活动标签、书房还是作品、设置页开没开。 */
 function authorPlace(): string {
@@ -132,6 +141,11 @@ function FeedbackReviseButton({ target, label, currentText, onAdopt }: {
 }) {
   const text = useLocaleStore(s => s.text)
   const [open, setOpen] = useState(false)
+  const configField = SETUP_FEEDBACK_CONFIG_FIELDS[target]
+  const onCaptured = useCallback((value: string, token: NovelConfigReadToken) => {
+    if (!configField) return
+    useProjectStore.getState().publishCapturedNovelConfig({ [configField]: value }, token)
+  }, [configField])
   if (!currentText.trim() && !open) return null
 
   return (
@@ -154,6 +168,7 @@ function FeedbackReviseButton({ target, label, currentText, onAdopt }: {
         baseText={currentText}
         onClose={() => setOpen(false)}
         onAdopted={onAdopt}
+        onCaptured={onCaptured}
       />
     </>
   )

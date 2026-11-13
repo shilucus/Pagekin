@@ -52,6 +52,36 @@ let openProjectRequestSequence = 0
 let recentProjectsRequestSequence = 0
 let closeProjectInFlight: Promise<boolean> | null = null
 let projectRecoveryInFlight: Promise<void> | null = null
+let novelConfigPublicationRevision = 0
+let novelConfigPublicationSession: ProjectSessionContext | null = null
+const novelConfigWritesInFlight = new Set<ProjectSessionContext>()
+
+export interface NovelConfigReadToken {
+  readonly projectSession: ProjectSessionContext
+  readonly revision: number
+}
+
+// A late formal read must not move the saved baseline across a newer write,
+// including an identical-value save whose draft ledger remains empty.
+function hasNovelConfigWrite(session: ProjectSessionContext): boolean {
+  return [...novelConfigWritesInFlight].some(writer => sameProjectSessionContext(writer, session))
+}
+
+function advanceNovelConfigPublication(session: ProjectSessionContext): void {
+  novelConfigPublicationSession = { ...session }
+  novelConfigPublicationRevision++
+}
+
+function beginNovelConfigWrite(session: ProjectSessionContext): () => void {
+  const writer = { ...session }
+  advanceNovelConfigPublication(session)
+  novelConfigWritesInFlight.add(writer)
+  return () => {
+    novelConfigWritesInFlight.delete(writer)
+    if (sameProjectSessionContext(writer, novelConfigPublicationSession)) novelConfigPublicationRevision++
+  }
+}
+
 let deleteRecoverySession: Readonly<{
   sources: readonly ProjectSessionContext[]
   restored: ProjectSessionContext
@@ -452,6 +482,9 @@ interface ProjectState {
    */
   /** keep：'none' 全按库里的值；'unsaved-edits' 作者改过还没保存的字段保留作者的值；'current' 这些字段都保留界面上的值，只把它们记为已保存基准。 */
   publishSavedNovelConfig: (saved: Partial<NovelConfig>, expectedProjectSession: ProjectSessionContext, keep: 'none' | 'unsaved-edits' | 'current') => void
+  /** Freeze local write ordering before reading formal fields; not a main-process capability. */
+  captureNovelConfigRead: (expectedProjectSession: ProjectSessionContext) => NovelConfigReadToken | null
+  publishCapturedNovelConfig: (saved: Partial<NovelConfig>, token: NovelConfigReadToken) => boolean
   /** Main validates frozen sources and writes before publishing generated fields to the UI. */
   commitGeneratedNovelConfig: (config: Partial<NovelConfig>, expectedConfig: NovelConfig, expectedProjectSession: ProjectSessionContext,
     generationRunHandle: import('../services/generation/generation-runtime').MainGenerationRunHandle,
@@ -929,18 +962,21 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       console.warn('[project-store.saveProject] 项目会话已变化，拒绝保存')
       return false
     }
+    const finishWrite = beginNovelConfigWrite(projectSession)
+    let saveRequest: Promise<ProjectChannels['project:save']['return']> | null = null
     try {
       // 提取纯净数据，防止 structured clone 序列化异常属性
       const plainData = toPlainProjectData(project)
       console.log('[project-store.saveProject] 准备调用 IPC，数据大小:', JSON.stringify(plainData).length)
+      saveRequest = ipc.invokeWithProjectSession(
+        projectSession,
+        'project:save',
+        plainData.id,
+        plainData,
+        project.path,
+      )
       const result = await withTimeout(
-        ipc.invokeWithProjectSession(
-          projectSession,
-          'project:save',
-          plainData.id,
-          plainData,
-          project.path,
-        ),
+        saveRequest,
         15_000,
         'project:save',
       )
@@ -962,6 +998,10 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     } catch (err) {
       console.error('[project-store.saveProject] 保存失败:', err)
       return false
+    } finally {
+      // Renderer timeout does not settle the physical main-process save.
+      if (saveRequest) void saveRequest.then(finishWrite, finishWrite)
+      else finishWrite()
     }
   },
 
@@ -969,38 +1009,44 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     const project = get().currentProject
     if (!project || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(project))
       || JSON.stringify(project.novelConfig) !== JSON.stringify(expectedConfig)) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
-    const { narrativePOV, ...coreFields } = generated
-    const data = { ...coreFields, ...(narrativePOV !== undefined ? { narrativePov: narrativePOV } : {}) }
-    let config = generated
-    if (persistEffect) config = (await persistEffect()) ?? generated
-    else {
-      const result = await ipc.invokeWithProjectSession(expectedProjectSession, 'db:project-core-commit-generated',
-        { data, generationRunHandle }, project.path)
-      if (!result.success) throw new Error(result.error || 'GENERATION_FORMAL_COMMIT_FAILED')
-    }
-    const current = get().currentProject
-    if (!current || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(current))) return false
-    const ledger = readConfigDraftLedger()
-    // Only the submitted fields became formal data; unrelated author edits stay dirty.
-    const saved = { ...(getProjectEditorDraft(ledger, project.path)?.baseValue ?? expectedConfig), ...config }
-    const unchanged = JSON.stringify(current.novelConfig) === JSON.stringify(expectedConfig)
-    const next = unchanged ? { ...expectedConfig, ...config } : { ...current.novelConfig }
-    if (!unchanged) {
-      for (const key of Object.keys(config) as (keyof NovelConfig)[]) {
-        if (JSON.stringify(current.novelConfig[key]) === JSON.stringify(expectedConfig[key])) Object.assign(next, { [key]: saved[key] })
+    const finishWrite = beginNovelConfigWrite(expectedProjectSession)
+    try {
+      const { narrativePOV, ...coreFields } = generated
+      const data = { ...coreFields, ...(narrativePOV !== undefined ? { narrativePov: narrativePOV } : {}) }
+      let config = generated
+      if (persistEffect) config = (await persistEffect()) ?? generated
+      else {
+        const result = await ipc.invokeWithProjectSession(expectedProjectSession, 'db:project-core-commit-generated',
+          { data, generationRunHandle }, project.path)
+        if (!result.success) throw new Error(result.error || 'GENERATION_FORMAL_COMMIT_FAILED')
       }
+      const current = get().currentProject
+      if (!current || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(current))) return false
+      const ledger = readConfigDraftLedger()
+      // Only the submitted fields became formal data; unrelated author edits stay dirty.
+      const saved = { ...(getProjectEditorDraft(ledger, project.path)?.baseValue ?? expectedConfig), ...config }
+      const unchanged = JSON.stringify(current.novelConfig) === JSON.stringify(expectedConfig)
+      const next = unchanged ? { ...expectedConfig, ...config } : { ...current.novelConfig }
+      if (!unchanged) {
+        for (const key of Object.keys(config) as (keyof NovelConfig)[]) {
+          if (JSON.stringify(current.novelConfig[key]) === JSON.stringify(expectedConfig[key])) Object.assign(next, { [key]: saved[key] })
+        }
+      }
+      set({ currentProject: { ...current, novelConfig: next } })
+      persistConfigDraftLedger(settleProjectEditorSave(ledger, project.path, saved, next))
+      // The formal effect succeeded. A concurrent author edit remains a dirty draft,
+      // and callers must not run callbacks that replace it with an older full config.
+      if (!unchanged) throw new Error('GENERATION_SAVED_WITH_NEWER_AUTHOR_DRAFT')
+      return true
+    } finally {
+      finishWrite()
     }
-    set({ currentProject: { ...current, novelConfig: next } })
-    persistConfigDraftLedger(settleProjectEditorSave(ledger, project.path, saved, next))
-    // The formal effect succeeded. A concurrent author edit remains a dirty draft,
-    // and callers must not run callbacks that replace it with an older full config.
-    if (!unchanged) throw new Error('GENERATION_SAVED_WITH_NEWER_AUTHOR_DRAFT')
-    return true
   },
 
   publishSavedNovelConfig: (saved, expectedProjectSession, keep) => {
     const project = get().currentProject
     if (!project || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(project))) return
+    advanceNovelConfigPublication(expectedProjectSession)
     const ledger = readConfigDraftLedger()
     const base = getProjectEditorDraft(ledger, project.path)?.baseValue ?? project.novelConfig
     const next = { ...project.novelConfig }
@@ -1010,6 +1056,27 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
     set({ currentProject: { ...project, novelConfig: next } })
     persistConfigDraftLedger(settleProjectEditorSave(ledger, project.path, { ...base, ...saved }, next))
+  },
+
+  captureNovelConfigRead: (expectedProjectSession) => {
+    if (hasNovelConfigWrite(expectedProjectSession) || !sameProjectSessionContext(
+      expectedProjectSession, projectSessionContextFromProject(get().currentProject),
+    )) return null
+    if (!sameProjectSessionContext(expectedProjectSession, novelConfigPublicationSession)) advanceNovelConfigPublication(expectedProjectSession)
+    return Object.freeze({ revision: novelConfigPublicationRevision, projectSession: Object.freeze({
+      projectId: expectedProjectSession.projectId, leaseId: expectedProjectSession.leaseId,
+      projectPath: expectedProjectSession.projectPath,
+    }) })
+  },
+
+  publishCapturedNovelConfig: (saved, token) => {
+    const project = get().currentProject
+    if (!project || hasNovelConfigWrite(token.projectSession) || token.revision !== novelConfigPublicationRevision
+      || !sameProjectSessionContext(token.projectSession, projectSessionContextFromProject(project))) return false
+    const base = getProjectEditorDraft(readConfigDraftLedger(), project.path)?.baseValue ?? project.novelConfig
+    if ((Object.keys(saved) as (keyof NovelConfig)[]).every(key => JSON.stringify(saved[key]) === JSON.stringify(base[key]))) return true
+    get().publishSavedNovelConfig(saved, token.projectSession, 'unsaved-edits')
+    return true
   },
 
   updateNovelConfig: (config, expectedProjectSession) => {
@@ -1048,6 +1115,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     const ledger = readConfigDraftLedger()
     const projectDraft = getProjectEditorDraft(ledger, projectPath)
     if (!projectDraft) return
+    advanceNovelConfigPublication(expectedProjectSession)
     if (sameProjectSessionContext(
       expectedProjectSession,
       projectSessionContextFromProject(get().currentProject),

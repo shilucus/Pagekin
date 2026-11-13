@@ -1947,6 +1947,14 @@
           "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; existing headless Chromium1228; real hook/React/store/CodeMirror with fictional IPC",
           "result": "Locally settles the detached architecture core-read failure, preserving existing valid-session failure/loading/content behavior; exact current-session plus latest-request fence prevents stale first-read settlement before the next begin. Final seven-file browser108/108 and seven-file non-browser29/29 passed, fresh typecheck/lint/color/i18n/source build exit0; independent final source/raw review accepted.",
           "limitations": "Partial correctness repair only. Baseline35/36 plus logged unhandled rejection, intermediate106/29 and filtered red2 failures/green2 passes retained; filtered42 were not executed. Existing act/build warnings retained. No new entry/layout/copy, full history/dirty-start/closed-result synchronization, actual Electron/SQLite, model/visual/platform acceptance or whole feature promotion."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "e73c0a52f52bdad43165d2ef039505f05c6b5cde + stage-70-source-manifest.json final source SHA256",
+          "artifactOrReceipt": "stage-70-evidence.md; .runtime/creation-runtime-modernization/stage70/impact-retest.json; fixture-retest.json; browser-final.json",
+          "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12, existing isolated Chrome150; fictional IPC/SQLite only",
+          "result": "Six setup fields recover capture-time formal C1 after committed-before-ACK close/reopen through existing unsaved-edits merge. Pre-request renderer token fences full session/instance/returned identity and save/generated/publish/discard ordering,including same-value save,physical timeout drain and old-A/new-B completion. Actual impact16files620/620,browser5files78/78,and final required-field fixture3files50/50 passed separately;fresh typecheck-retest/lint/colors/i18n/source build exit0;independent source/runtime/quality accepted.",
+          "limitations": "Partial evidence only;in_progress/false unchanged. Missing-API17fail,browser8fail and eight screenshots,initial2fail,cross-session2fail,native clock oracle619/620 and first typecheck exit2 are retained. Native test only permits validated target clock settlement plus one diagnostic,total_changes+2. Final fixture50/50 is not another full620 run. No full design-state/viewport,dirty-start/history/architecture policy,closed idempotency-key recovery,post-capture commit discovery,actual Electron/model/quality/speedup/platform or whole-feature acceptance."
         }
       ]
     },
@@ -2217,6 +2225,14 @@
           "environment": "Windows x64, Vitest4.1.12, existing headless Chromium1228; actual architecture hook/React/store and CodeMirror, fictional bridge",
           "result": "Fresh seven-file108/108 closes the formerly wider overview action-list/rejection failures and covers initial/manual/event failure recovery plus old-session failure fencing before/after a newer read. Existing loading, focus, adoption and editor-baseline behavior retained; non-browser29/29 and fresh quality/source-build checks passed with independent source/raw review.",
           "limitations": "UI-002 stays in_progress/false. The existing Revise action is not a new design approval; ADR0042 remains Proposed. Only the stale-session state update changes, with existing full-session contract evidence. Original baseline and red/green filter runs plus setup act/build warnings retained. No full design-state/viewport comparison, history/dirty-start/closed-result sync, actual Electron, real model or platform qualification."
+        },
+        {
+          "type": "browser",
+          "sourceSha": "e73c0a52f52bdad43165d2ef039505f05c6b5cde + stage-70-source-manifest.json final source SHA256",
+          "artifactOrReceipt": "stage-70-evidence.md; .runtime/creation-runtime-modernization/stage70/impact-retest.json; fixture-retest.json; browser-final.json",
+          "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12, existing isolated Chrome150; fictional IPC/SQLite only",
+          "result": "Fresh5file78/78 covers six committed-before-ACK reopen cases,same/other author edits and captured discard baseline,stale/closed/save/discard/full-session and returned project/target negatives,plus original setup/session/architecture behavior. No added copy/layout/control or automatic save/adopt. Same production impact620/620 and final required-field fixture50/50 are separate;fresh quality/source build passed with independent integrated review.",
+          "limitations": "Partial evidence only;in_progress/false unchanged. Missing-API17fail,browser8fail and eight screenshots,initial2fail,cross-session2fail,native clock oracle619/620 and first typecheck exit2 are retained. Native test only permits validated target clock settlement plus one diagnostic,total_changes+2. Final fixture50/50 is not another full620 run. No full design-state/viewport,dirty-start/history/architecture policy,closed idempotency-key recovery,post-capture commit discovery,actual Electron/model/quality/speedup/platform or whole-feature acceptance."
         }
       ]
     },

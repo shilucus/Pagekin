@@ -962,6 +962,13 @@ it('retains the physical permit and ignores late provider effects after dedicate
     WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'llm_calls' ORDER BY name`).pluck().all() as string[])
     .map(name => [name, f.db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all()]))
   const before = rows(), businessBefore = businessRows(), changes = f.db.prepare('SELECT total_changes()').pluck().get() as number
+  const rootBefore = (businessBefore.generation_roots as { root_action_id: string; active_since_ms: number | null; active_elapsed_ms: number }[])
+    .filter(root => root.root_action_id === view.handle.rootActionId)
+  expect(rootBefore).toHaveLength(1)
+  expect(Number.isSafeInteger(rootBefore[0].active_since_ms)).toBe(true)
+  expect(rootBefore[0].active_since_ms).toBeGreaterThanOrEqual(0)
+  expect(Number.isSafeInteger(rootBefore[0].active_elapsed_ms)).toBe(true)
+  expect(rootBefore[0].active_elapsed_ms).toBeGreaterThanOrEqual(0)
   expect(f.db.prepare('SELECT * FROM llm_calls').all()).toEqual([])
   let physicalIdle = false
   const drained = f.owner.whenPhysicalIdle().then(() => { physicalIdle = true })
@@ -974,13 +981,22 @@ it('retains the physical permit and ignores late provider effects after dedicate
   finish({ finishReason: 'stop', usage })
   await drained
   expect(rows()).toEqual(before)
-  expect(businessRows()).toEqual(businessBefore)
+  const businessAfter = businessRows()
+  const rootsAfter = businessAfter.generation_roots as { root_action_id: string; active_since_ms: number | null; active_elapsed_ms: number }[]
+  const rootAfter = rootsAfter.filter(root => root.root_action_id === view.handle.rootActionId)
+  expect(rootAfter).toHaveLength(1)
+  expect(rootAfter[0].active_since_ms).toBeNull()
+  expect(Number.isSafeInteger(rootAfter[0].active_elapsed_ms)).toBe(true)
+  expect(rootAfter[0].active_elapsed_ms).toBeGreaterThanOrEqual(rootBefore[0].active_elapsed_ms)
+  expect({ ...businessAfter, generation_roots: rootsAfter.map(root => root.root_action_id === view.handle.rootActionId
+    ? { ...root, active_since_ms: rootBefore[0].active_since_ms, active_elapsed_ms: rootBefore[0].active_elapsed_ms }
+    : root) }).toEqual(businessBefore)
   // Physical completion may record its diagnostic, but cannot rewrite logical cancellation or domain facts.
   expect(f.db.prepare('SELECT * FROM llm_calls').all()).toEqual([expect.objectContaining({ model_id: 'model',
     purpose: 'planning-feedback', prompt_tokens: 50, completion_tokens: 20, total_tokens: 70, success: 1, error_message: '' })])
   expect(() => f.owner.stageBlueprintFeedback({ ...input, runId: view.handle.runId, attemptId: before.attempt_id, artifactId: before.artifact_id })).toThrow()
-  expect(businessRows()).toEqual(businessBefore)
-  expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes + 1)
+  expect(businessRows()).toEqual(businessAfter)
+  expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(changes + 2)
   expect(BlueprintRepository.getByChapter(1, f.db)).toEqual(originalBlueprint)
   expect(f.spy).toHaveBeenCalledTimes(1)
 })
