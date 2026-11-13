@@ -40,7 +40,7 @@ describe('桌面预加载接口', () => {
       expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, request, session)
     }
     const calls = electron.ipcRenderer.invoke.mock.calls.length
-    for (const channel of ['reference-knowledge:v2:prepare', 'reference-knowledge:v1:execute', 'reference-knowledge:v1:reauthorize']) {
+    for (const channel of ['reference-knowledge:v2:prepare', 'reference-knowledge:v1:progress', 'reference-knowledge:v1:reauthorize']) {
       await expect(bridge.invoke(channel, request)).rejects.toThrow('KNOWLEDGE_BASE_REFERENCE_CHANNEL_NOT_ALLOWED')
     }
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)

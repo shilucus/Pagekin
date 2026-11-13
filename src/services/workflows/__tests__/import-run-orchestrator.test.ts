@@ -122,6 +122,30 @@ afterEach(() => {
 })
 
 describe('ImportRunOrchestrator', () => {
+  it('does not enter main knowledge execution when cancellation is already requested', async () => {
+    const { deps } = harness(1)
+    deps.executeReferenceKnowledge = vi.fn()
+    await expect(new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'knowledge', 'test-runner', { cancelled: true }, callbacks,
+    )).rejects.toThrow('Import cancelled at a safe boundary.')
+    expect(deps.executeReferenceKnowledge).not.toHaveBeenCalled()
+    expect(deps.startOrResume).not.toHaveBeenCalled()
+    expect(deps.cancelAtBoundary).not.toHaveBeenCalled()
+    expect(deps.fail).not.toHaveBeenCalled()
+  })
+
+  it('does not perform renderer terminal writes when main knowledge execution fails', async () => {
+    const { deps } = harness(1)
+    deps.executeReferenceKnowledge = vi.fn(async () => { throw new Error('main failure') })
+    await expect(new ImportRunOrchestrator(deps).executeStage(
+      'run-1', 'knowledge', 'test-runner', { cancelled: false }, callbacks,
+    )).rejects.toThrow('main failure')
+    expect(deps.startOrResume).not.toHaveBeenCalled()
+    expect(deps.renewExecution).not.toHaveBeenCalled()
+    expect(deps.cancelAtBoundary).not.toHaveBeenCalled()
+    expect(deps.fail).not.toHaveBeenCalled()
+  })
+
   it('runs author manuscripts through commit, publication, and postprocess without reference analysis', async () => {
     const { deps, getRun } = harness(2, {
       purpose: 'author-manuscript',

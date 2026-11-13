@@ -2,6 +2,7 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
+import { assertReferenceKnowledgeUnmanagedMutationAllowed } from '../services/reference-knowledge-authority'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import { assertGenerationSourcesCurrent, assertGenerationSynopsisCommit, commitGenerationPlotOutlineAuthorEdit, commitGenerationBlueprintAuthorEdit, assertImportGenerationSourcesCurrent, withImportGenerationQuerySources, recordGenerationDirectoryCommit, withGenerationAgentChildEffect } from './generation-controller'
 import { projectAccess } from '../services/project-access'
@@ -131,6 +132,14 @@ const MUTATING_DATABASE_CHANNELS = new Set([
 /** 导入对话框与导入运行卡片原样显示这些通道的报错（#474 B1），失败时按导入运行的语言写成说明。 */
 const IMPORT_CHANNEL = /^db:import-(?:run|global-facts)-/u
 
+// The main-owned knowledge stage alone advances or terminates its captured lease.
+const KNOWLEDGE_DRIVER_OWNED_CHANNELS = new Set([
+  'db:import-run-start-resume', 'db:import-run-renew-execution', 'db:import-run-restart',
+  'db:import-run-cancel-at-boundary', 'db:import-run-complete-batch',
+  'db:import-run-advance-stage', 'db:import-run-fail', 'db:import-run-complete',
+  'db:import-run-effect-receipt-prepare', 'db:import-run-effect-receipt-commit',
+])
+
 function importChannelLocale(args: unknown[], mayReadDatabase = true): Locale {
   const [first] = args
   if (typeof first === 'object' && first !== null) {
@@ -150,6 +159,11 @@ function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabas
     let mayReadDatabase = false
     try {
       const runtime = projectAccess.assertViewContext(context)
+      if (KNOWLEDGE_DRIVER_OWNED_CHANNELS.has(channel)) {
+        const request = args[0]
+        const runId = request && typeof request === 'object' && 'runId' in request ? request.runId : request
+        assertReferenceKnowledgeUnmanagedMutationAllowed(runtime.database, runId)
+      }
       if (explicitRuntime) {
         if (channel !== 'db:close' && MUTATING_DATABASE_CHANNELS.has(channel)) releaseWork = projectRuntimeHost.acquireWork(runtime)
         return await (handler as (runtime: ProjectRuntime, event: unknown, ...handlerArgs: unknown[]) => unknown)(runtime, event, ...args)

@@ -44,6 +44,7 @@ export type ImportRunGeneratedEffectCommitter<T> = (payload: unknown) => Promise
 
 export interface ImportRunOrchestratorDependencies {
   getRun: (runId: string) => Promise<ImportRunSnapshot | null>
+  executeReferenceKnowledge?: (run: ImportRunSnapshot, executionOwner: string) => Promise<ImportRunStartResult>
   startOrResume: (runId: string, owner: string) => Promise<ImportRunStartResult>
   renewExecution: (runId: string, execution: ImportRunExecutionLease) => Promise<ImportRunExecutionLease>
   getEffectReceipt: (
@@ -286,6 +287,22 @@ export class ImportRunOrchestrator {
       throw new Error(`Import stage ${requestedStage} does not belong to ${existing.purpose}.`)
     }
     if (existing.status === 'completed' || stageIndex(existing, existing.stage) > requestedIndex) return
+    if (existing.purpose === 'reference' && requestedStage === 'knowledge' && this.dependencies.executeReferenceKnowledge) {
+      // i18n-exempt: 步骤按阶段顺序执行，前一步不推进阶段就会抛错停下工作流，阶段只进不退，到不了这里
+      if (existing.stage !== requestedStage) throw new Error(`Import run is waiting at ${existing.stage}, not ${requestedStage}.`)
+      stopIfCancelled(context, existing.locale)
+      try {
+        await this.dependencies.executeReferenceKnowledge(existing, executionOwner)
+        stopIfCancelled(context, existing.locale)
+      } catch (error) {
+        if (cancellationRequested(context) && isWorkflowCancellation(error)) {
+          await context.cancellationRequest?.catch(() => undefined)
+          stopIfCancelled(context, existing.locale)
+        }
+        throw error
+      }
+      return
+    }
     const started = await this.dependencies.startOrResume(runId, executionOwner)
     const run = started.run
     const execution: ImportRunExecutionState = { current: started.execution }

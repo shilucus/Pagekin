@@ -86,6 +86,8 @@ Separate artifact reviewer Agent4(gpt-6.1-terra/high) recomputed138/138 identiti
 
 Root repeated138 hashes/14 paths/empty-index/entry-HEAD checks. Branch is master; no active hook,hooksPath,fsmonitor,signing or external-diff override. Existing global LFS filter definitions have no assigned filter on any owned path; text/eol attributes require LF. Three original protected hashes remain exact. Root-only commit locator:`feat(scheduler): bound single-book query overlap`; actual SHA and post-commit preservation are recorded after the command returns.
 
+Actual commit: `25635025ab678d15745c563238a369068b513671`,14exact paths. Root postchecks matched all14 raw Git blobs to reviewed worktree bytes and138/138 evidence/protected identities. Index/tracked worktree remained clean,only the original2untracked. A parse-only PowerShell interpolation probe was corrected before these completed checks; no project execution or write occurred in that failed probe.
+
 ## Qualification
 
 35 flags are10 completed/25 in_progress at entry and11 completed/24 in_progress after the bounded SCHED-001 acceptance. Only that flag changes; IMPORT-001/002 gain explicitly partial evidence. No promotion comes from static agreement or historical fixtures. Preserve every failed run and its denominator; do not sum overlapping reports. No real model, platform, literary-quality, full import, headless or all35 cumulative qualification is implied. A parallel read-only scout reconfirmed feedback dirty-start/history/closed-result design gaps and missing production entry for the extended blueprint/character panels; these do not block SCHED-001 and are not silently invented or marked complete.

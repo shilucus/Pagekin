@@ -28,7 +28,7 @@ import type { WritingLanguage } from '../../shared/writing-language'
 import { countDraftUnits } from '../../shared/draft-units'
 import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
 import type { PerformanceMetric } from '../../shared/performance-baseline'
-import { assertReferenceKnowledgeRequest, type ReferenceKnowledgeReference } from '../../shared/reference-knowledge-contract'
+import { assertReferenceKnowledgeRequest, isReferenceKnowledgeProgress, type ReferenceKnowledgeReference } from '../../shared/reference-knowledge-contract'
 
 type ReferenceKnowledgeIssuance = { reference: ReferenceKnowledgeReference; execution: ImportRunExecutionLease }
 
@@ -134,6 +134,44 @@ function productionDependencies(
   }
   return {
     getRun: runId => ipc.invokeWithProjectSession(session, 'db:import-run-get', runId, projectPath),
+    ...(referenceKnowledge ? {
+      executeReferenceKnowledge: async (run: ImportRunSnapshot, owner: string) => {
+        const { reference, execution } = referenceKnowledge
+        if (reference.runId !== run.id || reference.projectId !== session.projectId || execution.owner !== owner) {
+          throw new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
+        }
+        const authority = { owner: execution.owner, epoch: execution.epoch }
+        let active = true
+        const unsubscribe = ipc.on('reference-knowledge:v1:progress', event => {
+          if (!active || !isReferenceKnowledgeProgress(event) || event.reference.projectId !== reference.projectId
+            || event.reference.runId !== reference.runId || event.reference.grantId !== reference.grantId
+            || event.reference.revision !== reference.revision || event.execution.owner !== authority.owner
+            || event.execution.epoch !== authority.epoch) return
+          if (event.kind === 'batch') callbacks.setProgress(event.progress)
+          else callbacks.log(textForLocale(run.locale,
+            `参照章节 ${event.chapterNumber} 已进入知识库${event.idempotent ? '（已存在）' : ''}`,
+            `Reference Chapter ${event.chapterNumber} is in the knowledge base${event.idempotent ? ' (already present)' : ''}.`))
+        })
+        try {
+          const result = await ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:execute', { reference, execution: authority })
+          if (!result || typeof result !== 'object' || typeof result.success !== 'boolean') throw new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
+          if (!result.success) {
+            if (typeof result.error !== 'string' || typeof result.errorCode !== 'string' || !result.errorCode) {
+              throw new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
+            }
+            throw Object.assign(new Error(result.error), { code: result.errorCode })
+          }
+          if (!result.run || result.run.id !== run.id || result.run.purpose !== 'reference'
+            || result.run.rootRunId !== run.rootRunId || result.run.stage !== 'global'
+            || !result.execution || result.execution.owner !== authority.owner || result.execution.epoch !== authority.epoch
+            || !Number.isSafeInteger(result.execution.expiresAt) || result.execution.expiresAt <= 0) {
+            throw new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
+          }
+          context.data.importRunExecution = result.execution
+          return { run: result.run, execution: result.execution }
+        } finally { active = false; unsubscribe() }
+      },
+    } : {}),
     startOrResume: async (runId, owner) => {
       const start = referenceKnowledge
         ? await ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:resume', referenceKnowledge.reference)

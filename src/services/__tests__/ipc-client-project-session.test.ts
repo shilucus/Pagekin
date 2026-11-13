@@ -55,11 +55,14 @@ describe('project-scoped IPC session transport', () => {
     const reference = { projectId: 'project-A', runId: 'fictional-run', grantId: '11111111-1111-4111-8111-111111111111', revision: 1 }
     const prepare = { operationId: reference.grantId, runId: reference.runId, executionOwner: '22222222-2222-4222-8222-222222222222' }
     const chapter = { reference, chapterNumber: 1, execution: { owner: prepare.executionOwner, epoch: 1 } }
+    const execute = { reference, execution: chapter.execution }
     setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
     await ipc.invokeWithProjectSession(frozen, 'reference-knowledge:v1:prepare', prepare)
     expect(invoke).toHaveBeenLastCalledWith('reference-knowledge:v1:prepare', prepare, frozen)
     await ipc.invokeWithProjectSession(frozen, 'reference-knowledge:v1:import', chapter)
     expect(invoke).toHaveBeenLastCalledWith('reference-knowledge:v1:import', chapter, frozen)
+    await ipc.invokeWithProjectSession(frozen, 'reference-knowledge:v1:execute', execute)
+    expect(invoke).toHaveBeenLastCalledWith('reference-knowledge:v1:execute', execute, frozen)
     for (const channel of ['reference-knowledge:v1:resume', 'reference-knowledge:v1:complete'] as const) {
       await ipc.invokeWithProjectSession(frozen, channel, reference)
       expect(invoke).toHaveBeenLastCalledWith(channel, reference, frozen)
@@ -67,13 +70,14 @@ describe('project-scoped IPC session transport', () => {
     setActiveProjectSessionContext(null)
     await expect(ipc.invoke('reference-knowledge:v1:prepare', prepare)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
     await expect(ipc.invoke('reference-knowledge:v1:import', chapter)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    await expect(ipc.invoke('reference-knowledge:v1:execute', execute)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
     for (const channel of ['reference-knowledge:v1:resume', 'reference-knowledge:v1:complete'] as const) {
       await expect(ipc.invoke(channel, reference)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
     }
     await ipc.invoke('reference-knowledge:v1:revoke', reference)
     expect(invoke).toHaveBeenLastCalledWith('reference-knowledge:v1:revoke', reference)
     await expect(ipc.invokeWithProjectSession(frozen, 'reference-knowledge:v1:revoke', reference)).rejects.toThrow('通道不属于项目会话范围')
-    expect(invoke).toHaveBeenCalledTimes(5)
+    expect(invoke).toHaveBeenCalledTimes(6)
   })
   it('rejects a missing canonical bridge without invoking the legacy write API', async () => {
     Object.defineProperty(globalThis, 'window', {

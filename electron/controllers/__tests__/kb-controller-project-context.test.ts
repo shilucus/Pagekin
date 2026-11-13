@@ -77,7 +77,7 @@ vi.mock('../../i18n', () => ({
   mainText: vi.fn((_locale: string, zh: string) => zh),
 }))
 
-import { getEmbeddingConfig, registerKBController } from '../kb-controller'
+import { explainReferenceImportFailure, getEmbeddingConfig, registerKBController } from '../kb-controller'
 
 function rawHandler(channel: string): IpcHandler {
   const registered = mocks.handlers.get(channel)
@@ -608,5 +608,20 @@ describe('embedding config fallback by protocol', () => {
   it('never falls back to an Anthropic-protocol profile, which has no embedding endpoint', () => {
     withModel({ ...generationModel, protocol: 'anthropic' })
     expect(getEmbeddingConfig()).toBeNull()
+  })
+})
+
+describe('captured reference knowledge failure locale', () => {
+  it.each([
+    ['en-US', 'EMBEDDING_RESPONSE_INVALID', 'returned an unusable result'],
+    ['zh-CN', 'EMBEDDING_RESPONSE_INVALID', '返回的结果不合格'],
+    ['en-US', 'IMPORT_RUN_REFERENCE_UNBOUND', 'The import could not continue'],
+    ['zh-CN', 'IMPORT_RUN_REFERENCE_UNBOUND', '导入没能继续'],
+  ] as const)('uses captured %s for %s without consulting another view', (locale, code, expected) => {
+    mocks.getRun.mockReturnValue({ locale: locale === 'en-US' ? 'zh-CN' : 'en-US' })
+    const result = explainReferenceImportFailure({ success: false, error: code }, 'fictional-reference', locale)
+    expect(result).toMatchObject({ success: false, errorCode: code })
+    expect(result.error).toContain(expected)
+    expect(mocks.getRun).not.toHaveBeenCalled()
   })
 })

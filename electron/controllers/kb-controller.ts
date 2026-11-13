@@ -8,6 +8,7 @@ import { isProjectSessionContext } from '../../src/shared/project-session-contex
 import { hasRequiredApiKey } from '../../src/shared/provider-presets'
 import type { EmbeddingModel } from '../../src/shared/embedding-options'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
+import type { Locale } from '../../src/i18n/types'
 import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { mainText } from '../i18n'
 import { getCurrentProjectPath, getProjectDb } from '../database'
@@ -138,16 +139,16 @@ function referenceIntegrityFailure(code: string): readonly [zhCN: string, enUS: 
   ]
 }
 
-export function explainReferenceImportFailure<T extends { success: boolean; error?: string }>(result: T, runId: string): T | (T & { errorCode: string }) {
+export function explainReferenceImportFailure<T extends { success: boolean; error?: string }>(result: T, runId: string, capturedLocale?: Locale): T | (T & { errorCode: string }) {
   const code = !result.success ? result.error : undefined
   const explained = code ? REFERENCE_IMPORT_FAILURES[code] ?? referenceIntegrityFailure(code) : undefined
   if (!code) return result
   if (!explained) {
     // 导入运行的授权与收据校验（#474 B1）按同一套说明写。
-    const importFailure = explainImportRunFailure(code, () => importRunLocale(runId))
+    const importFailure = explainImportRunFailure(code, () => capturedLocale ?? importRunLocale(runId))
     return importFailure ? { ...result, ...importFailure } : result
   }
-  return { ...result, errorCode: code, error: importRunLocale(runId) === 'en-US' ? explained[1] : explained[0] }
+  return { ...result, errorCode: code, error: (capturedLocale ?? importRunLocale(runId)) === 'en-US' ? explained[1] : explained[0] }
 }
 
 export function legacyMigrationBlockedFailure() {

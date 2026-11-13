@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
-const ipcMocks = vi.hoisted(() => ({ invoke: vi.fn(), actual: vi.fn(), revoke: vi.fn(), complete: vi.fn() }))
+const ipcMocks = vi.hoisted(() => ({ invoke: vi.fn(), actual: vi.fn(), revoke: vi.fn(), complete: vi.fn(), on: vi.fn() }))
 const characterSyncMocks = vi.hoisted(() => ({ retry: vi.fn() }))
 const commandMocks = vi.hoisted(() => ({
   blueprintContext: undefined as WorkflowContext | undefined,
@@ -26,6 +26,7 @@ vi.mock('../../ipc-client', () => ({
       return ipcMocks.invoke(session, channel, ...args)
     },
     invoke: ipcMocks.revoke,
+    on: ipcMocks.on,
   },
 }))
 vi.mock('../directory-character-sync-recovery', () => ({
@@ -111,6 +112,7 @@ function context(): WorkflowContext {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  ipcMocks.on.mockImplementation(() => () => {})
   ipcMocks.revoke.mockResolvedValue({ state: 'revoked' })
   ipcMocks.complete.mockResolvedValue({ state: 'completed' })
   characterSyncMocks.retry.mockResolvedValue({ operationId: 'sync-1' })
@@ -355,66 +357,95 @@ describe('createImportWorkflow', () => {
     expect(commandMocks.blueprintContext?.data.importRunExecution).toMatchObject({ owner: executionOwner, epoch: 1 })
   })
 
-  it('imports the frozen snapshot through the reference-only idempotent channel and checkpoints it', async () => {
-    let snapshot = run({ totalChapters: 2, manifestChapterCount: 2 })
-    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+  it('delegates knowledge to main, filters progress and retains the returned execution', async () => {
+    const snapshot = run({ totalChapters: 2, manifestChapterCount: 2 })
+    const reference = { projectId: session.projectId, runId: snapshot.id, grantId: '00000000-0000-4000-8000-000000000002', revision: 1 }
+    const authority = { owner: executionOwner, epoch: 1 }
+    const execution = { ...authority, expiresAt: Number.MAX_SAFE_INTEGER }
+    const unsubscribe = vi.fn()
+    let listener: (event: unknown) => void = () => { throw new Error('listener missing') }
+    ipcMocks.on.mockImplementation((_channel, callback) => { listener = callback; return unsubscribe })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
       if (channel === 'db:import-run-get') return snapshot
-      if (channel === 'db:import-run-start-resume') return {
-        success: true,
-        start: {
-          run: snapshot,
-          execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
-        },
-      }
-      if (channel === 'db:import-run-renew-execution') return {
-        success: true,
-        execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
-      }
-      if (channel === 'db:import-run-list-chapters') {
-        const after = args[1] as number
-        return after === 0 ? [{
-          number: 1, title: 'Start', content: 'frozen reference',
-          contentFingerprint: 'c'.repeat(64), contentSize: 16,
-        }, {
-          number: 2, title: 'Next', content: 'second reference',
-          contentFingerprint: 'd'.repeat(64), contentSize: 16,
-        }] : []
-      }
-      if (channel === 'kb:import-reference-text') return { success: true, docId: 'stable', idempotent: false }
-      if (channel === 'db:import-run-complete-batch') {
-        snapshot = { ...snapshot, completedBatches: { knowledge: ['1-2'] } }
-        return { success: true, run: snapshot, newlyCompleted: true, cancelApplied: false }
-      }
-      if (channel === 'db:import-run-advance-stage') {
-        snapshot = { ...snapshot, stage: 'global' }
-        return { success: true, run: snapshot }
+      if (channel === 'reference-knowledge:v1:execute') {
+        expect(ipcMocks.on).toHaveBeenCalledWith('reference-knowledge:v1:progress', expect.any(Function))
+        listener({ reference, execution: authority, kind: 'chapter', chapterNumber: 1, idempotent: true })
+        listener({ reference, execution: authority, kind: 'batch', progress: 42 })
+        listener({ reference: { ...reference, revision: 2 }, execution: authority, kind: 'batch', progress: 30 })
+        listener({ reference, execution: { ...authority, epoch: 2 }, kind: 'batch', progress: 31 })
+        listener({ reference, execution: authority, kind: 'batch', progress: 100 })
+        listener({ reference, execution: authority, kind: 'batch', progress: 32, extra: true })
+        return { success: true, run: { ...snapshot, stage: 'global' }, execution }
       }
       throw new Error(`Unexpected channel ${channel}`)
     })
     const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    const stepContext = context()
+    const stepCallbacks: StepCallbacks = { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }
+    await workflow.steps[0].executor({} as never, stepContext, stepCallbacks)
+    expect(ipcMocks.actual).toHaveBeenCalledWith(session, 'reference-knowledge:v1:execute', { reference, execution: authority })
+    expect(stepCallbacks.log).toHaveBeenCalledExactlyOnceWith('参照章节 1 已进入知识库（已存在）')
+    expect(stepCallbacks.setProgress).toHaveBeenCalledExactlyOnceWith(42)
+    expect(stepContext.data.importRunExecution).toEqual(execution)
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    listener({ reference, execution: authority, kind: 'batch', progress: 50 })
+    expect(stepCallbacks.setProgress).toHaveBeenCalledOnce()
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).toEqual(['db:import-run-get', 'reference-knowledge:v1:execute'])
+  })
 
-    await workflow.steps[0].executor({} as never, context(), callbacks)
+  it.each(['run', 'root', 'stage', 'owner', 'epoch', 'expiry', 'failure'] as const)(
+    'rejects a malformed or mismatched main execution result: %s', async invalid => {
+      const snapshot = run()
+      const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+      const returnedRun = { ...snapshot, stage: 'global' as const }
+      const reply: unknown = invalid === 'failure' ? { success: false, error: 'bad' } : {
+        success: true,
+        run: { ...returnedRun, ...(invalid === 'run' ? { id: 'other' } : {}),
+          ...(invalid === 'root' ? { rootRunId: 'other' } : {}), ...(invalid === 'stage' ? { stage: 'knowledge' } : {}) },
+        execution: { ...execution, ...(invalid === 'owner' ? { owner: 'other' } : {}),
+          ...(invalid === 'epoch' ? { epoch: 2 } : {}), ...(invalid === 'expiry' ? { expiresAt: 0 } : {}) },
+      }
+      const unsubscribe = vi.fn()
+      ipcMocks.on.mockReturnValue(unsubscribe)
+      ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+        if (channel === 'db:import-run-get') return snapshot
+        if (channel === 'reference-knowledge:v1:execute') return reply
+        throw new Error(`Unexpected channel ${channel}`)
+      })
+      const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+      const stepContext = context()
+      await expect(workflow.steps[0].executor({} as never, stepContext, callbacks)).rejects.toThrow('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
+      expect(stepContext.data.importRunExecution).toBeUndefined()
+      expect(unsubscribe).toHaveBeenCalledOnce()
+      expect(ipcMocks.actual.mock.calls.map(call => call[1])).toEqual(['db:import-run-get', 'reference-knowledge:v1:execute'])
+    },
+  )
 
-    expect(ipcMocks.invoke).toHaveBeenCalledWith(
-      session,
-      'kb:import-reference-text',
-      1,
-      'import-run-1',
-      { owner: executionOwner, epoch: 1 },
-    )
-    expect(ipcMocks.invoke.mock.calls.map(call => call[1])).not.toContain('db:draft-create')
-    expect(ipcMocks.actual).toHaveBeenCalledWith(session, 'reference-knowledge:v1:resume', expect.objectContaining({ runId: snapshot.id }))
-    expect(ipcMocks.actual).toHaveBeenCalledWith(session, 'reference-knowledge:v1:import', {
-      reference: expect.objectContaining({ runId: snapshot.id, projectId: session.projectId }),
-      chapterNumber: 1, execution: { owner: executionOwner, epoch: 1 },
+  it('unsubscribes and does not terminate again when the execute IPC throws', async () => {
+    const snapshot = run()
+    const unsubscribe = vi.fn()
+    ipcMocks.on.mockReturnValue(unsubscribe)
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'reference-knowledge:v1:execute') throw new Error('synthetic IPC failure')
+      throw new Error(`Unexpected channel ${channel}`)
     })
-    const resumes = ipcMocks.actual.mock.calls.filter(call => call[1] === 'reference-knowledge:v1:resume')
-    const imports = ipcMocks.actual.mock.calls.filter(call => call[1] === 'reference-knowledge:v1:import')
-    expect(imports).toHaveLength(2)
-    expect(imports.map(call => (call[2] as { chapterNumber: number }).chapterNumber)).toEqual([1, 2])
-    expect(imports.every(call => (call[2] as { reference: unknown }).reference === resumes[0]![2])).toBe(true)
-    expect(ipcMocks.actual.mock.calls.map(call => call[1])).not.toContain('kb:import-reference-text')
-    expect(ipcMocks.actual.mock.calls.map(call => call[1])).not.toContain('db:import-run-start-resume')
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[0].executor({} as never, context(), callbacks)).rejects.toThrow('synthetic IPC failure')
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).toEqual(['db:import-run-get', 'reference-knowledge:v1:execute'])
+  })
+
+  it('does not re-execute knowledge after the persisted stage has advanced', async () => {
+    const snapshot = run()
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return { ...snapshot, stage: 'global' }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await workflow.steps[0].executor({} as never, context(), callbacks)
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).toEqual(['db:import-run-get'])
+    expect(ipcMocks.on).not.toHaveBeenCalled()
   })
 
   it('requires matching issuance without preparing implicitly and revokes before any step', async () => {
@@ -791,27 +822,15 @@ describe('import workflow failure copy follows the import run locale (#484)', ()
 })
 
 describe('作者在一批参照章节导入途中取消（#587）', () => {
-  // 主进程收到取消请求后，这一批剩下的章节都被拒绝；reply 是这时 kb:import-reference-text 给的回答。
+  // 主进程拥有执行期间的取消和失败终结。
   async function cancelDuringFirstChapter(reply: { success: false; error: string; errorCode: string }) {
     const snapshot = run({ totalChapters: 3, manifestChapterCount: 3 })
-    const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
-    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
       switch (channel) {
         case 'db:import-run-get': return snapshot
-        case 'db:import-run-start-resume': return { success: true, start: { run: snapshot, execution } }
-        case 'db:import-run-renew-execution': return { success: true, execution }
-        case 'db:import-run-list-chapters': return args[1] === 0 ? [1, 2, 3].map(number => ({
-          number, title: `第${number}章`, content: '参照正文', contentFingerprint: 'c'.repeat(64), contentSize: 12,
-        })) : []
-        case 'kb:import-reference-text':
-          if (args[0] === 1) {
-            useWorkflowStore.getState().cancelWorkflow(snapshot.id)
-            return { success: true, docId: 'stable-1', idempotent: false }
-          }
+        case 'reference-knowledge:v1:execute':
+          useWorkflowStore.getState().cancelWorkflow(snapshot.id)
           return reply
-        case 'db:import-run-request-cancel': return { success: true, run: { ...snapshot, cancelRequested: true } }
-        case 'db:import-run-cancel-at-boundary': return { success: true, run: { ...snapshot, status: 'cancelled' } }
-        case 'db:import-run-fail': return { success: true, run: { ...snapshot, status: 'failed' } }
         case 'fs:check-exists': return false
         default: throw new Error(`测试未配置桌面调用：${channel}`)
       }
@@ -840,7 +859,11 @@ describe('作者在一批参照章节导入途中取消（#587）', () => {
 
     expect(ended).toMatchObject({ status: 'cancelled' })
     expect(ended.steps[0]).toMatchObject({ status: 'cancelled', error: '导入已取消，停在了已保存的进度处。' })
-    expect(channels).toContain('db:import-run-cancel-at-boundary')
+    expect(ipcMocks.revoke.mock.calls.filter(call => call[0] === 'reference-knowledge:v1:revoke')).toEqual([[
+      'reference-knowledge:v1:revoke',
+      { projectId: session.projectId, runId: 'import-run-1', grantId: '00000000-0000-4000-8000-000000000002', revision: 1 },
+    ]])
+    expect(channels).not.toContain('db:import-run-cancel-at-boundary')
     expect(channels).not.toContain('db:import-run-fail')
   })
 
@@ -849,7 +872,11 @@ describe('作者在一批参照章节导入途中取消（#587）', () => {
 
     expect(ended).toMatchObject({ status: 'failed', errorCode: 'EMBEDDING_SPACE_BUSY' })
     expect(ended.steps[0]).toMatchObject({ status: 'failed', errorCode: 'EMBEDDING_SPACE_BUSY' })
-    expect(channels).toContain('db:import-run-fail')
+    expect(ipcMocks.revoke.mock.calls.filter(call => call[0] === 'reference-knowledge:v1:revoke')).toEqual([[
+      'reference-knowledge:v1:revoke',
+      { projectId: session.projectId, runId: 'import-run-1', grantId: '00000000-0000-4000-8000-000000000002', revision: 1 },
+    ]])
+    expect(channels).not.toContain('db:import-run-fail')
     expect(channels).not.toContain('db:import-run-cancel-at-boundary')
   })
 })

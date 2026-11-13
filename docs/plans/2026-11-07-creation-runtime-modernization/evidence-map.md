@@ -83,3 +83,10 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 - 实际注册 IPC、文档原 batch outcome、取消/unknown/drain 与恢复证据见 [Stage63 evidence](stage-63-evidence.md)：controller191、materials232、document104、service588 是分别通过且重叠的报告，不合并计数；所有失败链保留。源码、原始报告与本轮新构建入口由 [Stage63 manifest](stage-63-source-manifest.json) 绑定。
 - SCHED-001 三条 AC、PERF-001 前置、G-IMPLEMENT/G-RUN 和 deterministic/performance 已逐项核定，fresh typecheck/lint/colors/i18n/build 均0，独立 source/runtime review 无范围内阻断。仅 SCHED-001 提升 completed/true，功能总计11 completed/24 in_progress；IMPORT-001/002 仍仅补充前置证据。
 - 三对 query 受控观察显示实际峰值1/2与完整非空材料一致，未证明稳定提速；原文档观察不等于服务商性能。无真实模型、Electron、文学质量、完整导入、视觉、平台或35项累计终审结论。
+
+## Stage64 增量证据
+
+- 主进程知识阶段实际入口：`src/shared/reference-knowledge-contract.ts`、`electron/controllers/reference-knowledge-controller.ts`、`electron/services/reference-knowledge-authority.ts`；closed execute/progress、现有 private issuance、原有 owner/epoch heartbeat、收据/checkpoint/knowledge-to-global writer 与整阶段 foreground barrier。`electron/controllers/db-controller.ts` 隔离旧同 run writer；requestCancel 仍可达。
+- 生产委托和既有投影：`src/services/workflows/import-run-orchestrator.ts`、`import-workflow.ts`；renderer 不再重复知识循环/续租/终态写入，完整 reference/owner/epoch 过滤后只投影原中英文日志和原批次进度。作者原稿及后续阶段不变。
+- 最终实际 [Stage64 evidence](stage-64-evidence.md)：15文件513/513，含 native18/18；撤权终态 RED3fail 到 GREEN3pass、主驱动10/10及全部历史失败均保留，不相加。独立 source/runtime review 闭环 P2，fresh typecheck/lint/colors/i18n/build 均0；[manifest](stage-64-source-manifest.json) 绑定实际来源、原始报告与本轮构建入口。
+- ADR0074 只接受 foreground knowledge-stage ownership；IMPORT001/002 只补部分证据，所有状态不变，仍11completed/24in_progress。无完整拆书/仿写、A-to-B/background、Electron 进程、真实模型/文学质量、视觉、平台或35项累计终审结论。

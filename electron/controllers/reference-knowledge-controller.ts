@@ -2,14 +2,14 @@ import { ipcMain } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import {
   REFERENCE_KNOWLEDGE_CHANNELS, assertReferenceKnowledgeRequest, referenceKnowledgeRequiresView,
-  type PrepareReferenceKnowledgeRequest, type ReferenceKnowledgeChannels,
+  type ExecuteReferenceKnowledgeRequest, type PrepareReferenceKnowledgeRequest, type ReferenceKnowledgeChannels,
   type ReferenceKnowledgeReference,
 } from '../../src/shared/reference-knowledge-contract'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { projectAccess } from '../services/project-access'
 import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
 import { withLegacyProjectOperation } from '../services/project-runtime-compatibility'
-import { ReferenceKnowledgeAuthority } from '../services/reference-knowledge-authority'
+import { ReferenceKnowledgeAuthority, ReferenceKnowledgeExecutionFailure } from '../services/reference-knowledge-authority'
 import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { assertKnowledgeBaseStoragePathSupported, projectStoragePreflightFailure } from '../services/project-storage-preflight'
 import { getEmbeddingConfig, referenceImportDisplayName, explainReferenceImportFailure,
@@ -79,8 +79,8 @@ export function registerReferenceKnowledgeController(): void {
         if (raw.length !== (requiresView ? 2 : 1)) throw new Error('KNOWLEDGE_BASE_REFERENCE_PAYLOAD_INVALID')
         const body = raw[0]
         assertReferenceKnowledgeRequest(channel, body)
-        runId = channel === 'reference-knowledge:v1:import'
-          ? (body as ReferenceKnowledgeChannels['reference-knowledge:v1:import']['args'][0]).reference.runId
+        runId = channel === 'reference-knowledge:v1:import' || channel === 'reference-knowledge:v1:execute'
+          ? (body as ExecuteReferenceKnowledgeRequest).reference.runId
           : (body as PrepareReferenceKnowledgeRequest | ReferenceKnowledgeReference).runId
         if (!requiresView) return capability(body as ReferenceKnowledgeReference).revoke(event.sender, body as ReferenceKnowledgeReference)
         const session = raw[1]
@@ -99,8 +99,8 @@ export function registerReferenceKnowledgeController(): void {
             const authority = await authorized(runtime, fresh)
             return authority.prepare(event.sender, body as PrepareReferenceKnowledgeRequest, fresh)
           }
-          const reference = channel === 'reference-knowledge:v1:import'
-            ? (body as ReferenceKnowledgeChannels['reference-knowledge:v1:import']['args'][0]).reference
+          const reference = channel === 'reference-knowledge:v1:import' || channel === 'reference-knowledge:v1:execute'
+            ? (body as ExecuteReferenceKnowledgeRequest).reference
             : body as ReferenceKnowledgeReference
           if (reference.projectId !== runtime.projectId || authorities.get(runtime) !== capability(reference)) {
             throw new Error('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
@@ -108,6 +108,23 @@ export function registerReferenceKnowledgeController(): void {
           const authority = authorities.get(runtime)!
           if (channel === 'reference-knowledge:v1:resume') return authority.resume(event.sender, reference)
           if (channel === 'reference-knowledge:v1:complete') return authority.complete(event.sender, reference)
+          if (channel === 'reference-knowledge:v1:execute') {
+            const result = await authority.executeKnowledge(event.sender, body as ExecuteReferenceKnowledgeRequest, {
+              progress: progress => {
+                if (event.sender.isDestroyed()) return
+                try { event.sender.send('reference-knowledge:v1:progress', progress) }
+                catch { /* A lost view projection cannot change committed receipts or stage ownership. */ }
+              },
+              failureMessage: (code, locale, source) => {
+                const result = { success: false, error: code, errorCode: code }
+                if (isLegacyMigrationBlockedResult(result)) return legacyMigrationBlockedFailure().error
+                if (source === 'result') return explainReferenceImportFailure(result, runId!, locale).error!
+                return explainImportRunFailure(code, locale)?.error
+                  ?? explainReferenceImportFailure(result, runId!, locale).error!
+              },
+            })
+            return { success: true, ...result }
+          }
           const result = await authority.importChapter(event.sender,
             body as ReferenceKnowledgeChannels['reference-knowledge:v1:import']['args'][0])
           if (isLegacyMigrationBlockedResult(result)) return legacyMigrationBlockedFailure()
@@ -121,17 +138,20 @@ export function registerReferenceKnowledgeController(): void {
           return explainReferenceImportFailure(result, runId!)
         })
       } catch (error) {
+        if (channel === 'reference-knowledge:v1:execute' && error instanceof ReferenceKnowledgeExecutionFailure) {
+          return { success: false, error: error.displayMessage, errorCode: error.errorCode }
+        }
         const boundaryFailure = isLegacyMigrationBlockedError(error) ? legacyMigrationBlockedFailure()
           : projectStoragePreflightFailure(error)
         if (boundaryFailure) {
-          if (channel === 'reference-knowledge:v1:import') return boundaryFailure
+          if (channel === 'reference-knowledge:v1:import' || channel === 'reference-knowledge:v1:execute') return boundaryFailure
           throw new Error(boundaryFailure.error ?? 'KNOWLEDGE_BASE_REFERENCE_AUTHORITY_REJECTED')
         }
-        const code = failureCode(error, channel === 'reference-knowledge:v1:import')
+        const code = failureCode(error, channel === 'reference-knowledge:v1:import' || channel === 'reference-knowledge:v1:execute')
         if (channel === 'reference-knowledge:v1:revoke' || !runId) throw new Error(code)
         const importFailure = explainImportRunFailure(code, () => importRunLocale(runId!))
         const result = importFailure ?? explainReferenceImportFailure({ success: false, error: code, errorCode: code }, runId)
-        if (channel === 'reference-knowledge:v1:import') return { ...result, success: false }
+        if (channel === 'reference-knowledge:v1:import' || channel === 'reference-knowledge:v1:execute') return { ...result, success: false }
         throw new Error(result.error ?? code)
       }
     })

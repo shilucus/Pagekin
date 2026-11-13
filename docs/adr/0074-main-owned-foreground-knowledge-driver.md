@@ -1,0 +1,31 @@
+# ADR-0074: Main-Owned Foreground Knowledge Driver
+
+Date: 2026-11-13. Status: accepted for the bounded foreground knowledge-stage increment after current implementation, isolated native execution and independent source/runtime review. Full import and background qualification remain open.
+
+Sources: [F2 sections4.4-4.5](../plans/2026-11-07-creation-runtime-modernization/README.md), [ADR-0070](0070-foreground-reference-knowledge-issuance.md), the existing reference import orchestrator and ImportRunRepository knowledge receipt/checkpoint writers. This replaces only ADR-0070's renderer-driven chapter-loop limitation. Its explicit launch, private issuance, foreground lifecycle and complete-workflow qualification limits remain.
+
+## Entry And Ownership
+
+The actual reference workflow delegates its entire knowledge stage to the closed `reference-knowledge:v1:execute` entry. Its only input is the existing public reference and the captured execution owner/epoch. No chapters, source, model, credential, budget, root, background flag or new grant may be supplied. Main validates the current view, actual sender and live private issuance. Preparation remains the existing explicit import/continue action; execution never calls startOrResume or acquires a replacement epoch.
+
+Main owns the serial loop, same-owner lease heartbeat, safe-boundary cancellation, failure persistence, original chapter receipts, original batch checkpoints and the final knowledge-to-global transition. It reads the immutable chapter manifest in the existing page size and contiguous batch order. Each chapter reuses the actual captured admission, embedding inputs, budget, KB importer and run-receipt transaction. No new schema, task ledger, writer or allowance is introduced. Duplicate in-flight execution joins the same issuance's operation; completed knowledge acknowledgement is replayed from durable run state without another chapter request. Manual per-chapter admission, resume renewal and new preparation cannot interleave with that whole-stage operation. A process-local active-flight guard on the actual database/run blocks competing renderer renew/checkpoint/advance/fail/cancel-boundary/restart/effect writers; the existing request-cancel entry remains available. This is an ownership fence, not another durable task record or authorization source.
+
+The whole stage holds the existing runtime work resource until actual admitted work and synchronous cleanup have drained. Its active-flight state is separate from physical chapter inFlight counts and prevents between-chapter erasure or supersession. The existing foreground legacy barrier is retained for this increment. Managed retained runtime work does not require a new task-lease type, but the current UI still uses compatibility project opening and the remaining import stages are not migrated. Removing those protections, A-to-B continuation and whole-workflow background qualification are explicitly deferred.
+
+## Failure, Stop And Recovery
+
+Main renews only the captured owner/epoch, including while awaiting physical import. Lease loss stops further dispatch/effects; no new owner or automatic retry is acquired. Actual chapter errors are not recast as cancellation merely because a stop request also arrived. Failure persistence uses the existing locale-specific import/KB explanations and existing repository failure writer. Stale authority must not fail or cancel a superseding epoch. The controller returns safe diagnostic codes and existing explanation text, never raw provider/storage messages or credentials.
+
+Revocation, sender destruction and project close retain ADR-0070's main-only quiescence path. Whole-stage ownership prevents between-chapter issuance replacement or early resource release. Unknown/prepared dispatch history is never resent or cleared. Durable KB facts are not rolled back when a separate run receipt or later checkpoint fails. A new explicit continue can reconcile existing receipts/checkpoints under a newly issued current capability; persisted history never reconstructs the old process-local credentials or authorization.
+
+## Existing View Projections
+
+The event-only `reference-knowledge:v1:progress` channel carries the exact reference and execution owner/epoch, with either a successful chapter number/idempotency projection or the original batch percentage. Chapter events follow the actual run receipt; batch events follow the durable checkpoint, including replay of an already-completed batch. They preserve the existing localized chapter log and progress calculation and carry no facts to be committed by renderer. Event delivery is best-effort, not an acknowledgement or authority to adopt results; a send failure loses only this view projection, while actual sender destruction still invokes quiescence. No layout, control, new copy, resource or stage is added. Renderer subscribes before execution, validates and filters the full identity, and removes its listener on completion/failure.
+
+Renderer does not perform an additional chapter loop, heartbeat, failure write, cancellation boundary, checkpoint or stage advance for delegated knowledge. Author-manuscript, unissued legacy consumers and subsequent global/style/blueprint stages retain their existing execution and writer contracts. `novel_import` remains background-unqualified.
+
+## Acceptance And Rollback
+
+Required evidence is actual registered IPC plus isolated fictional SQLite/Lance receipts/checkpoints/transition, duplicate/replay, source and lease fencing, cancellation/revoke/close/sender-destroy physical drain, unknown no-resend and production renderer delegation/localized projections. Existing consumers and quality/build are rerun, and integrated source/raw evidence is independently reviewed. No real model, UI background qualification, process-crash capsule recovery, platform qualification or full IMPORT-001/002 completion is claimed.
+
+Rollback stops new delegated admission, drains the captured operation and retains all receipts, checkpoints, dispatch history and grant records. It may restore the previous renderer-driven foreground knowledge path only with the same private issuance and existing budget/unknown safeguards; it cannot restore the unbound legacy importer or clear durable history.

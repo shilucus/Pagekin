@@ -1,10 +1,10 @@
-import type { ImportRunExecutionLease, ImportRunStartResult } from './import-run'
+import type { ImportRunExecutionAuthority, ImportRunExecutionLease, ImportRunStartResult } from './import-run'
 import { assertReferenceImportGrantId, assertReferenceImportGrantOperationId } from './reference-import-grant'
 
 export const REFERENCE_KNOWLEDGE_CHANNELS = Object.freeze([
   'reference-knowledge:v1:prepare', 'reference-knowledge:v1:resume',
   'reference-knowledge:v1:import', 'reference-knowledge:v1:revoke',
-  'reference-knowledge:v1:complete',
+  'reference-knowledge:v1:complete', 'reference-knowledge:v1:execute',
 ] as const)
 
 /** Public evidence only; execution additionally requires a private main-process sender issuance. */
@@ -30,12 +30,31 @@ export interface ReferenceKnowledgeImportResult {
   errorCode?: string
 }
 
+export interface ExecuteReferenceKnowledgeRequest {
+  reference: ReferenceKnowledgeReference
+  execution: ImportRunExecutionAuthority
+}
+
+export type ReferenceKnowledgeExecutionResult =
+  | ({ success: true } & ImportRunStartResult)
+  | { success: false; error: string; errorCode: string }
+
+export type ReferenceKnowledgeProgress = ExecuteReferenceKnowledgeRequest & (
+  | { kind: 'chapter'; chapterNumber: number; idempotent: boolean }
+  | { kind: 'batch'; progress: number }
+)
+
+export interface ReferenceKnowledgeEvents {
+  'reference-knowledge:v1:progress': ReferenceKnowledgeProgress
+}
+
 export interface ReferenceKnowledgeChannels {
   'reference-knowledge:v1:prepare': { args: [PrepareReferenceKnowledgeRequest]; return: {
     reference: ReferenceKnowledgeReference
     execution: ImportRunExecutionLease
   } }
   'reference-knowledge:v1:resume': { args: [ReferenceKnowledgeReference]; return: ImportRunStartResult }
+  'reference-knowledge:v1:execute': { args: [ExecuteReferenceKnowledgeRequest]; return: ReferenceKnowledgeExecutionResult }
   'reference-knowledge:v1:import': { args: [{
     reference: ReferenceKnowledgeReference
     chapterNumber: number
@@ -83,6 +102,34 @@ function assertReference(value: unknown): asserts value is ReferenceKnowledgeRef
   positiveInteger(value.revision)
 }
 
+function assertExecution(value: unknown): asserts value is ImportRunExecutionAuthority {
+  object(value, ['owner', 'epoch'])
+  operationId(value.owner)
+  positiveInteger(value.epoch)
+}
+
+/** Progress is only a view projection; receipts and checkpoints remain authoritative. */
+export function isReferenceKnowledgeProgress(value: unknown): value is ReferenceKnowledgeProgress {
+  try {
+    if (!value || typeof value !== 'object' || !('kind' in value)) return false
+    const fields = value as Record<string, unknown>
+    if (fields.kind === 'chapter') {
+      object(fields, ['reference', 'execution', 'kind', 'chapterNumber', 'idempotent'])
+      assertReference(fields.reference)
+      assertExecution(fields.execution)
+      positiveInteger(fields.chapterNumber)
+      return typeof fields.idempotent === 'boolean'
+    }
+    if (fields.kind === 'batch') {
+      object(fields, ['reference', 'execution', 'kind', 'progress'])
+      assertReference(fields.reference)
+      assertExecution(fields.execution)
+      return Number.isSafeInteger(fields.progress) && Number(fields.progress) >= 0 && Number(fields.progress) <= 99
+    }
+    return false
+  } catch { return false }
+}
+
 export function assertReferenceKnowledgeRequest<C extends ReferenceKnowledgeChannel>(
   channel: C, value: unknown,
 ): asserts value is ReferenceKnowledgeChannels[C]['args'][0] {
@@ -102,9 +149,12 @@ export function assertReferenceKnowledgeRequest<C extends ReferenceKnowledgeChan
       object(value, ['reference', 'chapterNumber', 'execution'])
       assertReference(value.reference)
       positiveInteger(value.chapterNumber)
-      object(value.execution, ['owner', 'epoch'])
-      operationId(value.execution.owner)
-      positiveInteger(value.execution.epoch)
+      assertExecution(value.execution)
+      return
+    case 'reference-knowledge:v1:execute':
+      object(value, ['reference', 'execution'])
+      assertReference(value.reference)
+      assertExecution(value.execution)
       return
     default:
       throw new Error('KNOWLEDGE_BASE_REFERENCE_CHANNEL_NOT_ALLOWED')
