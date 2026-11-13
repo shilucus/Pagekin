@@ -12,6 +12,7 @@ import type { PlanningFeedbackChannels } from './planning-feedback-ipc'
 import type { RuntimeFeedbackChannels } from './runtime-feedback-contract'
 import type { ReferenceKnowledgeChannels, ReferenceKnowledgeEvents } from './reference-knowledge-contract'
 import type { ReferenceStyleEvents } from './reference-style-contract'
+import type { ReferenceGlobalEvents } from './reference-global-contract'
 import type { WorkflowDriverChannels } from './workflow-driver-contract'
 import type { WorkflowBatchChannels } from './workflow-batch-contract'
 import type { CharacterAvatarChannels } from './character-avatar'
@@ -1395,7 +1396,7 @@ export interface MCPChannels {
 
 // ===== 合并所有频道 =====
 export type AllInvokeChannels = ReferenceKnowledgeChannels & WorkflowBatchChannels & WorkflowDriverChannels & RuntimeFeedbackChannels & PlanningFeedbackChannels & LegacyRosterGenerationChannels & CharacterAvatarChannels & CloudBackupChannels & GraphGenerationChannels & FinalizationGenerationChannels & EditorInlineGenerationChannels & ImportGenerationChannels & AgentGenerationChannels & ReviewRevisionGenerationInvokeChannels & FinalizedCharacterGenerationChannels & CharacterProposalChannels & GenerationOwnerChannels & StartupChannels & WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
-export type AllEventChannels = ReferenceStyleEvents & ReferenceKnowledgeEvents & GenerationOwnerEvents & LLMStreamEvents & UpdateStateEvents & WindowEvents
+export type AllEventChannels = ReferenceGlobalEvents & ReferenceStyleEvents & ReferenceKnowledgeEvents & GenerationOwnerEvents & LLMStreamEvents & UpdateStateEvents & WindowEvents
 
 /** 提取 invoke 频道名 */
 export type InvokeChannel = keyof AllInvokeChannels

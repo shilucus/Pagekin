@@ -1,7 +1,7 @@
-const active = new WeakMap<object, Map<string, 'knowledge' | 'style'>>()
+const active = new WeakMap<object, Map<string, 'knowledge' | 'global' | 'style'>>()
 
 /** Process-local writer ownership only; durable execution authority remains in the existing repositories. */
-export function acquireImportStageFlight(database: object, runId: string, stage: 'knowledge' | 'style'): () => void {
+export function acquireImportStageFlight(database: object, runId: string, stage: 'knowledge' | 'global' | 'style'): () => void {
   assertImportStageUnmanagedMutationAllowed(database, runId)
   let runs = active.get(database)
   if (!runs) { runs = new Map(); active.set(database, runs) }

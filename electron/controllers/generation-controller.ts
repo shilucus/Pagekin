@@ -49,6 +49,9 @@ import { recordPerformanceComputedMetric, recordPerformanceCount } from '../serv
 import { isAgentGlobalToolAction, issueAgentGlobalToolExecution, revokeAgentGlobalToolExecutions } from '../services/agent-global-tool-admission'
 import { assertReferenceStyleRequest, assertReferenceStyleAckRequest } from '../../src/shared/reference-style-contract'
 import { ReferenceStyleForeground } from './reference-style-foreground'
+import { assertReferenceGlobalRequest, assertReferenceGlobalAckRequest } from '../../src/shared/reference-global-contract'
+import { ReferenceGlobalForeground } from './reference-global-foreground'
+import { ReferenceGlobalFailure } from '../services/reference-global-driver'
 import { ReferenceStyleFailure } from '../services/reference-style-driver'
 import { assertImportStageUnmanagedMutationAllowed } from '../services/import-stage-flight'
 
@@ -166,11 +169,13 @@ export function registerGenerationController(options: {
     3 * (INITIAL_GENERATION_SCHEDULING.global + INITIAL_GENERATION_SCHEDULING.maxQueued + INITIAL_GENERATION_SCHEDULING.maxQuarantined))
   const activeHandlers = new Map<ProjectRuntime, number>()
   const referenceStyles = new ReferenceStyleForeground()
+  const referenceGlobals = new ReferenceGlobalForeground()
   const hasPhysical = (entry: OwnerEntry | undefined) => entry?.mode === 'legacy'
     ? entry.owner.hasPhysicalInFlight() : entry?.authority.hasPhysicalInFlight() ?? false
   projectRuntimeHost.registerBusyPredicate(runtime => (activeHandlers.get(runtime) ?? 0) > 0 || hasPhysical(owners.get(runtime.database)))
   projectRuntimeHost.onCloseRequested(runtime => {
     referenceStyles.requestClose(runtime)
+    referenceGlobals.requestClose(runtime)
     revokeAgentGlobalToolExecutions(runtime)
     const failures: unknown[] = []
     const entry = owners.get(runtime.database)
@@ -194,6 +199,7 @@ export function registerGenerationController(options: {
   })
   onProjectDatabaseBeforeClose(({ database }) => {
     referenceStyles.release(database)
+    referenceGlobals.release(database)
     const entry = owners.get(database)
     if (entry) {
       if (entry.mode === 'legacy') entry.owner.suspendForProjectClose()
@@ -260,6 +266,11 @@ export function registerGenerationController(options: {
         projectId: runtime.projectId, epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
       rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDependencies, previous, epoch,
         modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
+      readImportPlanningSkill: (previous, modelReceipt) => {
+        const rebuilt = rebuildGenerationSourceBinding(sourceDependencies, previous, epoch,
+          modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy))
+        return { binding: rebuilt.binding, skill: rebuilt.importPlanningSkill ?? null }
+      },
       ...extra, ...delivery })
   }
   const authorizedRuntimeFeedback = (runtime: ProjectRuntime): RuntimeFeedbackAuthority => {
@@ -693,16 +704,50 @@ export function registerGenerationController(options: {
       for (const slot of slots) assertImportStageUnmanagedMutationAllowed(database, slot.import_run_id)
     }
     if (channel === 'generation:begin') { selection(args[0]); return }
-    if (!['import-generation:execute', 'generation:pause', 'generation:cancel', 'generation:resume',
+    if (!['import-generation:execute', 'import-generation:v1:query-materials', 'generation:pause', 'generation:cancel', 'generation:resume',
       'generation:restart', 'generation:discard-candidate', 'generation:compose-visible'].includes(channel)) return
     const first = args[0]
-    const handle = channel === 'import-generation:execute' && first && typeof first === 'object' && 'handle' in first
+    const handle = ['import-generation:execute', 'import-generation:v1:query-materials'].includes(channel) && first && typeof first === 'object' && 'handle' in first
       ? first.handle : first
     if (handle && typeof handle === 'object' && 'runId' in handle && typeof handle.runId === 'string') {
       const row = database.prepare('SELECT root_action_id FROM generation_runs WHERE run_id=?').get(handle.runId) as { root_action_id: string } | undefined
       if (row) root(row.root_action_id)
     }
     if (channel === 'generation:restart') selection(args[1])
+  }
+  for (const channel of ['import-generation:v1:global', 'import-generation:v1:global-ack'] as const) {
+    ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
+      try {
+        const session = raw[1]
+        if (raw.length !== 2 || !isProjectSessionContext(session)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
+        if (channel === 'import-generation:v1:global') assertReferenceGlobalRequest(raw[0])
+        else assertReferenceGlobalAckRequest(raw[0])
+        const owner = authorizedOwner(session, event)
+        const runtime = ownerRuntimes.get(owner)!
+        return await withRuntimeHandler(runtime, async () => {
+          if (channel === 'import-generation:v1:global-ack') {
+            assertReferenceGlobalAckRequest(raw[0])
+            return referenceGlobals.acknowledge(runtime, event.sender, session, raw[0])
+          }
+          assertReferenceGlobalRequest(raw[0])
+          try {
+            const result = await referenceGlobals.execute(runtime, owner, event.sender, session, raw[0], () => {
+              if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+            })
+            return { success: true, ...result }
+          } catch (error) {
+            if (error instanceof ReferenceGlobalFailure) {
+              if (error.secondaryErrors.length) console.error('[generation] reference global terminal bookkeeping failed', {
+                channel, errorCode: error.errorCode, secondaryErrorCodes: error.secondaryErrors,
+              })
+              return { success: false, errorCode: error.errorCode, error: error.displayMessage,
+                ...(error.completionFailureCode ? { completionFailureCode: error.completionFailureCode } : {}) }
+            }
+            throw error
+          }
+        })
+      } catch (error) { throw new Error(generationIpcErrorCode(channel, error)) }
+    })
   }
   for (const channel of ['import-generation:v1:style', 'import-generation:v1:style-ack'] as const) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {

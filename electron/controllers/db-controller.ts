@@ -3,6 +3,7 @@ import { isProjectSessionContext } from '../../src/shared/project-session-contex
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
 import { assertReferenceKnowledgeUnmanagedMutationAllowed } from '../services/reference-knowledge-authority'
+import { assertImportStageUnmanagedMutationAllowed } from '../services/import-stage-flight'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import { assertGenerationSourcesCurrent, assertGenerationSynopsisCommit, commitGenerationPlotOutlineAuthorEdit, commitGenerationBlueprintAuthorEdit, assertImportGenerationSourcesCurrent, withImportGenerationQuerySources, recordGenerationDirectoryCommit, withGenerationAgentChildEffect } from './generation-controller'
 import { projectAccess } from '../services/project-access'
@@ -159,6 +160,21 @@ function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabas
     let mayReadDatabase = false
     try {
       const runtime = projectAccess.assertViewContext(context)
+      if (channel === 'db:import-global-facts-commit') {
+        const request = args[0]
+        if (request && typeof request === 'object') {
+          const value = request as { operationId?: unknown; generationRunHandle?: { runId?: unknown } }
+          const operationId = typeof value.operationId === 'string' ? value.operationId.trim() : undefined
+          if (operationId?.startsWith('novel-import-global-')) {
+            assertImportStageUnmanagedMutationAllowed(runtime.database, operationId.slice('novel-import-global-'.length))
+          }
+          if (typeof value.generationRunHandle?.runId === 'string') {
+            const row = runtime.database.prepare("SELECT json_extract(binding_json,'$.sourceManifest.importSlot.runId') AS import_run_id FROM generation_runs WHERE run_id=?")
+              .get(value.generationRunHandle.runId) as { import_run_id: unknown } | undefined
+            assertImportStageUnmanagedMutationAllowed(runtime.database, row?.import_run_id)
+          }
+        }
+      }
       if (KNOWLEDGE_DRIVER_OWNED_CHANNELS.has(channel)) {
         const request = args[0]
         const runId = request && typeof request === 'object' && 'runId' in request ? request.runId : request

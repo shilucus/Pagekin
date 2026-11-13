@@ -10,6 +10,7 @@ import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import { readMainGenerationPolicy } from '../main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { getProjectDb, getCurrentProjectPath } from '../../database'
+import { readBuiltinWritingSkill } from '../../../src/shared/builtin-writing-skills'
 import { ImportRunRepository } from '../../repositories/import-run-repository'
 import { generationOutputContract, type BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import { createImportRunChapterBatchCheckpointId, type ImportRunChapterSnapshot, type ImportRunExecutionLease } from '../../../src/shared/import-run'
@@ -43,16 +44,20 @@ export function importGenerationFixture(cleanup: (() => void)[], chapterCount: n
   db.exec("INSERT INTO project_core(id,project_name,words_per_chapter) VALUES('main','长篇导入',100)")
   const current = { dispatch }
   const spy = vi.fn<Dispatch>((request, options) => current.dispatch(request, options))
-  const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: (key: string) => JSON.stringify({ key, content: '冻结的合成提示词', systemRole: '写作助手' }) }
+  const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinSkill: readBuiltinWritingSkill, readBuiltinPrompt: (key: string) => JSON.stringify({ key, content: '冻结的合成提示词', systemRole: '写作助手' }) }
   const owners: Owner[] = []
   const openOwner = (epoch: string) => {
     const owner = createMainGenerationOwner({ database: db, projectId: project.projectId, projectPath: root, epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: spy,
       buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: project.projectId, epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
-      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding })
+      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
+      readImportPlanningSkill: (previous, modelReceipt) => {
+        const rebuilt = rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy))
+        return { binding: rebuilt.binding, skill: rebuilt.importPlanningSkill ?? null }
+      } })
     owners.push(owner)
     return owner
   }
-  const f = { db, spy, current, openOwner, owner: openOwner('epoch-1'), chapters: Array.from({ length: chapterCount }, (_, index) => chapter(index + 1)) }
+  const f = { root, db, spy, current, openOwner, owner: openOwner('epoch-1'), chapters: Array.from({ length: chapterCount }, (_, index) => chapter(index + 1)) }
   cleanup.push(() => { for (const owner of owners) { try { owner.suspendForProjectClose() } catch { /* 已模拟崩溃的 owner 不再收尾 */ } } db.close(); fs.rmSync(root, { recursive: true, force: true }) })
   ImportRunRepository.prepare({ runId: '长篇导入', purpose: 'reference', sourceFingerprint: 'a'.repeat(64), locale: 'zh-CN', sourceDisplay: [{ displayName: '参考小说.txt', mediaType: 'text/plain', size: 1 }], chapters: f.chapters })
   db.prepare("UPDATE import_runs SET stage='global' WHERE id='长篇导入'").run()

@@ -45,6 +45,7 @@ export type ImportRunGeneratedEffectCommitter<T> = (payload: unknown) => Promise
 export interface ImportRunOrchestratorDependencies {
   getRun: (runId: string) => Promise<ImportRunSnapshot | null>
   executeReferenceKnowledge?: (run: ImportRunSnapshot, executionOwner: string) => Promise<ImportRunStartResult>
+  executeReferenceGlobal?: (run: ImportRunSnapshot, executionOwner: string) => Promise<void>
   executeReferenceStyle?: (run: ImportRunSnapshot, executionOwner: string) => Promise<void>
   startOrResume: (runId: string, owner: string) => Promise<ImportRunStartResult>
   renewExecution: (runId: string, execution: ImportRunExecutionLease) => Promise<ImportRunExecutionLease>
@@ -286,6 +287,21 @@ export class ImportRunOrchestrator {
     if (requestedIndex < 0) {
       // i18n-exempt: createImportWorkflow 按运行的 purpose 排步骤，阶段不属于这个 purpose 只会是接线错误
       throw new Error(`Import stage ${requestedStage} does not belong to ${existing.purpose}.`)
+    }
+    if (existing.purpose === 'reference' && requestedStage === 'global' && this.dependencies.executeReferenceGlobal
+      && (existing.stage === 'global' || stageIndex(existing, existing.stage) > requestedIndex)) {
+      stopIfCancelled(context, existing.locale)
+      try {
+        await this.dependencies.executeReferenceGlobal(existing, executionOwner)
+        stopIfCancelled(context, existing.locale)
+      } catch (error) {
+        if (cancellationRequested(context) && isWorkflowCancellation(error)) {
+          await context.cancellationRequest?.catch(() => undefined)
+          stopIfCancelled(context, existing.locale)
+        }
+        throw error
+      }
+      return
     }
     if (existing.purpose === 'reference' && requestedStage === 'style' && this.dependencies.executeReferenceStyle
       && (existing.stage === 'style' || stageIndex(existing, existing.stage) > requestedIndex)) {

@@ -35,6 +35,11 @@ import { createMainOwnedGenerationRuntime, type MainGenerationRunHandle } from '
 import { routeModelId } from '../model-routing'
 import { pinWorkflowModel } from './workflow-main-generation'
 import { useWorkflowReasoningStore } from '../../stores/workflow-reasoning-store'
+import { isReferenceGlobalCompletionFailureCode, isReferenceGlobalProgress, type ReferenceGlobalLog } from '../../shared/reference-global-contract'
+import { BoundedCompletionFailure } from './bounded-completion'
+import { getImportInferenceTopics } from '../../shared/import-inference-materials'
+import { globalEventBus } from '../../shared/event-bus'
+import { displayedErrorMessage } from '../../i18n/app-errors'
 
 type ReferenceKnowledgeIssuance = { reference: ReferenceKnowledgeReference; execution: ImportRunExecutionLease }
 
@@ -143,6 +148,34 @@ function styleLog(locale: ImportRunSnapshot['locale'], log: ReferenceStyleLog, c
 const sameGenerationHandle = (a: MainGenerationRunHandle, b: MainGenerationRunHandle) =>
   a.projectId === b.projectId && a.epoch === b.epoch && a.rootActionId === b.rootActionId && a.runId === b.runId
 
+function globalLog(locale: ImportRunSnapshot['locale'], language: WritingLanguage, value: ReferenceGlobalLog): string {
+  const t = (zh: string, en: string) => textForLocale(locale, zh, en)
+  switch (value.key) {
+    case 'retrieving': return t('通过向量知识库检索关键片段...', 'Retrieving key passages from the vector knowledge base...')
+    case 'calling-ai': return t('正在调用 AI 推演全局小说配置...', 'Running AI inference for the global novel configuration...')
+    case 'syntax-repair': return t('导入推演 JSON 存在词法错误，正在执行唯一一次完整替代语法修复...', 'The import-inference JSON has a syntax error; running the single full-replacement syntax repair...')
+    case 'parsing': return t('正在解析 AI 返回结果并写入项目...', 'Parsing the AI response and committing it to the project...')
+    case 'retrieved': {
+      const label = getImportInferenceTopics(language).find(topic => topic.key === value.topic)!.label
+      return t(`  已检索「${label.zhCN}」— ${value.count} 条结果`, `  Retrieved ${value.count} ${value.count === 1 ? 'result' : 'results'} for "${label.enUS}"`)
+    }
+    case 'retrieval-fallback': {
+      const label = getImportInferenceTopics(language).find(topic => topic.key === value.topic)!.label
+      return t(`  「${label.zhCN}」检索失败，将使用降级策略`, `  Retrieval failed for "${label.enUS}"; using the fallback strategy`)
+    }
+    case 'endpoint-recovery': return t(`导入推演关系端点缺少 ${value.count} 张角色卡，正在执行一次受限补卡校正`, `${value.count} relationship ${value.count === 1 ? 'endpoint is' : 'endpoints are'} missing a character card; running one bounded correction`)
+    case 'saved-proposals': return t(`小说配置、非角色架构与 ${value.count} 条角色提议已原子保存；提议保留待采用，尚未创建角色。`, `The novel configuration, non-character architecture, and ${value.count} character proposals were saved atomically. Proposals remain pending adoption; no characters were created.`)
+    case 'saved-roster': return t(`小说配置、非角色架构与 ${value.count} 张角色卡已原子提交`, `The novel configuration, non-character architecture, and ${value.count} character ${value.count === 1 ? 'card was' : 'cards were'} committed atomically`)
+    case 'skill': return t(`本次 planning 阶段使用已冻结写作 Skill：${value.name}`, `Using the workflow-start-frozen writing skill for planning: ${value.name}`)
+    case 'discard-failed': { const reason = displayedErrorMessage(locale, value.code); return t(`丢弃没通过校验的导入输出失败：${reason}`, `Could not discard the rejected import output: ${reason}`) }
+    case 'dropped-relationships': {
+      const zh = value.relationships.map(item => `${item.source}→${item.target}（${item.relation}）`).join('、')
+      const en = value.relationships.map(item => `${item.source}→${item.target} (${item.relation})`).join(', ')
+      return t(`已丢弃 ${value.relationships.length} 条关系，关系对象没有角色卡：${zh}。这是导入推演的内部限制（最多 8 张角色卡，只补卡一次），不是你的设置。导入完成后可以在「角色名单」里手动补上这些角色和关系。`, `Dropped ${value.relationships.length} relationship(s) whose target has no character card: ${en}. This is an internal import-inference limit (at most 8 character cards and one card-recovery request), not one of your settings. After the import, you can add these characters and relationships on the Cast page.`)
+    }
+  }
+}
+
 function productionDependencies(
   context: WorkflowContext,
   callbacks: StepCallbacks,
@@ -158,6 +191,145 @@ function productionDependencies(
   return {
     getRun: runId => ipc.invokeWithProjectSession(session, 'db:import-run-get', runId, projectPath),
     ...(referenceKnowledge ? {
+      executeReferenceGlobal: async (run: ImportRunSnapshot, owner: string) => {
+        const captured = context.data.importRunExecution as ImportRunExecutionLease | undefined
+        const lease = captured ?? referenceKnowledge.execution
+        if (referenceKnowledge.reference.runId !== run.id || referenceKnowledge.reference.projectId !== session.projectId
+          || lease.owner !== owner || lease.epoch !== referenceKnowledge.execution.epoch) throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
+        const execution = { owner: lease.owner, epoch: lease.epoch }
+        const modelId = context.generationModelId?.trim() || routeModelId('import-global-facts') || null
+        const transport = createMainGenerationTransport(() => session)
+        const displayed = new Map<string, string>()
+        let runtime: Awaited<ReturnType<typeof createMainOwnedGenerationRuntime>> | undefined
+        let unsubscribeReasoning: (() => void) | undefined
+        let handle: MainGenerationRunHandle | undefined
+        let sequence = 0
+        let active = true
+        let projectionError: unknown
+        let projectedReceipt: import('../../shared/import-run').ImportRunEffectReceipt | undefined
+        let queue = Promise.resolve()
+        const clearReasoning = () => useWorkflowReasoningStore.getState().clear(context.runId)
+        const previousCancellation = context.requestMainGenerationCancellation
+        context.requestMainGenerationCancellation = async () => {
+          const result = await ipc.invokeWithProjectSession(session, 'db:import-run-request-cancel', run.id, lease, projectPath)
+          if (!result.success) throw new Error(result.error || 'IMPORT_RUN_CANCEL_REQUEST_FAILED')
+        }
+        const projectCommitted = async () => {
+          const receipt = await ipc.invokeWithProjectSession(session, 'db:import-run-effect-receipt-get', run.id, 'global', 'done', projectPath)
+          if (!receipt || receipt.state !== 'committed' || receipt.stage !== 'global' || receipt.batchId !== 'done'
+            || receipt.kind !== 'project-global-facts' || !receipt.effectReceipt) throw new Error('GENERATION_REQUEST_FAILED')
+          assertImportRunEffectReceiptMetadata(receipt, run)
+          const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
+          if (!core) throw new Error(textForLocale(run.locale, '无法读取已保存的导入配置。', 'Could not read committed project configuration.'))
+          projectedReceipt = receipt
+          context.data.importGlobalFactsReceipt = receipt.effectReceipt
+          const fields = configFieldsFromCore(core)
+          const unknown = promptLanguageText(context.writingLanguage, '未知', 'Unknown')
+          const none = promptLanguageText(context.writingLanguage, '（无）', '(none)')
+          context.data.novelConfigSummary = promptLanguageText(context.writingLanguage,
+            `类型: ${fields.genre || unknown} | 子类型: ${fields.subGenre || unknown} | 受众: ${fields.targetAudience || unknown}\n大纲: ${fields.coreOutline || none}\n世界观: ${fields.worldSetting || none}\n金手指: ${fields.goldenFinger || none}\n主角: ${fields.protagonistProfile || none}`,
+            `Genre: ${fields.genre || unknown} | Subgenre: ${fields.subGenre || unknown} | Audience: ${fields.targetAudience || unknown}\nOutline: ${fields.coreOutline || none}\nWorld: ${fields.worldSetting || none}\nCentral advantage: ${fields.goldenFinger || none}\nProtagonist: ${fields.protagonistProfile || none}`)
+          const current = useProjectStore.getState().currentProject
+          if (current && sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
+            useProjectStore.getState().publishSavedNovelConfig(fields, session, 'unsaved-edits')
+          } else callbacks.log(textForLocale(run.locale, '当前正在查看其他作品，导入事实已安全保存至目标作品库', 'Viewing another project; imported facts saved safely to the target project database.'))
+          globalEventBus.emit('REFRESH_RESOURCE', { resources: ['fileTree', 'characterCards'], projectPath, projectSession: session })
+        }
+        const unsubscribeProject = useProjectStore.subscribe(state => {
+          if (!sameProjectSessionContext(session, projectSessionContextFromProject(state.currentProject))) clearReasoning()
+        })
+        const unsubscribe = ipc.on('import-generation:v1:global-progress', event => {
+          if (!active || !isReferenceGlobalProgress(event) || event.projectId !== session.projectId || event.leaseId !== session.leaseId
+            || event.runId !== run.id || event.execution.owner !== execution.owner || event.execution.epoch !== execution.epoch
+            || event.sequence <= sequence) return
+          sequence = event.sequence
+          queue = queue.then(async () => {
+            if (event.kind === 'log') { callbacks.log(globalLog(run.locale, context.writingLanguage, event.value)); return }
+            if (event.kind === 'progress') { callbacks.setProgress(event.progress); return }
+            if (event.kind === 'prompt-budget') { callbacks.setPromptBudgetReport?.(event.report); return }
+            if (event.kind === 'candidate') { context.data.importGlobalInferenceCandidate = event.content; return }
+            if (event.kind === 'committed') { await projectCommitted(); return }
+            let acknowledged = false
+            const ack = (decision: 'accept' | 'cancelled' | 'projection-failed') => ipc.invokeWithProjectSession(
+              session, 'import-generation:v1:global-ack', { runId: run.id, execution, token: event.token, decision },
+            )
+            try {
+              if (handle) throw new Error('GENERATION_REQUEST_FAILED')
+              handle = Object.freeze({ ...event.handle })
+              context.mainGenerationRunHandle = handle
+              context.mainGenerationRootHandle = handle
+              context.generationModelId = event.modelId
+              pinWorkflowModel(context, event.modelId)
+              unsubscribeReasoning = transport.subscribeReasoning?.(handle, reasoning => {
+                if (!active || context.cancelled || !reasoning.attemptId || !reasoning.text
+                  || !sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
+                useWorkflowReasoningStore.getState().append(context.runId, reasoning.attemptId, reasoning.text)
+              })
+              runtime = await createMainOwnedGenerationRuntime({ runHandle: handle, onSnapshot: snapshot => {
+                if (!active) return
+                if (snapshot.diagnostics) callbacks.setGenerationActivity?.({ operation: 'import-global-facts', diagnostics: snapshot.diagnostics })
+                if (callbacks.replaceText) callbacks.replaceText(snapshot.text)
+                else {
+                  const previous = displayed.get(snapshot.artifactId) ?? ''
+                  if (snapshot.text.startsWith(previous)) callbacks.appendText(snapshot.text.slice(previous.length))
+                }
+                displayed.set(snapshot.artifactId, snapshot.text)
+              } }, transport)
+              callbacks.setGenerationActivity?.({ operation: 'import-global-facts' })
+              acknowledged = true
+              await ack(context.cancelled || context.cancelRequested ? 'cancelled' : 'accept')
+            } catch (error) {
+              projectionError = error
+              if (!acknowledged) await ack(context.cancelled || context.cancelRequested ? 'cancelled' : 'projection-failed')
+            }
+          }).catch(error => { projectionError = error })
+        })
+        try {
+          const result = await ipc.invokeWithProjectSession(session, 'import-generation:v1:global', { runId: run.id, execution, modelId }).catch(async error => { await queue; throw error })
+          await queue
+          if (!result || typeof result.success !== 'boolean') throw new Error('GENERATION_REQUEST_FAILED')
+          if (!result.success) {
+            if (typeof result.error !== 'string' || typeof result.errorCode !== 'string' || !result.errorCode) throw new Error('GENERATION_REQUEST_FAILED')
+            if (Object.hasOwn(result, 'completionFailureCode')) {
+              if (result.errorCode !== 'GENERATION_REQUEST_FAILED' || !isReferenceGlobalCompletionFailureCode(result.completionFailureCode)) throw new Error('GENERATION_REQUEST_FAILED')
+              throw new BoundedCompletionFailure(result.completionFailureCode, result.error)
+            }
+            if (result.errorCode === 'GENERATION_REQUEST_FAILED') throw new Error(result.error)
+            throw Object.assign(new Error(result.error), { code: result.errorCode })
+          }
+          const completedReplay = result.replayed === true && result.run?.status === 'completed' && result.run.stage === 'completed'
+          const validExecution = result.execution === null ? completedReplay : !!result.execution
+            && result.execution.owner === execution.owner && result.execution.epoch === execution.epoch
+            && Number.isSafeInteger(result.execution.expiresAt) && result.execution.expiresAt > 0
+          if (result.version !== 1 || !result.run || result.run.id !== run.id || result.run.rootRunId !== run.rootRunId
+            || result.run.purpose !== 'reference' || !['style', 'blueprints', 'refresh', 'completed'].includes(result.run.stage)
+            || !validExecution || typeof result.replayed !== 'boolean' || !result.receipt
+            || result.receipt.state !== 'committed' || result.receipt.stage !== 'global' || result.receipt.batchId !== 'done'
+            || result.receipt.kind !== 'project-global-facts' || !result.receipt.effectReceipt
+            || (result.modelId !== null && (typeof result.modelId !== 'string' || !result.modelId.trim()))
+            || (handle && (!result.handle || !sameGenerationHandle(handle, result.handle)))
+            || (result.handle && (result.handle.projectId !== session.projectId
+              || typeof result.handle.epoch !== 'string' || !result.handle.epoch.trim()
+              || (!result.replayed && result.handle.epoch !== session.leaseId)
+              || typeof result.handle.rootActionId !== 'string' || !result.handle.rootActionId.trim()
+              || typeof result.handle.runId !== 'string' || !result.handle.runId.trim()))
+            || (!result.replayed && !handle)) throw new Error('GENERATION_REQUEST_FAILED')
+          try { assertImportRunEffectReceiptMetadata(result.receipt, run) } catch { throw new Error('GENERATION_REQUEST_FAILED') }
+          if (result.execution === null) delete context.data.importRunExecution
+          else context.data.importRunExecution = result.execution
+          if (projectionError) throw projectionError
+          if (runtime) await runtime.read()
+          if (!projectedReceipt) await projectCommitted()
+          if (JSON.stringify(projectedReceipt) !== JSON.stringify(result.receipt)) throw new Error('GENERATION_REQUEST_FAILED')
+        } finally {
+          active = false
+          unsubscribe()
+          unsubscribeReasoning?.()
+          unsubscribeProject()
+          clearReasoning()
+          try { await runtime?.close() } finally { context.requestMainGenerationCancellation = previousCancellation }
+        }
+      },
       executeReferenceStyle: async (run: ImportRunSnapshot, owner: string) => {
         const captured = context.data.importRunExecution as ImportRunExecutionLease | undefined
         const lease = captured ?? referenceKnowledge.execution

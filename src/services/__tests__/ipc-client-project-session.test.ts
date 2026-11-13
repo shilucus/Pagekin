@@ -39,6 +39,21 @@ afterEach(() => {
 })
 
 describe('project-scoped IPC session transport', () => {
+  it('keeps global execution and readiness ACK on the captured session without commit authority', async () => {
+    const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
+    const execution = { owner: 'fictional-owner', epoch: 1 }
+    const entry = { runId: 'fictional-import', execution, modelId: 'fictional-model' }
+    const ack = { runId: entry.runId, execution, token: 'fictional-token', decision: 'accept' as const }
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    await ipc.invokeWithProjectSession(frozen, 'import-generation:v1:global', entry)
+    expect(invoke).toHaveBeenLastCalledWith('import-generation:v1:global', entry, frozen)
+    await ipc.invokeWithProjectSession(frozen, 'import-generation:v1:global-ack', ack)
+    expect(invoke).toHaveBeenLastCalledWith('import-generation:v1:global-ack', ack, frozen)
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('import-generation:v1:global', entry)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    await expect(ipc.invoke('import-generation:v1:global-ack', ack)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
   it('keeps style execution and automatic ACK on the captured project session', async () => {
     const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
     const execution = { owner: 'fictional-owner', epoch: 1 }

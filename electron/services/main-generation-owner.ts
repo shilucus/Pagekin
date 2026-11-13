@@ -8,6 +8,7 @@ import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerat
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import type { CreativeStrategy } from '../../src/shared/reasoning-types'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
+import type { WritingSkillPromptMaterial } from '../../src/shared/writing-skill-task'
 import { assertImportQueryMaterialsRequest, type ImportQueryMaterialsRequest, type ImportQueryMaterialsResponse } from '../../src/shared/import-generation'
 import { TERMINAL_PROVIDER_FAILURE_CODES, rootBudgetExhausted, safeTransportError, tokenLiability } from '../../src/shared/generation-contract'
 import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock, withoutDraftReconciliationArtifacts } from '../../src/shared/draft-reconciliation'
@@ -145,6 +146,8 @@ export interface MainGenerationOwnerDependencies {
   loadModel: (id: string) => ModelProfile | null
   buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string; legacyRosterKey?: string; planningFeedbackInput?: PlanningFeedbackGenerationInput }, model: SafeGenerationModelReceipt, policy: MainGenerationPolicy) => RunBinding
   rebuildBinding: (previous: RunBinding, model: SafeGenerationModelReceipt) => RunBinding
+  /** Main-only source rebuild; the returned material must match the admitted binding. */
+  readImportPlanningSkill?: (previous: RunBinding, model: SafeGenerationModelReceipt) => { binding: RunBinding; skill: WritingSkillPromptMaterial | null }
   beforeDispatch?: () => void
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
   onReasoning?: (event: { projectId: string; epoch: string; rootActionId: string; runId: string; attemptId: string; text: string }) => void
@@ -2457,6 +2460,13 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       assertCurrent()
       const run = imports.find(slot)
       return run && (run.runId === runId || !imports.retryable(run)) ? { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, frozenContext: imports.context(run) } : null
+    },
+    readImportPlanningSkill: (handle: MainGenerationRunHandle): WritingSkillPromptMaterial | null => {
+      const run = requireRun(handle)
+      if (imports.context(run).slot.stage !== 'global' || !deps.readImportPlanningSkill) throw new Error('GENERATION_IMPORT_CONTEXT_REQUIRED')
+      const rebuilt = deps.readImportPlanningSkill(run.binding, currentModelReceipt(run.binding))
+      if (!compareGenerationSourceBindings(run.binding, rebuilt.binding)) throw new Error('GENERATION_IMPORT_CONTEXT_CHANGED')
+      return structuredClone(rebuilt.skill)
     },
     prepareImportQueryMaterials: async (request: ImportQueryMaterialsRequest): Promise<ImportQueryMaterialsResponse> => {
       assertImportQueryMaterialsRequest(request)

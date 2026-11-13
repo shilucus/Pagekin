@@ -97,3 +97,10 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 - `import-run-orchestrator.ts`、`import-workflow.ts` 保留原 whole-config CAS、自动 opened/commit-ready ACK、已验证全文快照与 reasoning、原日志/进度和未保存缓冲。历史 receipt 不是当前 config；completed-null 只读恢复不重建权限，已 commit 未 advance 仅补推进，unknown 不重发。
 - [Stage65 evidence](stage-65-evidence.md) 记录最终19文件592/592（含 native21/unit11/renderer123）及独立4文件428/428、fresh typecheck/lint/colors/i18n/build 全0和全部失败修复链；报告不相加。Sol 独立接受当前 source/runtime/quality，Terra另审非自有 native/artifacts；[manifest](stage-65-source-manifest.json) 绑定来源、原始报告和本轮实际构建入口。
 - 仅 IMPORT001/002 各补 contract_review/deterministic 部分证据，所有35项状态、门禁、依赖及既有证据不变，仍11completed/24in_progress。无完整拆书/仿写或目标采用、后续阶段迁移、A-to-B/background、Electron 进程、真实模型/文学质量、视觉、平台或累计终审资格。
+
+## Stage66 增量证据
+
+- [ADR0076](../../adr/0076-main-owned-foreground-reference-global.md) 限定 issued foreground reference global/done：`reference-global-contract.ts`、`reference-global-foreground.ts`、`reference-global-driver.ts`。main 执行原冻结材料/Skill、同 root/model 的顺序 inference/syntax/endpoint ordinals、query sources 门、effect/proposal/checkpoint/global-to-style、heartbeat/终态和物理 drain；不新增 ledger/schema/grant/额度或后台权限。
+- 原 global 契约不同于 style：只有自动 opened-readiness ACK，解码后 roster revision CAS 与提交后 unsaved-edits 投影保留，不增 whole-config precommit 拒绝。renderer 保留全文快照、reasoning、原双语日志/进度/候选、当前 core 重放、dirty/session 隔离；trusted diagnostics/bounded completion 的闭合元数据仅恢复原安全解释。
+- [Stage66 evidence](stage-66-evidence.md) 记录 final24文件697/697（native39/unit4/Skill7/contract26/renderer146）、独立4文件428/428及 fresh typecheck/lint/colors/i18n/build 全0；真实 unknown/persistence 查询竞争和 workflow-store 日志 RED/GREEN 全部保留。报告不相加，[manifest](stage-66-source-manifest.json) 绑定来源、38raw、28reported paths 与本轮16个实际构建入口。
+- 仅 IMPORT001/002 各补 contract_review/deterministic 部分证据，全部35项状态、门禁、依赖和既有记录不变，仍11completed/24in_progress。无完整拆书/仿写、蓝图/refresh 完整迁移、目标采用、A-to-B/background、Electron 进程、真实模型/文学质量、视觉、性能提升、平台或累计终审资格。

@@ -70,9 +70,13 @@ import {
 } from '../../../shared/import-run'
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 import type { ReferenceStyleAckRequest } from '../../../shared/reference-style-contract'
+import { globalEventBus } from '../../../shared/event-bus'
 import { useProjectStore } from '../../../stores/project-store'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
+import { createBoundedCompletionError } from '../bounded-completion'
+import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
+import { knownAppErrorMessage } from '../../../i18n/app-errors'
 
 const session = { projectId: 'test-project', leaseId: 'lease-test-project', projectPath: 'C:\\test-project' }
 const executionOwner = '00000000-0000-4000-8000-000000000001'
@@ -133,6 +137,135 @@ afterEach(() => {
 })
 
 describe('createImportWorkflow', () => {
+  it('delegates issued global after snapshot readiness and projects committed facts without a draft gate', async () => {
+    const snapshot = run({ stage: 'global' })
+    useEditorStore.setState({ tabs: [{ id: 'config', name: 'config', type: 'config', projectKey: session.projectPath }], activeTabId: 'config', draftLedgers: {} })
+    useProjectStore.getState().updateNovelConfig({ genre: 'author draft' }, session)
+    const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+    const authority = { owner: executionOwner, epoch: 1 }
+    const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: 'root', runId: 'generation' }
+    const receipt: ImportRunEffectReceipt = { schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION, runId: snapshot.id,
+      effectNamespace: snapshot.effectNamespace, effectKey: 'global-facts', stage: 'global', batchId: 'done',
+      kind: 'project-global-facts', payloadHash: 'a'.repeat(64), state: 'committed', payload: {}, effectReceipt: { core: { genre: 'A' } }, createdAt: 'now', updatedAt: 'now' }
+    const listeners = new Map<string, (event: unknown) => void>()
+    ipcMocks.on.mockImplementation((channel, listener) => { listeners.set(channel, listener); return () => listeners.delete(channel) })
+    let ready!: () => void
+    const opened = new Promise<void>(resolve => { ready = resolve })
+    const emitRefresh = vi.spyOn(globalEventBus, 'emit')
+    const cas = vi.spyOn(useProjectStore.getState(), 'commitGeneratedNovelConfig')
+    const event = (sequence: number, payload: object) => ({ projectId: session.projectId, leaseId: session.leaseId, runId: snapshot.id, execution: authority, sequence, ...payload })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, request: unknown) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'generation:read') return { handle, artifacts: [], budget: {} }
+      if (channel === 'import-generation:v1:global-ack') {
+        expect(request).toEqual({ runId: snapshot.id, execution: authority, token: 'open', decision: 'accept' })
+        expect(ipcMocks.actual.mock.calls.some(call => call[1] === 'generation:read')).toBe(true)
+        ready(); return { version: 1 }
+      }
+      if (channel === 'db:import-run-effect-receipt-get') return receipt
+      if (channel === 'db:project-core-get') return { genre: 'B', coreOutline: 'outline' }
+      if (channel === 'import-generation:v1:global') {
+        expect(request).toEqual({ runId: snapshot.id, execution: authority, modelId: 'selected-model' })
+        const emit = listeners.get('import-generation:v1:global-progress')!
+        emit(event(1, { kind: 'opened', token: 'open', handle, modelId: 'selected-model' }))
+        await opened
+        emit(event(2, { kind: 'log', value: { key: 'retrieved', topic: 'worldview', count: 2 } }))
+        emit(event(3, { kind: 'progress', progress: 70 }))
+        emit(event(4, { kind: 'candidate', content: '{candidate}' }))
+        emit(event(5, { kind: 'committed' }))
+        return { success: true, version: 1, run: { ...snapshot, stage: 'style' }, execution, receipt, handle, modelId: 'selected-model', replayed: false }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    const ctx = context(); ctx.generationModelId = 'selected-model'
+    await workflow.steps[1].executor({} as never, ctx, callbacks)
+    expect(cas).not.toHaveBeenCalled()
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('author draft')
+    expect(ctx.data.importGlobalInferenceCandidate).toBe('{candidate}')
+    expect(ctx.data.importGlobalFactsReceipt).toEqual(receipt.effectReceipt)
+    expect(ctx.data.novelConfigSummary).toContain('B')
+    expect(callbacks.log).toHaveBeenCalledWith('  已检索「世界观与力量体系」— 2 条结果')
+    expect(callbacks.setProgress).toHaveBeenCalledWith(70)
+    expect(emitRefresh).toHaveBeenCalledWith('REFRESH_RESOURCE', { resources: ['fileTree', 'characterCards'], projectPath: session.projectPath, projectSession: session })
+    expect(ipcMocks.actual.mock.calls.some(call => ['db:import-run-effect-receipt-prepare', 'db:import-run-effect-receipt-commit', 'db:import-run-advance-stage', 'db:import-run-fail'].includes(call[1]))).toBe(false)
+    expect(listeners.size).toBe(0)
+  })
+
+  it.each([false, true])('projects current core B rather than historical receipt A on global replay, dirty=%s', async dirty => {
+    const snapshot = run({ stage: 'completed', status: 'completed', resumable: false })
+    const receipt: ImportRunEffectReceipt = { schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION, runId: snapshot.id,
+      effectNamespace: snapshot.effectNamespace, effectKey: 'global-facts', stage: 'global', batchId: 'done',
+      kind: 'project-global-facts', payloadHash: 'a'.repeat(64), state: 'committed', payload: {}, effectReceipt: { core: { genre: 'A' } }, createdAt: 'now', updatedAt: 'now' }
+    useEditorStore.setState({ tabs: [{ id: 'config', name: 'config', type: 'config', projectKey: session.projectPath }], activeTabId: 'config', draftLedgers: {} })
+    const project = useProjectStore.getState().currentProject!
+    useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, genre: 'B' } } })
+    if (dirty) useProjectStore.getState().updateNovelConfig({ genre: 'C' }, session)
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:global') return { success: true, version: 1, run: snapshot, execution: null, receipt, handle: null, modelId: null, replayed: true }
+      if (channel === 'db:import-run-effect-receipt-get') return receipt
+      if (channel === 'db:project-core-get') return { genre: 'B' }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const ctx = context()
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await workflow.steps[1].executor({} as never, ctx, callbacks)
+    expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe(dirty ? 'C' : 'B')
+    expect(ctx.data.novelConfigSummary).toContain('B')
+    if (dirty) { useProjectStore.getState().discardNovelConfigDraft(session.projectPath, session); expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('B') }
+  })
+
+  it('keeps a raw global candidate and main failure ahead of projection failure', async () => {
+    const snapshot = run({ stage: 'global' })
+    let emit: ((event: unknown) => void) | undefined
+    ipcMocks.on.mockImplementation((_channel, listener) => { emit = listener; return () => {} })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:global') {
+        const identity = { projectId: session.projectId, leaseId: session.leaseId, runId: snapshot.id, execution: { owner: executionOwner, epoch: 1 } }
+        emit?.({ ...identity, sequence: 1, kind: 'candidate', content: 'raw invalid candidate' })
+        emit?.({ ...identity, sequence: 2, kind: 'committed' })
+        return { success: false, error: 'provider failure', errorCode: 'GENERATION_PROVIDER_FAILED' }
+      }
+      if (channel === 'db:import-run-effect-receipt-get') throw new Error('projection failed')
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const ctx = context()
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[1].executor({} as never, ctx, callbacks)).rejects.toMatchObject({ message: 'provider failure', code: 'GENERATION_PROVIDER_FAILED' })
+    expect(ctx.data.importGlobalInferenceCandidate).toBe('raw invalid candidate')
+    expect(ipcMocks.actual.mock.calls.some(call => call[1] === 'db:import-run-fail')).toBe(false)
+  })
+
+  it('reports postcommit projection failure without writing a main terminal failure', async () => {
+    const snapshot = run({ stage: 'style' })
+    const receipt: ImportRunEffectReceipt = { schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION, runId: snapshot.id,
+      effectNamespace: snapshot.effectNamespace, effectKey: 'global-facts', stage: 'global', batchId: 'done',
+      kind: 'project-global-facts', payloadHash: 'a'.repeat(64), state: 'committed', payload: {}, effectReceipt: {}, createdAt: 'now', updatedAt: 'now' }
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:global') return { success: true, version: 1, run: snapshot,
+        execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }, receipt, handle: null, modelId: null, replayed: true }
+      if (channel === 'db:import-run-effect-receipt-get') throw new Error('projection failed')
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[1].executor({} as never, context(), callbacks)).rejects.toThrow('projection failed')
+    expect(ipcMocks.actual.mock.calls.some(call => call[1] === 'db:import-run-fail')).toBe(false)
+  })
+
+  it('rejects a null execution lease for a noncompleted global replay', async () => {
+    const snapshot = run({ stage: 'style' })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:global') return { success: true, version: 1, run: snapshot,
+        execution: null, receipt: {}, handle: null, modelId: null, replayed: true }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[1].executor({} as never, context(), callbacks)).rejects.toThrow('GENERATION_REQUEST_FAILED')
+  })
   it('delegates issued style through opened and commit ACKs without renderer effect writers', async () => {
     const snapshot = run({ stage: 'style' })
     const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
@@ -375,7 +508,6 @@ describe('createImportWorkflow', () => {
   })
 
   it.each([
-    ['reference', 'global', 1, 'global-facts', 'project-global-facts', 'style'],
     ['author-manuscript', 'global', 3, 'global-facts', 'project-global-facts', 'style'],
     ['author-manuscript', 'style', 4, 'writing-style', 'project-writing-style', 'blueprints'],
   ] as const)('uses representative chapters for the production %s %s step with its frozen session and durable commit', async (purpose, stage, stepIndex, effectKey, kind, nextStage) => {
@@ -410,7 +542,7 @@ describe('createImportWorkflow', () => {
         default: throw new Error(`Unexpected channel ${channel}`)
       }
     })
-    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner, ...(author ? { authorChapterNumbers: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] } : {}) })
+    const workflow = createActualWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner, ...(author ? { authorChapterNumbers: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] } : {}) })
     const stepContext = context()
     useProjectStore.setState({ currentProject: {
       id: 'project-b', sessionLease: 'lease-b', name: 'B', path: 'C:\\project-b',
@@ -448,12 +580,20 @@ describe('createImportWorkflow', () => {
     'does not rediscover chapters or regenerate a completed %s checkpoint', async (stage, stepIndex, nextStage) => {
       const snapshot = run({ stage, completedBatches: { [stage]: ['done'] } })
       const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+      const receipt: ImportRunEffectReceipt = {
+        schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+        runId: snapshot.id, effectNamespace: snapshot.effectNamespace, effectKey: 'global-facts',
+        stage: 'global', batchId: 'done', kind: 'project-global-facts', payloadHash: 'c'.repeat(64),
+        state: 'committed', payload: {}, effectReceipt: { core: { genre: 'saved' } },
+        createdAt: '2026-01-01', updatedAt: '2026-01-01',
+      }
       ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
         switch (channel) {
           case 'db:import-run-get': return snapshot
-          case 'db:import-run-start-resume': return { success: true, start: { run: snapshot, execution } }
-          case 'db:import-run-renew-execution': return { success: true, execution }
-          case 'db:import-run-advance-stage': return { success: true, run: { ...snapshot, stage: nextStage } }
+          case 'import-generation:v1:global': return { success: true, version: 1, run: { ...snapshot, stage: nextStage },
+            execution, receipt, handle: null, modelId: null, replayed: true }
+          case 'db:import-run-effect-receipt-get': return receipt
+          case 'db:project-core-get': return { genre: 'saved' }
           default: throw new Error(`Unexpected channel ${channel}`)
         }
       })
@@ -463,8 +603,11 @@ describe('createImportWorkflow', () => {
 
       expect(commandMocks.global).not.toHaveBeenCalled()
       expect(commandMocks.style).not.toHaveBeenCalled()
-      expect(ipcMocks.invoke).toHaveBeenCalledWith(session, 'db:import-run-advance-stage', snapshot.id, stage, nextStage, execution, session.projectPath)
-      expect(ipcMocks.invoke.mock.calls.some(call => call[1] === 'db:import-run-list-representative-chapters' || call[1] === 'db:import-run-list-chapters')).toBe(false)
+      expect(ipcMocks.invoke).toHaveBeenCalledWith(session, 'import-generation:v1:global', expect.objectContaining({
+        runId: snapshot.id, execution: { owner: executionOwner, epoch: 1 },
+      }))
+      expect(ipcMocks.invoke.mock.calls.some(call => ['db:import-run-list-representative-chapters', 'db:import-run-list-chapters',
+        'generation:begin', 'import-generation:execute', 'db:import-run-advance-stage', 'db:import-run-effect-receipt-commit'].includes(call[1]))).toBe(false)
     },
   )
 
@@ -756,33 +899,12 @@ describe('createImportWorkflow', () => {
       createdAt: '2026-01-01',
       updatedAt: '2026-01-01',
     }
-    let receiptReads = 0
     ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
       if (channel === 'db:import-run-get') return snapshot
-      if (channel === 'db:import-run-start-resume') return {
-        success: true,
-        start: {
-          run: snapshot,
-          execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
-        },
-      }
-      if (channel === 'db:import-run-renew-execution') return {
-        success: true,
-        execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER },
-      }
-      if (channel === 'db:import-run-list-representative-chapters') return []
-      if (channel === 'db:import-run-effect-receipt-get') {
-        receiptReads += 1
-        return receiptReads === 1 ? receipt : { ...receipt, payloadHash: 'd'.repeat(64) }
-      }
-      if (channel === 'db:import-run-effect-receipt-commit') return {
-        success: true,
-        result: { receipt, run: snapshot, cancelApplied: false },
-      }
-      if (channel === 'db:import-run-fail') return {
-        success: true,
-        run: { ...snapshot, status: 'failed' },
-      }
+      if (channel === 'import-generation:v1:global') return { success: true, version: 1, run: { ...snapshot, stage: 'style' },
+        execution: { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }, receipt, handle: null, modelId: null, replayed: true }
+      if (channel === 'db:import-run-effect-receipt-get') return { ...receipt, payloadHash: 'd'.repeat(64) }
+      if (channel === 'db:project-core-get') return { genre: 'B' }
       throw new Error(`Unexpected channel ${channel}`)
     })
     const workflow = createImportWorkflow({
@@ -793,9 +915,7 @@ describe('createImportWorkflow', () => {
     })
 
     const failure = await workflow.steps[1].executor({} as never, context(), callbacks).catch((error: Error) => error)
-    expect((failure as Error).message).toMatch(/^已提交的导入结果与保存的记录不一致/u)
-    expect((failure as Error).message).not.toMatch(latinWord)
-    expect(receiptReads).toBe(2)
+    expect((failure as Error).message).toBe('GENERATION_REQUEST_FAILED')
   })
 
   it('resumes a checkpointed blueprint batch by completing its pending character sync without generation', async () => {
@@ -1064,6 +1184,76 @@ describe('import workflow failure copy follows the import run locale (#484)', ()
     })
 
     expect(failure.message).toMatch(expected)
+  })
+})
+
+describe('issued global workflow failure projection', () => {
+  async function failGlobal(locale: 'zh-CN' | 'en-US', reply: {
+    success: false; error: string; errorCode: string; completionFailureCode?: unknown
+  }) {
+    const snapshot = run({ stage: 'global', locale })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:global') return reply
+      if (channel === 'fs:check-exists') return false
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: vi.fn(async (channel: string) => channel === 'skills:list-user' ? [] : false), on: vi.fn(() => () => {}), once: vi.fn() } })
+    useWorkflowStore.setState({ activeRuns: [], history: [], globalLogs: [], waitingRuns: {} })
+    try {
+      await useWorkflowStore.getState().startWorkflow(createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner }))
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    const channels = ipcMocks.actual.mock.calls.map(call => call[1])
+    expect(channels).toContain('import-generation:v1:global')
+    expect(channels).not.toContain('db:import-run-fail')
+    expect(channels).not.toContain('db:import-run-cancel-at-boundary')
+    expect(channels).not.toContain('db:import-run-advance-stage')
+    return { ended: useWorkflowStore.getState().history[0]!, logs: useWorkflowStore.getState().globalLogs }
+  }
+
+  it.each([
+    ['length', 'zh-CN'], ['length', 'en-US'],
+    ['changed-syntax', 'zh-CN'], ['changed-syntax', 'en-US'],
+    ['missing-field', 'zh-CN'], ['missing-field', 'en-US'],
+  ] as const)('retains the trusted %s error in %s through the workflow store', async (kind, locale) => {
+    const message = kind === 'length' ? createBoundedCompletionError('length', locale).message
+      : kind === 'changed-syntax' ? locale === 'zh-CN' ? '导入推演 JSON 语法修复改变了候选事实，已拒绝写入'
+        : 'The import-inference JSON syntax repair changed candidate facts, so the write was rejected.'
+        : new StructuredContractDiagnostic('missing_field', 'novelConfig.genre').message
+    const { ended, logs } = await failGlobal(locale, { success: false, error: message, errorCode: 'GENERATION_REQUEST_FAILED',
+      ...(kind === 'length' ? { completionFailureCode: 'length' as const } : {}) })
+    expect(ended).toMatchObject({ status: 'failed', error: message })
+    expect(ended.steps[1]).toMatchObject({ status: 'failed', error: message })
+    expect(logs.some(log => log.level === 'error' && log.message.includes(message))).toBe(true)
+    if (kind === 'length') {
+      expect(ended.failureCode).toBe('length')
+      expect(ended.steps[1]!.failureCode).toBe('length')
+    }
+  })
+
+  it.each(['zh-CN', 'en-US'] as const)('keeps the registered provider code and localized log in %s', async locale => {
+    const { ended, logs } = await failGlobal(locale, { success: false, error: 'fictional provider failure', errorCode: 'GENERATION_PROVIDER_FAILED' })
+    const message = knownAppErrorMessage(locale, 'GENERATION_PROVIDER_FAILED')
+    expect(message).toBeTruthy()
+    expect(ended).toMatchObject({ status: 'failed', errorCode: 'GENERATION_PROVIDER_FAILED' })
+    expect(ended.steps[1]).toMatchObject({ status: 'failed', errorCode: 'GENERATION_PROVIDER_FAILED' })
+    expect(logs.some(log => log.level === 'error' && log.message.includes(message!))).toBe(true)
+  })
+
+  it.each([
+    ['stop', 'GENERATION_REQUEST_FAILED'],
+    [null, 'GENERATION_REQUEST_FAILED'],
+    [undefined, 'GENERATION_REQUEST_FAILED'],
+    ['arbitrary', 'GENERATION_REQUEST_FAILED'],
+    ['length', 'GENERATION_PROVIDER_FAILED'],
+  ] as const)('rejects malformed completion metadata %s with %s', async (completionFailureCode, errorCode) => {
+    const { ended } = await failGlobal('en-US', { success: false, error: 'untrusted failure details', errorCode, completionFailureCode })
+    expect(ended).toMatchObject({ status: 'failed', error: 'GENERATION_REQUEST_FAILED' })
+    expect(ended.steps[1]).toMatchObject({ status: 'failed', error: 'GENERATION_REQUEST_FAILED' })
+    expect(ended.failureCode).toBeUndefined()
+    expect(ended.steps[1]!.failureCode).toBeUndefined()
   })
 })
 
