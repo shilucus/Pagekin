@@ -773,6 +773,8 @@ const UNREGISTERED: Record<string, readonly string[]> = {
     'IMPORT_RUN_REFERENCE_RECEIPT_CONFLICT',
     'IMPORT_RUN_REFERENCE_RECEIPT_INCOMPLETE',
     'IMPORT_RUN_REFERENCE_UNBOUND',
+    // Closed refresh ACK carries only this finite diagnostic,not arbitrary renderer error text.
+    'IMPORT_RUN_REFRESH_PROJECTION_FAILED',
     'IMPORT_RUN_SNAPSHOT_CORRUPT',
     'IMPORT_RUN_SOURCE_DISPLAY_INVALID',
     'IMPORT_RUN_SOURCE_FINGERPRINT_INVALID',

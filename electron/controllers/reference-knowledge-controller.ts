@@ -15,8 +15,11 @@ import { assertKnowledgeBaseStoragePathSupported, projectStoragePreflightFailure
 import { getEmbeddingConfig, referenceImportDisplayName, explainReferenceImportFailure,
   isLegacyMigrationBlockedError, isLegacyMigrationBlockedResult, legacyMigrationBlockedFailure } from './kb-controller'
 import { explainImportRunFailure, importRunLocale } from './import-run-failure'
+import type { ReferenceRefreshAckRequest, ReferenceRefreshRequest } from '../../src/shared/reference-refresh-contract'
+import { ReferenceRefreshForeground } from './reference-refresh-foreground'
 
 const authorities = new Map<ProjectRuntime, ReferenceKnowledgeAuthority>()
+const refreshForeground = new ReferenceRefreshForeground()
 const IMPORT_FAILURE_CODE = /^(?:KNOWLEDGE_BASE_|IMPORT_RUN_|EMBEDDING_|REFERENCE_EMBEDDING_|REFERENCE_IMPORT_)[A-Z0-9_]+$/u
 let lifecycleInstalled = false
 
@@ -64,8 +67,12 @@ async function authorized(runtime: ProjectRuntime, fresh: () => void): Promise<R
 
 export function registerReferenceKnowledgeController(): void {
   if (!lifecycleInstalled) {
-    projectRuntimeHost.onCloseRequested(runtime => authorities.get(runtime)?.requestProjectClose())
+    projectRuntimeHost.onCloseRequested(runtime => {
+      refreshForeground.requestClose(runtime)
+      authorities.get(runtime)?.requestProjectClose()
+    })
     projectRuntimeHost.onBeforeRelease(runtime => {
+      refreshForeground.release(runtime.database)
       authorities.get(runtime)?.retire()
       authorities.delete(runtime)
     })
@@ -79,7 +86,9 @@ export function registerReferenceKnowledgeController(): void {
         if (raw.length !== (requiresView ? 2 : 1)) throw new Error('KNOWLEDGE_BASE_REFERENCE_PAYLOAD_INVALID')
         const body = raw[0]
         assertReferenceKnowledgeRequest(channel, body)
-        runId = channel === 'reference-knowledge:v1:import' || channel === 'reference-knowledge:v1:execute'
+        const hasExecution = channel === 'reference-knowledge:v1:import' || channel === 'reference-knowledge:v1:execute'
+          || channel === 'reference-knowledge:v1:refresh' || channel === 'reference-knowledge:v1:refresh-ack'
+        runId = hasExecution
           ? (body as ExecuteReferenceKnowledgeRequest).reference.runId
           : (body as PrepareReferenceKnowledgeRequest | ReferenceKnowledgeReference).runId
         if (!requiresView) return capability(body as ReferenceKnowledgeReference).revoke(event.sender, body as ReferenceKnowledgeReference)
@@ -99,9 +108,21 @@ export function registerReferenceKnowledgeController(): void {
             const authority = await authorized(runtime, fresh)
             return authority.prepare(event.sender, body as PrepareReferenceKnowledgeRequest, fresh)
           }
-          const reference = channel === 'reference-knowledge:v1:import' || channel === 'reference-knowledge:v1:execute'
+          const reference = hasExecution
             ? (body as ExecuteReferenceKnowledgeRequest).reference
             : body as ReferenceKnowledgeReference
+          if (channel === 'reference-knowledge:v1:refresh' || channel === 'reference-knowledge:v1:refresh-ack') {
+            const authority = authorities.get(runtime)
+            if (reference.projectId !== runtime.projectId || !authority) {
+              throw new Error('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+            }
+            if (channel === 'reference-knowledge:v1:refresh-ack') {
+              return refreshForeground.acknowledge(runtime, event.sender, session, body as ReferenceRefreshAckRequest)
+            }
+            // Completed run/grant history has no issuance; the authority permits only its read-only branch.
+            const result = await refreshForeground.execute(runtime, authority, event.sender, session, body as ReferenceRefreshRequest, fresh)
+            return { success: true, ...result }
+          }
           if (reference.projectId !== runtime.projectId || authorities.get(runtime) !== capability(reference)) {
             throw new Error('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
           }
@@ -138,20 +159,21 @@ export function registerReferenceKnowledgeController(): void {
           return explainReferenceImportFailure(result, runId!)
         })
       } catch (error) {
-        if (channel === 'reference-knowledge:v1:execute' && error instanceof ReferenceKnowledgeExecutionFailure) {
+        const executing = channel === 'reference-knowledge:v1:execute' || channel === 'reference-knowledge:v1:refresh'
+        if (executing && error instanceof ReferenceKnowledgeExecutionFailure) {
           return { success: false, error: error.displayMessage, errorCode: error.errorCode }
         }
         const boundaryFailure = isLegacyMigrationBlockedError(error) ? legacyMigrationBlockedFailure()
           : projectStoragePreflightFailure(error)
         if (boundaryFailure) {
-          if (channel === 'reference-knowledge:v1:import' || channel === 'reference-knowledge:v1:execute') return boundaryFailure
+          if (channel === 'reference-knowledge:v1:import' || executing) return boundaryFailure
           throw new Error(boundaryFailure.error ?? 'KNOWLEDGE_BASE_REFERENCE_AUTHORITY_REJECTED')
         }
-        const code = failureCode(error, channel === 'reference-knowledge:v1:import' || channel === 'reference-knowledge:v1:execute')
+        const code = failureCode(error, channel === 'reference-knowledge:v1:import' || executing)
         if (channel === 'reference-knowledge:v1:revoke' || !runId) throw new Error(code)
         const importFailure = explainImportRunFailure(code, () => importRunLocale(runId!))
         const result = importFailure ?? explainReferenceImportFailure({ success: false, error: code, errorCode: code }, runId)
-        if (channel === 'reference-knowledge:v1:import' || channel === 'reference-knowledge:v1:execute') return { ...result, success: false }
+        if (channel === 'reference-knowledge:v1:import' || executing) return { ...result, success: false }
         throw new Error(result.error ?? code)
       }
     })

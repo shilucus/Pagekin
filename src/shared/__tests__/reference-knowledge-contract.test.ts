@@ -12,15 +12,27 @@ const chapter = { reference, chapterNumber: 1, execution: { owner, epoch: 1 } }
 const execution = { reference, execution: chapter.execution }
 
 describe('foreground reference knowledge closed IPC contract', () => {
-  it('accepts exactly the six versioned verbs without adding an automatic authorization route', () => {
-    expect(REFERENCE_KNOWLEDGE_CHANNELS).toHaveLength(6)
+  it('accepts exactly the eight versioned verbs without adding an automatic authorization route', () => {
+    expect(REFERENCE_KNOWLEDGE_CHANNELS).toEqual([
+      'reference-knowledge:v1:prepare', 'reference-knowledge:v1:resume',
+      'reference-knowledge:v1:import', 'reference-knowledge:v1:revoke',
+      'reference-knowledge:v1:complete', 'reference-knowledge:v1:execute',
+      'reference-knowledge:v1:refresh', 'reference-knowledge:v1:refresh-ack',
+    ])
+    const requests = {
+      'reference-knowledge:v1:prepare': prepare,
+      'reference-knowledge:v1:resume': reference,
+      'reference-knowledge:v1:import': chapter,
+      'reference-knowledge:v1:revoke': reference,
+      'reference-knowledge:v1:complete': reference,
+      'reference-knowledge:v1:execute': execution,
+      'reference-knowledge:v1:refresh': execution,
+      'reference-knowledge:v1:refresh-ack': { ...execution, token: operationId, decision: 'completed' },
+    }
     for (const channel of REFERENCE_KNOWLEDGE_CHANNELS) {
       expect(isReferenceKnowledgeChannel(channel)).toBe(true)
       expect(referenceKnowledgeRequiresView(channel)).toBe(channel !== 'reference-knowledge:v1:revoke')
-      const request = channel === 'reference-knowledge:v1:prepare' ? prepare
-        : channel === 'reference-knowledge:v1:import' ? chapter
-          : channel === 'reference-knowledge:v1:execute' ? execution : reference
-      expect(() => assertReferenceKnowledgeRequest(channel, request)).not.toThrow()
+      expect(() => assertReferenceKnowledgeRequest(channel, requests[channel])).not.toThrow()
     }
     for (const channel of ['reference-knowledge:v2:prepare', 'reference-knowledge:v1:progress',
       'reference-knowledge:v1:reauthorize', 'reference-knowledge:v1:read-history']) {

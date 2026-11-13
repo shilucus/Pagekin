@@ -37,6 +37,7 @@ import { pinWorkflowModel } from './workflow-main-generation'
 import { useWorkflowReasoningStore } from '../../stores/workflow-reasoning-store'
 import { isReferenceGlobalCompletionFailureCode, isReferenceGlobalProgress, type ReferenceGlobalLog } from '../../shared/reference-global-contract'
 import { isReferenceBlueprintBatchId, isReferenceBlueprintProgress, type ReferenceBlueprintLog } from '../../shared/reference-blueprint-contract'
+import { isReferenceRefreshProgress } from '../../shared/reference-refresh-contract'
 import { BoundedCompletionFailure } from './bounded-completion'
 import { getImportInferenceTopics } from '../../shared/import-inference-materials'
 import { globalEventBus } from '../../shared/event-bus'
@@ -200,9 +201,94 @@ function productionDependencies(
     if (!result.success) throw new Error(result.error || textForLocale(context.uiLocale, zhCNText, enUSText))
     return result
   }
+  const refresh = async (run: ImportRunSnapshot) => {
+    callbacks.log(textForLocale(run.locale, '正在刷新项目数据...', 'Refreshing project data...'))
+    await refreshImportDerivedFileTreeBestEffort(
+      () => useProjectStore.getState().refreshFileTree(projectPath, undefined, session),
+      callbacks,
+      (zhCNText, enUSText) => textForLocale(run.locale, zhCNText, enUSText),
+    )
+    const [{ useCharacterStore }, { useDraftStore }] = await Promise.all([
+      import('../../stores/character-store'),
+      import('../../stores/draft-store'),
+    ])
+    await useCharacterStore.getState().loadCharacters(projectPath, session)
+    await useDraftStore.getState().loadAllDrafts(projectPath, session)
+  }
   return {
     getRun: runId => ipc.invokeWithProjectSession(session, 'db:import-run-get', runId, projectPath),
     ...(referenceKnowledge ? {
+      executeReferenceRefresh: async (run: ImportRunSnapshot, owner: string) => {
+        const captured = context.data.importRunExecution as ImportRunExecutionLease | undefined
+        const lease = captured ?? referenceKnowledge.execution
+        const { reference } = referenceKnowledge
+        if (reference.runId !== run.id || reference.projectId !== session.projectId
+          || lease.owner !== owner || lease.epoch !== referenceKnowledge.execution.epoch) throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
+        const execution = { owner: lease.owner, epoch: lease.epoch }
+        const previousCancellation = context.requestMainGenerationCancellation
+        if (run.status !== 'completed') {
+          context.requestMainGenerationCancellation = async () => {
+            const result = await ipc.invokeWithProjectSession(session, 'db:import-run-request-cancel', run.id, lease, projectPath)
+            if (!result.success) throw new Error(result.error || 'IMPORT_RUN_CANCEL_REQUEST_FAILED')
+          }
+        }
+        let active = true
+        let sequence = 0
+        let projectionError: unknown
+        let queue = Promise.resolve()
+        const unsubscribe = ipc.on('reference-knowledge:v1:refresh-progress', event => {
+          if (!active || !isReferenceRefreshProgress(event) || event.leaseId !== session.leaseId
+            || event.reference.projectId !== reference.projectId || event.reference.runId !== reference.runId
+            || event.reference.grantId !== reference.grantId || event.reference.revision !== reference.revision
+            || event.execution.owner !== execution.owner || event.execution.epoch !== execution.epoch
+            || event.sequence <= sequence) return
+          sequence = event.sequence
+          queue = queue.then(async () => {
+            if (event.kind === 'progress') {
+              callbacks.setProgress(event.progress)
+              return
+            }
+            let decision: 'completed' | 'failed' | 'cancelled' = 'completed'
+            if (context.cancelled || context.cancelRequested) decision = 'cancelled'
+            else {
+              try {
+                await refresh(run)
+                if (context.cancelled || context.cancelRequested) decision = 'cancelled'
+              } catch (error) {
+                projectionError ??= error
+                decision = 'failed'
+              }
+            }
+            const ack = await ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:refresh-ack', {
+              reference, execution, token: event.token, decision,
+            })
+            if (!ack || ack.version !== 1) throw new Error('GENERATION_REQUEST_FAILED')
+          }).catch(error => { projectionError ??= error })
+        })
+        try {
+          const result = await ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:refresh', { reference, execution })
+            .catch(async error => { await queue; throw error })
+          await queue
+          if (!result || typeof result.success !== 'boolean') throw new Error('GENERATION_REQUEST_FAILED')
+          if (!result.success) {
+            if (typeof result.error !== 'string' || typeof result.errorCode !== 'string' || !result.errorCode) throw new Error('GENERATION_REQUEST_FAILED')
+            if (result.errorCode === 'IMPORT_RUN_REFRESH_PROJECTION_FAILED' && projectionError !== undefined) throw projectionError
+            throw Object.assign(new Error(result.error), { code: result.errorCode })
+          }
+          if (result.version !== 1 || result.execution !== null || typeof result.replayed !== 'boolean'
+            || !result.run || result.run.id !== run.id || result.run.rootRunId !== run.rootRunId
+            || result.run.purpose !== 'reference' || result.run.stage !== 'completed' || result.run.status !== 'completed') {
+            throw new Error('GENERATION_REQUEST_FAILED')
+          }
+          if (projectionError !== undefined) throw projectionError
+          delete context.data.importRunExecution
+        } finally {
+          active = false
+          unsubscribe()
+          await queue
+          context.requestMainGenerationCancellation = previousCancellation
+        }
+      },
       executeReferenceGlobal: async (run: ImportRunSnapshot, owner: string) => {
         const captured = context.data.importRunExecution as ImportRunExecutionLease | undefined
         const lease = captured ?? referenceKnowledge.execution
@@ -988,20 +1074,7 @@ function productionDependencies(
         ))
       }
     },
-    refresh: async run => {
-      callbacks.log(textForLocale(run.locale, '正在刷新项目数据...', 'Refreshing project data...'))
-      await refreshImportDerivedFileTreeBestEffort(
-        () => useProjectStore.getState().refreshFileTree(projectPath, undefined, session),
-        callbacks,
-        (zhCNText, enUSText) => textForLocale(run.locale, zhCNText, enUSText),
-      )
-      const [{ useCharacterStore }, { useDraftStore }] = await Promise.all([
-        import('../../stores/character-store'),
-        import('../../stores/draft-store'),
-      ])
-      await useCharacterStore.getState().loadCharacters(projectPath, session)
-      await useDraftStore.getState().loadAllDrafts(projectPath, session)
-    },
+    refresh,
     completeBatch: async (runId, stage, checkpoint, execution) => {
       const result = required(
         await ipc.invokeWithProjectSession(

@@ -111,3 +111,10 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 - `reference-blueprint-contract.ts`、`reference-blueprint-foreground.ts`、`reference-blueprint-driver.ts` 与现有 orchestrator/workflow 维持精确 handle 的自动 readiness、原全文快照/reasoning、原日志/进度/receipt/context/刷新顺序。角色同步仍只形成待采用提议；prepared/committed/completed-null 恢复不补发请求或重建权限。长度例外仅允许同 reference-blueprints run/root 已知 length 的后续有界 ordinal，length 本身不成为可提交输出。
 - [Stage67 evidence](stage-67-evidence.md) 记录 final20文件620/620（native39/unit8/renderer161）、独立8文件528/528、fresh type/lint/colors/i18n/build 全0，以及所有初始失败/RED/GREEN；报告不相加。[manifest](stage-67-source-manifest.json) 绑定当前源码、原始报告及本轮实际构建入口。Sol 独立接受 bounded source/runtime，Terra 另审非自有 native/DB/artifacts。
 - 仅 IMPORT001/002 各追加 contract_review/deterministic 部分证据，所有状态、passes、依赖、门禁、required evidence 和旧记录不变，仍11completed/24in_progress。无完整拆书/仿写、refresh 所有权、目标采用、A-to-B/background、Electron 进程、真实模型/文学质量、视觉、提速、平台或累计终审资格。
+
+## Stage68 增量证据
+
+- [ADR0078](../../adr/0078-main-owned-foreground-reference-refresh.md) 限定 issued-reference foreground refresh：main 持有原 issuance、execution 和 work/writer 围栏，按原 projection/heartbeat/checkpoint/100/cancel/renew/run/grant 顺序执行；renderer 保留原日志、file-tree best-effort、顺序 character/draft 加载及闭合 ACK。
+- 完成 run 后不再 renew/fail/cancel；原 grant 写失败仅由仍有效的原 private issuance 补写。both-completed 历史只读、不重建权限；实际 source-hard 优先级、失败清理对象保留、取消终态和 successor 隔离均有到达持久化尾部的回归。
+- [Stage68 evidence](stage-68-evidence.md) 保留全部10JSON/25raw，最终33文件885/885，含 native19/unit3/template2；fresh type/lint/colors/check:i18n/source build 全0。Sol 独立接受限定 source/runtime/quality，[manifest](stage-68-source-manifest.json) 绑定当前源码、全部原始报告及本轮实际构建入口，另由 Terra 审计非自有 artifacts。
+- 仅 IMPORT001/002 各补 contract_review/deterministic 部分证据，完整35项状态和旧记录保持11completed/24in_progress。此前全源错误码扫描53项旧码失败仍单列至 Stage69，check:i18n PASS 不替代它。无完整迁移、目标采用、A-to-B/background、真实 Electron/model/project、文学质量、视觉、提速、平台或累计终审资格。

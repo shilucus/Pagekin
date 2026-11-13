@@ -11,6 +11,7 @@ import { chunkText } from '../embedding'
 import { ReferenceEmbeddingBudgetRepository, type ReferenceEmbeddingBudgetCapability } from '../repositories/reference-embedding-budget-repository'
 import type { PrepareReferenceKnowledgeRequest, ReferenceKnowledgeImportResult,
   ExecuteReferenceKnowledgeRequest, ReferenceKnowledgeProgress, ReferenceKnowledgeReference } from '../../src/shared/reference-knowledge-contract'
+import type { ReferenceRefreshRequest, ReferenceRefreshSuccess } from '../../src/shared/reference-refresh-contract'
 import { captureReferenceImportAdmission, type ReferenceImportAdmission } from './reference-import-admission'
 import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 import { projectRuntimeHost, type ProjectRuntime } from './project-runtime'
@@ -59,6 +60,14 @@ interface Issuance {
 export interface ReferenceKnowledgeExecutionHooks {
   progress(event: ReferenceKnowledgeProgress): void
   failureMessage(code: string, locale: ImportRunLocale, source: 'result' | 'throw'): string
+}
+
+export interface ReferenceRefreshExecutionHooks {
+  signal: AbortSignal
+  assertCurrent(): void
+  refresh(): Promise<void>
+  progress(progress: 100): void
+  failureMessage(code: string, locale: ImportRunLocale): string
 }
 
 export class ReferenceKnowledgeExecutionFailure extends Error {
@@ -400,7 +409,7 @@ export class ReferenceKnowledgeAuthority {
     return renewed
   }
 
-  private async withKnowledgeHeartbeat<T>(issuance: Issuance, operation: () => Promise<T>): Promise<T> {
+  private async withKnowledgeHeartbeat<T>(issuance: Issuance, operation: () => Promise<T>, heartbeatFirst = false): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined
     let stopped = false
     let heartbeatError: unknown
@@ -435,6 +444,7 @@ export class ReferenceKnowledgeAuthority {
       if (timer) clearTimeout(timer)
       await renewalTail
     }
+    if (heartbeatFirst && heartbeatError) throw heartbeatError
     if (operationError !== undefined) throw operationError
     if (heartbeatError) throw heartbeatError
     return value
@@ -655,11 +665,192 @@ export class ReferenceKnowledgeAuthority {
     const issuance = this.require(subject, reference)
     assertImportStageUnmanagedMutationAllowed(this.context.database, issuance.runId)
     if (issuance.knowledgeActive) throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
-    const grant = this.grants().complete(grantRef(issuance.reference))
+    this.completeOriginalGrant(issuance)
     issuance.lifecycle.revoked = true
     this.erase(issuance)
-    if (grant.state !== 'completed') throw failure('KNOWLEDGE_BASE_REFERENCE_RUN_NOT_COMPLETED')
     return { state: 'completed' }
+  }
+
+  private completeOriginalGrant(issuance: Issuance): ReferenceImportGrant {
+    const grant = this.grants().complete(grantRef(issuance.reference))
+    if (grant.state !== 'completed') throw failure('KNOWLEDGE_BASE_REFERENCE_RUN_NOT_COMPLETED')
+    return grant
+  }
+
+  async executeRefresh(subject: Subject, request: ReferenceRefreshRequest,
+    hooks: ReferenceRefreshExecutionHooks): Promise<ReferenceRefreshSuccess> {
+    this.assertRuntime(false)
+    hooks.assertCurrent()
+    if (subject.isDestroyed() || request.reference.projectId !== this.context.projectId) {
+      throw failure('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+    }
+
+    const scope = ImportRunRepository.captureReferenceGrantScope(request.reference.runId, this.context)
+    const savedGrant = this.grants().get(request.reference.grantId)
+    const savedRun = ImportRunRepository.get(request.reference.runId, this.context)
+    if (!savedGrant || !savedRun || savedGrant.projectId !== request.reference.projectId
+      || savedGrant.runId !== request.reference.runId || savedGrant.revision !== request.reference.revision
+      || savedGrant.manifestFingerprint !== scope.manifestFingerprint
+      || savedRun.id !== scope.runId || savedRun.purpose !== 'reference') {
+      throw failure('REFERENCE_IMPORT_GRANT_SCOPE_MISMATCH')
+    }
+
+    const retained = this.issuances.get(request.reference.grantId)
+    if (!retained) {
+      if (savedGrant.state !== 'completed' || savedRun.status !== 'completed' || savedRun.stage !== 'completed'
+        || scope.status !== 'completed' || scope.stage !== 'completed') {
+        throw failure('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+      }
+      return { version: 1, run: savedRun, execution: null, replayed: true }
+    }
+
+    const issuance = this.require(subject, request.reference)
+    if (request.execution.owner !== issuance.execution.owner || request.execution.epoch !== issuance.execution.epoch) {
+      throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_MISMATCH')
+    }
+    if (issuance.knowledgeActive || issuance.inFlight > 0) throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
+    if (savedGrant.state !== 'active' && savedGrant.state !== 'completed') {
+      throw failure('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+    }
+
+    if (savedRun.status === 'completed' && savedRun.stage === 'completed' && scope.status === 'completed'
+      && scope.stage === 'completed') {
+      if (savedGrant.state === 'active') this.completeOriginalGrant(issuance)
+      issuance.lifecycle.revoked = true
+      this.erase(issuance)
+      return { version: 1, run: savedRun, execution: null, replayed: true }
+    }
+    if (savedGrant.state !== 'active' || savedRun.status !== 'running' || savedRun.stage !== 'refresh'
+      || scope.status !== 'running' || scope.stage !== 'refresh') {
+      throw failure('IMPORT_RUN_STAGE_MISMATCH')
+    }
+
+    const releaseStage = acquireImportStageFlight(this.context.database, issuance.runId, 'refresh')
+    let releaseWork: () => void
+    try { releaseWork = this.resources.acquireWork() }
+    catch (error) { releaseStage(); throw error }
+    issuance.inFlight++
+
+    return this.driveRefresh(issuance, hooks, savedRun, releaseWork, releaseStage)
+  }
+
+  private async driveRefresh(issuance: Issuance, hooks: ReferenceRefreshExecutionHooks,
+    initialRun: ImportRunSnapshot, releaseWork: () => void, releaseStage: () => void): Promise<ReferenceRefreshSuccess> {
+    let currentRun = initialRun
+    let replayed = initialRun.completedBatches.refresh?.includes('done') ?? false
+    let runCompleted = false
+    let operationFailure: ReferenceKnowledgeExecutionFailure | undefined
+    const secondaryErrors: Error[] = []
+    const stillCurrent = () => this.isCurrentRefreshExecution(issuance)
+    const cancelled = () => {
+      if (hooks.signal.aborted || issuance.lifecycle.revoked || issuance.lifecycle.destroyed) return true
+      const run = ImportRunRepository.get(issuance.runId, this.context)
+      return !run || run.status === 'cancelled' || run.cancelRequested
+    }
+    const cancelAtBoundary = () => {
+      if (!stillCurrent()) return
+      const run = ImportRunRepository.get(issuance.runId, this.context)
+      if (run?.status === 'running' && run.stage === 'refresh') {
+        ImportRunRepository.cancelAtBoundary(issuance.runId, issuance.execution, this.context)
+      }
+    }
+
+    try {
+      hooks.assertCurrent()
+      await this.renewKnowledgeExecution(issuance)
+      currentRun = ImportRunRepository.get(issuance.runId, this.context)!
+      if (!currentRun || currentRun.status !== 'running' || currentRun.stage !== 'refresh') {
+        throw failure('IMPORT_RUN_EXECUTION_STALE')
+      }
+      if (!replayed) {
+        if (cancelled()) {
+          cancelAtBoundary()
+          throw failure('IMPORT_RUN_CANCELLED')
+        }
+        if (hooks.signal.aborted) throw failure('IMPORT_RUN_CANCELLED')
+        await this.withKnowledgeHeartbeat(issuance, () => hooks.refresh(), true)
+        hooks.assertCurrent()
+        await this.renewKnowledgeExecution(issuance)
+        const checkpoint = ImportRunRepository.completeBatch(issuance.runId, 'refresh', 'done', issuance.execution, this.context)
+        currentRun = checkpoint.run
+        replayed = !checkpoint.newlyCompleted
+      }
+
+      hooks.progress(100)
+      if (cancelled()) {
+        cancelAtBoundary()
+        throw failure('IMPORT_RUN_CANCELLED')
+      }
+      hooks.assertCurrent()
+      await this.renewKnowledgeExecution(issuance)
+      if (cancelled()) {
+        cancelAtBoundary()
+        throw failure('IMPORT_RUN_CANCELLED')
+      }
+      hooks.assertCurrent()
+      currentRun = ImportRunRepository.complete(issuance.runId, issuance.execution, this.context)
+      runCompleted = true
+      this.completeOriginalGrant(issuance)
+      issuance.lifecycle.revoked = true
+    } catch (error) {
+      const safe = safeFailure(error)
+      currentRun = ImportRunRepository.get(issuance.runId, this.context) ?? currentRun
+      if (!runCompleted && stillCurrent()) {
+        const isCancelled = safe.message === 'IMPORT_RUN_CANCELLED'
+          || (safe.message === 'KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REVOKED'
+            && (issuance.lifecycle.revoked || issuance.lifecycle.destroyed))
+        try {
+          if (isCancelled) cancelAtBoundary()
+          else {
+            const message = hooks.failureMessage(safe.message, currentRun.locale)
+            ImportRunRepository.fail(issuance.runId, 'refresh', message, issuance.execution, this.context)
+          }
+        } catch (persistError) { secondaryErrors.push(safeFailure(persistError)) }
+      }
+      operationFailure = new ReferenceKnowledgeExecutionFailure(safe.message,
+        hooks.failureMessage(safe.message, currentRun.locale))
+      operationFailure.secondaryErrors.push(...secondaryErrors)
+    } finally {
+      issuance.inFlight--
+      try {
+        if (issuance.lifecycle.revoked && issuance.inFlight === 0 && !issuance.knowledgeActive) {
+          try { this.quiesce(issuance) }
+          catch (error) {
+            const safe = safeFailure(error)
+            if (operationFailure) operationFailure.secondaryErrors.push(safe)
+            else operationFailure = new ReferenceKnowledgeExecutionFailure(safe.message,
+              hooks.failureMessage(safe.message, currentRun.locale))
+          }
+        }
+      } finally {
+        try { releaseWork() }
+        catch (error) {
+          const safe = safeFailure(error)
+          if (operationFailure) operationFailure.secondaryErrors.push(safe)
+          else operationFailure = new ReferenceKnowledgeExecutionFailure(safe.message,
+            hooks.failureMessage(safe.message, currentRun.locale))
+        }
+        try { releaseStage() }
+        catch (error) {
+          const safe = safeFailure(error)
+          if (operationFailure) operationFailure.secondaryErrors.push(safe)
+          else operationFailure = new ReferenceKnowledgeExecutionFailure(safe.message,
+            hooks.failureMessage(safe.message, currentRun.locale))
+        }
+      }
+    }
+
+    if (operationFailure) throw operationFailure
+    return { version: 1, run: currentRun, execution: null, replayed }
+  }
+
+  private isCurrentRefreshExecution(issuance: Issuance): boolean {
+    const row = this.context.database.prepare(`SELECT status, stage, execution_owner, execution_epoch
+      FROM import_runs WHERE id=?`).get(issuance.runId) as {
+      status: string; stage: string; execution_owner: string; execution_epoch: number
+    } | undefined
+    return row?.status === 'running' && row.stage === 'refresh'
+      && row.execution_owner === issuance.execution.owner && row.execution_epoch === issuance.execution.epoch
   }
 
   hasIssuance(grantId: string): boolean { return this.issuances.has(grantId) }

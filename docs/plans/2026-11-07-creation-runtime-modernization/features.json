@@ -1384,6 +1384,22 @@
           "environment": "Windows x64,Node24.13.0,Corepack pnpm11.11.0,Vitest4.1.12;actual registered controllers,isolated fictional SQLite/Lance and controlled fetch",
           "result": "Fresh final20-file620/620 includes native39/unit8/renderer161;separate frozen owner/source/import/length/Skill8-file528/528 also passed. Actual pagination101,length and syntax repair,pre-dispatch split,unknown takeover,prepared-only/null recovery,rollback/sync/transition-only recovery,source/lease/sender/writer fences and hard-failure/cancellation physical drain passed. Fresh type/lint/colors/i18n/build exited0 and independent bounded source/runtime/quality review accepted current bytes.",
           "limitations": "All initial failed,filtered and superseded reports retained;overlapping results are not summed. No full import/imitation,target adoption,refresh ownership,A-to-B/background,Electron process,OS-crash recovery,real provider/model,literary quality,speedup,visual,platform or cumulative35 qualification;all complete feature semantics and old evidence unchanged."
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "3e05526cd10a807c32fbfd5a7275fd2b92d4a3ac + stage-68-source-manifest.json frozen identities",
+          "artifactOrReceipt": "../../adr/0078-main-owned-foreground-reference-refresh.md; stage-68-evidence.md; review-record.md",
+          "environment": "Independent Sol integrated source/runtime/quality review;issued foreground reference refresh completion increment",
+          "result": "Main owns the original refresh heartbeat/checkpoint/100/cancel/renew/run/grant sequence while retaining the same private issuance and work/writer fence. Renderer preserves original localized refresh/file-tree/character/draft projections and identity-bound ACK. Completed run is immutable;only valid original issuance retries its pending grant and both-completed history is read-only. Source-hard priority,failed cleanup retention and durable cancellation are repaired without loosening successor/source/session guards.",
+          "limitations": "Only foreground refresh completion is accepted. No schema,ledger,grant,allowance,background permission or author approval expansion;no complete deconstruction migration or A-to-B qualification. IMPORT-001 stays in_progress/false;all flags,gates,dependencies,required evidence and old records remain unchanged."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "3e05526cd10a807c32fbfd5a7275fd2b92d4a3ac + stage-68-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-68-evidence.md; .runtime/creation-runtime-modernization/stage68/impact-retest.json; impact-final.json; projection-contract-initial.json; source-priority-red.json; source-priority-red-2.json; source-priority-green.json; cancel-terminal-red.json; cancel-source-green.json; driver-native-initial.json; direct-template-initial.json; typecheck-initial.log; typecheck-final.log; lint-final.log; i18n-final.log; build-final.log",
+          "environment": "Windows x64,Node24.13.0,Corepack pnpm11.11.0,Vitest4.1.12;actual registered controllers,isolated fictional SQLite/Lance and controlled fetch",
+          "result": "Fresh33-file885/885,zero failed/pending/todo,includes native refresh19,authority3,bilingual existing-template2 and prior reference/controller/repository regressions. Actual grant UPDATE failure/original-issuance retry,checkpoint/history replay,heartbeat,source/session/sender/writer/takeover,cancel/destroy/close and retained resource claims passed. Fresh type/lint/colors/check:i18n/source build exit0;independent bounded source/runtime/quality accepted.",
+          "limitations": "All failed and filtered raw retained;overlapping reports are not summed. Earlier global error-code scan still fails on53 entryHEAD codes and is separately queued,not waived by check:i18n PASS. No full import/imitation,target adoption,A-to-B/background,real Electron/model/project,literary quality,speedup,visual,platform or cumulative35 qualification."
         }
       ]
     },
@@ -1620,6 +1636,22 @@
           "environment": "Same shared fresh20-file620/620 and separate8-file528/528 as IMPORT-001,not a separate imitation workflow run",
           "result": "Native blueprint39/39 plus current renderer/contract/controller/previous migrated stages passed on final frozen bytes. Page boundaries,original task/root/model/ordinal,real structured length/repair,unknown no-resend,prepared/committed/completed replay,atomic rollback,sync failure preservation,source/session/writer fences and physical-drain terminal precedence passed. Independent bounded source/runtime/quality review accepted;fresh type/lint/colors/i18n/source build passed.",
           "limitations": "Reports overlap and are not summed;all failures retained. No complete imitation,target adoption,refresh ownership,A-to-B/background,Electron process,real-model/literary quality,visual,speedup,platform or cumulative35 qualification;all flags,gates and old evidence unchanged."
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "3e05526cd10a807c32fbfd5a7275fd2b92d4a3ac + stage-68-source-manifest.json frozen identities",
+          "artifactOrReceipt": "../../adr/0078-main-owned-foreground-reference-refresh.md; stage-68-evidence.md; review-record.md",
+          "environment": "Same shared foreground reference-refresh prerequisite as IMPORT-001,not a separate complete imitation acceptance",
+          "result": "Original reference refresh and run/grant completion move to main with unchanged renderer projection ordering and finite existing-template failure. Valid original-issuance compensation cannot renew or rewrite completed runs;read-only completed history never reconstructs authority. Independent review accepts the original lifecycle,source and writer fences with reached cancellation/cleanup regression tails.",
+          "limitations": "Does not establish target style consumption/adoption,complete imitation or background qualification. No new approval authority;IMPORT-002 remains in_progress/false and all feature gates,dependencies,required evidence and old records unchanged."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "3e05526cd10a807c32fbfd5a7275fd2b92d4a3ac + stage-68-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-68-evidence.md; .runtime/creation-runtime-modernization/stage68/impact-retest.json; impact-final.json; projection-contract-initial.json; source-priority-red.json; source-priority-red-2.json; source-priority-green.json; cancel-terminal-red.json; cancel-source-green.json; driver-native-initial.json; direct-template-initial.json; typecheck-initial.log; typecheck-final.log; lint-final.log; i18n-final.log; build-final.log",
+          "environment": "Same shared fresh33-file885/885 as IMPORT-001,not a separate imitation workflow run",
+          "result": "Native refresh19/19 plus current shared/transport/renderer/previous-stage tests pass on final frozen bytes. Existing completion/projection order,real grant-write failure and supplement,source-hard versus destroy,failed-quiesce retry,canonical cancellation and successor protection are reached. Independent bounded source/runtime/quality accepted;fresh type/lint/colors/check:i18n/source build passed.",
+          "limitations": "Reports overlap and are not summed;all failures remain,including the separate baseline53-code global scan. No complete imitation,target adoption,A-to-B/background,real Electron/model/project,literary quality,visual,speedup,platform or cumulative35 qualification;all flags,gates and old evidence unchanged."
         }
       ]
     },

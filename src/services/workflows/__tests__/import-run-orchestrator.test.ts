@@ -122,6 +122,29 @@ afterEach(() => {
 })
 
 describe('ImportRunOrchestrator', () => {
+  it.each(['refresh', 'completed'] as const)('delegates issued reference refresh at %s without renderer lifecycle writes', async stage => {
+    const { deps } = harness(1, { stage, status: stage === 'completed' ? 'completed' : 'running' })
+    deps.executeReferenceRefresh = vi.fn(async () => {})
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'refresh', 'test-runner', { cancelled: false }, callbacks)
+    expect(deps.executeReferenceRefresh).toHaveBeenCalledOnce()
+    expect(deps.startOrResume).not.toHaveBeenCalled()
+    expect(deps.renewExecution).not.toHaveBeenCalled()
+    expect(deps.refresh).not.toHaveBeenCalled()
+    expect(deps.completeBatch).not.toHaveBeenCalled()
+    expect(deps.complete).not.toHaveBeenCalled()
+    expect(deps.fail).not.toHaveBeenCalled()
+    expect(deps.cancelAtBoundary).not.toHaveBeenCalled()
+  })
+
+  it('keeps author refresh on the legacy path', async () => {
+    const { deps } = harness(1, { purpose: 'author-manuscript', stage: 'refresh' })
+    deps.executeReferenceRefresh = vi.fn(async () => {})
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'refresh', 'test-runner', { cancelled: false }, callbacks)
+    expect(deps.executeReferenceRefresh).not.toHaveBeenCalled()
+    expect(deps.refresh).toHaveBeenCalledOnce()
+    expect(deps.complete).toHaveBeenCalledOnce()
+  })
+
   it.each(['blueprints', 'refresh', 'completed'] as const)('delegates issued reference blueprints at %s without renderer writers', async stage => {
     const { deps } = harness(1, { stage, status: stage === 'completed' ? 'completed' : 'running' })
     deps.executeReferenceBlueprints = vi.fn(async () => {})

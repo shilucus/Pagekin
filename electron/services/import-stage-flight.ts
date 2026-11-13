@@ -1,9 +1,9 @@
 import type Database from 'better-sqlite3'
 
-const active = new WeakMap<object, Map<string, 'knowledge' | 'global' | 'style' | 'blueprints'>>()
+const active = new WeakMap<object, Map<string, 'knowledge' | 'global' | 'style' | 'blueprints' | 'refresh'>>()
 
 /** Process-local writer ownership only; durable execution authority remains in the existing repositories. */
-export function acquireImportStageFlight(database: object, runId: string, stage: 'knowledge' | 'global' | 'style' | 'blueprints'): () => void {
+export function acquireImportStageFlight(database: object, runId: string, stage: 'knowledge' | 'global' | 'style' | 'blueprints' | 'refresh'): () => void {
   assertImportStageUnmanagedMutationAllowed(database, runId)
   let runs = active.get(database)
   if (!runs) { runs = new Map(); active.set(database, runs) }

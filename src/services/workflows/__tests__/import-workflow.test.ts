@@ -80,6 +80,8 @@ import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-st
 import type { ReferenceStyleAckRequest } from '../../../shared/reference-style-contract'
 import { globalEventBus } from '../../../shared/event-bus'
 import { useProjectStore } from '../../../stores/project-store'
+import { useCharacterStore } from '../../../stores/character-store'
+import { useDraftStore } from '../../../stores/draft-store'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import { createBoundedCompletionError } from '../bounded-completion'
@@ -145,6 +147,163 @@ afterEach(() => {
 })
 
 describe('createImportWorkflow', () => {
+  it.each([false, true])('projects an issued refresh in original order with tree failure=%s', async treeFails => {
+    const snapshot = run({ stage: 'refresh', locale: 'en-US' })
+    const order: string[] = []
+    vi.spyOn(useProjectStore.getState(), 'refreshFileTree').mockImplementation(async () => {
+      order.push('tree')
+      if (treeFails) throw new Error('tree unavailable')
+    })
+    vi.spyOn(useCharacterStore.getState(), 'loadCharacters').mockImplementation(async () => { order.push('characters') })
+    vi.spyOn(useDraftStore.getState(), 'loadAllDrafts').mockImplementation(async () => { order.push('drafts') })
+    vi.spyOn(callbacks, 'log').mockImplementation(message => { order.push(message) })
+    vi.spyOn(callbacks, 'setProgress').mockImplementation(value => { order.push(`progress:${value}`) })
+    let listener: (event: unknown) => void = () => {}
+    const unsubscribe = vi.fn()
+    ipcMocks.on.mockImplementation((channel, callback) => {
+      if (channel === 'reference-knowledge:v1:refresh-progress') listener = callback
+      return unsubscribe
+    })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'reference-knowledge:v1:refresh-ack') {
+        order.push(`ack:${(args[0] as { decision: string }).decision}`)
+        return { version: 1 }
+      }
+      if (channel === 'reference-knowledge:v1:refresh') {
+        const request = args[0] as { reference: object; execution: object }
+        const event = { ...request, leaseId: session.leaseId, sequence: 1, kind: 'refresh', token: '00000000-0000-4000-8000-000000000003' }
+        listener({ ...event, leaseId: 'other-lease' })
+        listener(event)
+        listener(event)
+        listener({ ...request, leaseId: session.leaseId, sequence: 2, kind: 'progress', progress: 100 })
+        return { success: true, version: 1, run: { ...snapshot, stage: 'completed', status: 'completed' }, execution: null, replayed: false }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    const ctx = context()
+    await workflow.steps[4].executor({} as never, ctx, callbacks)
+    expect(order).toEqual([
+      'Refreshing project data...', 'tree',
+      ...(treeFails ? ['The derived import file tree did not refresh promptly and was skipped; the core import result is unaffected.'] : []),
+      'characters', 'drafts', 'ack:completed', 'progress:100',
+    ])
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(ctx.data.importRunExecution).toBeUndefined()
+    const channels = ipcMocks.actual.mock.calls.map(call => call[1])
+    expect(channels.filter(channel => channel === 'reference-knowledge:v1:refresh-ack')).toHaveLength(1)
+    for (const channel of ['db:import-run-renew-execution', 'db:import-run-complete-batch', 'db:import-run-complete', 'db:import-run-fail', 'reference-knowledge:v1:complete']) {
+      expect(channels).not.toContain(channel)
+    }
+  })
+
+  it('retains the original local refresh error when main reports projection failure', async () => {
+    const snapshot = run({ stage: 'refresh' })
+    const ctx = context()
+    const localError = new Error('fixture character projection failed')
+    vi.spyOn(useProjectStore.getState(), 'refreshFileTree').mockResolvedValue()
+    vi.spyOn(useCharacterStore.getState(), 'loadCharacters').mockRejectedValue(localError)
+    const drafts = vi.spyOn(useDraftStore.getState(), 'loadAllDrafts').mockResolvedValue()
+    let listener: (event: unknown) => void = () => {}
+    let releaseAck: () => void = () => {}
+    const acked = new Promise<void>(resolve => { releaseAck = resolve })
+    ipcMocks.on.mockImplementation((_channel, callback) => { listener = callback; return () => {} })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'reference-knowledge:v1:refresh-ack') {
+        expect(args[0]).toMatchObject({ decision: 'failed' })
+        releaseAck()
+        return { version: 1 }
+      }
+      if (channel === 'reference-knowledge:v1:refresh') {
+        listener({ ...(args[0] as object), leaseId: session.leaseId, sequence: 1, kind: 'refresh', token: '00000000-0000-4000-8000-000000000003' })
+        await acked
+        ctx.cancelRequested = true
+        return { success: false, error: 'safe main error', errorCode: 'IMPORT_RUN_REFRESH_PROJECTION_FAILED' }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[4].executor({} as never, ctx, callbacks)).rejects.toBe(localError)
+    expect(drafts).not.toHaveBeenCalled()
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).not.toContain('db:import-run-fail')
+  })
+
+  it('keeps a hard main failure ahead of a local projection error', async () => {
+    const snapshot = run({ stage: 'refresh' })
+    vi.spyOn(useProjectStore.getState(), 'refreshFileTree').mockResolvedValue()
+    vi.spyOn(useCharacterStore.getState(), 'loadCharacters').mockRejectedValue(new Error('local projection error'))
+    let listener: (event: unknown) => void = () => {}
+    let releaseAck: () => void = () => {}
+    const acked = new Promise<void>(resolve => { releaseAck = resolve })
+    ipcMocks.on.mockImplementation((_channel, callback) => { listener = callback; return () => {} })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'reference-knowledge:v1:refresh-ack') { releaseAck(); return { version: 1 } }
+      if (channel === 'reference-knowledge:v1:refresh') {
+        listener({ ...(args[0] as object), leaseId: session.leaseId, sequence: 1, kind: 'refresh', token: '00000000-0000-4000-8000-000000000003' })
+        await acked
+        return { success: false, error: 'storage failed', errorCode: 'IMPORT_RUN_STORAGE_FAILED' }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[4].executor({} as never, context(), callbacks)).rejects.toMatchObject({ message: 'storage failed', code: 'IMPORT_RUN_STORAGE_FAILED' })
+  })
+
+  it('delegates completed refresh history without installing a stale cancellation writer', async () => {
+    const snapshot = run({ stage: 'completed', status: 'completed' })
+    const ctx = context()
+    const previous = vi.fn(async () => {})
+    ctx.requestMainGenerationCancellation = previous
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'reference-knowledge:v1:refresh') {
+        expect(ctx.requestMainGenerationCancellation).toBe(previous)
+        return { success: true, version: 1, run: snapshot, execution: null, replayed: true }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await workflow.steps[4].executor({} as never, ctx, callbacks)
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).not.toContain('db:import-run-request-cancel')
+  })
+
+  it('requests cancellation with the original lease and acknowledges a cancelled projection', async () => {
+    const snapshot = run({ stage: 'refresh' })
+    const ctx = context()
+    const tree = vi.spyOn(useProjectStore.getState(), 'refreshFileTree').mockResolvedValue()
+    let listener: (event: unknown) => void = () => {}
+    let releaseAck: () => void = () => {}
+    const acked = new Promise<void>(resolve => { releaseAck = resolve })
+    ipcMocks.on.mockImplementation((_channel, callback) => { listener = callback; return () => {} })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-request-cancel') {
+        expect(args[1]).toMatchObject({ owner: executionOwner, epoch: 1 })
+        return { success: true }
+      }
+      if (channel === 'reference-knowledge:v1:refresh-ack') {
+        expect(args[0]).toMatchObject({ decision: 'cancelled' })
+        releaseAck()
+        return { version: 1 }
+      }
+      if (channel === 'reference-knowledge:v1:refresh') {
+        await ctx.requestMainGenerationCancellation!()
+        ctx.cancelRequested = true
+        listener({ ...(args[0] as object), leaseId: session.leaseId, sequence: 1, kind: 'refresh', token: '00000000-0000-4000-8000-000000000003' })
+        await acked
+        return { success: false, error: 'hard failure', errorCode: 'IMPORT_RUN_STORAGE_FAILED' }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[4].executor({} as never, ctx, callbacks)).rejects.toMatchObject({ message: 'hard failure', code: 'IMPORT_RUN_STORAGE_FAILED' })
+    expect(tree).not.toHaveBeenCalled()
+    expect(ctx.requestMainGenerationCancellation).toBeUndefined()
+  })
+
   it('delegates multiple blueprint ranges with readiness, filtered identity and canonical sync projection', async () => {
     const snapshot = run({ stage: 'blueprints', totalChapters: 2 })
     const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
@@ -1035,8 +1194,8 @@ describe('createImportWorkflow', () => {
     expect(ipcMocks.actual).not.toHaveBeenCalled()
   })
 
-  it.each([false, true])('completes the durable run before grant completion; failure=%s', async fail => {
-    const snapshot = run({ stage: 'refresh', completedBatches: { refresh: ['done'] } })
+  it('keeps the author refresh completion on the legacy path', async () => {
+    const snapshot = run({ purpose: 'author-manuscript', stage: 'refresh', completedBatches: { refresh: ['done'] } })
     const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
     ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
       if (channel === 'db:import-run-get') return snapshot
@@ -1046,14 +1205,12 @@ describe('createImportWorkflow', () => {
       if (channel === 'db:import-run-fail') return { success: true, run: snapshot }
       throw new Error(`Unexpected channel ${channel}`)
     })
-    if (fail) ipcMocks.complete.mockRejectedValue(new Error('fixture completion failed'))
-    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
-    const result = workflow.steps[4].executor({} as never, context(), callbacks)
-    if (fail) await expect(result).rejects.toThrow('fixture completion failed')
-    else await expect(result).resolves.toBeUndefined()
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner, authorChapterNumbers: [1] })
+    await expect(workflow.steps[3].executor({} as never, context(), callbacks)).resolves.toBeUndefined()
     const channels = ipcMocks.actual.mock.calls.map(call => call[1])
     expect(channels.indexOf('db:import-run-complete')).toBeGreaterThanOrEqual(0)
-    expect(channels.indexOf('reference-knowledge:v1:complete')).toBeGreaterThan(channels.indexOf('db:import-run-complete'))
+    expect(channels).not.toContain('reference-knowledge:v1:complete')
+    expect(channels).not.toContain('reference-knowledge:v1:refresh')
   })
 
   it('rejects a stale project lease before creating any task', () => {

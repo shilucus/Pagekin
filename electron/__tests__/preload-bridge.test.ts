@@ -208,6 +208,24 @@ describe('桌面预加载接口', () => {
     }
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)
   })
+  it('forwards closed reference refresh/readiness and its event without exposing the IPC event or adding approval', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const session = Object.freeze({ projectId: 'fictional-project', leaseId: 'fictional-view', projectPath: 'C:/fictional' })
+    const entry = { reference: { projectId: session.projectId, runId: 'fictional-import', grantId: '11111111-1111-4111-8111-111111111111', revision: 1 },
+      execution: { owner: '22222222-2222-4222-8222-222222222222', epoch: 1 } }
+    const ack = { ...entry, token: '33333333-3333-4333-8333-333333333333', decision: 'completed' }
+    for (const [channel, request] of [['reference-knowledge:v1:refresh', entry], ['reference-knowledge:v1:refresh-ack', ack]] as const) {
+      await bridge.invoke(channel, request, session)
+      expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, request, session)
+    }
+    const listener = vi.fn(), unsubscribe = bridge.on('reference-knowledge:v1:refresh-progress', listener)
+    const handler = electron.ipcRenderer.on.mock.lastCall?.[1] as (...args: unknown[]) => void
+    const event = { ...entry, leaseId: session.leaseId, sequence: 1, kind: 'refresh', token: ack.token }
+    handler({ privateSender: true }, event)
+    expect(listener).toHaveBeenCalledWith(event)
+    unsubscribe()
+    await expect(bridge.invoke('reference-knowledge:v1:refresh-approve', ack)).rejects.toThrow('KNOWLEDGE_BASE_REFERENCE_CHANNEL_NOT_ALLOWED')
+  })
   it('forwards representative chapter reads and their frozen session without adding authority', async () => {
     const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
     const session = Object.freeze({ projectId: 'fixture-project', leaseId: 'fixture-lease', projectPath: 'C:/fictional-project' })

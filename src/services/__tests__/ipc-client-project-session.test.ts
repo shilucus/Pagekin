@@ -39,6 +39,21 @@ afterEach(() => {
 })
 
 describe('project-scoped IPC session transport', () => {
+  it('keeps reference refresh and its projection ACK on the frozen view,never a replacement execution lease', async () => {
+    const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
+    const reference = { projectId: 'project-A', runId: 'fictional-run', grantId: '11111111-1111-4111-8111-111111111111', revision: 1 }
+    const entry = { reference, execution: { owner: '22222222-2222-4222-8222-222222222222', epoch: 1 } }
+    const ack = { ...entry, token: '33333333-3333-4333-8333-333333333333', decision: 'completed' as const }
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    await ipc.invokeWithProjectSession(frozen, 'reference-knowledge:v1:refresh', entry)
+    expect(invoke).toHaveBeenLastCalledWith('reference-knowledge:v1:refresh', entry, frozen)
+    await ipc.invokeWithProjectSession(frozen, 'reference-knowledge:v1:refresh-ack', ack)
+    expect(invoke).toHaveBeenLastCalledWith('reference-knowledge:v1:refresh-ack', ack, frozen)
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('reference-knowledge:v1:refresh', entry)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    await expect(ipc.invoke('reference-knowledge:v1:refresh-ack', ack)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
   it('keeps multirange blueprint entry/readiness on the captured view without adding authority', async () => {
     const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
     const execution = { owner: 'fictional-owner', epoch: 1 }

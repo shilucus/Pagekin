@@ -1,10 +1,13 @@
 import type { ImportRunExecutionAuthority, ImportRunExecutionLease, ImportRunStartResult } from './import-run'
 import { assertReferenceImportGrantId, assertReferenceImportGrantOperationId } from './reference-import-grant'
+import { REFERENCE_REFRESH_CHANNELS, assertReferenceRefreshRequest } from './reference-refresh-contract'
+import type { ReferenceRefreshChannels, ReferenceRefreshEvents } from './reference-refresh-contract'
 
 export const REFERENCE_KNOWLEDGE_CHANNELS = Object.freeze([
   'reference-knowledge:v1:prepare', 'reference-knowledge:v1:resume',
   'reference-knowledge:v1:import', 'reference-knowledge:v1:revoke',
   'reference-knowledge:v1:complete', 'reference-knowledge:v1:execute',
+  ...REFERENCE_REFRESH_CHANNELS,
 ] as const)
 
 /** Public evidence only; execution additionally requires a private main-process sender issuance. */
@@ -44,11 +47,11 @@ export type ReferenceKnowledgeProgress = ExecuteReferenceKnowledgeRequest & (
   | { kind: 'batch'; progress: number }
 )
 
-export interface ReferenceKnowledgeEvents {
+export interface ReferenceKnowledgeEvents extends ReferenceRefreshEvents {
   'reference-knowledge:v1:progress': ReferenceKnowledgeProgress
 }
 
-export interface ReferenceKnowledgeChannels {
+export interface ReferenceKnowledgeChannels extends ReferenceRefreshChannels {
   'reference-knowledge:v1:prepare': { args: [PrepareReferenceKnowledgeRequest]; return: {
     reference: ReferenceKnowledgeReference
     execution: ImportRunExecutionLease
@@ -155,6 +158,10 @@ export function assertReferenceKnowledgeRequest<C extends ReferenceKnowledgeChan
       object(value, ['reference', 'execution'])
       assertReference(value.reference)
       assertExecution(value.execution)
+      return
+    case 'reference-knowledge:v1:refresh':
+    case 'reference-knowledge:v1:refresh-ack':
+      assertReferenceRefreshRequest(channel, value)
       return
     default:
       throw new Error('KNOWLEDGE_BASE_REFERENCE_CHANNEL_NOT_ALLOWED')
