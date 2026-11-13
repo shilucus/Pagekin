@@ -118,3 +118,10 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 - 完成 run 后不再 renew/fail/cancel；原 grant 写失败仅由仍有效的原 private issuance 补写。both-completed 历史只读、不重建权限；实际 source-hard 优先级、失败清理对象保留、取消终态和 successor 隔离均有到达持久化尾部的回归。
 - [Stage68 evidence](stage-68-evidence.md) 保留全部10JSON/25raw，最终33文件885/885，含 native19/unit3/template2；fresh type/lint/colors/check:i18n/source build 全0。Sol 独立接受限定 source/runtime/quality，[manifest](stage-68-source-manifest.json) 绑定当前源码、全部原始报告及本轮实际构建入口，另由 Terra 审计非自有 artifacts。
 - 仅 IMPORT001/002 各补 contract_review/deterministic 部分证据，完整35项状态和旧记录保持11completed/24in_progress。此前全源错误码扫描53项旧码失败仍单列至 Stage69，check:i18n PASS 不替代它。无完整迁移、目标采用、A-to-B/background、真实 Electron/model/project、文学质量、视觉、提速、平台或累计终审资格。
+
+## Stage69 增量证据
+
+- `app-errors.ts` 在既有 known 解析之后仅为25个有限诊断使用现有 `error.unknown`；不改变 ERROR_KEYS、driver 的安全分类、取消优先级、executor 物理收据或 import 的持久说明。扫描器按当前调用链区分13个模板路径、15个内部/转换路径，保留原断言并增加展示与注册的隔离检查。
+- 蓝图 validator/types 原样抽到 browser-safe 模块，旧入口 re-export 同一函数，原 apply/hash 不变；Panel 仅更换 import 和初始 alert 的既有显示转换。MCP false receipt 经现有查询重建状态/registry，不再假清空；失败查询保留旧数据，IPC rejection 原样传播，未声称 store.error 已进入可见 UI。
+- [Stage69 evidence](stage-69-evidence.md) 保留9份 JSON、所有失败/零测试链和 fresh quality/build：最终15文件363/363，另3文件34/34浏览器；完整扫描已实际通过，而非由 check:i18n 替代。Sol 独立接受 bounded source/runtime/quality，[manifest](stage-69-source-manifest.json) 绑定当前来源、原始报告与实际新构建入口；独立非自有工件审计另匹配142/142身份及完整清单语义。
+- 只给 IMPORT001/002、FEEDBACK003、UI003、MCP001 各补一条部分证据，完整35项状态、门禁、依赖和旧记录不变，仍11completed/24in_progress。无完整功能、真实 MCP/model/Electron、文学质量、视觉、提速、安装包/平台或累计终审资格。

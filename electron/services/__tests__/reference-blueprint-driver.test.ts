@@ -66,6 +66,26 @@ function dispatchBlueprints(f: ReturnType<typeof importGenerationFixture>, group
 }
 
 describe('reference blueprint driver', () => {
+  it.each(['display-only', 'mixed-cancellation'] as const)('preserves %s classification at opened', async kind => {
+    const f = fixture(1)
+    const execution = ImportRunRepository.startOrResume('长篇导入', '蓝图诊断测试').execution
+    // Isolate the blueprint stage; earlier stages are not represented as executed.
+    f.db.prepare("UPDATE import_runs SET stage='blueprints' WHERE id=?").run('长篇导入')
+    const invoke = options(f, { owner: execution.owner, epoch: execution.epoch })
+    invoke.hooks.opened = async () => {
+      throw kind === 'display-only' ? new Error('GENERATION_OWNER_BUSY')
+        : Object.assign(new Error('GENERATION_ACTION_CANCELLED'), { failureCode: 'GENERATION_OWNER_BUSY' })
+    }
+
+    await expect(executeReferenceBlueprints(invoke)).rejects.toMatchObject({
+      errorCode: kind === 'display-only' ? 'GENERATION_REQUEST_FAILED' : 'GENERATION_ACTION_CANCELLED',
+    })
+    expect(f.db.prepare('SELECT status,last_error,cancel_requested FROM import_runs WHERE id=?').get('长篇导入'))
+      .toMatchObject(kind === 'display-only'
+        ? { status: 'failed', last_error: 'GENERATION_REQUEST_FAILED', cancel_requested: 0 }
+        : { status: 'cancelled', last_error: '', cancel_requested: 1 })
+    expect(f.spy).not.toHaveBeenCalled()
+  })
   it('creates the first blueprint root when the run has no prior generation history', async () => {
     const f = fixture(1)
     const execution = ImportRunRepository.startOrResume('长篇导入', '蓝图首建测试').execution

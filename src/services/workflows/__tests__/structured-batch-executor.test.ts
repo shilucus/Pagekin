@@ -1840,6 +1840,20 @@ describe('main-process stop codes reach the failure', () => {
     expect(result).toMatchObject({ ok: false, failure: { code: 'generation_failed', message: '结构化生成失败', errorCode: 'GENERATION_IMPORT_ORDINAL_GAP' } })
   })
 
+  it('keeps a display-only code out of the generic failure message while retaining the prior physical receipt', async () => {
+    const complete = vi.fn<GenerationSession['complete']>()
+      .mockResolvedValueOnce({ status: 'completed', finishReason: 'stop',
+        content: JSON.stringify({ blueprints: [{ chapterNumber: 1, title: '完整章节' }] }),
+        receipt: attemptReceipt(1, 100, 100, 'stop') })
+      .mockRejectedValueOnce(new Error('GENERATION_OWNER_BUSY'))
+    const result = await createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+      .execute({ items: [1, 2], limits: { maxBatchItems: 1 } })
+    expect(result).toMatchObject({ ok: false, failure: { code: 'generation_failed', reason: 'server_error',
+      message: '结构化生成失败', errorCode: 'GENERATION_OWNER_BUSY' },
+    receipt: { calls: 1, requestedTokens: 100, splitCount: 0 }, validatedItems: [{ chapterNumber: 1, title: '完整章节' }] })
+    expect(complete).toHaveBeenCalledTimes(2)
+  })
+
   it('reports an in-flight active-time stop as a deadline with its code', async () => {
     const result = await execute(async () => ({ status: 'incomplete', finishReason: 'error', content: '',
       receipt: { ...attemptReceipt(1, 200, 200, 'error'), failureCode: 'ROOT_BUDGET_EXHAUSTED' } } as GenerationOutcome))

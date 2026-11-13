@@ -4,6 +4,7 @@ import type { AgentGlobalToolExecution, AgentToolAction } from '../../shared/age
 import { runAgentLoop } from '../../services/agent/agent-engine'
 import { AgentGenerationClient } from '../../services/agent/agent-generation-client'
 import { toolRegistry, type AgentExecutionContext } from '../../services/agent/tool-registry'
+import { translate } from '../../i18n/core'
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -290,5 +291,149 @@ describe('MCP 连接失败的说明', () => {
       await useMCPStore.getState().connectServer('safe-id')
       expect(useMCPStore.getState().error).toEqual(shown)
     }
+  })
+})
+
+describe('MCP disconnect receipts', () => {
+  beforeEach(() => { useLocaleStore.setState({ locale: 'en-US' }) })
+  afterEach(() => { useLocaleStore.setState({ locale: originalLocale }) })
+
+  const previousTool = { name: 'old_tool', description: 'Old tool', inputSchema: { type: 'object' }, serverId: 'first' }
+  const currentTool = { name: 'current_tool', description: 'Current tool', inputSchema: { type: 'object' }, serverId: 'remaining' }
+  const oldResource = { uri: 'fictional://old', name: 'Old resource', serverId: 'first' }
+  const currentResource = { uri: 'fictional://current', name: 'Current resource', serverId: 'remaining' }
+  const firstServer = { id: 'first', name: 'First server', status: 'connected' as const, toolCount: 1 }
+  const remainingServer = { id: 'remaining', name: 'Remaining server', status: 'connected' as const, toolCount: 1 }
+
+  function seedAvailableState() {
+    useMCPStore.setState({
+      servers: [firstServer, remainingServer],
+      tools: [previousTool],
+      resources: [oldResource],
+      error: null,
+    })
+    useMCPStore.getState().registerMCPToolsToRegistry()
+  }
+
+  it.each(['zh-CN', 'en-US'] as const)('keeps single-disconnect failure and refreshes actual state in %s', async locale => {
+    useLocaleStore.setState({ locale })
+    seedAvailableState()
+    mocks.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'mcp:disconnect') return { success: false, error: 'MCP_DISCONNECT_FAILED' }
+      if (channel === 'mcp:get-servers-status') return [remainingServer]
+      if (channel === 'mcp:list-tools') return [currentTool]
+      if (channel === 'mcp:list-resources') return [currentResource]
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+
+    await useMCPStore.getState().disconnectServer('first')
+
+    expect(useMCPStore.getState()).toMatchObject({
+      servers: [remainingServer], tools: [currentTool], resources: [currentResource],
+      error: translate(locale, 'error.unknown', { message: 'MCP_DISCONNECT_FAILED' }),
+    })
+    expect(mocks.invoke).toHaveBeenCalledWith('mcp:disconnect', 'first')
+    expect(mocks.invoke).toHaveBeenCalledWith('mcp:get-servers-status')
+    expect(mocks.invoke).toHaveBeenCalledWith('mcp:list-tools')
+    expect(mocks.invoke).toHaveBeenCalledWith('mcp:list-resources')
+    expect(toolRegistry.get('mcp__remaining__current_tool')).toBeDefined()
+    expect(toolRegistry.get('mcp__first__old_tool')).toBeUndefined()
+  })
+
+  it('does not clear all-disconnect state when the main process reports remaining servers', async () => {
+    seedAvailableState()
+    mocks.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'mcp:disconnect-all') return { success: false, error: 'MCP_DISCONNECT_FAILED' }
+      if (channel === 'mcp:get-servers-status') return [remainingServer]
+      if (channel === 'mcp:list-tools') return [currentTool]
+      if (channel === 'mcp:list-resources') return [currentResource]
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+
+    await useMCPStore.getState().disconnectAll()
+
+    expect(useMCPStore.getState()).toMatchObject({
+      servers: [remainingServer], tools: [currentTool], resources: [currentResource],
+      error: translate('en-US', 'error.unknown', { message: 'MCP_DISCONNECT_FAILED' }),
+    })
+    expect(mocks.invoke).toHaveBeenCalledWith('mcp:get-servers-status')
+    expect(mocks.invoke).toHaveBeenCalledWith('mcp:list-tools')
+    expect(mocks.invoke).toHaveBeenCalledWith('mcp:list-resources')
+    expect(toolRegistry.get('mcp__remaining__current_tool')).toBeDefined()
+  })
+
+  it('preserves prior available state if status and tool refreshes fail after disconnect failure', async () => {
+    seedAvailableState()
+    mocks.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'mcp:disconnect') return { success: false, error: 'MCP_DISCONNECT_FAILED' }
+      if (channel === 'mcp:get-servers-status') throw new Error('fictional status query failure')
+      if (channel === 'mcp:list-tools') throw new Error('fictional tool query failure')
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+
+    await useMCPStore.getState().disconnectServer('first')
+
+    expect(useMCPStore.getState()).toMatchObject({
+      servers: [firstServer, remainingServer], tools: [previousTool], resources: [oldResource],
+      error: translate('en-US', 'error.unknown', { message: 'MCP_DISCONNECT_FAILED' }),
+    })
+    expect(mocks.invoke).toHaveBeenCalledWith('mcp:get-servers-status')
+    expect(mocks.invoke).toHaveBeenCalledWith('mcp:list-tools')
+    expect(toolRegistry.get('mcp__first__old_tool')).toBeDefined()
+  })
+
+  it('propagates a rejected single-disconnect IPC error without changing available state', async () => {
+    seedAvailableState()
+    const ipcError = new Error('fictional disconnect IPC rejection')
+    mocks.invoke.mockRejectedValue(ipcError)
+
+    await expect(useMCPStore.getState().disconnectServer('first')).rejects.toBe(ipcError)
+
+    expect(useMCPStore.getState()).toMatchObject({
+      servers: [firstServer, remainingServer], tools: [previousTool], resources: [oldResource], error: null,
+    })
+    expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith('mcp:disconnect', 'first')
+    expect(toolRegistry.get('mcp__first__old_tool')).toBeDefined()
+  })
+
+  it('propagates a rejected disconnect-all IPC error without changing available state', async () => {
+    seedAvailableState()
+    const ipcError = new Error('fictional disconnect-all IPC rejection')
+    mocks.invoke.mockRejectedValue(ipcError)
+
+    await expect(useMCPStore.getState().disconnectAll()).rejects.toBe(ipcError)
+
+    expect(useMCPStore.getState()).toMatchObject({
+      servers: [firstServer, remainingServer], tools: [previousTool], resources: [oldResource], error: null,
+    })
+    expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith('mcp:disconnect-all')
+    expect(toolRegistry.get('mcp__first__old_tool')).toBeDefined()
+  })
+
+  it('keeps the existing successful single-disconnect refresh and registry behavior', async () => {
+    seedAvailableState()
+    mocks.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'mcp:disconnect') return { success: true }
+      if (channel === 'mcp:get-servers-status') return [remainingServer]
+      if (channel === 'mcp:list-tools') return [currentTool]
+      if (channel === 'mcp:list-resources') return [currentResource]
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+
+    await useMCPStore.getState().disconnectServer('first')
+
+    expect(useMCPStore.getState()).toMatchObject({ servers: [remainingServer], tools: [currentTool], resources: [currentResource], error: null })
+    expect(toolRegistry.get('mcp__remaining__current_tool')).toBeDefined()
+    expect(toolRegistry.get('mcp__first__old_tool')).toBeUndefined()
+  })
+
+  it('keeps the existing successful disconnect-all clearing behavior', async () => {
+    seedAvailableState()
+    mocks.invoke.mockResolvedValue({ success: true })
+
+    await useMCPStore.getState().disconnectAll()
+
+    expect(useMCPStore.getState()).toMatchObject({ servers: [], tools: [], resources: [] })
+    expect(toolRegistry.get('mcp__first__old_tool')).toBeUndefined()
   })
 })

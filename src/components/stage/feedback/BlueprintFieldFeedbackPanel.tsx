@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { renderDiffProse } from './diff-prose-render'
 import { Button } from '../../ui/Button'
-import { validateBlueprintFeedbackChanges } from '../../../shared/blueprint-feedback-contract'
+import { validateBlueprintFeedbackChanges } from '../../../shared/blueprint-feedback-validation'
 import { displayedErrorMessage } from '../../../i18n/app-errors'
 import type { Locale } from '../../../i18n/types'
 import './planning-feedback.css'
@@ -137,7 +137,9 @@ export function BlueprintFieldFeedbackPanel({
 
       {(validationError || (!validationResult.valid && Object.values(selectedFields).some(Boolean))) && (
         <div className="pf-error-box" role="alert" data-testid="blueprint-validation-error">
-          {validationError ?? (!validationResult.valid ? validationResult.error : null)}
+          {validationError ?? (!validationResult.valid
+            ? displayedErrorMessage(currentLocale as Locale, validationResult.error, isZh ? '蓝图字段校验失败' : 'Blueprint validation failed')
+            : null)}
         </div>
       )}
 

@@ -58,6 +58,23 @@ async function started(f: ReturnType<typeof importGenerationFixture>) {
 }
 
 describe('reference global driver', () => {
+  it.each(['display-only', 'mixed-cancellation'] as const)('preserves %s classification before retrieval', async kind => {
+    const f = importGenerationFixture(cleanup, 1)
+    const { execution, handle } = await started(f)
+    const invoke = options(f, handle, { owner: execution.owner, epoch: execution.epoch })
+    const error = kind === 'display-only' ? new Error('GENERATION_OWNER_BUSY')
+      : Object.assign(new Error('GENERATION_ACTION_CANCELLED'), { failureCode: 'GENERATION_OWNER_BUSY' })
+    vi.spyOn(f.owner, 'prepareImportQueryMaterials').mockRejectedValue(error)
+
+    await expect(executeReferenceGlobal(invoke)).rejects.toMatchObject({
+      errorCode: kind === 'display-only' ? 'GENERATION_REQUEST_FAILED' : 'GENERATION_ACTION_CANCELLED',
+    })
+    expect(f.db.prepare('SELECT status,last_error,cancel_requested FROM import_runs WHERE id=?').get('长篇导入'))
+      .toMatchObject(kind === 'display-only'
+        ? { status: 'failed', last_error: 'GENERATION_REQUEST_FAILED', cancel_requested: 0 }
+        : { status: 'cancelled', last_error: '', cancel_requested: 1 })
+    expect(f.spy).not.toHaveBeenCalled()
+  })
   it('waits for opened readiness before retrieval and commits the decoded global effect', async () => {
     const f = importGenerationFixture(cleanup, 2)
     const { execution, handle } = await started(f)

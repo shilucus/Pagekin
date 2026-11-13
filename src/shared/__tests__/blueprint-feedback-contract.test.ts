@@ -5,6 +5,7 @@ import {
   validateBlueprintFeedbackChanges,
 } from '../blueprint-feedback-contract'
 import type { BlueprintData } from '../../../electron/repositories/blueprint-repository'
+import { validateBlueprintFeedbackChanges as validateBrowserBlueprintFeedbackChanges } from '../blueprint-feedback-validation'
 
 function createSampleBlueprint(chapterNumber: number): BlueprintData {
   return {
@@ -22,6 +23,14 @@ function createSampleBlueprint(chapterNumber: number): BlueprintData {
 }
 
 describe('blueprint-feedback-contract (FEEDBACK-003)', () => {
+  it('keeps the legacy validation export identical to the browser-safe entry', () => {
+    expect(validateBlueprintFeedbackChanges).toBe(validateBrowserBlueprintFeedbackChanges)
+    const changes = { title: 'Fictional title' }
+    const result = validateBrowserBlueprintFeedbackChanges(changes)
+    expect(result).toEqual({ valid: true, changes })
+    if (result.valid) expect(result.changes).toBe(changes)
+  })
+
   describe('validateBlueprintFeedbackChanges', () => {
     it('接收合法子集字段修改，且未选字段不被自动补充', () => {
       const changes = {

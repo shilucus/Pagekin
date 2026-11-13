@@ -34,6 +34,25 @@ async function startStyle(f: ReturnType<typeof importGenerationFixture>) {
 }
 
 describe('reference style driver', () => {
+  it.each(['display-only', 'mixed-cancellation'] as const)('preserves %s classification at opened', async kind => {
+    const f = importGenerationFixture(cleanup, 1)
+    const { rootHandle, execution } = await startStyle(f)
+    const invoke = options(f, rootHandle.projectId, { owner: execution.owner, epoch: execution.epoch })
+    const priorCalls = f.spy.mock.calls.length
+    invoke.hooks.opened = async () => {
+      throw kind === 'display-only' ? new Error('GENERATION_OWNER_BUSY')
+        : Object.assign(new Error('GENERATION_ACTION_CANCELLED'), { failureCode: 'GENERATION_OWNER_BUSY' })
+    }
+
+    await expect(executeReferenceStyle(invoke)).rejects.toMatchObject({
+      errorCode: kind === 'display-only' ? 'GENERATION_REQUEST_FAILED' : 'GENERATION_ACTION_CANCELLED',
+    })
+    expect(f.db.prepare('SELECT status,last_error,cancel_requested FROM import_runs WHERE id=?').get('长篇导入'))
+      .toMatchObject(kind === 'display-only'
+        ? { status: 'failed', last_error: 'GENERATION_REQUEST_FAILED', cancel_requested: 0 }
+        : { status: 'cancelled', last_error: '', cancel_requested: 1 })
+    expect(f.spy).toHaveBeenCalledTimes(priorCalls)
+  })
   it('does not read unrelated finalized sources when imported samples are usable', async () => {
     const f = importGenerationFixture(cleanup, 2)
     const { rootHandle, execution } = await startStyle(f)

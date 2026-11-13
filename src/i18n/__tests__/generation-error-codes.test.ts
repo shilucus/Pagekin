@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { knownAppErrorMessage } from '../app-errors'
+import { displayOnlyErrorMessage, knownAppErrorMessage } from '../app-errors'
 
 /**
  * 生成 IPC 会把任何 GENERATION_* 码原样转给渲染端，工作流失败面板对未登记的码只能显示原码。
@@ -112,6 +112,48 @@ const COVERED_PREFIXES = [
   'IMPORT_RESOURCE_',
 ] as const
 const UNREGISTERED: Record<string, readonly string[]> = {
+  // kb-controller 和 reference-global-foreground 经 import-run-failure 按运行语言转换；
+  // 蓝图 foreground 的有限 allowlist 同样交给 import-run-failure。不得登记成通用安全码。
+  templateTranslated: [
+    'KNOWLEDGE_BASE_REFERENCE_BUDGET_INVALID',
+    'KNOWLEDGE_BASE_REFERENCE_BUDGET_REQUIRED',
+    'KNOWLEDGE_BASE_REFERENCE_BUDGET_EXHAUSTED',
+    'KNOWLEDGE_BASE_REFERENCE_BUDGET_ACTIVE_TIME_EXHAUSTED',
+    'KNOWLEDGE_BASE_REFERENCE_BUDGET_RECOVERY_UNKNOWN',
+    'KNOWLEDGE_BASE_REFERENCE_BUDGET_HISTORY_UNBUDGETED',
+    'KNOWLEDGE_BASE_REFERENCE_BUDGET_PLAN_CONFLICT',
+    'KNOWLEDGE_BASE_REFERENCE_BUDGET_PERSISTENCE_FAILED',
+    'KNOWLEDGE_BASE_REFERENCE_BUDGET_HISTORY_FROZEN',
+    'KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE',
+    'IMPORT_RUN_EFFECT_HANDLE_REQUIRED',
+    'IMPORT_RUN_EXECUTION_REQUIRED',
+    'BLUEPRINT_RANGE_INVALID',
+  ],
+  internalStage69: [
+    // project-store 丢弃过期打开结果；embedding 当前带 signal 的调用使用单批次。
+    'PROJECT_OPEN_SUPERSEDED',
+    'EMBEDDING_REQUEST_ABORTED',
+    // preload 拒绝未列入闭合通道的内部请求。
+    'GENERATION_IMPORT_CHANNEL_NOT_ALLOWED',
+    // planning-feedback repository 的异常经 generation IPC 折叠为 GENERATION_REQUEST_FAILED。
+    'BLUEPRINT_NOT_FOUND',
+    // generation-run-service 拆出 admission 包装的原始异常。
+    'GENERATION_RUNTIME_FEEDBACK_ADMISSION_REJECTED',
+    // generation-run-service 的关闭恢复尾部将这些错误汇入关闭失败外壳。
+    'GENERATION_RECOVERY_TAIL_SOURCE_CONFLICT',
+    'GENERATION_TAIL_PREFIX_MISSING',
+    'GENERATION_CLOSE_QUIESCE_FAILED',
+    // workflow authority 在调用恢复前检查 epoch 已变化。
+    'GENERATION_WORKFLOW_DRIVER_EPOCH_CURRENT',
+    // import-novel command 捕获 query 不可用并记录双语回退说明。
+    'GENERATION_IMPORT_QUERY_SEARCH_UNAVAILABLE',
+    // 面板只构造四个字段；主进程 blueprint-feedback adapter 包装其余载荷校验失败。
+    'BLUEPRINT_CHANGES_INVALID_OBJECT',
+    'BLUEPRINT_NEW_CHARACTERS_NOT_ARRAY',
+    'BLUEPRINT_NEW_CHARACTER_MALFORMED',
+    'BLUEPRINT_RELATIONSHIPS_NOT_ARRAY',
+    'BLUEPRINT_RELATIONSHIP_MALFORMED',
+  ],
   // 请求形状、句柄、事务、收据、哈希与谱系的完整性校验：只有我们自己的代码缺陷、被篡改的 IPC
   // 或被外部改坏的作品库才会触发。界面给不出作者能照做的建议，原码留给反馈定位。
   contractViolation: [
@@ -929,6 +971,7 @@ function coveredCodesInSource(): Map<string, string> {
 
 const unregistered = new Set(Object.values(UNREGISTERED).flat())
 const isRegistered = (code: string) => knownAppErrorMessage('zh-CN', code) !== undefined
+const isDisplayOnly = (code: string) => displayOnlyErrorMessage('zh-CN', code) !== undefined
 
 describe('error codes that reach the workflow failure panel', () => {
   const codes = coveredCodesInSource()
@@ -940,7 +983,7 @@ describe('error codes that reach the workflow failure panel', () => {
   })
 
   it('registers or explicitly exempts every code the source can raise', () => {
-    const uncovered = [...codes].filter(([code]) => !isRegistered(code) && !unregistered.has(code))
+    const uncovered = [...codes].filter(([code]) => !isRegistered(code) && !isDisplayOnly(code) && !unregistered.has(code))
       .map(([code, file]) => `${code} (${file})`)
     expect(uncovered, '在 app-errors.ts 登记文案，或在本文件按理由列为不登记').toEqual([])
   })
@@ -949,5 +992,13 @@ describe('error codes that reach the workflow failure panel', () => {
     expect([...unregistered].filter(isRegistered)).toEqual([])
     expect([...unregistered].filter(code => !codes.has(code))).toEqual([])
     expect(Object.values(UNREGISTERED).flat()).toHaveLength(unregistered.size)
+  })
+
+  it('keeps presentation-only diagnostics separate from registered and exempted codes', () => {
+    const displayOnly = [...codes.keys()].filter(isDisplayOnly)
+    expect(displayOnly).toHaveLength(25)
+    expect(displayOnly.filter(isRegistered)).toEqual([])
+    expect(displayOnly.filter(code => unregistered.has(code))).toEqual([])
+    expect(displayOnly.every(code => displayOnlyErrorMessage('en-US', code) !== undefined)).toBe(true)
   })
 })

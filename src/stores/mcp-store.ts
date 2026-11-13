@@ -128,7 +128,10 @@ export const useMCPStore = create<MCPState>()((set, get) => ({
   },
 
   disconnectServer: async (serverId) => {
-    await ipc.invoke('mcp:disconnect', serverId)
+    const result = await ipc.invoke('mcp:disconnect', serverId)
+    if (!result.success) {
+      set({ error: displayedErrorMessage(useLocaleStore.getState().locale, result.error) })
+    }
     // 从 ToolRegistry 注销该服务器的 Tool
     toolRegistry.unregisterBySource('mcp')
     await get().refreshStatus()
@@ -137,7 +140,15 @@ export const useMCPStore = create<MCPState>()((set, get) => ({
   },
 
   disconnectAll: async () => {
-    await ipc.invoke('mcp:disconnect-all')
+    const result = await ipc.invoke('mcp:disconnect-all')
+    if (!result.success) {
+      set({ error: displayedErrorMessage(useLocaleStore.getState().locale, result.error) })
+      toolRegistry.unregisterBySource('mcp')
+      await get().refreshStatus()
+      await get().refreshTools()
+      get().registerMCPToolsToRegistry()
+      return
+    }
     toolRegistry.unregisterBySource('mcp')
     set({ servers: [], tools: [], resources: [] })
   },

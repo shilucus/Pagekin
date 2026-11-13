@@ -419,6 +419,41 @@ export function appErrorMessage(locale: Locale, error: unknown): string {
     ?? translate(locale, 'error.unknown', { message: readMessage(error) })
 }
 
+// Presentation only: these diagnostics must not become safe-code admission for drivers.
+const DISPLAY_ONLY_ERROR_CODES = new Set([
+  'GENERATION_PROJECT_CLOSE_FAILED',
+  'RUNTIME_FEEDBACK_RESOURCES_CHANGED',
+  'GENERATION_OWNER_BUSY',
+  'RUNTIME_FEEDBACK_HANDOFF_FAILED',
+  'RUNTIME_FEEDBACK_CAPABILITY_REQUIRED',
+  'MCP_TRANSPORT_CLOSED',
+  'MCP_TOOL_FAILED',
+  'MCP_TRANSPORT_ERROR',
+  'MCP_TRANSPORT_UNAVAILABLE',
+  'MCP_REQUEST_REJECTED',
+  'CHARACTER_ROSTER_SCHEMA_MISSING',
+  'GENERATION_AGENT_CLOSING',
+  'GENERATION_AGENT_GLOBAL_EXECUTION_STALE',
+  'GENERATION_OWNER_CLOSING',
+  'RUNTIME_FEEDBACK_REVOKE_CLEANUP_FAILED',
+  'RUNTIME_FEEDBACK_PREPARE_ROLLBACK_FAILED',
+  'RUNTIME_FEEDBACK_EXECUTION_CLEANUP_FAILED',
+  'RUNTIME_FEEDBACK_CLOSE_QUIESCE_FAILED',
+  'GENERATION_BATCH_PROJECT_CORE_MISSING',
+  'GENERATION_BATCH_BLUEPRINT_MISSING',
+  'GENERATION_DRAFT_REQUIRED_PREDECESSOR_MISSING',
+  'IMPORT_RUN_CANCEL_REQUEST_FAILED',
+  'BLUEPRINT_CHANGES_EMPTY',
+  'BLUEPRINT_CHARACTERS_INVALID',
+  'MCP_DISCONNECT_FAILED',
+])
+
+export function displayOnlyErrorMessage(locale: Locale, error: unknown): string | undefined {
+  const code = codeCandidates(error).find((candidate): candidate is string =>
+    typeof candidate === 'string' && DISPLAY_ONLY_ERROR_CODES.has(candidate))
+  return code ? translate(locale, 'error.unknown', { message: code }) : undefined
+}
+
 /** 显示处去掉的前缀：Electron 的调用通道，以及 "Error: "、"TypeError: " 这类类名。 */
 const DISPLAY_PREFIX = /^(?:Error invoking remote method '[^']+': )?(?:[A-Za-z]*Error: )?/u
 
@@ -430,6 +465,8 @@ const DISPLAY_PREFIX = /^(?:Error invoking remote method '[^']+': )?(?:[A-Za-z]*
 export function displayedErrorMessage(locale: Locale, error: unknown, fallback?: string): string {
   const known = knownAppErrorMessage(locale, error)
   if (known) return known
+  const diagnostic = displayOnlyErrorMessage(locale, error)
+  if (diagnostic) return diagnostic
   return displayedRaw(error).trim().replace(DISPLAY_PREFIX, '') || fallback || localize(locale, '未知错误', 'Unknown error')
 }
 
