@@ -47,6 +47,10 @@ import { KnowledgeBaseUnavailableError, knowledgeBaseLoader } from '../services/
 import { getEmbeddingConfig } from './kb-controller'
 import { recordPerformanceComputedMetric, recordPerformanceCount } from '../services/performance-diagnostics'
 import { isAgentGlobalToolAction, issueAgentGlobalToolExecution, revokeAgentGlobalToolExecutions } from '../services/agent-global-tool-admission'
+import { assertReferenceStyleRequest, assertReferenceStyleAckRequest } from '../../src/shared/reference-style-contract'
+import { ReferenceStyleForeground } from './reference-style-foreground'
+import { ReferenceStyleFailure } from '../services/reference-style-driver'
+import { assertImportStageUnmanagedMutationAllowed } from '../services/import-stage-flight'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
 type OwnerChannels = PlanningFeedbackChannels & LegacyRosterGenerationChannels & GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
@@ -161,10 +165,12 @@ export function registerGenerationController(options: {
   const scheduler = options.scheduler ?? new MainGenerationScheduler(INITIAL_GENERATION_SCHEDULING,
     3 * (INITIAL_GENERATION_SCHEDULING.global + INITIAL_GENERATION_SCHEDULING.maxQueued + INITIAL_GENERATION_SCHEDULING.maxQuarantined))
   const activeHandlers = new Map<ProjectRuntime, number>()
+  const referenceStyles = new ReferenceStyleForeground()
   const hasPhysical = (entry: OwnerEntry | undefined) => entry?.mode === 'legacy'
     ? entry.owner.hasPhysicalInFlight() : entry?.authority.hasPhysicalInFlight() ?? false
   projectRuntimeHost.registerBusyPredicate(runtime => (activeHandlers.get(runtime) ?? 0) > 0 || hasPhysical(owners.get(runtime.database)))
   projectRuntimeHost.onCloseRequested(runtime => {
+    referenceStyles.requestClose(runtime)
     revokeAgentGlobalToolExecutions(runtime)
     const failures: unknown[] = []
     const entry = owners.get(runtime.database)
@@ -187,6 +193,7 @@ export function registerGenerationController(options: {
     if (failures.length) throw new AggregateError(failures, 'GENERATION_PROJECT_CLOSE_FAILED')
   })
   onProjectDatabaseBeforeClose(({ database }) => {
+    referenceStyles.release(database)
     const entry = owners.get(database)
     if (entry) {
       if (entry.mode === 'legacy') entry.owner.suspendForProjectClose()
@@ -657,6 +664,7 @@ export function registerGenerationController(options: {
         if (channel === 'import-generation:v1:query-materials') assertImportQueryMaterialsRequest(raw[0])
         const owner = authorizedOwner(session, event)
         const runtime = ownerRuntimes.get(owner)!
+        assertUnmanagedImportGeneration(channel, raw, runtime.database)
         activeHandlers.set(runtime, (activeHandlers.get(runtime) ?? 0) + 1)
         try {
           const result = await handler(owner, ...raw as OwnerChannels[C]['args'])
@@ -670,6 +678,63 @@ export function registerGenerationController(options: {
       } catch (error) {
         throw new Error(generationIpcErrorCode(channel, error))
       }
+    })
+  }
+  function assertUnmanagedImportGeneration(channel: string, args: unknown[], database: Database.Database): void {
+    const selection = (input: unknown) => {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) return
+      const value = input as { importSlot?: { runId?: unknown }; parentRootActionId?: unknown }
+      assertImportStageUnmanagedMutationAllowed(database, value.importSlot?.runId)
+      if (typeof value.parentRootActionId === 'string') root(value.parentRootActionId)
+    }
+    const root = (rootActionId: string) => {
+      const slots = database.prepare(`SELECT DISTINCT json_extract(binding_json,'$.sourceManifest.importSlot.runId') AS import_run_id
+        FROM generation_runs WHERE root_action_id=?`).all(rootActionId) as { import_run_id: unknown }[]
+      for (const slot of slots) assertImportStageUnmanagedMutationAllowed(database, slot.import_run_id)
+    }
+    if (channel === 'generation:begin') { selection(args[0]); return }
+    if (!['import-generation:execute', 'generation:pause', 'generation:cancel', 'generation:resume',
+      'generation:restart', 'generation:discard-candidate', 'generation:compose-visible'].includes(channel)) return
+    const first = args[0]
+    const handle = channel === 'import-generation:execute' && first && typeof first === 'object' && 'handle' in first
+      ? first.handle : first
+    if (handle && typeof handle === 'object' && 'runId' in handle && typeof handle.runId === 'string') {
+      const row = database.prepare('SELECT root_action_id FROM generation_runs WHERE run_id=?').get(handle.runId) as { root_action_id: string } | undefined
+      if (row) root(row.root_action_id)
+    }
+    if (channel === 'generation:restart') selection(args[1])
+  }
+  for (const channel of ['import-generation:v1:style', 'import-generation:v1:style-ack'] as const) {
+    ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
+      try {
+        const session = raw[1]
+        if (raw.length !== 2 || !isProjectSessionContext(session)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
+        if (channel === 'import-generation:v1:style') assertReferenceStyleRequest(raw[0])
+        else assertReferenceStyleAckRequest(raw[0])
+        const owner = authorizedOwner(session, event)
+        const runtime = ownerRuntimes.get(owner)!
+        return await withRuntimeHandler(runtime, async () => {
+          if (channel === 'import-generation:v1:style-ack') {
+            assertReferenceStyleAckRequest(raw[0])
+            return referenceStyles.acknowledge(runtime, event.sender, session, raw[0])
+          }
+          assertReferenceStyleRequest(raw[0])
+          try {
+            const result = await referenceStyles.execute(runtime, owner, event.sender, session, raw[0], () => {
+              if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+            })
+            return { success: true, ...result }
+          } catch (error) {
+            if (error instanceof ReferenceStyleFailure) {
+              if (error.secondaryErrors.length) console.error('[generation] reference style terminal bookkeeping failed', {
+                channel, errorCode: error.errorCode, secondaryErrorCodes: error.secondaryErrors,
+              })
+              return { success: false, errorCode: error.errorCode, error: error.displayMessage }
+            }
+            throw error
+          }
+        })
+      } catch (error) { throw new Error(generationIpcErrorCode(channel, error)) }
     })
   }
   register('planning-feedback:v1:capture', 1, (owner, request) => owner.captureFieldFeedback(request.target))

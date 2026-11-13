@@ -4,8 +4,10 @@ import type { ProjectCoreData } from '../../electron/repositories/project-core-r
 import type { PromptTemplate } from '../services/prompt-templates'
 import type { ImportRunExecutionAuthority } from './import-run'
 import type { ImportInferenceTopicKey } from './import-inference-materials'
+import { REFERENCE_STYLE_CHANNELS } from './reference-style-contract'
+import type { ReferenceStyleChannels } from './reference-style-contract'
 
-export const IMPORT_GENERATION_CHANNELS = ['import-generation:read', 'import-generation:execute', 'import-generation:v1:query-materials'] as const
+export const IMPORT_GENERATION_CHANNELS = ['import-generation:read', 'import-generation:execute', 'import-generation:v1:query-materials', ...REFERENCE_STYLE_CHANNELS] as const
 export function isImportGenerationChannel(value: string): value is typeof IMPORT_GENERATION_CHANNELS[number] {
   return (IMPORT_GENERATION_CHANNELS as readonly string[]).includes(value)
 }
@@ -50,7 +52,7 @@ export interface ImportGenerationRecovery {
   modelId: string
   frozenContext: ImportGenerationContext
 }
-export interface ImportGenerationChannels {
+export interface ImportGenerationChannels extends ReferenceStyleChannels {
   'import-generation:read': { args: [{ slot: ImportGenerationSlot; runId?: string }]; return: ImportGenerationRecovery | null }
   'import-generation:execute': { args: [{ handle: MainGenerationRunHandle; ordinal: number; task: GenerationTask; execution?: ImportRunExecutionAuthority }]; return: MainGenerationExecuteReceipt }
   'import-generation:v1:query-materials': { args: [ImportQueryMaterialsRequest]; return: ImportQueryMaterialsResponse }

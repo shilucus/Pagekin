@@ -16,6 +16,24 @@ vi.mock('electron', () => electron)
 await import('../preload')
 
 describe('桌面预加载接口', () => {
+  it('forwards only the closed style entry and ACK while keeping progress event-only', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const session = { projectId: 'fictional-project', leaseId: 'fictional-view', projectPath: 'C:/fictional' }
+    const execution = { owner: 'fictional-owner', epoch: 1 }
+    const requests = [
+      ['import-generation:v1:style', { runId: 'fictional-run', execution, modelId: 'fictional-model' }],
+      ['import-generation:v1:style-ack', { runId: 'fictional-run', execution, token: 'fictional-token', phase: 'opened', decision: 'accept' }],
+    ] as const
+    for (const [channel, request] of requests) {
+      await bridge.invoke(channel, request, session)
+      expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, request, session)
+    }
+    const calls = electron.ipcRenderer.invoke.mock.calls.length
+    for (const channel of ['import-generation:v1:style-progress', 'import-generation:v2:style', 'import-generation:v1:style-adopt']) {
+      await expect(bridge.invoke(channel, requests[0][1], session)).rejects.toThrow('GENERATION_IMPORT_CHANNEL_NOT_ALLOWED')
+    }
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(calls)
+  })
   it('forwards the closed import generation family without adding query or budget authority', async () => {
     const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
     const request = Object.freeze({ handle: Object.freeze({ projectId: 'fictional', epoch: 'view', rootActionId: 'root', runId: 'run' }),

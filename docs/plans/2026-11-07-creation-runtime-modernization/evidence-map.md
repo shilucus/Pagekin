@@ -90,3 +90,10 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 - 生产委托和既有投影：`src/services/workflows/import-run-orchestrator.ts`、`import-workflow.ts`；renderer 不再重复知识循环/续租/终态写入，完整 reference/owner/epoch 过滤后只投影原中英文日志和原批次进度。作者原稿及后续阶段不变。
 - 最终实际 [Stage64 evidence](stage-64-evidence.md)：15文件513/513，含 native18/18；撤权终态 RED3fail 到 GREEN3pass、主驱动10/10及全部历史失败均保留，不相加。独立 source/runtime review 闭环 P2，fresh typecheck/lint/colors/i18n/build 均0；[manifest](stage-64-source-manifest.json) 绑定实际来源、原始报告与本轮构建入口。
 - ADR0074 只接受 foreground knowledge-stage ownership；IMPORT001/002 只补部分证据，所有状态不变，仍11completed/24in_progress。无完整拆书/仿写、A-to-B/background、Electron 进程、真实模型/文学质量、视觉、平台或35项累计终审结论。
+
+## Stage65 增量证据
+
+- [ADR0075](../../adr/0075-main-owned-foreground-reference-style.md) 接受 issued foreground reference style/done 的主进程所有权：`reference-style-contract.ts`、`reference-style-foreground.ts`、`reference-style-driver.ts`。原生取样、冻结任务、原 root/model/ordinal0、receipt/checkpoint/style-to-blueprints、heartbeat/终态和物理 drain 由 main 执行；`import-stage-flight.ts` 隔离同 run 旧写入口。
+- `import-run-orchestrator.ts`、`import-workflow.ts` 保留原 whole-config CAS、自动 opened/commit-ready ACK、已验证全文快照与 reasoning、原日志/进度和未保存缓冲。历史 receipt 不是当前 config；completed-null 只读恢复不重建权限，已 commit 未 advance 仅补推进，unknown 不重发。
+- [Stage65 evidence](stage-65-evidence.md) 记录最终19文件592/592（含 native21/unit11/renderer123）及独立4文件428/428、fresh typecheck/lint/colors/i18n/build 全0和全部失败修复链；报告不相加。Sol 独立接受当前 source/runtime/quality，Terra另审非自有 native/artifacts；[manifest](stage-65-source-manifest.json) 绑定来源、原始报告和本轮实际构建入口。
+- 仅 IMPORT001/002 各补 contract_review/deterministic 部分证据，所有35项状态、门禁、依赖及既有证据不变，仍11completed/24in_progress。无完整拆书/仿写或目标采用、后续阶段迁移、A-to-B/background、Electron 进程、真实模型/文学质量、视觉、平台或累计终审资格。

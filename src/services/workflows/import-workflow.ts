@@ -1,5 +1,5 @@
 /** Persisted, resumable reference-import workflow. */
-import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import type { NovelConfig, ProjectSessionContext } from '../../shared/ipc-channels'
 import {
   assertImportRunEffectReceiptMetadata,
   type ImportRunChapterSnapshot,
@@ -29,6 +29,12 @@ import { countDraftUnits } from '../../shared/draft-units'
 import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
 import type { PerformanceMetric } from '../../shared/performance-baseline'
 import { assertReferenceKnowledgeRequest, isReferenceKnowledgeProgress, type ReferenceKnowledgeReference } from '../../shared/reference-knowledge-contract'
+import { isReferenceStyleProgress, type ReferenceStyleLog, type ReferenceStyleAckRequest } from '../../shared/reference-style-contract'
+import { createMainGenerationTransport } from '../generation/main-generation-transport'
+import { createMainOwnedGenerationRuntime, type MainGenerationRunHandle } from '../generation/generation-runtime'
+import { routeModelId } from '../model-routing'
+import { pinWorkflowModel } from './workflow-main-generation'
+import { useWorkflowReasoningStore } from '../../stores/workflow-reasoning-store'
 
 type ReferenceKnowledgeIssuance = { reference: ReferenceKnowledgeReference; execution: ImportRunExecutionLease }
 
@@ -120,6 +126,23 @@ function currentNovelConfigSummary(writingLanguage: WritingLanguage): string {
   )
 }
 
+function styleLog(locale: ImportRunSnapshot['locale'], log: ReferenceStyleLog, count?: number): string {
+  switch (log) {
+    case 'imported-samples': return textForLocale(locale, `正在分析导入文本样本文风（${count} 段）...`, `Analyzing ${count} imported text ${count === 1 ? 'sample' : 'samples'}...`)
+    case 'sampling-finalized': return textForLocale(locale, '正在采样已有章节正文...', 'Sampling existing chapter text...')
+    case 'no-finalized': return textForLocale(locale, '无已写章节，无法分析文风', 'No written chapters are available for writing-style analysis.')
+    case 'sampled-finalized': return textForLocale(locale, `  已采样 ${count} 章正文`, `  Sampled ${count} ${count === 1 ? 'chapter' : 'chapters'}`)
+    case 'read-finalized-failed': return textForLocale(locale, '提取定稿内容失败', 'Failed to read finalized chapter content.')
+    case 'empty-samples': return textForLocale(locale, '采样文本为空，跳过文风分析', 'The sample text is empty; skipping writing-style analysis.')
+    case 'calling-ai': return textForLocale(locale, '调用 AI 分析文风特征...', 'Running AI writing-style analysis...')
+    case 'empty-result': return textForLocale(locale, '文风分析返回空结果', 'Writing-style analysis returned an empty result.')
+    case 'saved': return textForLocale(locale, '文风特征已保存到小说配置', 'Writing-style profile saved to the novel configuration')
+  }
+}
+
+const sameGenerationHandle = (a: MainGenerationRunHandle, b: MainGenerationRunHandle) =>
+  a.projectId === b.projectId && a.epoch === b.epoch && a.rootActionId === b.rootActionId && a.runId === b.runId
+
 function productionDependencies(
   context: WorkflowContext,
   callbacks: StepCallbacks,
@@ -135,6 +158,164 @@ function productionDependencies(
   return {
     getRun: runId => ipc.invokeWithProjectSession(session, 'db:import-run-get', runId, projectPath),
     ...(referenceKnowledge ? {
+      executeReferenceStyle: async (run: ImportRunSnapshot, owner: string) => {
+        const captured = context.data.importRunExecution as ImportRunExecutionLease | undefined
+        const lease = captured ?? referenceKnowledge.execution
+        if (referenceKnowledge.reference.runId !== run.id || referenceKnowledge.reference.projectId !== session.projectId
+          || lease.owner !== owner || lease.epoch !== referenceKnowledge.execution.epoch) throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
+        const execution = { owner: lease.owner, epoch: lease.epoch }
+        const modelId = context.generationModelId?.trim() || routeModelId('analyze-writing-style') || null
+        const transport = createMainGenerationTransport(() => session)
+        const displayed = new Map<string, string>()
+        const projection: { runtime?: Awaited<ReturnType<typeof createMainOwnedGenerationRuntime>> } = {}
+        let unsubscribeReasoning: (() => void) | undefined
+        let handle: MainGenerationRunHandle | undefined
+        let expected: NovelConfig | undefined
+        let sequence = 0
+        let active = true
+        let projectionError: unknown
+        let queue = Promise.resolve()
+        const clearReasoning = () => useWorkflowReasoningStore.getState().clear(context.runId)
+        const previousCancellation = context.requestMainGenerationCancellation
+        const requestCancel = async () => {
+          const result = await ipc.invokeWithProjectSession(session, 'db:import-run-request-cancel', run.id, lease, projectPath)
+          if (!result.success) throw new Error(result.error || 'IMPORT_RUN_CANCEL_REQUEST_FAILED')
+        }
+        context.requestMainGenerationCancellation = requestCancel
+        const ack = async (token: string, phase: ReferenceStyleAckRequest['phase'], decision: ReferenceStyleAckRequest['decision']) =>
+          ipc.invokeWithProjectSession(session, 'import-generation:v1:style-ack', { runId: run.id, execution, token, phase, decision })
+        const unsubscribeProject = useProjectStore.subscribe(state => {
+          if (!sameProjectSessionContext(session, projectSessionContextFromProject(state.currentProject))) clearReasoning()
+        })
+        const unsubscribe = ipc.on('import-generation:v1:style-progress', event => {
+          if (!active || !isReferenceStyleProgress(event) || event.projectId !== session.projectId
+            || event.leaseId !== session.leaseId || event.runId !== run.id || event.execution.owner !== execution.owner
+            || event.execution.epoch !== execution.epoch || event.sequence <= sequence) return
+          sequence = event.sequence
+          let openedConfig: NovelConfig | undefined
+          let openedError: unknown
+          if (event.kind === 'opened') {
+            try {
+              const project = useProjectStore.getState().currentProject
+              if (!project || !sameProjectSessionContext(session, projectSessionContextFromProject(project))) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
+              openedConfig = structuredClone(project.novelConfig)
+            } catch (error) { openedError = error }
+          }
+          queue = queue.then(async () => {
+            if (event.kind === 'log') { callbacks.log(styleLog(run.locale, event.log, 'count' in event ? event.count : undefined)); return }
+            if (event.kind === 'progress') { callbacks.setProgress(event.progress); return }
+            if (event.kind === 'prompt-budget') { callbacks.setPromptBudgetReport?.(event.report); return }
+            if (event.kind === 'opened') {
+              let acknowledged = false
+              try {
+                if (handle) throw new Error('GENERATION_REQUEST_FAILED')
+                handle = Object.freeze({ ...event.handle })
+                if (openedError) throw openedError
+                expected = openedConfig
+                context.mainGenerationRunHandle = handle
+                context.mainGenerationRootHandle = handle
+                context.generationModelId = event.modelId
+                pinWorkflowModel(context, event.modelId)
+                unsubscribeReasoning = transport.subscribeReasoning?.(handle, reasoning => {
+                  if (!active || context.cancelled || !reasoning.attemptId || !reasoning.text
+                    || !sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
+                  useWorkflowReasoningStore.getState().append(context.runId, reasoning.attemptId, reasoning.text)
+                })
+                projection.runtime = await createMainOwnedGenerationRuntime({ runHandle: handle, onSnapshot: snapshot => {
+                  if (!active) return
+                  if (snapshot.diagnostics) callbacks.setGenerationActivity?.({ operation: 'analyze-writing-style', diagnostics: snapshot.diagnostics })
+                  if (callbacks.replaceText) callbacks.replaceText(snapshot.text)
+                  else {
+                    const previous = displayed.get(snapshot.artifactId) ?? ''
+                    if (snapshot.text.startsWith(previous)) callbacks.appendText(snapshot.text.slice(previous.length))
+                  }
+                  displayed.set(snapshot.artifactId, snapshot.text)
+                } }, transport)
+                if (context.cancelled || context.cancelRequested) { acknowledged = true; await ack(event.token, 'opened', 'cancelled'); return }
+                callbacks.setGenerationActivity?.({ operation: 'analyze-writing-style' })
+                acknowledged = true
+                await ack(event.token, 'opened', 'accept')
+              } catch (error) {
+                projectionError = error
+                if (!acknowledged) await ack(event.token, 'opened', context.cancelled || context.cancelRequested ? 'cancelled' : 'projection-failed')
+              }
+              return
+            }
+            let acknowledged = false
+            try {
+              if (!handle || !expected || !sameGenerationHandle(handle, event.handle)) throw new Error('GENERATION_REQUEST_FAILED')
+              if (context.cancelled || context.cancelRequested) { await ack(event.token, 'commit', 'cancelled'); return }
+              const saved = await useProjectStore.getState().commitGeneratedNovelConfig(
+                { writingStyle: event.writingStyle }, expected, session, handle, async () => {
+                  acknowledged = true
+                  const result = await ack(event.token, 'commit', 'accept')
+                  if (result.version !== 1 || typeof result.savedWritingStyle !== 'string' || !result.savedWritingStyle.trim()) throw new Error('GENERATION_REQUEST_FAILED')
+                  return { writingStyle: result.savedWritingStyle }
+                },
+              )
+              if (!saved) throw new Error(textForLocale(run.locale, '文风特征保存失败', 'Failed to save the writing-style profile.'))
+            } catch (error) {
+              projectionError = error
+              if (!acknowledged) await ack(event.token, 'commit', context.cancelled || context.cancelRequested ? 'cancelled'
+                : error instanceof Error && error.message === 'GENERATION_AUTHOR_DRAFT_CHANGED' ? 'draft-changed' : 'projection-failed')
+            }
+          }).catch(error => { projectionError = error })
+        })
+        try {
+          const result = await ipc.invokeWithProjectSession(session, 'import-generation:v1:style', { runId: run.id, execution, modelId }).catch(async error => {
+            await queue
+            throw error
+          })
+          await queue
+          if (!result || typeof result.success !== 'boolean') throw new Error('GENERATION_REQUEST_FAILED')
+          if (!result.success) {
+            if (typeof result.error !== 'string' || typeof result.errorCode !== 'string' || !result.errorCode) throw new Error('GENERATION_REQUEST_FAILED')
+            if (result.errorCode === 'GENERATION_AUTHOR_DRAFT_CHANGED' && projectionError instanceof Error
+              && projectionError.message === 'GENERATION_AUTHOR_DRAFT_CHANGED') throw projectionError
+            throw Object.assign(new Error(result.error), { code: result.errorCode })
+          }
+          const completedReplay = result.replayed === true && result.run?.status === 'completed' && result.run.stage === 'completed'
+          const validExecution = result.execution === null ? completedReplay
+            : !!result.execution && result.execution.owner === execution.owner && result.execution.epoch === execution.epoch
+              && Number.isSafeInteger(result.execution.expiresAt) && result.execution.expiresAt > 0
+          if (result.version !== 1 || !result.run || result.run.id !== run.id || result.run.rootRunId !== run.rootRunId
+            || result.run.purpose !== 'reference' || !['blueprints', 'refresh', 'completed'].includes(result.run.stage)
+            || !validExecution
+            || typeof result.savedWritingStyle !== 'string' || !result.savedWritingStyle.trim()
+            || typeof result.replayed !== 'boolean' || (handle && (!result.handle || !sameGenerationHandle(handle, result.handle)))
+            || (result.handle && (result.handle.projectId !== session.projectId
+              || typeof result.handle.epoch !== 'string' || !result.handle.epoch.trim()
+              || (!result.replayed && result.handle.epoch !== session.leaseId)
+              || typeof result.handle.rootActionId !== 'string' || !result.handle.rootActionId.trim()
+              || typeof result.handle.runId !== 'string' || !result.handle.runId.trim())) || (!result.replayed && !handle)) {
+            throw new Error('GENERATION_REQUEST_FAILED')
+          }
+          if (result.execution === null) delete context.data.importRunExecution
+          else context.data.importRunExecution = result.execution
+          if (projectionError) throw projectionError
+          if (projection.runtime) await projection.runtime.read()
+          if (result.replayed) {
+            const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
+            if (!core) throw new Error(textForLocale(run.locale, '无法读取已保存的导入配置。', 'Could not read committed project configuration.'))
+            const current = useProjectStore.getState().currentProject
+            if (current && sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
+              useProjectStore.getState().publishSavedNovelConfig(configFieldsFromCore(core), session, 'unsaved-edits')
+            } else callbacks.log(textForLocale(run.locale, '导入结果已持久化入库；前台正浏览其他作品，跳过前台界面同步。', 'Import effect persisted to storage; foreground is viewing another project, skipping UI sync.'))
+          }
+          const current = useProjectStore.getState().currentProject
+          if (current && sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
+            context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
+          }
+        } finally {
+          active = false
+          unsubscribe()
+          unsubscribeReasoning?.()
+          unsubscribeProject()
+          clearReasoning()
+          await projection.runtime?.close()
+          context.requestMainGenerationCancellation = previousCancellation
+        }
+      },
       executeReferenceKnowledge: async (run: ImportRunSnapshot, owner: string) => {
         const { reference, execution } = referenceKnowledge
         if (reference.runId !== run.id || reference.projectId !== session.projectId || execution.owner !== owner) {

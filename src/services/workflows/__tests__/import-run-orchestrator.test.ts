@@ -122,6 +122,29 @@ afterEach(() => {
 })
 
 describe('ImportRunOrchestrator', () => {
+  it.each(['style', 'blueprints', 'completed'] as const)('delegates issued reference style at %s without legacy writers', async stage => {
+    const { deps } = harness(1, { stage, status: stage === 'completed' ? 'completed' : 'running' })
+    deps.executeReferenceStyle = vi.fn(async () => {})
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'style', 'test-runner', { cancelled: false }, callbacks)
+    expect(deps.executeReferenceStyle).toHaveBeenCalledOnce()
+    expect(deps.startOrResume).not.toHaveBeenCalled()
+    expect(deps.renewExecution).not.toHaveBeenCalled()
+    expect(deps.prepareEffectReceipt).not.toHaveBeenCalled()
+    expect(deps.commitEffectReceipt).not.toHaveBeenCalled()
+    expect(deps.advanceStage).not.toHaveBeenCalled()
+    expect(deps.fail).not.toHaveBeenCalled()
+    expect(deps.cancelAtBoundary).not.toHaveBeenCalled()
+  })
+
+  it('does not run renderer terminal writers after a delegated style failure', async () => {
+    const { deps } = harness(1, { stage: 'style' })
+    deps.executeReferenceStyle = vi.fn(async () => { throw new Error('main style failure') })
+    await expect(new ImportRunOrchestrator(deps).executeStage('run-1', 'style', 'test-runner', { cancelled: false }, callbacks)).rejects.toThrow('main style failure')
+    expect(deps.startOrResume).not.toHaveBeenCalled()
+    expect(deps.fail).not.toHaveBeenCalled()
+    expect(deps.cancelAtBoundary).not.toHaveBeenCalled()
+  })
+
   it('does not enter main knowledge execution when cancellation is already requested', async () => {
     const { deps } = harness(1)
     deps.executeReferenceKnowledge = vi.fn()

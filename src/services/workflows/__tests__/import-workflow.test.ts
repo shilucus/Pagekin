@@ -69,7 +69,9 @@ import {
   type ImportRunSnapshot,
 } from '../../../shared/import-run'
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
+import type { ReferenceStyleAckRequest } from '../../../shared/reference-style-contract'
 import { useProjectStore } from '../../../stores/project-store'
+import { useEditorStore } from '../../../stores/editor-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 
 const session = { projectId: 'test-project', leaseId: 'lease-test-project', projectPath: 'C:\\test-project' }
@@ -124,12 +126,256 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => useProjectStore.setState({ currentProject: null }))
+afterEach(() => {
+  vi.restoreAllMocks()
+  useProjectStore.setState({ currentProject: null })
+  useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
+})
 
 describe('createImportWorkflow', () => {
+  it('delegates issued style through opened and commit ACKs without renderer effect writers', async () => {
+    const snapshot = run({ stage: 'style' })
+    const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+    const authority = { owner: executionOwner, epoch: 1 }
+    const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: 'root', runId: 'generation' }
+    const listeners = new Map<string, (event: unknown) => void>()
+    ipcMocks.on.mockImplementation((channel, listener) => { listeners.set(channel, listener); return () => listeners.delete(channel) })
+    let opened!: () => void, committed!: () => void
+    const openedAck = new Promise<void>(resolve => { opened = resolve })
+    const commitAck = new Promise<void>(resolve => { committed = resolve })
+    const persist = vi.spyOn(useProjectStore.getState(), 'commitGeneratedNovelConfig').mockImplementation(async (_generated, _expected, _session, _handle, effect) => {
+      await effect!()
+      return true
+    })
+    const event = (sequence: number, payload: object) => ({ projectId: session.projectId, leaseId: session.leaseId,
+      runId: snapshot.id, execution: authority, sequence, ...payload })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, request: unknown) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'generation:read') return { handle, artifacts: [], budget: {} }
+      if (channel === 'import-generation:v1:style-ack') {
+        const ack = request as ReferenceStyleAckRequest
+        if (ack.phase === 'opened') { expect(ack.decision).toBe('accept'); opened() }
+        else { expect(ack.decision).toBe('accept'); committed() }
+        return { version: 1, savedWritingStyle: ack.phase === 'commit' ? 'saved style' : null }
+      }
+      if (channel === 'import-generation:v1:style') {
+        expect(request).toEqual({ runId: snapshot.id, execution: authority, modelId: 'selected-model' })
+        const emit = listeners.get('import-generation:v1:style-progress')!
+        emit(event(1, { kind: 'opened', token: 'open-token', handle, modelId: 'selected-model' }))
+        await openedAck
+        emit(event(2, { kind: 'progress', progress: 10 }))
+        emit(event(3, { kind: 'commit-ready', token: 'commit-token', handle, writingStyle: 'generated style' }))
+        await commitAck
+        return { success: true, version: 1, run: { ...snapshot, stage: 'blueprints' }, execution,
+          savedWritingStyle: 'saved style', handle, modelId: 'selected-model', replayed: false }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    const stepContext = context(); stepContext.generationModelId = 'selected-model'
+    await workflow.steps[2].executor({} as never, stepContext, callbacks)
+    expect(persist).toHaveBeenCalledOnce()
+    expect(stepContext.data.importRunExecution).toEqual(execution)
+    expect(stepContext.data.novelConfigSummary).toContain('类型:')
+    expect(ipcMocks.actual.mock.calls.some(call => ['db:import-run-effect-receipt-prepare', 'db:import-run-effect-receipt-commit',
+      'db:import-run-advance-stage', 'db:import-run-fail'].includes(call[1]))).toBe(false)
+    expect(listeners.size).toBe(0)
+  })
+
+  it.each([[false, false], [false, true], [true, false], [true, true]])('projects current core for an old-view replay with completed=%s dirty=%s', async (completed, dirty) => {
+    const snapshot = completed ? run({ stage: 'completed', status: 'completed', resumable: false, completedChapters: 1 }) : run({ stage: 'blueprints' })
+    const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+    useEditorStore.setState({ tabs: [{ id: 'config', name: 'config', type: 'config', projectKey: session.projectPath }], activeTabId: 'config', draftLedgers: {} })
+    const project = useProjectStore.getState().currentProject!
+    useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, writingStyle: 'B' } } })
+    if (dirty) useProjectStore.getState().updateNovelConfig({ writingStyle: 'C' }, session)
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:style') return { success: true, version: 1, run: snapshot, execution: completed ? null : execution,
+        savedWritingStyle: 'A', handle: { projectId: session.projectId, epoch: 'old-view', rootActionId: 'root', runId: 'generation' }, modelId: null, replayed: true }
+      if (channel === 'db:project-core-get') return { writingStyle: 'B' }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const publish = vi.spyOn(useProjectStore.getState(), 'publishSavedNovelConfig')
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    const stepContext = context()
+    stepContext.data.importRunExecution = execution
+    await workflow.steps[2].executor({} as never, stepContext, callbacks)
+    expect(stepContext.data.importRunExecution).toEqual(completed ? undefined : execution)
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ writingStyle: 'B' }), session, 'unsaved-edits')
+    expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe(dirty ? 'C' : 'B')
+    if (dirty) {
+      useProjectStore.getState().discardNovelConfigDraft(session.projectPath, session)
+      expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe('B')
+    }
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).toEqual(['db:import-run-get', 'import-generation:v1:style', 'db:project-core-get'])
+  })
+
+  it.each([
+    { stage: 'blueprints', status: 'running' },
+    { stage: 'completed', status: 'running' },
+    { stage: 'blueprints', status: 'completed' },
+  ] as const)('rejects a null lease outside completed replay: $stage / $status', async state => {
+    const snapshot = run(state)
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:style') return { success: true, version: 1, run: snapshot, execution: null,
+        savedWritingStyle: 'A', handle: null, modelId: null, replayed: true }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[2].executor({} as never, context(), callbacks)).rejects.toThrow('GENERATION_REQUEST_FAILED')
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).toEqual(['db:import-run-get', 'import-generation:v1:style'])
+  })
+
+  it('rejects a null lease on a non-replayed result even with a valid opened handle', async () => {
+    const snapshot = run({ stage: 'style' })
+    const authority = { owner: executionOwner, epoch: 1 }
+    const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: 'root', runId: 'generation' }
+    const listeners = new Map<string, (event: unknown) => void>()
+    ipcMocks.on.mockImplementation((channel, listener) => { listeners.set(channel, listener); return () => listeners.delete(channel) })
+    let opened!: () => void
+    const openedAck = new Promise<void>(resolve => { opened = resolve })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'generation:read') return { handle, artifacts: [], budget: {} }
+      if (channel === 'import-generation:v1:style-ack') { opened(); return { version: 1, savedWritingStyle: null } }
+      if (channel === 'import-generation:v1:style') {
+        listeners.get('import-generation:v1:style-progress')!({ projectId: session.projectId, leaseId: session.leaseId,
+          runId: snapshot.id, execution: authority, sequence: 1, kind: 'opened', token: 'open-token', handle, modelId: 'selected-model' })
+        await openedAck
+        return { success: true, version: 1, run: { ...snapshot, stage: 'blueprints' }, execution: null,
+          savedWritingStyle: 'A', handle, modelId: 'selected-model', replayed: false }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[2].executor({} as never, context(), callbacks)).rejects.toThrow('GENERATION_REQUEST_FAILED')
+    expect(ipcMocks.actual.mock.calls.some(call => call[1] === 'db:project-core-get')).toBe(false)
+  })
+
+  it.each([
+    { projectId: 'other-project', epoch: 'old-view', rootActionId: 'root', runId: 'generation' },
+    { projectId: session.projectId, epoch: 'old-view', rootActionId: '', runId: 'generation' },
+    { projectId: session.projectId, epoch: 'old-view', rootActionId: 'root', runId: '' },
+  ])('rejects a malformed historical replay handle', async handle => {
+    const snapshot = run({ stage: 'blueprints' })
+    const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:style') return { success: true, version: 1, run: snapshot, execution,
+        savedWritingStyle: 'A', handle, modelId: null, replayed: true }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[2].executor({} as never, context(), callbacks)).rejects.toThrow('GENERATION_REQUEST_FAILED')
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).toEqual(['db:import-run-get', 'import-generation:v1:style'])
+  })
+
+  it.each(['draft-changed', 'saved-with-newer-draft'] as const)('keeps the %s CAS result separate from main terminal writes', async mode => {
+    const snapshot = run({ stage: 'style' })
+    const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
+    const authority = { owner: executionOwner, epoch: 1 }
+    const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: 'root', runId: 'generation' }
+    const listeners = new Map<string, (event: unknown) => void>()
+    ipcMocks.on.mockImplementation((channel, listener) => { listeners.set(channel, listener); return () => listeners.delete(channel) })
+    let opened!: () => void, committed!: () => void
+    const openedAck = new Promise<void>(resolve => { opened = resolve })
+    const commitAck = new Promise<void>(resolve => { committed = resolve })
+    vi.spyOn(useProjectStore.getState(), 'commitGeneratedNovelConfig').mockImplementation(async (_generated, _expected, _session, _handle, effect) => {
+      if (mode === 'draft-changed') throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
+      await effect!()
+      throw new Error('GENERATION_SAVED_WITH_NEWER_AUTHOR_DRAFT')
+    })
+    const event = (sequence: number, payload: object) => ({ projectId: session.projectId, leaseId: session.leaseId,
+      runId: snapshot.id, execution: authority, sequence, ...payload })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string, request: unknown) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'generation:read') return { handle, artifacts: [], budget: {} }
+      if (channel === 'import-generation:v1:style-ack') {
+        const ack = request as ReferenceStyleAckRequest
+        if (ack.phase === 'opened') opened()
+        else { expect(ack.decision).toBe(mode === 'draft-changed' ? 'draft-changed' : 'accept'); committed() }
+        return { version: 1, savedWritingStyle: ack.phase === 'commit' && ack.decision === 'accept' ? 'saved style' : null }
+      }
+      if (channel === 'import-generation:v1:style') {
+        const emit = listeners.get('import-generation:v1:style-progress')!
+        emit(event(1, { kind: 'opened', token: 'open-token', handle, modelId: 'selected-model' }))
+        await openedAck
+        emit(event(2, { kind: 'commit-ready', token: 'commit-token', handle, writingStyle: 'generated style' }))
+        await commitAck
+        if (mode === 'draft-changed') return { success: false, errorCode: 'GENERATION_AUTHOR_DRAFT_CHANGED', error: 'changed' }
+        return { success: true, version: 1, run: { ...snapshot, stage: 'blueprints' }, execution,
+          savedWritingStyle: 'saved style', handle, modelId: 'selected-model', replayed: false }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[2].executor({} as never, context(), callbacks)).rejects.toThrow(mode === 'draft-changed'
+      ? 'GENERATION_AUTHOR_DRAFT_CHANGED' : 'GENERATION_SAVED_WITH_NEWER_AUTHOR_DRAFT')
+    expect(ipcMocks.actual.mock.calls.some(call => ['db:import-run-fail', 'db:import-run-cancel-at-boundary'].includes(call[1]))).toBe(false)
+  })
+
+  it('preserves the main style error and code without renderer failure writes', async () => {
+    const snapshot = run({ stage: 'style' })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:style') return { success: false, error: 'safe explanation', errorCode: 'IMPORT_STYLE_FAILED' }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[2].executor({} as never, context(), callbacks)).rejects.toMatchObject({ message: 'safe explanation', code: 'IMPORT_STYLE_FAILED' })
+    expect(ipcMocks.actual.mock.calls.map(call => call[1])).toEqual(['db:import-run-get', 'import-generation:v1:style'])
+  })
+
+  it('preserves a main hard failure when an earlier projection has failed', async () => {
+    const snapshot = run({ stage: 'style' })
+    const authority = { owner: executionOwner, epoch: 1 }
+    const handle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: 'root', runId: 'generation' }
+    const listeners = new Map<string, (event: unknown) => void>()
+    ipcMocks.on.mockImplementation((channel, listener) => { listeners.set(channel, listener); return () => listeners.delete(channel) })
+    let opened!: () => void
+    const openedAck = new Promise<void>(resolve => { opened = resolve })
+    let reads = 0
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'generation:read') {
+        if (++reads > 1) throw new Error('late projection read failed')
+        return { handle, artifacts: [], budget: {} }
+      }
+      if (channel === 'import-generation:v1:style-ack') { opened(); return { version: 1, savedWritingStyle: null } }
+      if (channel === 'import-generation:v1:style') {
+        const emit = listeners.get('import-generation:v1:style-progress')!
+        const identity = { projectId: session.projectId, leaseId: session.leaseId, runId: snapshot.id, execution: authority }
+        emit({ ...identity, sequence: 1, kind: 'opened', token: 'open-token', handle, modelId: 'selected-model' })
+        await openedAck
+        emit({ ...identity, sequence: 2, kind: 'log', log: 'calling-ai' })
+        return { success: false, errorCode: 'GENERATION_PROVIDER_FAILED', error: 'safe provider failure' }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    const failingCallbacks = { ...callbacks, log: () => { throw new Error('projection failed') } }
+    await expect(workflow.steps[2].executor({} as never, context(), failingCallbacks)).rejects.toMatchObject({
+      message: 'safe provider failure', code: 'GENERATION_PROVIDER_FAILED',
+    })
+    expect(reads).toBe(1)
+    expect(ipcMocks.actual.mock.calls.some(call => ['db:import-run-fail', 'db:import-run-cancel-at-boundary'].includes(call[1]))).toBe(false)
+  })
+
+  it('uses the registered generation error for a malformed style response', async () => {
+    const snapshot = run({ stage: 'style' })
+    ipcMocks.invoke.mockImplementation(async (_session, channel: string) => {
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'import-generation:v1:style') return { success: true }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createImportWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot, executionOwner })
+    await expect(workflow.steps[2].executor({} as never, context(), callbacks)).rejects.toThrow('GENERATION_REQUEST_FAILED')
+  })
+
   it.each([
     ['reference', 'global', 1, 'global-facts', 'project-global-facts', 'style'],
-    ['reference', 'style', 2, 'writing-style', 'project-writing-style', 'blueprints'],
     ['author-manuscript', 'global', 3, 'global-facts', 'project-global-facts', 'style'],
     ['author-manuscript', 'style', 4, 'writing-style', 'project-writing-style', 'blueprints'],
   ] as const)('uses representative chapters for the production %s %s step with its frozen session and durable commit', async (purpose, stage, stepIndex, effectKey, kind, nextStage) => {
@@ -198,7 +444,7 @@ describe('createImportWorkflow', () => {
     expect(ipcMocks.invoke).toHaveBeenCalledWith(session, 'db:import-run-advance-stage', snapshot.id, stage, nextStage, execution, session.projectPath)
   })
 
-  it.each([['global', 1, 'style'], ['style', 2, 'blueprints']] as const)(
+  it.each([['global', 1, 'style']] as const)(
     'does not rediscover chapters or regenerate a completed %s checkpoint', async (stage, stepIndex, nextStage) => {
       const snapshot = run({ stage, completedBatches: { [stage]: ['done'] } })
       const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }

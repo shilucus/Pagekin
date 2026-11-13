@@ -16,6 +16,7 @@ import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 import { projectRuntimeHost, type ProjectRuntime } from './project-runtime'
 import { referenceEmbeddingBudgetFailure, type ReferenceEmbeddingBudgetPlan } from './reference-embedding-budget-contract'
 import { LEGACY_VECTOR_MIGRATION_BLOCKED } from './knowledge-base-migration-error'
+import { acquireImportStageFlight, assertImportStageUnmanagedMutationAllowed, hasImportStageFlight } from './import-stage-flight'
 
 interface Subject {
   isDestroyed(): boolean
@@ -69,22 +70,8 @@ export class ReferenceKnowledgeExecutionFailure extends Error {
   }
 }
 
-const activeKnowledgeRuns = new WeakMap<object, Set<string>>()
-
 export function assertReferenceKnowledgeUnmanagedMutationAllowed(database: object, runId: unknown): void {
-  if (typeof runId !== 'string') return
-  if (activeKnowledgeRuns.get(database)?.has(runId)) throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
-}
-
-function setKnowledgeActive(database: object, runId: string, active: boolean): void {
-  let runs = activeKnowledgeRuns.get(database)
-  if (active) {
-    if (!runs) { runs = new Set(); activeKnowledgeRuns.set(database, runs) }
-    runs.add(runId)
-    return
-  }
-  runs?.delete(runId)
-  if (runs?.size === 0) activeKnowledgeRuns.delete(database)
+  assertImportStageUnmanagedMutationAllowed(database, runId)
 }
 
 function splitKnowledgeBatches(chapters: readonly ImportRunChapterSnapshot[]): ImportRunChapterSnapshot[][] {
@@ -233,7 +220,7 @@ export class ReferenceKnowledgeAuthority {
     try {
       ImportRunRepository.assertExecutionAuthority(issuance.runId, issuance.execution, Date.now(), this.context.database)
       ImportRunRepository.requestCancel(issuance.runId, issuance.execution, this.context)
-      if (issuance.inFlight === 0 && !issuance.knowledgeActive
+      if (issuance.inFlight === 0 && !issuance.knowledgeActive && !hasImportStageFlight(this.context.database, issuance.runId)
         && (snapshot.stage === 'knowledge' || !issuance.resumed)) {
         ImportRunRepository.cancelAtBoundary(issuance.runId, issuance.execution, this.context)
       }
@@ -282,6 +269,7 @@ export class ReferenceKnowledgeAuthority {
       ImportRunRepository.assertExecutionAuthority(retained.runId, retained.execution, Date.now(), this.context.database)
       return { reference: retained.reference, execution: retained.execution }
     }
+    assertImportStageUnmanagedMutationAllowed(this.context.database, request.runId)
     for (const old of this.issuances.values()) if (old.runId === request.runId && old.knowledgeActive) {
       throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
     }
@@ -369,6 +357,7 @@ export class ReferenceKnowledgeAuthority {
 
   resume(subject: Subject, reference: ReferenceKnowledgeReference): ImportRunStartResult {
     const issuance = this.require(subject, reference)
+    assertImportStageUnmanagedMutationAllowed(this.context.database, issuance.runId)
     if (issuance.knowledgeActive) throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
     issuance.admission.assertCurrent(this.resources, issuance.runId)
     ImportRunRepository.assertExecutionAuthority(issuance.runId, issuance.execution, Date.now(), this.context.database)
@@ -390,11 +379,15 @@ export class ReferenceKnowledgeAuthority {
     if (issuance.knowledgeOperation) return issuance.knowledgeOperation
     if (issuance.inFlight > 0) throw failure('KNOWLEDGE_BASE_REFERENCE_IMPORT_IN_FLIGHT')
 
-    const releaseWork = this.resources.acquireWork()
+    const releaseStage = acquireImportStageFlight(this.context.database, issuance.runId, 'knowledge')
+    let releaseWork: () => void
+    try { releaseWork = this.resources.acquireWork() }
+    catch (error) { releaseStage(); throw error }
     issuance.knowledgeActive = true
     issuance.resumed = true
-    setKnowledgeActive(this.context.database, issuance.runId, true)
-    const operation = this.runKnowledge(issuance, hooks, releaseWork)
+    const operation = this.runKnowledge(issuance, hooks, () => {
+      try { releaseWork() } finally { releaseStage() }
+    })
     issuance.knowledgeOperation = operation
     return operation
   }
@@ -501,7 +494,6 @@ export class ReferenceKnowledgeAuthority {
             operationFailure = new ReferenceKnowledgeExecutionFailure(safe.message, displayMessage)
           } else operationFailure.secondaryErrors.push(safeFailure(error))
         }
-        setKnowledgeActive(this.context.database, issuance.runId, false)
       }
     }
     if (operationFailure) throw operationFailure
@@ -594,6 +586,7 @@ export class ReferenceKnowledgeAuthority {
   async importChapter(subject: Subject, request: { reference: ReferenceKnowledgeReference; chapterNumber: number;
     execution: { owner: string; epoch: number } }): Promise<ReferenceKnowledgeImportResult> {
     const issuance = this.require(subject, request.reference)
+    assertImportStageUnmanagedMutationAllowed(this.context.database, issuance.runId)
     if (issuance.knowledgeActive) throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
     if (request.execution.owner !== issuance.execution.owner || request.execution.epoch !== issuance.execution.epoch) {
       throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_MISMATCH')
@@ -660,6 +653,7 @@ export class ReferenceKnowledgeAuthority {
 
   complete(subject: Subject, reference: ReferenceKnowledgeReference): { state: 'completed' } {
     const issuance = this.require(subject, reference)
+    assertImportStageUnmanagedMutationAllowed(this.context.database, issuance.runId)
     if (issuance.knowledgeActive) throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
     const grant = this.grants().complete(grantRef(issuance.reference))
     issuance.lifecycle.revoked = true
