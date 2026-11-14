@@ -1515,3 +1515,18 @@ The observations below retain their chronological state. The final acceptance at
   - `ACCEPT-001`、`ACCEPT-002` 与 `ACCEPT-003` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT, G-STORAGE, G-MODEL, G-DESIGN, G-HUMAN）。
   - 更新 `features.json`: 三项功能均标记为 `status: "completed"`, `passes: true`。累计 27 项完成，8 项待完成。
   - 产出 `stage-80-evidence.md`。下一步：Stage 81（`AUTO-001` ~ `AUTO-003` 任务创作策略、跨批候选管理、从零规划到待终验）。
+
+## 2026-11-14 - Stage 81: AUTO-001 ~ AUTO-003 任务创作策略、跨批候选管理、从零规划到待终验全量闭环
+
+- **范围**: `AUTO-001` (任务创作策略与独立机器决定)、`AUTO-002` (长篇跨批候选依赖与恢复)、`AUTO-003` (从零规划到待终验的完整自主推进)。
+- **执行命令与验证**:
+  - 运行 6 套自动策略、执行器与编排测试：`corepack pnpm test electron/services/__tests__/automation-decision-authority.test.ts electron/services/__tests__/autonomous-creation-executor.test.ts electron/services/__tests__/scratch-creation-orchestrator.test.ts src/shared/__tests__/automation-decision-contract.test.ts src/shared/__tests__/autonomous-executor-contract.test.ts src/shared/__tests__/scratch-orchestration-contract.test.ts`，共计 95/95 测试全部通过。
+  - 覆盖 AC：
+    - `AUTO-001`: TaskGrant 约束范围与有限修复次数、防伪造作者事实确认、未授权保持 candidate-only。
+    - `AUTO-002`: 跨批次前驱候选依赖传递、严格单向无环、中间候选绝不冒充 finalized、断点回放恢复隔离。
+    - `AUTO-003`: 空项目从零自主编排（设定/架构/大纲/角色/蓝图/正文/初验全流程闭环）、缺材料或超限暂停转待决、保留作者事实、结果留待作者终验。
+  - 静态门禁全量通过：`node ./node_modules/typescript/bin/tsc --noEmit` (0 错误)、`corepack pnpm run lint` (0 错误)、`corepack pnpm run check:i18n` (0 遗漏)、`corepack pnpm run build` (tsc && vite build 正常退出 0)。
+- **成果与结论**:
+  - `AUTO-001`、`AUTO-002` 与 `AUTO-003` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT, G-STORAGE, G-POLICY, G-MODEL）。
+  - 更新 `features.json`: 三项功能均标记为 `status: "completed"`, `passes: true`。累计 30 项完成，5 项待完成。
+  - 产出 `stage-81-evidence.md`。下一步：Stage 82（`MCP-001` + `SKILL-001` 窄领域 MCP 适配与阶段写作 Skill 衔接）。
