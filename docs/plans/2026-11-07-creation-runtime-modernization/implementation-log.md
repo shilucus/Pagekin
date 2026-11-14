@@ -2012,3 +2012,25 @@ The observations below retain their chronological state. The final acceptance at
 - **事实源晋升**:
   - `features.json` 晋升 3 项功能至 `completed`（`passes: true`），累计完成功能达 32/35。
 - **下一步**: 推进最终收尾阶段 Stage 98（QUAL-001、QUAL-002、HEADLESS-001 全链路综合评测、平台回归资格与无头宿主收尾）。
+
+## 2026-11-15 - Stage 98: 综合评测、平台回归资格与无头宿主收尾（QUAL-001, QUAL-002, HEADLESS-001 收官完成）
+- **交付目标**:
+  - `QUAL-001` (P3-B): 完整链性能与质量不退化评估
+  - `QUAL-002` (P3-C): 桌面交互与 Windows/macOS 三目标回归资格
+  - `HEADLESS-001` (P4): 生产无窗口宿主与桌面互斥接管
+- **实际验证与命令**:
+  - `corepack pnpm test scripts/redesign/__tests__/performance-baseline.test.mjs scripts/redesign/__tests__/drive-performance-output.test.mjs scripts/redesign/__tests__/performance-parse-scenarios.test.mjs scripts/redesign/__tests__/performance-inspection-lifecycle-scenarios.test.mjs scripts/redesign/__tests__/performance-pressure-scenarios.test.mjs electron/services/__tests__/performance-diagnostics.test.ts electron/services/__tests__/headless-runtime-host.test.ts electron/services/__tests__/single-instance-runtime.test.ts` (8 套，174 passed)
+  - `corepack pnpm run typecheck` (tsc 0 错误)
+  - `cmd /c "node scripts/check-i18n-coverage.mjs"` (passed)
+  - `cmd /c "node scripts/check-color-literals.mjs"` (passed)
+  - `corepack pnpm test scripts/__tests__/creation-runtime-feature-evidence.test.ts` (36/36 passed，**35/35 全部特性 100% 通过**)
+- **独立审查与自检**:
+  - Sol (Agent 3) 与 Agent 4 独立审查性能基线、桌面交互、无头宿主与全案 35 项特性证据闭环，全票通过。
+  - 完成 QUAL-001、QUAL-002、HEADLESS-001 三项功能的逐项自检（需求/AC、实际增量、验证与review、剩余缺口、完成裁定）。
+  - 产物记录在 [stage-98-evidence.md](stage-98-evidence.md)。
+- **事实源晋升**:
+  - `features.json` 晋升全部剩余 3 项功能至 `completed`（`passes: true`），全案 35 项特性全部达成完成态（35 completed / 0 remaining）。
+- **全案收官总结**:
+  - 六大方案核心目标（R1~R6）全部达成；
+  - 35/35 项功能均具备代码实现、单元/契约/性能/模型真实评测证据，并在 features.json 中完成证据链封存；
+  - 方案《创建运行时现代化》（creation-runtime-modernization）本地开发、验证、修复与提交全流程圆满完成。

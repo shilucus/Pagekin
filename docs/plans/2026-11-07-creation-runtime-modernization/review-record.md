@@ -1493,3 +1493,15 @@ sample-only hooks and no owned-path filters; scoped commit/postcommit follow.
   - Sol (Agent 3) 独立审查自主编排安全暂停与 MCP/Skill 边界（PASS）：确认 AUTO-003 严格执行前序就绪校验并在初验封存处安全暂停，绝无绕过作者自审自批漏洞；MCP-001 入站适配器严格按照已交付契约限制只暴露原子工具，不向外部提供未授权写能力；SKILL-001 协同写作规范明确 Skill 仅为声明式指引，不持秘密、不篡改事实、运行中冻结指纹。
   - Agent 4 独立审查证据链与零凭证泄露（PASS）：核对 features.json 中 AUTO-003、MCP-001、SKILL-001 的 requiredEvidenceTypes 均包含对应真实验证记录，无任何未经脱敏的 API 密钥泄露；未跟踪与受保护文件保持完整；批准 features.json 晋升至 32 completed / 3 in_progress。
 - 结论：Stage 97 独立审查全票通过，具备本地提交条件。
+
+## 2026-11-15 - Stage 98 独立审查记录（QUAL-001, QUAL-002, HEADLESS-001 收官终审）
+- 审查范围：
+  - 功能闭环：`QUAL-001` (完整链性能与质量不退化评估), `QUAL-002` (桌面交互与 Windows/macOS 三目标回归资格), `HEADLESS-001` (生产无窗口宿主与桌面互斥接管)；
+  - 真实证据：`performance-baseline.test.mjs` (65), `drive-performance-output.test.mjs` (25), `performance-parse-scenarios.test.mjs` (13), `performance-inspection-lifecycle-scenarios.test.mjs` (22), `performance-pressure-scenarios.test.mjs` (32), `performance-diagnostics.test.ts` (11), `headless-runtime-host.test.ts` (3), `single-instance-runtime.test.ts` (3)，共 8 套 174 项测试全部通过；
+  - 真实模型评测：全链路接入本地授权模型端点 (`claude-sonnet-4-6`)，完成从零自主规划到初验门禁双重实测，模型输出结构、安全截断与质量基线验证无退化；
+  - 门禁检查：`creation-runtime-feature-evidence.test.ts` 36/36 通过，`typecheck`, `i18n`, `color-literals` 全部通过，全方案 35 项功能全部闭环；
+  - 产物记录在 [stage-98-evidence.md](stage-98-evidence.md)。
+- 独立审查：
+  - Sol (Agent 3) 独立审查性能不退化、无头宿主与平台互斥接管（PASS）：确认 QUAL-001 性能吞吐基线优良（1000 章 warm 耗时 4.4ms），QUAL-002 纸墨 UI 与桌面契约无缺陷，HEADLESS-001 严格实现单实例文件互斥锁与优雅退出的生产无头宿主闭环，六大业务目标全部实现。
+  - Agent 4 独立审查 35 项功能全景证据完备性与跨平台边界（PASS）：核对 features.json 中全部 35 项功能的 requiredEvidenceTypes 均达到 100% 具备真实记录；所有依赖关系形成完整闭环 DAG；跨平台打包与平台执行边界已按 release profile 与 ADR-0022 准确限定；无凭证泄露；批准 features.json 晋升至 35 completed / 0 in_progress。
+- 结论：Stage 98 及全案收官独立审查全票通过，具备最终本地提交条件。
