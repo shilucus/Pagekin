@@ -1783,3 +1783,37 @@ The observations below retain their chronological state. The final acceptance at
   11owned paths,344built files and full feature semantic conservation. Root
   scoped Git/postcommit preservation checks follow;
   no new browser/Electron/model/platform or complete UI001 claim.
+
+## 2026-11-14 - Stage 90: Unavailable Inbound Execution Guard
+
+- Stage89 committed as `83ed149c48cfbc60fc3d48b011c0e9c2d982100d`; postcommit11paths,
+  40bound identities, empty index and all protected files match the review.
+- Freeze the confirmed API fake acceptance only: a stored authority is not a
+  composed executor. New start/resume will fail COMMAND_NOT_ALLOWED/503 before
+  effects, after original auth/idempotency/unknown/ownership/collision guards.
+- Agent2 owns service and narrow tests/test-only history. Root owns ADR0050,
+  records, commands and Git; Sol independently reviews current integration/raw.
+  No production executor/seed API, new persistence, UI or dependency change.
+- [Stage90 evidence](stage-90-evidence.md) freezes scope and verification mapping;
+  actual implementation/validation/review remain pending at this scope freeze.
+- Service now rejects known-unavailable new execution; old simulated unknown,
+  initialized/running/resumed events and success command receipts are removed.
+  Original auth/cache/pending/unknown/ownership/collision ordering is retained.
+- Root inspects direct CLI consumers and observes actual4passed/8failed RED;
+  test-only historical seeding replaces fake-start assumptions. Actual final
+  8files175/175 and metadata36/36 pass, no failed/pending/todo. Initial53/53 is
+  overlapping. Missing-output-directory pipeline failure remains disclosed.
+- Fresh typecheck/lint/colors/i18n/build exit0. Sol independently accepts current
+  source and raw; no production CLI code or user-visible app output is changed.
+  Manifest binds40identities,4reports,14owned paths and complete344-file build
+  digest65bd0a7a0cfa3f7bb3acc5485a6dad92669e1bf0ef2703018d227d3b860082b8.
+  Same build as89 is not real API composition evidence. API001/CLI001 each gain
+  2partial records; all prior semantics and14/21status flags remain unchanged.
+- Next independently executable work is SCHED002 actual two-book serial/concurrent
+  fixture observation, followed by domain-writer admission. Current network broker
+  and historical Stage72 claims do not close the domain matrix or performance
+  gate. These code/isolated-run tasks do not require new user policy or credentials.
+- Sol's final independent artifact audit accepts40/40identities,4reports,exact
+  14owned paths,344built files and full prior feature semantics. Root confirms
+  empty index, unchanged protected files and no effective hooks/owned filters;
+  scoped Git/postcommit preservation checks follow.

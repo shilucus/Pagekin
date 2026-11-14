@@ -1318,3 +1318,31 @@ remain. No new browser/Electron, complete background migration, literary quality
 or platform claim follows. Sol's final independent artifact audit accepts all
 40identities,3reports,complete344-file build tree,exact11owned paths and full
 entry feature semantic comparison. Root scoped Git/postcommit audit follows.
+
+## 2026-11-14 - Stage 90 Independent Inbound Unavailability Review
+
+Sol independently reads service/controller/HTTP/MCP/CLI call sites and accepts
+the narrow source correction. Start keeps foreign/orphan403 and same-owner
+new-key409 before503; resume keeps missing-ID400 and inaccessible403 before503.
+Authentication and human-review scope precede cache, historical succeeded replay
+does not dispatch, unknown refuses retry, and rejection clears only its pending
+entry. Default/raw-authority construction cannot mint running/resumed effects.
+
+Root's direct downstream inspection exposes old CLI tests depending on fake
+execution. Actual CLI RED4passed/8failed of12 remains. Tests now use explicit
+fictional history for reads/replay/unknown and actual unavailable start mapping;
+CLI production is untouched. Sol reviews these changes and independently reads
+final8files175/175,0failed/pending/todo. Initial5files53 overlap, not additive.
+An output-directory pipeline failure has no claimed test result; the directory
+is created locally before rerun. No initial service RED is invented.
+
+Fresh typecheck, lint/colors, i18n and source build actually exit0; checklist36/36
+follows exactly4partial API001/CLI001 appends. Full prior JSON is semantically
+identical after removing them, retaining14completed/21in_progress. The listener
+wording finding is corrected: tests use temporary loopback, no new production
+listener. Fictional memory history is not durable dispatch or trusted approval.
+Sol's final independent artifact audit accepts40/40identities, all4reports,
+complete344-file build,exact14owned paths and full prior feature semantics.
+Root confirms an empty index, unchanged protected files, sample-only hooks and
+unspecified owned-path filters; scoped Git/postcommit checks follow. No full
+API/CLI, Electron/browser, model/quality, speedup or platform claim follows.

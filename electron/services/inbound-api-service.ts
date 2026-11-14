@@ -327,58 +327,9 @@ export class InboundApiService {
         if (owner) {
           this.assertTaskOwner(taskId, req)
           throw new InboundDomainError(INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, 'Task ID is already in use', 409)
-        } else {
-          if (this.taskEvents.has(taskId)) this.rejectTaskOwner()
-          this.taskOwners.set(taskId, { projectId: req.projectId, callerId: req.callerId, grantId: req.grantId })
         }
-        this.recordEvent(taskId, {
-          taskId,
-          projectId: req.projectId,
-          type: 'status_changed',
-          data: { status: 'running', command: req.command },
-        })
-        this.recordEvent(taskId, {
-          taskId,
-          projectId: req.projectId,
-          type: 'step_completed',
-          data: { stepIndex: 0, name: 'initialized' },
-        })
-
-        // Check if an intentional unknown test condition is passed in payload
-        if (req.payload.simulateTerminalStatus === 'unknown') {
-          return {
-            operationKey,
-            idempotencyKey: req.idempotencyKey,
-            projectId: req.projectId,
-            grantId: req.grantId,
-            command: req.command,
-            payloadHash,
-            status: 'unknown',
-            error: {
-              code: 'SIMULATED_UNKNOWN_TERMINAL',
-              message: 'Simulated unknown terminal state for testing non-retryable barrier',
-            },
-            createdAt: now,
-            completedAt: now,
-          }
-        }
-
-        return {
-          operationKey,
-          idempotencyKey: req.idempotencyKey,
-          projectId: req.projectId,
-          grantId: req.grantId,
-          command: req.command,
-          payloadHash,
-          status: 'succeeded',
-          result: {
-            taskId,
-            state: 'running',
-            leaseId: (req.payload.leaseId as string) || 'lease-default',
-          },
-          createdAt: now,
-          completedAt: now,
-        }
+        if (this.taskEvents.has(taskId)) this.rejectTaskOwner()
+        throw new InboundDomainError(INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, 'Workflow execution is unavailable', 503)
       }
 
       case 'workflow:resume': {
@@ -391,25 +342,7 @@ export class InboundApiService {
           )
         }
         this.assertTaskOwner(taskId, req)
-        this.recordEvent(taskId, {
-          taskId,
-          projectId: req.projectId,
-          type: 'status_changed',
-          data: { status: 'resumed' },
-        })
-
-        return {
-          operationKey,
-          idempotencyKey: req.idempotencyKey,
-          projectId: req.projectId,
-          grantId: req.grantId,
-          command: req.command,
-          payloadHash,
-          status: 'succeeded',
-          result: { taskId, state: 'resumed' },
-          createdAt: now,
-          completedAt: now,
-        }
+        throw new InboundDomainError(INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, 'Workflow execution is unavailable', 503)
       }
 
       case 'workflow:get': {

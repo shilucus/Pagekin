@@ -2528,7 +2528,23 @@
         "artifactOrReceipt": "stage-87-evidence.md; .runtime/creation-runtime-modernization/stage-87/focused-final.json",
         "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; fictional in-memory tasks and ephemeral loopback",
         "result": "Partial task ownership/collision repair independently reviewed: exact project/caller/grant guards, inaccessible-task uniform403, same-owner new-key409 before effects, legal cursor/resume, prior same-key replay and unknown barrier retained. Final integrated13files334/334; fresh typecheck/lint/colors/i18n/build exit0.",
-        "limitations": "No real driver dispatch, production broker, grant issuer, persistent receipts or Electron qualification; status remains in_progress/false. The334 includes overlapping API/MCP/AUTO/checklist tests and is not summed with earlier runs."
+          "limitations": "No real driver dispatch, production broker, grant issuer, persistent receipts or Electron qualification; status remains in_progress/false. The334 includes overlapping API/MCP/AUTO/checklist tests and is not summed with earlier runs."
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "83ed149c48cfbc60fc3d48b011c0e9c2d982100d plus stage-90-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-90-evidence.md; ../../adr/0050-inbound-domain-api-security-and-idempotency-contract.md",
+          "environment": "Windows x64; current API service/controller/MCP/CLI call-chain review; F2 section7.1/7.3 and bounded ADR0050 decision",
+          "result": "Partial truthful-execution repair: uncomposed start/resume reject COMMAND_NOT_ALLOWED/503 after original auth/idempotency/history/unknown and exact ownership/collision guards, before owner/event/success effects. Raw authority is not a composed executor. Independent source review accepted.",
+          "limitations": "API001 remains in_progress/false. No production executor, persistent receipts, new grant/approval channel, Electron, model or platform qualification. Existing historical succeeded receipts still replay without dispatch."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "83ed149c48cfbc60fc3d48b011c0e9c2d982100d plus stage-90-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-90-evidence.md; .runtime/creation-runtime-modernization/stage-90/impact-final.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; fictional memory history and ephemeral loopback only",
+          "result": "Final8files175/175, zero failed/pending/todo: default/raw-authority unavailability, repeated/concurrent zero effects, original guards and history, HTTP/MCP/CLI failure propagation. Fresh typecheck/lint/colors/i18n/source build exit0; independent source/raw review accepted.",
+          "limitations": "Partial only. Initial output-directory pipeline failure and CLI4/12 RED remain; first service focus53/53 overlaps final175. Fictional seeded history is not production dispatch/durability/approval. No new Electron/browser, complete API, model quality, speed or platform evidence."
         }
       ]
     },
@@ -2589,6 +2605,22 @@
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; creation-cli.test.ts (12/12)",
           "result": "Creation CLI suites passed (12/12); typecheck, lint, check:i18n, build exit 0; submit, run --wait, events/wait, disconnect-resilience, structured receipt printing and exit code conformance qualified",
           "limitations": "Automated workflow loop belongs to AUTO-001; MCP inbound tools belong to MCP-001"
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "83ed149c48cfbc60fc3d48b011c0e9c2d982100d plus stage-90-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-90-evidence.md",
+          "environment": "Windows x64; actual CLI HTTP error/exit mapping and explicit fictional-history test review",
+          "result": "Partial honesty repair: unchanged CLI propagates absent executor as submit503/runAndWait FAILED, not successful task completion. Historical receipt/events/unknown/cancel/review tests are labeled fictional memory history; no production simulated unknown remains. Independent review accepted.",
+          "limitations": "CLI001 remains in_progress/false. Real run-wait, broker recovery and single-use human approval are not qualified; no production CLI or visible output change."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "83ed149c48cfbc60fc3d48b011c0e9c2d982100d plus stage-90-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-90-evidence.md; .runtime/creation-runtime-modernization/stage-90/cli-impact-red.json; impact-final.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; fictional memory history and ephemeral loopback",
+          "result": "CLI RED4passed/8failed of12 retained; final13/13 CLI included in8files175/175. Original token masking, task/human-review separation and historical receipt/cursor behavior retained. Fresh quality/source-build checks exit0 and independent review accepted.",
+          "limitations": "The175 is shared with API evidence and not added again. No production start, persistent receipts, Electron, trusted approval channel, model quality, speedup or platform qualification; no service RED is invented."
         }
       ]
     },

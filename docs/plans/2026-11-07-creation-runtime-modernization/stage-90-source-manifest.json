@@ -1,0 +1,243 @@
+{
+  "schemaVersion": 1,
+  "stage": 90,
+  "sourceSha": "83ed149c48cfbc60fc3d48b011c0e9c2d982100d",
+  "productionSourcesChanged": true,
+  "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12",
+  "sourceFiles": [
+    {
+      "path": "docs/adr/0050-inbound-domain-api-security-and-idempotency-contract.md",
+      "sha256": "99f5282468bc9a685779ccc421033b373687c6102aa91dc472bf70cd466d20fd"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/README.md",
+      "sha256": "5302a8930d95da9cd618bc528dd8d40d99f2c59957ce91b6332bc0e974c8b5c3"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/features.json",
+      "sha256": "44fb062cbd307f6006a3850648f1b2538742fc5b6495357e0c7c04c1ae35b31c"
+    },
+    {
+      "path": "electron/controllers/inbound-api-controller.ts",
+      "sha256": "d2035a381831f4c238f689c23ec10932b77cb4dafa3b4eed5fcb73ea6144e1c2"
+    },
+    {
+      "path": "electron/controllers/__tests__/inbound-api-controller.test.ts",
+      "sha256": "99b8c6fd49ea71bb80374561657e2a38b0377ad5769cd48031232635edeb66b8"
+    },
+    {
+      "path": "electron/controllers/__tests__/inbound-api-controller.headers.test.ts",
+      "sha256": "6c179c509f8d52ac17eff19e6498fdf59c24b3d12b2ad4b2d02817b21aa84cde"
+    },
+    {
+      "path": "electron/controllers/__tests__/inbound-api-controller.idempotency.test.ts",
+      "sha256": "b62bb84d9deb37c49384528e76f29391626e3bf51f3503488e800e2fc4896c5c"
+    },
+    {
+      "path": "electron/controllers/__tests__/inbound-api-controller.ownership.test.ts",
+      "sha256": "0df7cef4376175b93872ebf96b5abde277e03d50fee10f6d4554ceb28e78252c"
+    },
+    {
+      "path": "electron/controllers/__tests__/inbound-api-history-fixture.ts",
+      "sha256": "d33b1ee735bb2d72d90ce1745313eeaa72ffa8f876771f93f6ccf979a84978ec"
+    },
+    {
+      "path": "electron/services/inbound-api-service.ts",
+      "sha256": "0181f10012a00f319b4f7879563013069839b7238bed55f63712863b9cb9b64c"
+    },
+    {
+      "path": "electron/services/inbound-mcp-adapter.ts",
+      "sha256": "ec91884386d4c5c8c58049038c234cebc202b36d9197ff234ea9a521ca30ed97"
+    },
+    {
+      "path": "electron/services/__tests__/inbound-mcp-adapter.test.ts",
+      "sha256": "bfd68884bf12c8016e1015d6124bf270b0e58d62c1a1d9ac2e838f2523b134ab"
+    },
+    {
+      "path": "scripts/cli/creation-cli.ts",
+      "sha256": "49e35ea23d623f65ac1066e5f36e11de10ab88d55300e55fecd66670095e88c9"
+    },
+    {
+      "path": "scripts/cli/__tests__/creation-cli.test.ts",
+      "sha256": "ccaa0cb9e10bca514c0a89f812674ab74fe492757cfd7ee89cc8e7bffca011ec"
+    },
+    {
+      "path": "scripts/__tests__/creation-runtime-feature-evidence.test.ts",
+      "sha256": "0ca582e88bd8a2468892d0eb5d86324f42deed400c029ddb725815b7f0057f5a"
+    },
+    {
+      "path": "src/shared/inbound-domain-contract.ts",
+      "sha256": "17f038422757462b8c809fa70c377e1b110c6ef3fb8016dabc9af2e7df6d87a8"
+    },
+    {
+      "path": "src/shared/inbound-mcp-contract.ts",
+      "sha256": "a0f270e6c3cf0b6112e4567ccf987548569f0c91eaab9540cc830934fcd6edaa"
+    },
+    {
+      "path": "src/shared/__tests__/inbound-domain-contract.test.ts",
+      "sha256": "8938d6c5880bf9c5b75293bf85d8b1c9a3942d5b348dcac397c147eea08a88ab"
+    },
+    {
+      "path": "src/shared/__tests__/inbound-mcp-contract.test.ts",
+      "sha256": "08c8bbf2a8f0b56417e0a319c356dea978499241bdeabde5fdb3b9a4f229203b"
+    },
+    {
+      "path": "package.json",
+      "sha256": "aa4cbf80b48400a90dd254fc340b86d3fe57452421438cf6e5971f5ccaf026c6"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "e235a794f493ce2a5fd0af786efcc573093bab34b70679c17beff931d6e5926f"
+    },
+    {
+      "path": "vite.config.ts",
+      "sha256": "daca389a0e2d1d557e4256dd85e1c66b2e2f2a5619a5f037f56c5aaf218fcc47"
+    }
+  ],
+  "rawArtifacts": [
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/build.log",
+      "sha256": "7fa1ee0aa90eb9e9a10c5ef1bc21216ae7cf1bdad6ac4f385cf9418ee656c985"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/checklist-final.json",
+      "sha256": "7d8d7453d147cc1f1847b6115c6c6a4cffaa99e20756d58a5e13138854fe6210"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/checklist-final.log",
+      "sha256": "9c031e02cdb3b3079bdd885506a9637a9070653d490f134d47ca02d98a010b37"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/cli-impact-red.json",
+      "sha256": "fe56fbc95cde937f221ef49bb05d7a2fc887917898056d31eabc048a965d6652"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/cli-impact-red.log",
+      "sha256": "509070077ad973edaad6b28262373458204384a8b48c2dcd90ff0c23489c54c0"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/focused-first.json",
+      "sha256": "f1b1be5235b5937314b4d9ae18e145ed842ba11b8576a90e1b384072de371d3d"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/focused-first.log",
+      "sha256": "c351856ed604c77335b7ef504b0438ca0d5690ce573e9ca401f6ac05725a7f31"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/i18n.log",
+      "sha256": "0ff0abd7910f67af6931a6ea4ff912f1000fb00c8a4acede6ca22d0ad3c20bdd"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/impact-final.json",
+      "sha256": "7aa8e1cb5d70ce8b7c2f6c6b7b22c1cb5cd9e4292e02d94be9c3deadca489532"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/impact-final.log",
+      "sha256": "55aa111cd388da88b9c5fa06ed54578ae4f59f361251c181329c1f837870c15a"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/lint.log",
+      "sha256": "cee744aea3cd35e8306c4ea9bc2f0b03d489a68cb6a8fb461c90c41eec4d2eb7"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/typecheck.log",
+      "sha256": "069beb6158dd7ac3f86604f2833e4ece296004b5e37839db8548bba60317d44a"
+    }
+  ],
+  "builtArtifacts": [
+    {
+      "path": "dist/index.html",
+      "sha256": "09449ad825727d20ff1f6d273107363871c2e0bc4fdd9ecc4d965fac84063fd1"
+    },
+    {
+      "path": "dist-electron/main.js",
+      "sha256": "e9b757b37e3d4f04760a7a63908167dade562c9f34eece82104f4ed4f64ab008"
+    },
+    {
+      "path": "dist-electron/preload.mjs",
+      "sha256": "699cd2465764fc6090fa1ca93bd9f5967a628a2bccf3f7894778d85c1e660ceb"
+    }
+  ],
+  "buildTree": {
+    "roots": [
+      "dist",
+      "dist-electron"
+    ],
+    "fileCount": 344,
+    "algorithm": "SHA256 of UTF8 path:lowercase-sha256 lines, ordinal path sort, LF including final newline",
+    "sha256": "65bd0a7a0cfa3f7bb3acc5485a6dad92669e1bf0ef2703018d227d3b860082b8"
+  },
+  "protectedFiles": [
+    {
+      "path": "docs/repository-analysis-2026-11-07.md",
+      "sha256": "bb6866223c596c690e4d2e35c38faa9ebb05e45084776ee1b285083bad89a74b"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-evidence.md",
+      "sha256": "5aa85559b9a71022d378cfa7b50eb55e1539beabd77e1766050d819fa336f1f9"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-source-manifest.json",
+      "sha256": "7ae7d4318c58dc872664bb89bd455a3995a3c02e5c2de4e2c8fe7d3d9ad48130"
+    }
+  ],
+  "reports": [
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/checklist-final.json",
+      "files": 1,
+      "total": 36,
+      "passed": 36,
+      "failed": 0,
+      "pending": 0,
+      "todo": 0,
+      "success": true
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/cli-impact-red.json",
+      "files": 1,
+      "total": 12,
+      "passed": 4,
+      "failed": 8,
+      "pending": 0,
+      "todo": 0,
+      "success": false
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/focused-first.json",
+      "files": 5,
+      "total": 53,
+      "passed": 53,
+      "failed": 0,
+      "pending": 0,
+      "todo": 0,
+      "success": true
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-90/impact-final.json",
+      "files": 8,
+      "total": 175,
+      "passed": 175,
+      "failed": 0,
+      "pending": 0,
+      "todo": 0,
+      "success": true
+    }
+  ],
+  "ownedPaths": [
+    "docs/adr/0050-inbound-domain-api-security-and-idempotency-contract.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/evidence-map.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/features.json",
+    "docs/plans/2026-11-07-creation-runtime-modernization/implementation-log.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/review-record.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-90-evidence.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-90-source-manifest.json",
+    "electron/controllers/__tests__/inbound-api-controller.idempotency.test.ts",
+    "electron/controllers/__tests__/inbound-api-controller.ownership.test.ts",
+    "electron/controllers/__tests__/inbound-api-controller.test.ts",
+    "electron/controllers/__tests__/inbound-api-history-fixture.ts",
+    "electron/services/__tests__/inbound-mcp-adapter.test.ts",
+    "electron/services/inbound-api-service.ts",
+    "scripts/cli/__tests__/creation-cli.test.ts"
+  ],
+  "limitations": "Partial uncomposed API/CLI safety only. Fictional seeded memory history is not real dispatch, persistent recovery or trusted human approval. Report counts overlap and are not summed. No new Electron/browser, full API/CLI, model quality, speedup or platform qualification; unchanged build is not production composition proof."
+}

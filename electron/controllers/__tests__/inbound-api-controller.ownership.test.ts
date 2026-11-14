@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { INBOUND_ERROR_CODES, type InboundCommand, type InboundRequest } from '../../../src/shared/inbound-domain-contract'
 import { InboundApiController } from '../inbound-api-controller'
+import { seedFictionalTask } from './inbound-api-history-fixture'
 
 describe('inbound task ownership', () => {
   it('isolates task reads and resume across project, caller and grant, including start collisions', async () => {
@@ -9,7 +10,7 @@ describe('inbound task ownership', () => {
     const otherToken = controller.service.issueToken({ callerId: 'other', scopes: ['task'], allowedProjectIds: ['book-a'] })
     const owner: InboundRequest = { callerId: 'owner', token: token.token, projectId: 'book-a', grantId: 'grant-a',
       command: 'workflow:start', idempotencyKey: 'start', payload: { taskId: 'task-a' } }
-    await controller.handleRequest(owner)
+    seedFictionalTask(controller.service, owner, 'task-a')
     const strangers = [
       { ...owner, projectId: 'book-b' },
       { ...owner, callerId: 'other', token: otherToken.token },
@@ -30,9 +31,9 @@ describe('inbound task ownership', () => {
     expect(initial.result).toMatchObject({ taskId: 'task-a', eventCount: 2 })
     const cursor = await controller.handleRequest(read('workflow:events', 'events', 1))
     expect(cursor.result?.events).toMatchObject([{ sequenceNumber: 2, type: 'step_completed' }])
-    const resumed = await controller.handleRequest(read('workflow:resume', 'resume'))
-    expect(resumed.result).toMatchObject({ taskId: 'task-a', state: 'resumed' })
-    expect(controller.service.getEvents('task-a')).toHaveLength(3)
+    await expect(controller.handleRequest(read('workflow:resume', 'resume')))
+      .rejects.toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, status: 503 })
+    expect(controller.service.getEvents('task-a')).toHaveLength(2)
   })
 
   it.each(['workflow:get', 'workflow:events', 'workflow:resume'] as const)(

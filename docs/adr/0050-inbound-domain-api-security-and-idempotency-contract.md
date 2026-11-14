@@ -62,6 +62,32 @@
   recovery or proof that the real WorkflowDriverAuthority is composed. No new
   public execution capability or trusted author approval channel is opened.
 
+## Stage 90 Unavailable Execution Boundary (2026-11-14)
+
+- The current inbound service has no composed real start/resume executor. A
+  stored `WorkflowDriverAuthority` pointer or getter is not dispatch capability.
+  Until actual composition and its task-grant policy are independently accepted,
+  every request requiring a new `workflow:start` or `workflow:resume` execution
+  fails closed with existing `COMMAND_NOT_ALLOWED` and HTTP503. This is an
+  explicit bounded unavailability decision, not a claim that the old contract
+  already specified503 or that production execution has been delivered.
+- Structural validation and authentication remain first. Existing completed
+  receipt replay, payload mismatch, pending join and unknown refusal retain
+  precedence. Start still rejects foreign/orphan task identities uniformly403
+  and same-owner existing-task/new-key collisions409 before the unavailable
+  branch. Resume still rejects missing taskId400 and unknown/foreign owners403.
+- A known unavailable execution creates no owner, initialized/running/resumed
+  event or successful command receipt. The existing rejected-dispatch path clears
+  only its own pending entry. Repeating or overlapping the request cannot turn
+  that known failure into an unknown outcome or a recorded task. The former
+  payload-controlled simulated unknown branch is not a production execution API.
+- Explicit fictional owner/event/receipt/pending history in test-only fixtures
+  exercises retained read/idempotency rules; it is not a production seed API,
+  a durable adapter, actual execution or trusted human approval. Real rejection
+  tests must use the unmodified production dispatch, including raw-authority-only
+  construction. No speculative executor interface, second broker or new public
+  capability is introduced by this repair.
+
 ## 效果与保证
 - 实现外部 CLI 与工具链对 Pagekin 创作运行时的安全受控调用；
 - 保障单书隔离与人审门禁不可突破；

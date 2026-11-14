@@ -205,3 +205,19 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
   corrected. Luna separately confirms DRIVER002's existing internal registered
   kernel AC; it is not the legacy renderer batch. All35 semantics except two
   partial evidence appends remain unchanged,14completed/21in_progress.
+
+## Stage90 Unavailable Inbound Execution
+
+- [Stage90](stage-90-evidence.md) and ADR0050 bind the bounded fail-closed API
+  decision: optional authority is not an executor. New start/resume reject503
+  without owner/event/success effects after original auth, history, unknown and
+  exact ownership/collision checks. No new broker, persistence or approval claim.
+- First5files53/53; direct CLI impact RED4passed/8failed of12 is retained. Final
+  8files175/175 and metadata36/36 pass, with fresh type/lint/colors/i18n/build0.
+  CLI production is unchanged; fictional historical tests do not execute tasks.
+  The initial missing-output-directory pipeline failure is explicitly recorded.
+- Sol independently accepts bounded source/raw. [Manifest](stage-90-source-manifest.json)
+  binds40local source/raw/build/protected identities,4reports and the344-file
+  build tree; unchanged build is not proof of production composition. API001 and
+  CLI001 each gain2partial records only; entire previous JSON semantics and14/21
+  flags remain. No new Electron/browser, model, speedup or platform qualification.

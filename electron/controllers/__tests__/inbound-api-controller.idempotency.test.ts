@@ -1,126 +1,105 @@
 import { describe, expect, it } from 'vitest'
-import { INBOUND_ERROR_CODES, type InboundRequest } from '../../../src/shared/inbound-domain-contract'
+import { INBOUND_ERROR_CODES, type InboundReceipt, type InboundRequest } from '../../../src/shared/inbound-domain-contract'
+import type { WorkflowDriverAuthority } from '../../services/workflow-driver-authority'
+import { InboundApiService } from '../../services/inbound-api-service'
 import { InboundApiController } from '../inbound-api-controller'
+import { clearFictionalPending, fictionalReceipt, fictionalStateCounts, seedFictionalPending,
+  seedFictionalReceipt, seedFictionalTask } from './inbound-api-history-fixture'
 
 const projectId = 'fictional-project'
-
-function fixture(callerId = 'fictional-caller', grantId = 'fictional-grant') {
-  const controller = new InboundApiController()
-  const token = controller.service.issueToken({ callerId, scopes: ['task'], allowedProjectIds: [projectId] })
+function fixture(callerId = 'fictional-caller', grantId = 'fictional-grant', service = new InboundApiService()) {
+  const controller = new InboundApiController({ service })
+  const token = service.issueToken({ callerId, scopes: ['task'], allowedProjectIds: [projectId] })
   const request: InboundRequest = { callerId, token: token.token, projectId, grantId,
-    command: 'workflow:start', idempotencyKey: 'fictional-key', payload: {} }
+    command: 'workflow:start', idempotencyKey: 'fictional-key', payload: { taskId: 'fictional-task' } }
   return { controller, request }
 }
 
-describe('in-process inbound idempotency at the controller boundary', () => {
-  it.each(['fixed', 'automatic'] as const)('joins overlapping equivalent starts with %s task identity', async (mode) => {
-    const { controller, request } = fixture()
-    const task = mode === 'fixed' ? { taskId: 'fictional-task' } : {}
-    const first = { ...request, payload: { ...task, outer: { alpha: 1, beta: 2 }, suffix: 'value' } }
-    const reordered = { ...request, payload: { suffix: 'value', outer: { beta: 2, alpha: 1 }, ...task } }
-    const [a, b] = await Promise.all([controller.handleRequest(first), controller.handleRequest(reordered)])
-    expect(a).toEqual(b)
-    expect(a.status).toBe('succeeded')
-    const taskId = a.result?.taskId as string
-    expect(taskId).toBeTruthy()
-    if (mode === 'fixed') expect(taskId).toBe('fictional-task')
-    expect(controller.service.getEvents(taskId).map(event => event.type)).toEqual(['status_changed', 'step_completed'])
-    expect(await controller.handleRequest(first)).toEqual(a)
-    expect(controller.service.getEvents(taskId)).toHaveLength(2)
+describe('inbound fail-closed execution and idempotency', () => {
+  it.each(['none', 'raw authority'] as const)('rejects new starts with %s without effects or cached receipt', async mode => {
+    const service = mode === 'none' ? new InboundApiService() : new InboundApiService({ workflowDriverAuthority: {} as WorkflowDriverAuthority })
+    const { controller, request } = fixture(undefined, undefined, service)
+    for (const results of [await Promise.allSettled([controller.handleRequest(request), controller.handleRequest(request)]),
+      await Promise.allSettled([controller.handleRequest(request)])]) {
+      for (const result of results) {
+        expect(result.status).toBe('rejected')
+        if (result.status === 'rejected') expect(result.reason).toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, status: 503 })
+      }
+    }
+    expect(service.getEvents('fictional-task')).toEqual([])
+    expect(fictionalStateCounts(service)).toEqual({ owners: 0, receipts: 0, pending: 0 })
+    const query = await controller.handleRequest({ ...request, command: 'workflow:receipt', idempotencyKey: 'query',
+      payload: { targetCommand: 'workflow:start', targetIdempotencyKey: request.idempotencyKey } })
+    expect(query).toMatchObject({ status: 'failed', error: { code: 'RECEIPT_NOT_FOUND' } })
   })
 
-  it('rejects a different payload while the first attempt is still pending', async () => {
+  it('joins equivalent pending requests and rejects mismatched payload before a pending result', async () => {
     const { controller, request } = fixture()
-    const first = { ...request, payload: { taskId: 'fictional-task', version: 1 } }
-    const different = { ...request, payload: { taskId: 'fictional-task', version: 2 } }
-    const original = controller.handleRequest(first)
-    const conflict = controller.handleRequest(different)
-    const [a, b] = await Promise.allSettled([original, conflict])
-    expect(a.status).toBe('fulfilled')
-    expect(b.status).toBe('rejected')
-    if (b.status === 'rejected') expect(b.reason).toMatchObject({ code: INBOUND_ERROR_CODES.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH })
-    expect(controller.service.getEvents('fictional-task')).toHaveLength(2)
-    await expect(controller.handleRequest(different)).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH })
+    const receipt = fictionalReceipt(request)
+    let resolve!: (value: InboundReceipt) => void
+    const pending = new Promise<InboundReceipt>(done => { resolve = done })
+    seedFictionalPending(controller.service, request, pending)
+    const first = controller.handleRequest(request)
+    const second = controller.handleRequest({ ...request, payload: { ...request.payload } })
+    await expect(controller.handleRequest({ ...request, payload: { ...request.payload, different: true } }))
+      .rejects.toMatchObject({ code: INBOUND_ERROR_CODES.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH, status: 409 })
+    resolve(receipt)
+    expect(await Promise.all([first, second])).toEqual([receipt, receipt])
+    clearFictionalPending(controller.service, request)
+    expect(controller.service.getEvents('fictional-task')).toEqual([])
   })
 
-  it('shares an overlapping unknown attempt but rejects a later retry without another effect', async () => {
+  it.each(['succeeded', 'unknown'] as const)('preserves historical %s replay and new-key collision', async status => {
     const { controller, request } = fixture()
-    const unknown = { ...request, payload: { taskId: 'fictional-task', simulateTerminalStatus: 'unknown' } }
-    const [a, b] = await Promise.all([controller.handleRequest(unknown), controller.handleRequest(unknown)])
-    expect(a.status).toBe('unknown')
-    expect(b).toEqual(a)
-    expect(controller.service.getEvents('fictional-task')).toHaveLength(2)
-    await expect(controller.handleRequest(unknown)).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.UNKNOWN_STATUS_NON_RETRYABLE })
-    expect(controller.service.getEvents('fictional-task')).toHaveLength(2)
-  })
-
-  it.each(['succeeded', 'unknown'] as const)('refuses a new key for an existing %s task without another effect', async status => {
-    const { controller, request } = fixture()
-    const first = { ...request, payload: { taskId: 'fictional-task', ...(status === 'unknown' ? { simulateTerminalStatus: 'unknown' } : {}) } }
-    const receipt = await controller.handleRequest(first)
-    expect(receipt.status).toBe(status)
-    if (status === 'succeeded') expect(await controller.handleRequest(first)).toEqual(receipt)
-    else await expect(controller.handleRequest(first)).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.UNKNOWN_STATUS_NON_RETRYABLE, status: 409 })
-    await expect(controller.handleRequest({ ...first, idempotencyKey: 'another-key' }))
-      .rejects.toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, status: 409 })
+    seedFictionalTask(controller.service, request, 'fictional-task')
+    const receipt = seedFictionalReceipt(controller.service, request, status)
+    if (status === 'succeeded') expect(await controller.handleRequest(request)).toEqual(receipt)
+    else await expect(controller.handleRequest(request)).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.UNKNOWN_STATUS_NON_RETRYABLE, status: 409 })
+    const collision = { ...request, idempotencyKey: 'different-key' }
+    const results = await Promise.allSettled([controller.handleRequest(collision), controller.handleRequest({ ...collision, idempotencyKey: 'third-key' })])
+    for (const result of results) {
+      expect(result.status).toBe('rejected')
+      if (result.status === 'rejected') expect(result.reason).toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, status: 409 })
+    }
     expect(controller.service.getEvents('fictional-task')).toHaveLength(2)
   })
 
-  it('rejects a concurrent start with a different key for the same task', async () => {
-    const { controller, request } = fixture()
-    const first = { ...request, payload: { taskId: 'fictional-task' } }
-    const [a, b] = await Promise.allSettled([
-      controller.handleRequest(first), controller.handleRequest({ ...first, idempotencyKey: 'another-key' }),
-    ])
-    expect(a.status).toBe('fulfilled')
-    expect(b.status).toBe('rejected')
-    if (b.status === 'rejected') expect(b.reason).toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, status: 409 })
-    expect(controller.service.getEvents('fictional-task')).toHaveLength(2)
-  })
-
-  it.each(['pending', 'completed'] as const)('keeps colon-bearing identity tuples separate when %s and queries each receipt', async (phase) => {
+  it('keeps colon-bearing identity tuples separate for pending and historical receipts', async () => {
     const { controller } = fixture('c:g', 'x')
     const leftToken = controller.service.issueToken({ callerId: 'c:g', scopes: ['task'], allowedProjectIds: [projectId] })
     const rightToken = controller.service.issueToken({ callerId: 'c', scopes: ['task'], allowedProjectIds: [projectId] })
     const left: InboundRequest = { callerId: 'c:g', token: leftToken.token, projectId, grantId: 'x',
-      command: 'workflow:start', idempotencyKey: 'key', payload: {} }
-    const right: InboundRequest = { ...left, callerId: 'c', token: rightToken.token, grantId: 'g:x' }
-    const pending = controller.handleRequest(left)
-    const [a, b] = phase === 'pending'
-      ? await Promise.all([pending, controller.handleRequest(right)])
-      : [await pending, await controller.handleRequest(right)] as const
-    expect(a.grantId).toBe('x')
-    expect(b.grantId).toBe('g:x')
-    expect(a.result?.taskId).not.toBe(b.result?.taskId)
-    expect(controller.service.getEvents(a.result?.taskId as string)).toHaveLength(2)
-    expect(controller.service.getEvents(b.result?.taskId as string)).toHaveLength(2)
-    expect(await controller.handleRequest(left)).toEqual(a)
-    expect(await controller.handleRequest(right)).toEqual(b)
+      command: 'workflow:start', idempotencyKey: 'key', payload: { taskId: 'left' } }
+    const right: InboundRequest = { ...left, callerId: 'c', token: rightToken.token, grantId: 'g:x', payload: { taskId: 'right' } }
+    const a = fictionalReceipt(left)
+    const b = fictionalReceipt(right)
+    seedFictionalPending(controller.service, left, Promise.resolve(a))
+    seedFictionalPending(controller.service, right, Promise.resolve(b))
+    expect(await Promise.all([controller.handleRequest(left), controller.handleRequest(right)])).toEqual([a, b])
+    clearFictionalPending(controller.service, left)
+    clearFictionalPending(controller.service, right)
+    seedFictionalReceipt(controller.service, left)
+    seedFictionalReceipt(controller.service, right)
     const query = (base: InboundRequest): InboundRequest => ({ ...base, command: 'workflow:receipt',
       idempotencyKey: 'receipt-query', payload: { targetCommand: 'workflow:start', targetIdempotencyKey: 'key' } })
-    const [leftQuery, rightQuery] = await Promise.all([controller.handleRequest(query(left)), controller.handleRequest(query(right))])
-    expect(leftQuery.result?.receipt).toEqual(a)
-    expect(rightQuery.result?.receipt).toEqual(b)
+    const [l, r] = await Promise.all([controller.handleRequest(query(left)), controller.handleRequest(query(right))])
+    expect(l.result?.receipt).toEqual(a)
+    expect(r.result?.receipt).toEqual(b)
   })
 
-  it('authenticates every overlapping and completed reuse before returning a receipt', async () => {
+  it('authenticates before serving pending or completed history', async () => {
     const { controller, request } = fixture()
-    const revoked = controller.service.issueToken({ callerId: request.callerId, scopes: ['task'], allowedProjectIds: [projectId] })
     const forbidden = controller.service.issueToken({ callerId: request.callerId, scopes: ['task'], allowedProjectIds: ['other-project'] })
-    const original = controller.handleRequest({ ...request, payload: { taskId: 'fictional-task' } })
+    const revoked = controller.service.issueToken({ callerId: request.callerId, scopes: ['task'], allowedProjectIds: [projectId] })
     controller.service.revokeToken(revoked.token)
-    const badToken = controller.handleRequest({ ...request, token: revoked.token, payload: { taskId: 'fictional-task' } })
-    const badProject = controller.handleRequest({ ...request, token: forbidden.token, payload: { taskId: 'fictional-task' } })
-    const [a, b, c] = await Promise.allSettled([original, badToken, badProject])
-    expect(a.status).toBe('fulfilled')
-    expect(b.status).toBe('rejected')
-    if (b.status === 'rejected') expect(b.reason).toMatchObject({ code: INBOUND_ERROR_CODES.UNAUTHORIZED_TOKEN })
-    expect(c.status).toBe('rejected')
-    if (c.status === 'rejected') expect(c.reason).toMatchObject({ code: INBOUND_ERROR_CODES.PROJECT_GRANT_INVALID })
-    controller.service.revokeToken(request.token)
-    await expect(controller.handleRequest({ ...request, payload: { taskId: 'fictional-task' } })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.UNAUTHORIZED_TOKEN })
-    await expect(controller.handleRequest({ ...request, token: forbidden.token, payload: { taskId: 'fictional-task' } })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.PROJECT_GRANT_INVALID })
-    expect(controller.service.getEvents('fictional-task')).toHaveLength(2)
+    const receipt = fictionalReceipt(request)
+    seedFictionalPending(controller.service, request, Promise.resolve(receipt))
+    for (const phase of ['pending', 'completed']) {
+      if (phase === 'completed') { clearFictionalPending(controller.service, request); seedFictionalReceipt(controller.service, request) }
+      expect(await controller.handleRequest(request)).toEqual(receipt)
+      await expect(controller.handleRequest({ ...request, token: revoked.token })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.UNAUTHORIZED_TOKEN })
+      await expect(controller.handleRequest({ ...request, token: forbidden.token })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.PROJECT_GRANT_INVALID })
+    }
   })
 
   it('does not let a task token reuse a pending or completed human approval receipt', async () => {
@@ -130,32 +109,31 @@ describe('in-process inbound idempotency at the controller boundary', () => {
     controller.service.addReviewItem({ reviewId: 'fictional-review', taskId: 'fictional-task', projectId, proposal: {} })
     const approval: InboundRequest = { ...request, token: reviewer.token, command: 'human-review:approve', payload: { reviewId: 'fictional-review' } }
     const pending = controller.handleRequest(approval)
-    const forbidden = controller.handleRequest({ ...approval, token: request.token })
-    const [a, b] = await Promise.allSettled([pending, forbidden])
-    expect(a.status).toBe('fulfilled')
-    expect(b.status).toBe('rejected')
-    if (b.status === 'rejected') expect(b.reason).toMatchObject({ code: INBOUND_ERROR_CODES.HUMAN_REVIEW_SCOPE_REQUIRED })
+    await expect(controller.handleRequest({ ...approval, token: request.token })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.HUMAN_REVIEW_SCOPE_REQUIRED })
+    await pending
     await expect(controller.handleRequest({ ...approval, token: request.token })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.HUMAN_REVIEW_SCOPE_REQUIRED })
   })
 
-  it('propagates a known dispatch error to overlapping callers without hanging or an automatic effect', async () => {
-    const { controller, request } = fixture()
+  it.each(['none', 'raw authority'] as const)('rejects missing task before closed executor and owned resume with %s without appending', async mode => {
+    const service = mode === 'none' ? new InboundApiService() : new InboundApiService({ workflowDriverAuthority: {} as WorkflowDriverAuthority })
+    const { controller, request } = fixture(undefined, undefined, service)
     const invalid: InboundRequest = { ...request, command: 'workflow:resume', payload: {} }
-    const results = await Promise.allSettled([controller.handleRequest(invalid), controller.handleRequest(invalid)])
-    for (const result of results) {
-      expect(result.status).toBe('rejected')
-      if (result.status === 'rejected') expect(result.reason).toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED })
-    }
-    expect(controller.service.getEvents('fictional-task')).toEqual([])
-    await controller.handleRequest({ ...request, idempotencyKey: 'start-before-resume', payload: { taskId: 'fictional-task' } })
+    await expect(controller.handleRequest(invalid)).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, status: 400 })
+    seedFictionalTask(controller.service, request, 'fictional-task')
     const valid = { ...invalid, payload: { taskId: 'fictional-task' } }
-    const receipt = await controller.handleRequest(valid)
-    expect(receipt.status).toBe('succeeded')
-    expect(receipt.result).toMatchObject({ taskId: 'fictional-task', state: 'resumed' })
-    expect(controller.service.getEvents('fictional-task')[2]).toMatchObject(
-      { type: 'status_changed', data: { status: 'resumed' } },
-    )
-    expect(await controller.handleRequest(valid)).toEqual(receipt)
-    expect(controller.service.getEvents('fictional-task')).toHaveLength(3)
+    for (const result of await Promise.allSettled([controller.handleRequest(valid), controller.handleRequest(valid)])) {
+      expect(result.status).toBe('rejected')
+      if (result.status === 'rejected') expect(result.reason).toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, status: 503 })
+    }
+    expect(controller.service.getEvents('fictional-task')).toHaveLength(2)
+    expect(fictionalStateCounts(controller.service)).toEqual({ owners: 1, receipts: 0, pending: 0 })
+  })
+
+  it('keeps orphaned task event history inaccessible before checking executor availability', async () => {
+    const { controller, request } = fixture()
+    controller.service.recordEvent('fictional-task', { taskId: 'fictional-task', projectId, type: 'log', data: {} })
+    await expect(controller.handleRequest(request)).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.PROJECT_GRANT_INVALID, status: 403 })
+    expect(controller.service.getEvents('fictional-task')).toHaveLength(1)
+    expect(fictionalStateCounts(controller.service)).toEqual({ owners: 0, receipts: 0, pending: 0 })
   })
 })

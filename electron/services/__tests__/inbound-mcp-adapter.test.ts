@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { InboundMcpAdapter } from '../inbound-mcp-adapter'
 import { InboundApiService } from '../inbound-api-service'
 import type { InboundReceipt } from '../../../src/shared/inbound-domain-contract'
+import { seedFictionalReceipt, seedFictionalTask } from '../../controllers/__tests__/inbound-api-history-fixture'
 
 describe('InboundMcpAdapter', () => {
   const createTestFixture = () => {
@@ -49,8 +50,8 @@ describe('InboundMcpAdapter', () => {
     expect(toolNames).not.toContain('sql_query')
   })
 
-  it('executes allowed tool delegating to InboundApiService sharing token and idempotency', async () => {
-    const { adapter, taskToken } = createTestFixture()
+  it('fails closed when start has no composed executor', async () => {
+    const { adapter, apiService, taskToken } = createTestFixture()
 
     const request = {
       jsonrpc: '2.0' as const,
@@ -65,6 +66,7 @@ describe('InboundMcpAdapter', () => {
           grantId: 'grant-mcp-01',
           idempotencyKey: 'idem-mcp-task-01',
           payload: {
+            taskId: 'task-flow-101',
             workflowType: 'outline_generation',
             prompt: 'Please select three traits. A drop of dew. The union of clans.',
           },
@@ -75,18 +77,13 @@ describe('InboundMcpAdapter', () => {
     const response = await adapter.handleMessage(request)
     expect(response.error).toBeUndefined()
     const result = response.result as { content: Array<{ type: string; text: string }>; isError?: boolean }
-    expect(result.isError).toBeFalsy()
-
-    const receipt: InboundReceipt = JSON.parse(result.content[0].text)
-    expect(receipt.operationKey).toBeDefined()
-    expect(receipt.status).toBe('succeeded')
-    expect(receipt.idempotencyKey).toBe('idem-mcp-task-01')
-
-    // Replay with identical idempotencyKey -> returns same receipt without duplicate effect
+    expect(result.isError).toBe(true)
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ errorCode: 'COMMAND_NOT_ALLOWED', status: 503 })
     const replayResponse = await adapter.handleMessage(request)
-    const replayResult = replayResponse.result as { content: Array<{ type: string; text: string }> }
-    const replayReceipt: InboundReceipt = JSON.parse(replayResult.content[0].text)
-    expect(replayReceipt.operationKey).toBe(receipt.operationKey)
+    const replayResult = replayResponse.result as { content: Array<{ type: string; text: string }>; isError?: boolean }
+    expect(replayResult.isError).toBe(true)
+    expect(JSON.parse(replayResult.content[0].text)).toMatchObject({ errorCode: 'COMMAND_NOT_ALLOWED', status: 503 })
+    expect(apiService.getEvents('task-flow-101')).toEqual([])
   })
 
   it('handles pagekin_list_projects with only token and auto-resolves callerId and projects', async () => {
@@ -117,7 +114,7 @@ describe('InboundMcpAdapter', () => {
   })
 
   it('queries events with cursor pagination and retrieves workflow receipt', async () => {
-    const { adapter, taskToken } = createTestFixture()
+    const { adapter, apiService, taskToken } = createTestFixture()
 
     const discovery = await adapter.handleMessage({ jsonrpc: '2.0', id: 40, method: 'tools/list' })
     const tools = (discovery.result as { tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown>; required: string[] } }> }).tools
@@ -127,25 +124,12 @@ describe('InboundMcpAdapter', () => {
       expect(schema?.required).toContain('grantId')
     }
 
-    // 1. Start a workflow
-    const startRes = await adapter.handleMessage({
-      jsonrpc: '2.0',
-      id: 4,
-      method: 'tools/call',
-      params: {
-        name: 'pagekin_start_workflow',
-        arguments: {
-          token: taskToken.token,
-          projectId: 'proj-novel-1',
-          grantId: 'grant-mcp-events',
-          idempotencyKey: 'idem-event-test',
-          payload: {
-            taskId: 'task-flow-101',
-          },
-        },
-      },
-    })
-    expect(startRes.error).toBeUndefined()
+    // Historical records are fictional and do not invoke a workflow.
+    const start = { callerId: 'test-mcp-client', token: taskToken.token, projectId: 'proj-novel-1',
+      grantId: 'grant-mcp-events', command: 'workflow:start' as const, idempotencyKey: 'idem-event-test',
+      payload: { taskId: 'task-flow-101' } }
+    seedFictionalTask(apiService, start, 'task-flow-101')
+    seedFictionalReceipt(apiService, start)
 
     const getRes = await adapter.handleMessage({
       jsonrpc: '2.0', id: 42, method: 'tools/call', params: {

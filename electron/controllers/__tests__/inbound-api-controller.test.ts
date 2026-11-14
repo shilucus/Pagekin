@@ -6,6 +6,7 @@ import {
   InboundDomainError,
 } from '../../../src/shared/inbound-domain-contract'
 import { InboundApiController } from '../inbound-api-controller'
+import { seedFictionalReceipt, seedFictionalTask } from './inbound-api-history-fixture'
 
 describe('inbound-api-controller and service integration', () => {
   let controller: InboundApiController
@@ -39,7 +40,7 @@ describe('inbound-api-controller and service integration', () => {
   })
 
   describe('AC-1: Command Whitelist, Execution & Project Grant Validation', () => {
-    it('executes workflow:start successfully for an authorized project', async () => {
+    it('rejects a new workflow when no executor is composed', async () => {
       const request: InboundRequest = {
         callerId: 'test-cli-caller',
         token: taskToken,
@@ -50,10 +51,7 @@ describe('inbound-api-controller and service integration', () => {
         payload: { chapterId: 'ch-1' },
       }
 
-      const receipt = await controller.handleRequest(request)
-      expect(receipt.status).toBe('succeeded')
-      expect(receipt.command).toBe('workflow:start')
-      expect(receipt.result?.taskId).toBeDefined()
+      await expect(controller.handleRequest(request)).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, status: 503 })
     })
 
     it('rejects commands for unauthorized projects with PROJECT_GRANT_INVALID', async () => {
@@ -102,6 +100,7 @@ describe('inbound-api-controller and service integration', () => {
         payload: { seed: 100 },
       }
 
+      seedFictionalReceipt(controller.service, request)
       const receipt1 = await controller.handleRequest(request)
       const receipt2 = await controller.handleRequest(request)
 
@@ -124,7 +123,7 @@ describe('inbound-api-controller and service integration', () => {
         payload: { param: 'second-attempt-with-different-param' },
       }
 
-      await controller.handleRequest(req1)
+      seedFictionalReceipt(controller.service, req1)
       await expect(controller.handleRequest(req2)).rejects.toMatchObject({
         code: INBOUND_ERROR_CODES.IDEMPOTENCY_KEY_PAYLOAD_MISMATCH,
       })
@@ -138,11 +137,10 @@ describe('inbound-api-controller and service integration', () => {
         grantId,
         command: 'workflow:start',
         idempotencyKey: 'idem-unknown-state-key',
-        payload: { simulateTerminalStatus: 'unknown' },
+        payload: { taskId: 'fictional-unknown' },
       }
 
-      const receipt = await controller.handleRequest(unknownReq)
-      expect(receipt.status).toBe('unknown')
+      seedFictionalReceipt(controller.service, unknownReq, 'unknown')
 
       // Subsequent retry with same key must be rejected
       await expect(controller.handleRequest(unknownReq)).rejects.toMatchObject({
@@ -152,8 +150,8 @@ describe('inbound-api-controller and service integration', () => {
 
     it('supports cursor event streaming via afterSequence', async () => {
       const taskId = 'task-event-cursor-test'
-      await controller.handleRequest({ callerId: 'test-cli-caller', token: taskToken, projectId, grantId,
-        command: 'workflow:start', idempotencyKey: 'idem-cursor-start', payload: { taskId } })
+      seedFictionalTask(controller.service, { callerId: 'test-cli-caller', token: taskToken, projectId, grantId,
+        command: 'workflow:start', idempotencyKey: 'idem-cursor-start', payload: { taskId } }, taskId)
       controller.service.recordEvent(taskId, {
         taskId,
         projectId,
@@ -285,6 +283,14 @@ describe('inbound-api-controller and service integration', () => {
       expect(validResponse.status).toBe(200)
       const data = await validResponse.json()
       expect(data.status).toBe('succeeded')
+
+      const closedResponse = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, command: 'workflow:start', idempotencyKey: 'http-closed', payload: { taskId: 'http-fictional' } }),
+      })
+      expect(closedResponse.status).toBe(503)
+      expect(await closedResponse.json()).toMatchObject({ error: { code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED } })
+      expect(controller.service.getEvents('http-fictional')).toEqual([])
 
       // Malicious Host header (DNS rebinding simulation using raw http.request)
       const badHostStatus = await new Promise<{ status: number; body: { error: { code: string } } }>((resolve, reject) => {
