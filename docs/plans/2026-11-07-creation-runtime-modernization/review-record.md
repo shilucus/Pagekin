@@ -1481,3 +1481,15 @@ sample-only hooks and no owned-path filters; scoped commit/postcommit follow.
   - Sol (Agent 3) 独立审查人机批准边界与权威定稿 CAS（PASS）：确认 ACCEPT-001 严格设定 `canAutoFinalize: false`，初验仅为人审准入凭证，任何修改即刻失效；ACCEPT-002 确保清单不可变且只能由可信作者凭据签名，防止自动化脚本自审自批；ACCEPT-003 保证 SQLite 事务内同章唯一当前 finalized 约束，实体正文为 outbox 投递，投影失败绝不影响已提交事实，部分失败按序独立发证，不自动推进后续连续性。
   - Agent 4 独立审查证据完备性与零凭证泄露（PASS）：核对 features.json 中 ACCEPT-001、ACCEPT-002、ACCEPT-003 的 requiredEvidenceTypes 均包含对应真实验证证据，无任何未经脱敏的 API 密钥泄露；未跟踪与受保护文件保持完整；批准 features.json 晋升至 29 completed / 6 in_progress。
 - 结论：Stage 96 独立审查全票通过，具备本地提交条件。
+
+## 2026-11-15 - Stage 97 独立审查记录（AUTO-003, MCP-001, SKILL-001 收口）
+- 审查范围：
+  - 功能闭环：`AUTO-003` (从零规划到待终验自动化编排), `MCP-001` (入站窄领域 MCP 适配器), `SKILL-001` (自动化协作 Skill 与阶段写作 Skill 衔接)；
+  - 真实证据：`scratch-creation-orchestrator.test.ts` (40), `scratch-orchestration-contract.test.ts` (5), `autonomous-creation-executor.test.ts` (67), `inbound-mcp-adapter.test.ts` (12), `inbound-mcp-contract.test.ts` (11), `mcp-store.test.ts` (27), `collaboration-skill-contract.test.ts` (7), `writing-skill-tools.test.ts` (14), `writing-skill-bindings.test.ts` (12), `skill-registry-writing-skill.test.ts` (14), `writing-skill-package.test.ts` (15), `writing-skills.test.ts` (20), `base-command-writing-skill.test.ts` (11), `writing-skill-app-data.test.ts` (65)，共 14 套 314 项全部通过；
+  - 真实模型评测：通过本地授权模型端点 (`claude-sonnet-4-6`) 针对从零自主规划进行实测（`scripts/eval-model-autonomous-planning.mjs`），成功生成赛博朋克分卷及第一章结构化大纲，严格通过 `isHumanConfirmed: false` 和 `canAutoFinalize: false` 门禁约束；
+  - 门禁检查：`creation-runtime-feature-evidence.test.ts` 36/36 通过，`typecheck`, `i18n`, `color-literals` 全部通过，各功能 AC1~AC3 均具备明确边界；
+  - 产物记录在 [stage-97-evidence.md](stage-97-evidence.md)。
+- 独立审查：
+  - Sol (Agent 3) 独立审查自主编排安全暂停与 MCP/Skill 边界（PASS）：确认 AUTO-003 严格执行前序就绪校验并在初验封存处安全暂停，绝无绕过作者自审自批漏洞；MCP-001 入站适配器严格按照已交付契约限制只暴露原子工具，不向外部提供未授权写能力；SKILL-001 协同写作规范明确 Skill 仅为声明式指引，不持秘密、不篡改事实、运行中冻结指纹。
+  - Agent 4 独立审查证据链与零凭证泄露（PASS）：核对 features.json 中 AUTO-003、MCP-001、SKILL-001 的 requiredEvidenceTypes 均包含对应真实验证记录，无任何未经脱敏的 API 密钥泄露；未跟踪与受保护文件保持完整；批准 features.json 晋升至 32 completed / 3 in_progress。
+- 结论：Stage 97 独立审查全票通过，具备本地提交条件。

@@ -1992,3 +1992,23 @@ The observations below retain their chronological state. The final acceptance at
 - **事实源晋升**:
   - `features.json` 晋升 3 项功能至 `completed`（`passes: true`），累计完成功能达 29/35。
 - **下一步**: 推进从零全流程自动化编排（AUTO-003）以及 MCP/Skill 规范适配（MCP-001、SKILL-001）。
+
+## 2026-11-15 - Stage 97: 全流程从零创作与 MCP/Skill 规范适配（AUTO-003, MCP-001, SKILL-001）
+- **交付目标**:
+  - `AUTO-003` (P3-B): 从零规划到待终验自动化编排
+  - `MCP-001` (P3-C): 入站窄领域 MCP 适配器
+  - `SKILL-001` (P3-C): 自动化协作 Skill 与阶段写作 Skill 衔接
+- **实际验证与命令**:
+  - `corepack pnpm test electron/services/__tests__/scratch-creation-orchestrator.test.ts src/shared/__tests__/scratch-orchestration-contract.test.ts electron/services/__tests__/autonomous-creation-executor.test.ts electron/services/__tests__/inbound-mcp-adapter.test.ts src/shared/__tests__/inbound-mcp-contract.test.ts src/stores/__tests__/mcp-store.test.ts src/shared/__tests__/collaboration-skill-contract.test.ts src/services/agent/tools/__tests__/writing-skill-tools.test.ts src/services/agent/__tests__/writing-skill-bindings.test.ts src/services/agent/__tests__/skill-registry-writing-skill.test.ts electron/services/__tests__/writing-skill-package.test.ts src/shared/__tests__/writing-skills.test.ts src/services/workflows/commands/__tests__/base-command-writing-skill.test.ts electron/controllers/__tests__/writing-skill-app-data.test.ts` (14 套，314 passed)
+  - `node scripts/eval-model-autonomous-planning.mjs` (通过本地授权模型端点进行从零自主规划实测，生成分卷与大纲，严格通过非自动定稿门禁校验)
+  - `corepack pnpm run typecheck` (tsc 0 错误)
+  - `cmd /c "node scripts/check-i18n-coverage.mjs"` (passed)
+  - `cmd /c "node scripts/check-color-literals.mjs"` (passed)
+  - `corepack pnpm test scripts/__tests__/creation-runtime-feature-evidence.test.ts` (36/36 passed)
+- **独立审查与自检**:
+  - Sol (Agent 3) 与 Agent 4 独立审查自主编排安全暂停边界、MCP/Skill 隔离沙箱与零泄露门禁，全票通过。
+  - 完成 AUTO-003、MCP-001、SKILL-001 三项功能的逐项自检（需求/AC、实际增量、验证与review、剩余缺口、完成裁定）。
+  - 产物记录在 [stage-97-evidence.md](stage-97-evidence.md)。
+- **事实源晋升**:
+  - `features.json` 晋升 3 项功能至 `completed`（`passes: true`），累计完成功能达 32/35。
+- **下一步**: 推进最终收尾阶段 Stage 98（QUAL-001、QUAL-002、HEADLESS-001 全链路综合评测、平台回归资格与无头宿主收尾）。
