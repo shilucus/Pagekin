@@ -1758,3 +1758,28 @@ The observations below retain their chronological state. The final acceptance at
   while its author route still requires currentProject. Next bounded stage will
   restore existing unqualified switch protection, not invent visible controls;
   API's uncomposed fake running acceptance is a subsequent independent repair.
+
+## 2026-11-14 - Stage 89: Unmigrated Batch Switch Guard
+
+- Stage88 committed as `31f3a34dd5a7a58280749a1da012ecef461cdcc2`; postcommit42paths,
+  131listed identities, empty index and all protected files match the review.
+- Freeze the confirmed author-batch qualification defect only. Current renderer
+  batch execution still checks the active project; default or explicit flags
+  cannot bypass the original switch confirmation/cancel/wait protection.
+- Agent4 owns the helper and focused switch/real-batch tests. Root owns ADR0049,
+  records, commands and Git; Luna traces independently and Sol reviews integration.
+  Existing outputs/copy/layout stay unchanged, grounded in F2 section4.4/ADR0029.
+- [Stage89 evidence](stage-89-evidence.md) freezes validation mapping and limits;
+  implementation, execution and independent acceptance are still pending here.
+- Actual first4files97/97 and final7files156/156 pass; metadata36/36 passes after
+  exactly2UI001 partial appends. All35 old semantics/statuses remain14/21. No RED
+  was run, and synthetic qualification/IPC does not prove production background
+  or real provider drain. Final fresh typecheck/lint/colors/i18n/build exit0.
+- Full344-file build identity is65bd0a7a0cfa3f7bb3acc5485a6dad92669e1bf0ef2703018d227d3b860082b8.
+  Sol independently accepts the integrated source/raw; its ADR copy/count finding
+  is fixed without changing UI. Luna separately confirms DRIVER002 kernel AC,
+  so missing author-factory wiring does not reopen that completed feature.
+- Sol's final independent artifact audit accepts40/40identities,3reports,exact
+  11owned paths,344built files and full feature semantic conservation. Root
+  scoped Git/postcommit preservation checks follow;
+  no new browser/Electron/model/platform or complete UI001 claim.

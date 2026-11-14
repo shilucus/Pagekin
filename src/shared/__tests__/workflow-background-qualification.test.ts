@@ -20,9 +20,10 @@ describe('isWorkflowBackgroundQualified (UI-001 / ADR-0049)', () => {
     expect(isWorkflowBackgroundQualified({ type: 'novel_import', projectSession: session, backgroundQualified: true })).toBe(false)
   })
 
-  it('accepts batch_generate workflows with valid session', () => {
+  it('keeps batch generation protected even when explicitly marked as qualified', () => {
     const session = { projectId: 'p1', leaseId: 'lease-123', projectPath: 'C:\\p1' }
-    expect(isWorkflowBackgroundQualified({ type: 'batch_generate', projectSession: session })).toBe(true)
+    expect(isWorkflowBackgroundQualified({ type: 'batch_generate', projectSession: session })).toBe(false)
+    expect(isWorkflowBackgroundQualified({ type: 'batch_generate', projectSession: session, backgroundQualified: true })).toBe(false)
   })
 
   it('rejects unmigrated workflows without explicit qualification', () => {

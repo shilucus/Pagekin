@@ -15,10 +15,8 @@ export function isWorkflowBackgroundQualified(run: WorkflowBackgroundCandidate):
   if (!run.projectSession || !run.projectSession.projectId || !run.projectSession.leaseId || !run.projectSession.projectPath) {
     return false
   }
-  // Import execution still depends on the active project session.
-  if (run.type === 'novel_import') return false
+  // These renderer workflows still depend on the active project session.
+  if (run.type === 'novel_import' || run.type === 'batch_generate') return false
   if (run.backgroundQualified === true) return true
-  // batch_generate 已在 Stage 5B1 完成主进程调度与独立 ProjectSession 隔离
-  if (run.type === 'batch_generate') return true
   return false
 }

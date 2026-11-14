@@ -41,14 +41,15 @@ describe('QUAL-001: Full-Chain Performance and Quality Non-Regression Evaluation
     expect(options.batchSize).toBe(2)
   })
 
-  it('validates workflow background qualification criteria across single and multi-book runs', () => {
+  it('keeps unmigrated import and batch workflows protected across project sessions', () => {
     // 严格核验后台运行资格门禁
     const sessionA = { projectId: 'book-a', leaseId: 'lease-a-1', projectPath: 'C:\\books\\a' }
     const sessionB = { projectId: 'book-b', leaseId: 'lease-b-1', projectPath: 'C:\\books\\b' }
 
-    // 未迁移的导入保留切书保护；批量草稿仍具备后台资格
+    // 未迁移的导入和批量草稿都保留切书保护。
     expect(isWorkflowBackgroundQualified({ type: 'novel_import', projectSession: sessionA })).toBe(false)
-    expect(isWorkflowBackgroundQualified({ type: 'batch_generate', projectSession: sessionB })).toBe(true)
+    expect(isWorkflowBackgroundQualified({ type: 'batch_generate', projectSession: sessionB })).toBe(false)
+    expect(isWorkflowBackgroundQualified({ type: 'batch_generate', projectSession: sessionB, backgroundQualified: true })).toBe(false)
 
     // 拒绝未迁移或无会话的链路
     expect(isWorkflowBackgroundQualified({ type: 'novel_import', projectSession: null })).toBe(false)

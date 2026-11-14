@@ -1294,3 +1294,27 @@ the exact42owned paths,12report statistics and complete344-file ordinal build
 tree. Its own parent/history source relies on Sol's independent acceptance.
 Root observes an empty index, unchanged protected files, sample-only hooks and
 no owned-path Git filters; scoped commit/postcommit checks remain root-only.
+
+## 2026-11-14 - Stage 89 Independent Switch-Guard Review
+
+Luna independently identifies the real author-batch current-session dependency
+and incorrect background eligibility. It separately checks DRIVER002's AC,
+accepted ADR0033, actual registered main IPC and existing three Electron scenes;
+missing author UI wiring does not disqualify that internal kernel. The legacy
+author factory still needs its original cancel/wait protection.
+
+Sol independently reviews the integrated helper, tests, ADR and actual156/156
+raw/log. Default and explicit true cannot bypass either unmigrated type. The real
+batch factory/store test delays only an IPC response, so its assertion is executor
+wait-before-open, not provider drain. Timeout/failure preserve A; synthetic other
+qualified tasks only test contract routing. The ADR's original copy/count mismatch
+is corrected to current code without any visible edit. Root confirms final
+typecheck/lint/colors/i18n/build exit0; no checks are weakened or skipped failures
+relabeled. The helper was edited first, so no RED is claimed.
+
+Bounded source/runtime acceptance has no identified remaining blocker. Only two
+UI001 partial records are added; entire prior feature semantics and14/21flags
+remain. No new browser/Electron, complete background migration, literary quality
+or platform claim follows. Sol's final independent artifact audit accepts all
+40identities,3reports,complete344-file build tree,exact11owned paths and full
+entry feature semantic comparison. Root scoped Git/postcommit audit follows.

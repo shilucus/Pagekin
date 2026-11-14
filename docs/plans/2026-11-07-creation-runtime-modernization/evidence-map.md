@@ -189,3 +189,19 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 - IMPORT001 only receives3partial records; all35 flags and other semantics stay
   14completed/21in_progress. No background/A-to-B, multi-book, full imitation,
   real-model quality, performance improvement or target-platform acceptance.
+
+## Stage89 Unmigrated Batch Guard Evidence
+
+- [Stage89 evidence](stage-89-evidence.md) maps F2 section4.4/ADR0029/0049 to the
+  actual author batch/store/switch chain. Both default and explicit-true batch
+  qualification fail before the generic branch, retaining original UI outputs.
+- Actual7files156/156 include the real batch factory/store waiting before openB,
+  timeout and cancellation failure retaining A, plus import/mixed/close/resource
+  guards. Four-file97 overlaps; metadata36/36 follows two UI001 partial appends.
+  Fresh typecheck/lint/colors/i18n/build exit0. No RED, new Electron/browser or
+  real provider drain is claimed. The complete344-file build and local raw are
+  bound by [the manifest](stage-89-source-manifest.json).
+- Sol independently accepts source/raw after its ADR copy/count finding is
+  corrected. Luna separately confirms DRIVER002's existing internal registered
+  kernel AC; it is not the legacy renderer batch. All35 semantics except two
+  partial evidence appends remain unchanged,14completed/21in_progress.

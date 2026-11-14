@@ -3,6 +3,7 @@ import type { ProjectData } from '../../shared/ipc-channels'
 import { useEditorStore } from '../editor-store'
 import { useProjectStore } from '../project-store'
 import { useWorkflowStore, type WorkflowRun } from '../workflow-store'
+import { createBatchChapterWorkflow } from '../../services/workflows/batch-chapter-workflow'
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -36,6 +37,11 @@ vi.mock('../../services/project-service', () => ({
   onProjectOpening: mocks.onProjectOpening,
   onProjectOpened: mocks.onProjectOpened,
   onProjectClosed: mocks.onProjectClosed,
+}))
+
+vi.mock('../../services/agent/writing-skill-bindings', async importOriginal => ({
+  ...await importOriginal<typeof import('../../services/agent/writing-skill-bindings')>(),
+  freezeWritingSkillsSnapshot: vi.fn(async () => ({})),
 }))
 
 function project(key: 'A' | 'B'): ProjectData {
@@ -85,6 +91,27 @@ function makeRun(id: string, projectKey: 'A' | 'B', type: WorkflowRun['type'], b
   }
 }
 
+function startBlockedBatch() {
+  let release!: () => void
+  const blocked = new Promise<void>(resolve => { release = resolve })
+  const fallback = mocks.invoke.getMockImplementation()!
+  mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+    if (channel === 'generation:begin-batch') {
+      const input = args[0] as { mode: string; targetUnits: number; range: { startChapter: number; endChapter: number } }
+      await blocked
+      return { ...input, batchId: 'fixture-batch', rootHandle: { projectId: 'A', epoch: 'lease-A',
+        rootActionId: 'fixture-root', runId: 'fixture-run' },
+      completedChapters: [{ chapterNumber: 1 }], nextChapterNumber: null }
+    }
+    return fallback(channel, ...args)
+  })
+  const definition = createBatchChapterWorkflow({ projectPath: 'C:\\novels\\A',
+    projectSession: { projectId: 'A', leaseId: 'lease-A', projectPath: 'C:\\novels\\A' },
+    startChapterNumber: 1, chapterCount: 1, generationModelId: 'fixture-model', completionMode: 'draft_review' })
+  const completion = useWorkflowStore.getState().startWorkflow({ ...definition, runId: 'real-batch' })
+  return { release, completion }
+}
+
 describe('Project Transition and Background Qualification (UI-001 / ADR-0049)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -106,9 +133,8 @@ describe('Project Transition and Background Qualification (UI-001 / ADR-0049)', 
     })
   })
 
-  it('AC-1: allows switching view to Project B without cancellation when all runs are background qualified', async () => {
-    // Project A has a background-qualified task running
-    const runA = makeRun('run-a1', 'A', 'batch_generate', true)
+  it('keeps the explicitly qualified synthetic route distinct from protected workflows', async () => {
+    const runA = makeRun('run-a1', 'A', 'architecture_generation', true)
     useWorkflowStore.setState({ activeRuns: [runA] })
 
     // Open Project B
@@ -141,7 +167,7 @@ describe('Project Transition and Background Qualification (UI-001 / ADR-0049)', 
 
   it.each([false, true])('keeps import protected when backgroundQualified is %s', async backgroundQualified => {
     const runA = makeRun('import-a', 'A', 'novel_import', backgroundQualified)
-    useWorkflowStore.setState({ activeRuns: [runA, makeRun('batch-a', 'A', 'batch_generate', true)] })
+    useWorkflowStore.setState({ activeRuns: [runA, makeRun('qualified-a', 'A', 'architecture_generation', true)] })
     mocks.confirm.mockResolvedValueOnce(false)
 
     expect(await useProjectStore.getState().openProject('C:\\novels\\B')).toBe(false)
@@ -169,8 +195,68 @@ describe('Project Transition and Background Qualification (UI-001 / ADR-0049)', 
     }
   })
 
-  it('AC-1 & AC-2: closeProject still prompts for confirmation even if task is background qualified', async () => {
-    const runA = makeRun('run-a1', 'A', 'batch_generate', true)
+  it.each([false, true])('rejects switching a batch with explicit qualification %s when the author declines', async qualified => {
+    useWorkflowStore.setState({ activeRuns: [makeRun('batch-a', 'A', 'batch_generate', qualified)] })
+    mocks.confirm.mockResolvedValueOnce(false)
+    expect(await useProjectStore.getState().openProject('C:\\novels\\B')).toBe(false)
+    expect(mocks.confirm).toHaveBeenCalledOnce()
+    expect(mocks.invoke.mock.calls.some(([channel]) => channel === 'project:open')).toBe(false)
+    expect(useProjectStore.getState().currentProject?.id).toBe('A')
+  })
+
+  it('waits for the real batch factory executor to exit before opening B', async () => {
+    const batch = startBlockedBatch()
+    try {
+      await vi.waitFor(() => expect(mocks.invoke.mock.calls.some(([channel]) => channel === 'generation:begin-batch')).toBe(true))
+      const opening = useProjectStore.getState().openProject('C:\\novels\\B')
+      await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('cancelling'))
+      expect(mocks.confirm).toHaveBeenCalledOnce()
+      expect(mocks.invoke.mock.calls.some(([channel]) => channel === 'project:open')).toBe(false)
+      batch.release()
+      await batch.completion
+      expect(await opening).toBe(true)
+      expect(useProjectStore.getState().currentProject?.id).toBe('B')
+      expect(useWorkflowStore.getState().history.find(run => run.id === 'real-batch')?.status).toBe('cancelled')
+    } finally {
+      batch.release()
+      await batch.completion
+    }
+  })
+
+  it('keeps A open when waiting for the real batch executor times out', async () => {
+    const batch = startBlockedBatch()
+    const originalCancel = useWorkflowStore.getState().cancelProjectWorkflowsAndWait
+    useWorkflowStore.setState({ cancelProjectWorkflowsAndWait: path => originalCancel(path, 1) })
+    try {
+      await vi.waitFor(() => expect(mocks.invoke.mock.calls.some(([channel]) => channel === 'generation:begin-batch')).toBe(true))
+      expect(await useProjectStore.getState().openProject('C:\\novels\\B')).toBe(false)
+      expect(useProjectStore.getState().currentProject?.id).toBe('A')
+      expect(mocks.invoke.mock.calls.some(([channel]) => channel === 'project:open')).toBe(false)
+      expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('cancelling')
+      expect(mocks.alertError).toHaveBeenCalled()
+    } finally {
+      useWorkflowStore.setState({ cancelProjectWorkflowsAndWait: originalCancel })
+      batch.release()
+      await batch.completion
+    }
+  })
+
+  it('keeps A open if cancellation fails', async () => {
+    useWorkflowStore.setState({ activeRuns: [makeRun('batch-a', 'A', 'batch_generate')] })
+    const originalCancel = useWorkflowStore.getState().cancelProjectWorkflowsAndWait
+    useWorkflowStore.setState({ cancelProjectWorkflowsAndWait: vi.fn(async () => { throw new Error('fictional cancellation failure') }) })
+    try {
+      expect(await useProjectStore.getState().openProject('C:\\novels\\B')).toBe(false)
+      expect(useProjectStore.getState().currentProject?.id).toBe('A')
+      expect(mocks.invoke.mock.calls.some(([channel]) => channel === 'project:open')).toBe(false)
+      expect(mocks.alertError).toHaveBeenCalled()
+    } finally {
+      useWorkflowStore.setState({ cancelProjectWorkflowsAndWait: originalCancel })
+    }
+  })
+
+  it('closeProject still prompts for an explicitly qualified synthetic task', async () => {
+    const runA = makeRun('run-a1', 'A', 'architecture_generation', true)
     useWorkflowStore.setState({ activeRuns: [runA] })
 
     mocks.confirm.mockResolvedValueOnce(false) // user cancels close confirmation
@@ -180,9 +266,9 @@ describe('Project Transition and Background Qualification (UI-001 / ADR-0049)', 
     expect(mocks.confirm).toHaveBeenCalled()
   })
 
-  it('AC-2: Project B tabs and draft ledgers are isolated and unaffected by Project A tasks', async () => {
+  it('keeps B editor state separate from a synthetic qualified A task', async () => {
     // Project A running task
-    const runA = makeRun('run-a1', 'A', 'batch_generate', true)
+    const runA = makeRun('run-a1', 'A', 'architecture_generation', true)
     useWorkflowStore.setState({ activeRuns: [runA] })
 
     // User switches to Project B

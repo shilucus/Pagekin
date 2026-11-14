@@ -2262,6 +2262,22 @@
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; Chromium 1228 headless shell; 3 unit/integration suites (63/63) and 4 browser suites (69/69)",
           "result": "All 3 unit/integration suites (63/63) and 4 browser suites (69/69) passed; typecheck, lint, check:i18n, build exit 0; background project task qualification, unsaved buffer protection on switch, and multi-state presentation qualified",
           "limitations": "Headless CLI and external API qualification belongs to API-001 and CLI-001"
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "31f3a34dd5a7a58280749a1da012ecef461cdcc2",
+          "artifactOrReceipt": "stage-89-evidence.md; stage-89-source-manifest.json",
+          "environment": "Windows x64; current helper, author batch/store and switch call-chain review; F2 section4.4, ADR0029/0049",
+          "result": "Partial safety repair: legacy batch_generate and novel_import deny background qualification before explicit flags. Original confirm/cancel/wait outputs remain; registered internal DRIVER-002 is separately qualified, not the legacy author factory.",
+          "limitations": "Restores the unmigrated-workflow guard only. Synthetic explicit-qualification routing does not prove a production background entry. No new UI design, full UI-001, background import/imitation or platform acceptance."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "31f3a34dd5a7a58280749a1da012ecef461cdcc2",
+          "artifactOrReceipt": "stage-89-evidence.md; stage-89-source-manifest.json; .runtime/creation-runtime-modernization/stage-89/impact-final.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; fictional mocked IPC and real renderer batch/store executor",
+          "result": "Actual7files156/156, zero failed/pending/todo, including default/explicit flags, author refusal, real executor wait-before-open, timeout/failure retaining A, import/mixed/close/resource guards. Earlier4files97/97 overlap and are not added.",
+          "limitations": "Pending generation:begin-batch is a controlled IPC substitute, not a real provider physical-drain or multi-runtime proof. No browser/Electron/model/quality or performance qualification; no feature promotion."
         }
       ]
     },
