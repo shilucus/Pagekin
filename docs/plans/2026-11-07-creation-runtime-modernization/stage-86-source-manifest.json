@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "stage": 86,
+  "sourceSha": "f46144fc3a22743db1cadcd8128481fecdb01dac",
+  "productionSourcesChanged": false,
+  "environment": "Windows x64; Node 24.13.0; pnpm 11.11.0; Electron 44.9.3",
+  "sourceFiles": [
+    {
+      "path": "package.json",
+      "sha256": "aa4cbf80b48400a90dd254fc340b86d3fe57452421438cf6e5971f5ccaf026c6"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "e235a794f493ce2a5fd0af786efcc573093bab34b70679c17beff931d6e5926f"
+    },
+    {
+      "path": "vite.config.ts",
+      "sha256": "daca389a0e2d1d557e4256dd85e1c66b2e2f2a5619a5f037f56c5aaf218fcc47"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/README.md",
+      "sha256": "5302a8930d95da9cd618bc528dd8d40d99f2c59957ce91b6332bc0e974c8b5c3"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/features.json",
+      "sha256": "4303fe472197acb374cf07adfcd3038d06425438c703c3dd859abc876fb3284d"
+    },
+    {
+      "path": "scripts/__tests__/creation-runtime-feature-evidence.test.ts",
+      "sha256": "0ca582e88bd8a2468892d0eb5d86324f42deed400c029ddb725815b7f0057f5a"
+    },
+    {
+      "path": "scripts/redesign/drive.mjs",
+      "sha256": "4b1e1c3b300ab7323530314339b69390e9462a473a054ea937426a0fd3fdd1fc"
+    },
+    {
+      "path": "scripts/redesign/real-model.mjs",
+      "sha256": "fa497b0adad154cc4b33d554f84be3568e1905ea4267a0f91882766136c17d86"
+    },
+    {
+      "path": "scripts/redesign/fake-model.mjs",
+      "sha256": "0842504a4d811151199cb7023db343dcf0d8be5664c03f2f959f78f88de0927a"
+    },
+    {
+      "path": "scripts/redesign/performance-scenarios.mjs",
+      "sha256": "8bc89d4c777c3a82f4c7c57ef89172cc73bf57aa2204218957c6cdabf860cf4c"
+    },
+    {
+      "path": "scripts/redesign/performance-pressure-scenarios.mjs",
+      "sha256": "feedbe21cf29b72a7cc38acf544d44107e3a6e00e2ead775d414bd24e74150ce"
+    },
+    {
+      "path": "scripts/redesign/performance-baseline.mjs",
+      "sha256": "3cb7e9109c4444bd38fe2048e59b84bd229c623f7590f59a0dbc1959c376ffbb"
+    },
+    {
+      "path": "scripts/redesign/drive-performance-output.mjs",
+      "sha256": "37ec50ed3d9c98aa8f6130fb40c11e36577d9fcd8993c10437548d7330d34c5c"
+    },
+    {
+      "path": "scripts/redesign/import-infer-scenarios.mjs",
+      "sha256": "7c235f4e0797f05d0fe4870878bcc4a1e407841f3bebb422d0bd5bedf4c5f209"
+    },
+    {
+      "path": "scripts/redesign/__tests__/performance-baseline.test.mjs",
+      "sha256": "994ffe4f5acde56d80256bd11dbd3fd042e67c4a81484c06b6df183b86a1dcda"
+    },
+    {
+      "path": "scripts/redesign/__tests__/performance-pressure-scenarios.test.mjs",
+      "sha256": "f4b63614372d91edc7b0f1cf41b807ca89229747709f3f44984f50f90481757b"
+    },
+    {
+      "path": "scripts/redesign/__tests__/performance-parse-scenarios.test.mjs",
+      "sha256": "f1a7df44f9df1465cef2ce0f2ca3a75088d2b68ff10d3977dac317bdd35ab488"
+    },
+    {
+      "path": "scripts/redesign/__tests__/performance-inspection-lifecycle-scenarios.test.mjs",
+      "sha256": "a4dfb5a5e1278058d59b742ca008a7103269ad3ea123723b1e43a831b90dce7e"
+    },
+    {
+      "path": "scripts/redesign/__tests__/drive-performance-output.test.mjs",
+      "sha256": "597d75a27c1a15fb0de87b35fe907f8e7e40d38a2d0a9a7a253458fa9d15632a"
+    },
+    {
+      "path": "src/shared/__tests__/performance-baseline.test.ts",
+      "sha256": "59916f1f178f0daebe958c008cd7988908619ff45a4631a29913f19618ac309a"
+    },
+    {
+      "path": "electron/services/__tests__/performance-diagnostics.test.ts",
+      "sha256": "d3946fa1886dbea2954e8f3c38db723ee64180287736f60a5397a041a9f2125c"
+    }
+  ],
+  "rawArtifacts": [
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/build.log",
+      "sha256": "9dc057706f9653bb378eacbff8954b770888312816aebc60f18d3ead61301760"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/checklist-final.json",
+      "sha256": "1339c9cd2a4ebb7d21bd3320d0e1a09b9c66171cd46919742d36ecc96faa9c34"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/checklist-final.log",
+      "sha256": "c801a840aae9f7c5cf1bd83a7cdd70e7994c02f6064248f0fd51fc3580ba22cf"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/checklist-red.json",
+      "sha256": "bbb8342cdd9dc6cca89102b4658175ce0d544fc5e3d91bb7dc41546983ac344d"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/drive.log",
+      "sha256": "49d2ebcade5bd23018c0103e2673447db8a76e77c46818c0d7f423d020aa1d5f"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/focused-green.json",
+      "sha256": "92eccac340dc203c96bb26ff1e7afb5aff10fa8a9dd727ea8a94030f76fa428e"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/focused-green.log",
+      "sha256": "b81076c2bb8788ec8130f468cedbfbbc2843a4e7d63f69ec8b8b0be3a7c282b5"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/i18n.log",
+      "sha256": "eb20f75ec4a3f646c3a5ab22a3adc9b017bd66b7bb83d5d35bf0d0e991db982a"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/lint.log",
+      "sha256": "b507adddcdcef6799afed2ba0171edaef8b4251cf7ef96868a0a76a562e0589d"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/typecheck.log",
+      "sha256": "ad0b139ff4fb06f90f22ca5afeacc5fd9b88a6f0b8d81eca70f93e50cc8d5cf3"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/desktop/perf-import-10-light.console.log",
+      "sha256": "0cea2541cccd8c6ba70c1288e797ef535ac70f4a3ddd84a35178fe74ec9f73c2"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/desktop/perf-import-10-light.json",
+      "sha256": "a75145641c181f9299d89a588f00792c0b0e2a4648c57595a418ba03a8afd483"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-86/desktop/perf-import-10-light.png",
+      "sha256": "54629922fa3b3b380d3edcfc33808165b175d1c5dee4a66c305fd32ae0d6af61"
+    }
+  ],
+  "builtFiles": [
+    {
+      "path": "dist-electron/main.js",
+      "sha256": "25a4e2cf74ce742baafbf2063e0eac7675fa44ceba4acf7467efc2b748b9656b"
+    },
+    {
+      "path": "dist-electron/preload.mjs",
+      "sha256": "095882f7f65a9330d30f00b32a19130b080da039e247c8fa66bdc722925394a1"
+    },
+    {
+      "path": "dist/assets/App-0QhXbmnE.js",
+      "sha256": "b65e3aeccc705a75e7eb67bb52cc1dcaade3b8fdcb2a8f7c47a17e8f3ea6df67"
+    },
+    {
+      "path": "dist/assets/App-BlD9-wOP.css",
+      "sha256": "0d8d0e68dcd49683abccc3290e8d71369fede2f7e0419f489f82dd3b6e8c67f2"
+    },
+    {
+      "path": "dist/assets/app-errors-Dr0KN9lU.js",
+      "sha256": "616f34129597886458ae5f3556981d33d2a60f3bff52b340e00fc045aad46ff6"
+    },
+    {
+      "path": "dist/assets/index-BSskxKmP.js",
+      "sha256": "7fd75abb58eaf085ce5ed98a04053f66090927da15ec7a9699511c3e7ee23417"
+    },
+    {
+      "path": "dist/assets/index-WqVwihiE.css",
+      "sha256": "7f780f1f995881173ed97fe577f9e9d256b69eb3d5c6fea51147d7874e20a7c6"
+    },
+    {
+      "path": "dist/index.html",
+      "sha256": "2323a9919e63bd4721c6f7f462c80cd5dab63f3c3cf567a31c89b30e7b92961c"
+    }
+  ],
+  "buildTree": {
+    "paths": [
+      "dist",
+      "dist-electron"
+    ],
+    "entryCount": 344,
+    "algorithm": "SHA256 of UTF8 LF lines path:lowercase-sha256, ordinal path sort",
+    "sha256": "bcf2388445e3d49b4a4457a669d6668779c5215e95b27bb6f49d63119fd0d10f"
+  },
+  "protectedFiles": [
+    {
+      "path": "docs/repository-analysis-2026-11-07.md",
+      "sha256": "bb6866223c596c690e4d2e35c38faa9ebb05e45084776ee1b285083bad89a74b"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-evidence.md",
+      "sha256": "5aa85559b9a71022d378cfa7b50eb55e1539beabd77e1766050d819fa336f1f9"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-source-manifest.json",
+      "sha256": "7ae7d4318c58dc872664bb89bd455a3995a3c02e5c2de4e2c8fe7d3d9ad48130"
+    }
+  ],
+  "ownedPaths": [
+    "scripts/__tests__/creation-runtime-feature-evidence.test.ts",
+    "docs/plans/2026-11-07-creation-runtime-modernization/features.json",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-86-evidence.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-86-source-manifest.json",
+    "docs/plans/2026-11-07-creation-runtime-modernization/implementation-log.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/evidence-map.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/review-record.md"
+  ]
+}

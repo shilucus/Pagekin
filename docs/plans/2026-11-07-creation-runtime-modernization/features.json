@@ -279,6 +279,14 @@
           "environment": "Same frozen Windows x64 build; Electron 44.9.3 / Node 24.22.0 / Chrome 152.0.7977.167; 1440x900 light; controlled loopback fictional provider; uncontrolled cache",
           "result": "Six actual single-book samples: five scene assertions pass; 1000 chapters retain TIMEOUT, attempted1/failed1, cancellation drained, forced quit and unavailable final counts. All probes live, slow-embedding live_zero_events; no cleanup/stop/cutoff/external writes/requests/residual failures. Actual source/parameter omission denominators and six inspected image/report hashes retained; original six reports unchanged.",
           "limitations": "Two/four books unsupported_not_executed. The 1000-chapter sample has no renderer snapshot observation and a 732.954623ms main event-loop maximum; targets remain candidate-only. HTTP429 is one unknown/no resend, not generation success. Single observations are not workflow/interaction p95, real billing, literary quality or platform qualification."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "f46144fc3a22743db1cadcd8128481fecdb01dac",
+          "artifactOrReceipt": "stage-86-evidence.md#fresh-desktop-sample; stage-86-source-manifest.json",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Electron 44.9.3; isolated fictional loopback provider; 1440x900 light; uncontrolled cache",
+          "result": "One fresh perf-import-10 sample: attempted 1, failed 0, 10 finalized chapters and 10 blueprints, 32 fixture requests, 20620.3816ms; probes observed; normal quit, zero observed external writes/requests, cutoff requests or residual processes. Screenshot inspected; source/build/report identities recorded.",
+          "limitations": "Refreshes one previously accepted baseline sample only; not a repeated workflow p95, speedup, complete import migration, multi-book, model-quality or platform qualification. Existing failures and evidence are unchanged."
         }
       ]
     },
@@ -1099,8 +1107,8 @@
         "performance",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "contract_review",
@@ -1214,8 +1222,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "contract_review",
@@ -1482,8 +1490,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "contract_review",
@@ -1749,8 +1757,8 @@
         "performance",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -1816,8 +1824,8 @@
         "performance",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -2212,8 +2220,8 @@
         "browser",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -2271,8 +2279,8 @@
         "browser",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -2366,8 +2374,8 @@
         "browser",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "design_review",
@@ -2439,8 +2447,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -2515,8 +2523,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -2581,8 +2589,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -2647,8 +2655,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -2728,8 +2736,8 @@
         "electron",
         "model_quality"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -2810,8 +2818,8 @@
         "electron",
         "model_quality"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -2887,8 +2895,8 @@
         "browser",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -2959,8 +2967,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -3021,8 +3029,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -3093,8 +3101,8 @@
         "deterministic",
         "agent_workflow"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -3172,8 +3180,8 @@
         "electron",
         "model_quality"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",
@@ -3249,8 +3257,8 @@
         "electron",
         "platform"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "platform",
@@ -3321,8 +3329,8 @@
         "electron",
         "platform"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "deterministic",

@@ -1634,3 +1634,44 @@ The observations below retain their chronological state. The final acceptance at
 - **边界与未执行项**:
   - 全部测试与断言在本地隔离环境（隔离虚构项目与 SQLite）与无消耗 Mock 模型传输下执行，未产生真实线上 LLM token liability 或外部网络开销。
   - 三目标（Windows x64 / macOS arm64 / macOS x64）最终正式安装包分发需在各自独立 CI Runner 上执行。
+
+## 2026-11-14 - Stage 86: Completion Evidence Integrity And Fresh Baseline
+
+- Entry `f46144fc3a22743db1cadcd8128481fecdb01dac`, master. Initial index empty;
+  two untracked Stage 1B3 documents and tracked repository-analysis are protected.
+  User reauthorizes the complete F2 implementation, listed commands, isolated
+  fictional persistence validation and exact-path root-only local commits.
+- Team actually uses Agent1 gpt-6-luna, Agent2 gpt-6.1-terra, Agent3 gpt-6.1-sol,
+  plus independent Agent4 gpt-6.1-terra. No substitution. Static cross-file
+  retrieval is bounded rg/definition/caller fallback, not runtime evidence.
+- The new checklist regression produces actual RED: 36 tests, 15 passed,
+  21 failed for missing declared evidence types. Exactly those 21 status/pass
+  pairs return to in_progress/false. Fourteen existing completed flags remain;
+  this does not newly certify them. Gates, AC, dependencies, schema and all old
+  evidence remain unchanged. Stage 85's 35/35 conclusion is not accepted.
+- Stage 47's PERF-001 adjudication is preserved: its failed thousand-chapter
+  sample is valid failure evidence, not a successful workflow or achieved target.
+  No historical report is overwritten. One new performance record is appended.
+- Actual GREEN: inspected eight-file command in [Stage 86](stage-86-evidence.md)
+  passes 218/218, zero failed/pending/todo. Final checklist rerun after the new
+  evidence record passes 36/36; it is a subset, not an additional denominator.
+- Fresh build, typecheck, lint/colors and check:i18n all exit 0. Known Vite alias,
+  freeze, chunk size, static/dynamic import and inlineDynamicImports warnings
+  remain. No package/native/toolchain change is made.
+- Actual isolated perf-import-10 exits 0: 10 finalized chapters, 10 blueprints,
+  32 fake requests, 20620.3816ms, observed probes, normal quit, no observed
+  external writes/requests, post-cutoff requests or residual processes. Root
+  inspects the saved screenshot. This is one sample, not speedup, workflow p95,
+  complete import migration, real-model quality or target-platform qualification.
+- Current audits find real import stage drivers but renderer-owned overall
+  sequencing; API/CLI/MCP and acceptance/automation/headless helpers still lack
+  complete production composition. Design, grant policy, trusted author action,
+  real-model budget and target runners remain explicit gates, not synthetic PASS.
+- [Evidence](stage-86-evidence.md), [manifest](stage-86-source-manifest.json) and
+  original ignored RED/GREEN/desktop artifacts bind the current sources/results.
+  Independent Agent4 accepts the integrated scope after45/45 identity checks
+  and complete344-file ordinal build-tree verification. Its locale-sort finding
+  is fixed and re-reviewed; raw source/test/report/build bytes are unchanged.
+  Root exact-path local commit and preservation checks follow.
+  Next bounded phase repairs confirmed internal API task ownership and autonomous
+  predecessor identity/save boundaries without opening production capabilities.

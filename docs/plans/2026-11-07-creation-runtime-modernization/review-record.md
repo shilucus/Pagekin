@@ -1206,3 +1206,31 @@ Root fresh typecheck-retest,lint/colors,check:i18n and renderer/main/preload bui
 Sol independently reads the fresh four successful quality/build logs and current source identities,accepting bounded source/runtime/quality with no remaining identified correctness blocker. Root appends exactly two partial records;removing them reproduces the entire entryHEAD feature JSON. Manifest125evidence+3protected binds73provenance/21reported/9JSON/31raw/21actual built entries;nonowner artifact audit and exact-path Git remain pending. A pre-write missing-path guard prevents a guessed project-repository path;the actual project-core-repository is bound instead. Windows command-length rejection starts no helper;chunked apply_patch then produces the exact parser-verified complete manifest,without running new scripts or changing source/test bytes.
 
 Final independent Agent4 nonowner audit matches128/128evidence/protected identities,14actual owned paths,all9report summaries/14logs/8REDscreenshots/21current built paths and complete entryHEAD features after exactly two appends are removed. It correctly notes the original pending-lease case was renamed and expanded to other-book/new-lease;no same-name rerun is claimed. Its authored native test is independently accepted by Sol,not by this artifact audit alone. Sol final wording review finds no qualification inflation;current status is synchronized to source/runtime/quality/artifact acceptance. Root exclusive exact-path Git/pre/postchecks remain before local commit.
+
+## 2026-11-14 - Stage 86 Current-Source Recheck
+
+Entry f46144fc3a22743db1cadcd8128481fecdb01dac. Agent1 gpt-6-luna checks PERF/
+IMPORT and confirms Stage47 accepted a trustworthy failure baseline, not a
+successful thousand-chapter workflow. Agent2 gpt-6.1-terra checks runtime/API/
+headless and finds API registration-only success, missing production composition
+and task ownership gaps; helper tests do not qualify these complete features.
+Agent3 gpt-6.1-sol checks feedback/acceptance/automation and confirms real
+feedback writer/CAS boundaries while finding unreachable extended UI and
+nonpersistent/uncomposed automation/approval helpers. These are static source
+audits with bounded rg/import/definition/caller evidence, not actual runtime
+reproductions. Historical document HEADs are snapshots, not current identities.
+
+Independent Agent4 gpt-6.1-terra initially reads the raw36-test RED with21failed
+and verifies baseline-driver isolation/cleanup at the source level. It correctly
+requires subsequent integrated review and notes that passing metadata checks
+cannot certify referenced evidence or production behavior. Root corrects only
+the21 entries missing declared types, retains14 existing completion flags and
+all prior evidence/AC/dependencies/gates, and runs actual8-file218/218GREEN,
+final checklist36/36, fresh quality/build and one isolated10chapter Electron
+sample. Final Agent4 review matches45/45 source/raw/build/protected identities
+and independently recomputes344/344 built files. Its initial manifest-sort
+finding is repaired with explicit ordinal path order and re-reviewed; final
+digest bcf2388445e3d49b4a4457a669d6668779c5215e95b27bb6f49d63119fd0d10f
+matches. It accepts the bounded integrated stage with no unresolved blocker,
+not the whole program. No executed source/test/raw/build bytes change after
+the runs; final record wording does not constitute another runtime execution.

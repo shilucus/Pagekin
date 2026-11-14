@@ -132,3 +132,22 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 - [Stage70 evidence](stage-70-evidence.md) 保留全部实际失败链、8张浏览器 RED 截图和 fresh quality/build：同16文件620/620，另5文件78/78浏览器；仅补三必填夹具字段后相关3文件50/50，报告不相加，也不冒充再次完整620。主进程取消旧测试只准目标 root 两个已断言时钟字段结算及单条诊断，total_changes 精确+2，全部其它业务事实/取消保护不变。
 - Sol 独立接受当前限定 source/runtime/quality 和夹具修复；typecheck初次exit2保留，随后typecheck/lint/colors/i18n/source build均0。[manifest](stage-70-source-manifest.json) 绑定当前源码、所有原始报告与本轮实际新构建入口，Agent4另核对128/128证据/保护身份、14owned、完整feature语义及报告/构建分母；root exact-path Git/postchecks仍另行执行。
 - 只给 FEEDBACK002/UI002 各补一条部分证据，完整35项状态、门禁、依赖及旧记录保持11completed/24in_progress。无完整功能、dirty-start/历史/架构重入策略、真实 Electron/model/project、文学质量、视觉、提速、安装包/平台或累计终审资格。
+
+## Stage86 Incremental Evidence And Qualification Correction
+
+- [Stage86](stage-86-evidence.md) supersedes Stage85's unsupported full-program
+  completion claim. The current checklist regression has actual 21-failure RED,
+  then eight-file218/218 GREEN and a final36/36 checklist subset. Only21 status/
+  passes pairs are downgraded;14 prior completions, all old evidence, gates,
+  dependencies, AC and the frozen F2 digest are retained.
+- A fresh contained Electron perf-import-10 run observes10 finalized chapters,
+  10 blueprints and32 local fixture requests in20620.3816ms; normal quit and
+  no observed external writes/requests/cutoff requests/residual processes.
+  Root inspects its actual1440x900light screenshot. [Manifest](stage-86-source-manifest.json)
+  binds source/build/raw identities. No historical failed sample is overwritten.
+- Runtime/API/headless and feedback/acceptance/automation audits distinguish
+  existing stage/domain implementations from missing complete production
+  composition. No new design, real-model, package/platform, multi-book or
+  cumulative35 qualification is claimed. Independent Agent4 accepts the bounded
+  stage after45/45 identities and344/344 ordinal build-tree recomputation; its
+  original locale-sorting finding is repaired and re-reviewed.
