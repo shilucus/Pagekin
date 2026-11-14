@@ -120,7 +120,9 @@ export class InboundMcpAdapter {
       projectId = tokenRecord?.allowedProjectIds?.[0] || 'default'
     }
 
-    const grantId = (args.grantId as string) || `mcp-grant-${toolName}`
+    const grantId = ['workflow:start', 'workflow:get', 'workflow:events', 'workflow:receipt'].includes(command)
+      ? args.grantId as string
+      : (args.grantId as string) || `mcp-grant-${toolName}`
     const idempotencyKey = (args.idempotencyKey as string) || `mcp-${toolName}-${Date.now()}`
     let payload = (args.payload as Record<string, unknown>) || {}
 

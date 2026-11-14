@@ -53,6 +53,7 @@ export class InboundApiService {
   private readonly idempotencyStore = new Map<string, IdempotencyRecord>()
   private readonly pendingIdempotency = new Map<string, PendingIdempotencyRecord>()
   private readonly taskEvents = new Map<string, InboundEvent[]>()
+  private readonly taskOwners = new Map<string, { projectId: string; callerId: string; grantId: string }>()
   private readonly reviewItems = new Map<string, HumanReviewItem>()
   private isTrustedReviewChannelOpen = false
   private readonly workflowDriverAuthority?: WorkflowDriverAuthority
@@ -322,6 +323,14 @@ export class InboundApiService {
 
       case 'workflow:start': {
         const taskId = (req.payload.taskId as string) || `task_${randomUUID()}`
+        const owner = this.taskOwners.get(taskId)
+        if (owner) {
+          this.assertTaskOwner(taskId, req)
+          throw new InboundDomainError(INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, 'Task ID is already in use', 409)
+        } else {
+          if (this.taskEvents.has(taskId)) this.rejectTaskOwner()
+          this.taskOwners.set(taskId, { projectId: req.projectId, callerId: req.callerId, grantId: req.grantId })
+        }
         this.recordEvent(taskId, {
           taskId,
           projectId: req.projectId,
@@ -381,6 +390,7 @@ export class InboundApiService {
             400,
           )
         }
+        this.assertTaskOwner(taskId, req)
         this.recordEvent(taskId, {
           taskId,
           projectId: req.projectId,
@@ -404,6 +414,7 @@ export class InboundApiService {
 
       case 'workflow:get': {
         const taskId = req.payload.taskId as string
+        this.assertTaskOwner(taskId, req)
         const events = this.taskEvents.get(taskId) || []
         const lastEvent = events[events.length - 1]
 
@@ -427,6 +438,7 @@ export class InboundApiService {
 
       case 'workflow:events': {
         const taskId = req.payload.taskId as string
+        this.assertTaskOwner(taskId, req)
         const afterSeq = req.sequenceCursor ?? (req.payload.afterSequence as number) ?? 0
         const events = this.getEvents(taskId, afterSeq)
 
@@ -525,6 +537,17 @@ export class InboundApiService {
           400,
         )
       }
+    }
+  }
+
+  private rejectTaskOwner(): never {
+    throw new InboundDomainError(INBOUND_ERROR_CODES.PROJECT_GRANT_INVALID, 'Task is not available to this caller', 403)
+  }
+
+  private assertTaskOwner(taskId: string, req: InboundRequest): void {
+    const owner = this.taskOwners.get(taskId)
+    if (!owner || owner.projectId !== req.projectId || owner.callerId !== req.callerId || owner.grantId !== req.grantId) {
+      this.rejectTaskOwner()
     }
   }
 

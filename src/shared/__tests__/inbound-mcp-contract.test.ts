@@ -37,6 +37,23 @@ describe('InboundMcpContract', () => {
     expect(check.reason).toBeUndefined()
   })
 
+  it.each(['pagekin_start_workflow', 'pagekin_get_workflow', 'pagekin_query_events', 'pagekin_get_receipt'])(
+    'requires the original grant in both discovery and validation for %s', name => {
+      const definition = INBOUND_MCP_TOOLS.find(tool => tool.name === name)!
+      expect(definition.inputSchema.properties.grantId).toMatchObject({ type: 'string', pattern: '\\S' })
+      expect(definition.inputSchema.required).toContain('grantId')
+      const pattern = new RegExp((definition.inputSchema.properties.grantId as { pattern: string }).pattern)
+      expect(pattern.test('')).toBe(false)
+      expect(pattern.test(' \t\n')).toBe(false)
+      expect(pattern.test('original-grant')).toBe(true)
+      for (const grantId of [undefined, '', ' ', 7]) {
+        expect(validateMcpToolCall({ name, arguments: { token: 'fictional-token', grantId } } as never))
+          .toMatchObject({ valid: false, reason: 'Missing or invalid original task grantId' })
+      }
+      expect(validateMcpToolCall({ name, arguments: { token: 'fictional-token', grantId: 'original-grant' } }).valid).toBe(true)
+    },
+  )
+
   it('does NOT false-positive reject legitimate novel text containing common words (select, drop, alter, union)', () => {
     const novelCreativeParams = {
       name: 'pagekin_start_workflow',

@@ -152,6 +152,8 @@ describe('inbound-api-controller and service integration', () => {
 
     it('supports cursor event streaming via afterSequence', async () => {
       const taskId = 'task-event-cursor-test'
+      await controller.handleRequest({ callerId: 'test-cli-caller', token: taskToken, projectId, grantId,
+        command: 'workflow:start', idempotencyKey: 'idem-cursor-start', payload: { taskId } })
       controller.service.recordEvent(taskId, {
         taskId,
         projectId,
@@ -179,23 +181,23 @@ describe('inbound-api-controller and service integration', () => {
         command: 'workflow:events',
         idempotencyKey: 'idem-events-1',
         payload: { taskId },
-        sequenceCursor: 0,
+        sequenceCursor: 2,
       }
       const allRes = await controller.handleRequest(allEventsReq)
       const events = allRes.result?.events as { sequenceNumber: number }[]
       expect(events).toHaveLength(3)
-      expect(events.map(e => e.sequenceNumber)).toEqual([1, 2, 3])
+      expect(events.map(e => e.sequenceNumber)).toEqual([3, 4, 5])
 
-      // Query only after sequence 2
+      // Query only after sequence 4
       const nextEventsReq: InboundRequest = {
         ...allEventsReq,
         idempotencyKey: 'idem-events-2',
-        sequenceCursor: 2,
+        sequenceCursor: 4,
       }
       const partialRes = await controller.handleRequest(nextEventsReq)
       const partialEvents = partialRes.result?.events as { sequenceNumber: number }[]
       expect(partialEvents).toHaveLength(1)
-      expect(partialEvents[0]!.sequenceNumber).toBe(3)
+      expect(partialEvents[0]!.sequenceNumber).toBe(5)
     })
   })
 

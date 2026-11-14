@@ -8,8 +8,34 @@ import {
 } from '../../src/shared/autonomous-executor-contract'
 
 export interface DraftStorageProvider {
-  getDraft(chapterNumber: number): Promise<{ version: number; contentHash: string } | null>
-  saveCandidateDraft(chapterNumber: number, content: string): Promise<{ draftId: number; version: number; contentHash: string }>
+  readonly contractVersion: 2
+  getDraft(chapterNumber: number): Promise<PredecessorCandidateRef | null>
+  /** Compare the complete predecessor and save in one atomic boundary; conflict guarantees zero writes. */
+  compareAndSaveCandidate(request: {
+    chapterNumber: number
+    content: string
+    expectedPredecessor: Readonly<PredecessorCandidateRef> | null
+  }): Promise<
+    | { status: 'saved'; candidate: PredecessorCandidateRef }
+    | { status: 'predecessor_conflict'; actualPredecessor: PredecessorCandidateRef | null }
+  >
+}
+
+function snapshotCandidateRef(value: unknown, chapterNumber: number): Readonly<PredecessorCandidateRef> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const ref = value as Partial<PredecessorCandidateRef>
+  if (ref.chapterNumber !== chapterNumber || !Number.isSafeInteger(chapterNumber) || chapterNumber < 1
+    || !Number.isSafeInteger(ref.draftId) || ref.draftId! < 1
+    || !Number.isSafeInteger(ref.version) || ref.version! < 1
+    || ![ref.contentHash, ref.sourceFingerprint, ref.receiptId].every(item => typeof item === 'string' && item.trim())) return null
+  return Object.freeze({ chapterNumber, draftId: ref.draftId!, version: ref.version!, contentHash: ref.contentHash!,
+    sourceFingerprint: ref.sourceFingerprint!, receiptId: ref.receiptId! })
+}
+
+function sameCandidateRef(expected: Readonly<PredecessorCandidateRef>, actual: Readonly<PredecessorCandidateRef> | null): boolean {
+  return actual !== null && expected.chapterNumber === actual.chapterNumber && expected.draftId === actual.draftId
+    && expected.version === actual.version && expected.contentHash === actual.contentHash
+    && expected.sourceFingerprint === actual.sourceFingerprint && expected.receiptId === actual.receiptId
 }
 
 export interface ChapterGenerator {
@@ -39,6 +65,7 @@ export class AutonomousCreationExecutor {
   private readonly generator: ChapterGenerator
 
   constructor(options: { storage: DraftStorageProvider; generator: ChapterGenerator }) {
+    if (options.storage.contractVersion !== 2) throw new Error('AUTONOMOUS_STORAGE_CONTRACT_INVALID')
     this.storage = options.storage
     this.generator = options.generator
   }
@@ -49,64 +76,54 @@ export class AutonomousCreationExecutor {
   async executeBatchChain(config: AutonomousBatchChainConfig): Promise<ExecutionResult> {
     // 1. Enforce strict batch configuration validation (<= 10 chapters, no auto_finalize bypass)
     validateAutonomousBatchConfig(config)
+    const { batchId, startChapter, chapterCount } = config
 
     const receipts: AutonomousStepReceipt[] = []
     let stoppedDueToConflict = false
     const result = (): ExecutionResult => ({
-      batchId: config.batchId,
+      batchId,
       receipts,
       stoppedDueToConflict,
       completedChapters: receipts.filter(r => r.status === 'candidate_draft_created').length,
     })
 
     // Map existing declared predecessor refs by chapter number
-    const predecessorMap = new Map<number, PredecessorCandidateRef>()
+    const predecessorMap = new Map<number, Readonly<PredecessorCandidateRef> | null>()
     for (const ref of config.predecessorChain) {
-      predecessorMap.set(ref.chapterNumber, ref)
+      predecessorMap.set(ref.chapterNumber, snapshotCandidateRef(ref, ref.chapterNumber))
     }
 
-    let lastCandidateRef: { chapterNumber: number; version: number; contentHash: string } | null = null
+    let lastCandidateRef: Readonly<PredecessorCandidateRef> | null = null
+    const conflict = (chapterNumber: number, actual: Readonly<PredecessorCandidateRef> | null) => {
+      stoppedDueToConflict = true
+      receipts.push({ stepId: `step_conflict_${randomUUID()}`, batchId, chapterNumber, draftId: 0,
+        status: 'predecessor_conflict_readonly', isFinalized: false, sourcePredecessorHash: actual?.contentHash ?? '',
+        error: `Predecessor chapter ${chapterNumber - 1} is missing, incomplete or changed. Halting batch to preserve integrity.`,
+        createdAt: Date.now() })
+    }
 
-    for (let i = 0; i < config.chapterCount; i++) {
-      const currentChapter = config.startChapter + i
+    for (let i = 0; i < chapterCount; i++) {
+      const currentChapter = startChapter + i
       const prevChapter = currentChapter - 1
 
       let predecessorHash = ''
+      const expectedRef = i > 0 ? lastCandidateRef : predecessorMap.get(prevChapter) ?? null
 
       // 2. Predecessor CAS & Conflict check
       if (prevChapter >= 1) {
-        const declaredRef = predecessorMap.get(prevChapter)
-        const expectedRef = declaredRef ?? lastCandidateRef
-
-        let actualStored: Awaited<ReturnType<DraftStorageProvider['getDraft']>> = null
+        let actualStored: Readonly<PredecessorCandidateRef> | null = null
         if (expectedRef) {
           try {
-            actualStored = await this.storage.getDraft(prevChapter)
+            actualStored = snapshotCandidateRef(await this.storage.getDraft(prevChapter), prevChapter)
           } catch {
             throw new AutonomousExecutionInterruptedError('predecessor_read', currentChapter, result())
           }
         }
-        if (!expectedRef || !actualStored
-          || expectedRef.version !== actualStored.version || expectedRef.contentHash !== actualStored.contentHash) {
-          stoppedDueToConflict = true
-          receipts.push({
-            stepId: `step_conflict_${randomUUID()}`,
-            batchId: config.batchId,
-            chapterNumber: currentChapter,
-            draftId: 0,
-            status: 'predecessor_conflict_readonly',
-            isFinalized: false,
-            sourcePredecessorHash: actualStored?.contentHash ?? '',
-            error: !expectedRef
-              ? `Predecessor chapter ${prevChapter} has no declared candidate reference. Halting batch to preserve integrity.`
-              : !actualStored
-                ? `Predecessor chapter ${prevChapter} is missing. Halting batch to preserve integrity.`
-                : `Predecessor chapter ${prevChapter} was modified (version or content mismatch). Halting batch to preserve integrity.`,
-            createdAt: Date.now(),
-          })
+        if (!expectedRef || !sameCandidateRef(expectedRef, actualStored)) {
+          conflict(currentChapter, actualStored)
           break
         }
-        predecessorHash = actualStored.contentHash
+        predecessorHash = expectedRef.contentHash
       }
 
       // 3. Generate candidate chapter
@@ -120,7 +137,7 @@ export class AutonomousCreationExecutor {
       if (genResult.status === 'failed' || genResult.status === 'unknown') {
         receipts.push({
           stepId: `step_${randomUUID()}`,
-          batchId: config.batchId,
+          batchId,
           chapterNumber: currentChapter,
           draftId: 0,
           status: genResult.status,
@@ -132,10 +149,32 @@ export class AutonomousCreationExecutor {
         break
       }
 
+      const generatedContent = genResult.content
+      if (expectedRef) {
+        let actualStored: Readonly<PredecessorCandidateRef> | null
+        try {
+          actualStored = snapshotCandidateRef(await this.storage.getDraft(prevChapter), prevChapter)
+        } catch {
+          throw new AutonomousExecutionInterruptedError('predecessor_read', currentChapter, result())
+        }
+        if (!sameCandidateRef(expectedRef, actualStored)) {
+          conflict(currentChapter, actualStored)
+          break
+        }
+      }
+
       // 4. Save candidate draft (Strictly draft, never finalized!)
-      let saved: Awaited<ReturnType<DraftStorageProvider['saveCandidateDraft']>>
+      let saved: Readonly<PredecessorCandidateRef>
       try {
-        saved = await this.storage.saveCandidateDraft(currentChapter, genResult.content)
+        const outcome = await this.storage.compareAndSaveCandidate({ chapterNumber: currentChapter,
+          content: generatedContent, expectedPredecessor: expectedRef })
+        if (outcome?.status === 'predecessor_conflict') {
+          conflict(currentChapter, snapshotCandidateRef(outcome.actualPredecessor, prevChapter))
+          break
+        }
+        const candidate = outcome?.status === 'saved' ? snapshotCandidateRef(outcome.candidate, currentChapter) : null
+        if (!candidate) throw new Error('AUTONOMOUS_CANDIDATE_SAVE_UNPROVEN')
+        saved = candidate
       } catch {
         // The storage may already have committed; only the earlier confirmed prefix is known.
         throw new AutonomousExecutionInterruptedError('candidate_save', currentChapter, result())
@@ -143,7 +182,7 @@ export class AutonomousCreationExecutor {
 
       const receipt: AutonomousStepReceipt = {
         stepId: `step_${randomUUID()}`,
-        batchId: config.batchId,
+        batchId,
         chapterNumber: currentChapter,
         draftId: saved.draftId,
         status: 'candidate_draft_created',
@@ -154,11 +193,7 @@ export class AutonomousCreationExecutor {
 
       receipts.push(receipt)
 
-      lastCandidateRef = {
-        chapterNumber: currentChapter,
-        version: saved.version,
-        contentHash: saved.contentHash,
-      }
+      lastCandidateRef = saved
     }
 
     return result()

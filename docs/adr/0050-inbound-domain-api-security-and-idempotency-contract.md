@@ -47,6 +47,21 @@
    - 解析前核对原始 authority，不能因 URL 归一化引入数字 IP 别名等新来源。自定义协议当前只收紧语法，不从测试示例臆造 authority 白名单；不新增 HTTPS、其他协议或 HTTP IPv6 Origin 支持。非法头部在 body 消费、鉴权与领域 dispatch 前拒绝，合法头部不替代 Bearer/project 授权；
    - 限制单个请求载荷最大上限为 512KB，防止超大请求导致主进程内存耗尽。
 
+## Stage 87 Task Ownership (2026-11-14)
+
+- A task is bound to the exact `(projectId, callerId, grantId)` that started it.
+  `workflow:get`, `workflow:events` and `workflow:resume` check this tuple before
+  reading or appending events. Unknown and foreign task IDs use the same
+  `PROJECT_GRANT_INVALID` / HTTP 403 response without an existence distinction.
+- An existing task ID cannot be started again with another idempotency key,
+  including after an unknown result. The same owner receives
+  `COMMAND_NOT_ALLOWED` / HTTP 409 before any new initialization event. A foreign
+  owner still receives the uniform 403. Existing same-key receipt replay and
+  same-key unknown rejection are evaluated first and remain unchanged.
+- These are process-local ownership guards, not a grant issuer, durable task
+  recovery or proof that the real WorkflowDriverAuthority is composed. No new
+  public execution capability or trusted author approval channel is opened.
+
 ## 效果与保证
 - 实现外部 CLI 与工具链对 Pagekin 创作运行时的安全受控调用；
 - 保障单书隔离与人审门禁不可突破；

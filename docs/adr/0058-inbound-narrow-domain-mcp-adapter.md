@@ -40,6 +40,22 @@
    - 任务级凭据尝试调用 `human-review:approve` 或自批自身产生物时，被拦截并返回 `HUMAN_REVIEW_SCOPE_REQUIRED`；
    - 状态流转中的取消（cancelled）、超时（timeout）或挂起待决（`suspended_needs_author`）真实原样返回给外部 MCP 客户端。
 
+## Stage 87 Explicit Task Grant Revision (2026-11-14)
+
+- `pagekin_start_workflow`, `pagekin_get_workflow`, `pagekin_query_events` and
+  `pagekin_get_receipt` require an explicit nonempty `grantId`. Discovery declares
+  this field and the call validator enforces it; the adapter never synthesizes a
+  per-tool grant for these operations. Reads reuse the grant from the task start.
+- This deliberately tightens the previous incomplete query schemas: clients that
+  omitted the original grant must supply it. A valid token alone does not permit
+  lookup or rebinding of an existing task. Non-task project/review tools retain
+  their existing behavior; no new tools or scopes are introduced.
+- Deterministic discovery/adapter checks are partial evidence only. The adapter
+  is not yet composed as a production broker, and its preliminary-report mapping
+  and real receipt/grant persistence still require separate implementation and
+  acceptance. The following effects are target contracts, not a completed MCP-001
+  adjudication; the current feature checklist remains authoritative.
+
 ## 效果与保证
 - 外部 MCP 宿主能够以标准协议调用 Pagekin 领域创作能力；
 - 杜绝了系统级提权风险（无 SQL、无任意文件读写、无进程派生）；

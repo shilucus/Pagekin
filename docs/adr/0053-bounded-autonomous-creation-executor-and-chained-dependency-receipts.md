@@ -34,6 +34,29 @@
 - 声明前驱已不存在、批内实际前驱缺失、或跨批没有直接前驱引用，均在下一章生成/保存前以既有只读冲突收据停止；无实际读取时不把声明 hash 当作读取证明。版本或 hash 不匹配继续保留原冲突保护。
 - 本增量不建立跨崩溃来源证明、生产持久恢复、模型调度或定稿映射；不能把局部确定性检查当成 AUTO-002 完整资格。
 
+## Stage 87 Complete Predecessor And Storage V2 (2026-11-14)
+
+- Chapter start/count are safe integers >=1, the existing ten-chapter limit is
+  unchanged, and the last chapter must also be safely representable. Reject an
+  invalid range before reading, generating or saving, including NaN/fractions.
+- Before the first await, copy the batch identity/range and all declared
+  predecessor references. Identity comparison includes all six reference fields,
+  not only contentHash/version. Storage-returned references are copied and must
+  identify the requested chapter; incomplete provenance is not invented.
+- Read and compare before generation and again after a successful generation.
+  Pass the same frozen expected reference to storage contractVersion 2's
+  `compareAndSaveCandidate`. The storage owner must compare the complete reference
+  and save in one atomic boundary; a `predecessor_conflict` outcome guarantees
+  zero writes. There is no unconditional legacy save fallback.
+- Continue a batch using the actual full reference returned by a confirmed save.
+  A save exception or malformed save result has an unproven effect: preserve only
+  the previously confirmed receipt prefix through the existing typed interruption
+  and do not retry. Failed/unknown generation never saves or advances the chain.
+- The current adapters are isolated in-memory test fixtures. This internal V2
+  boundary does not establish a production transaction, durable recovery or full
+  AUTO-002 qualification. A future persistent adapter needs its own atomicity and
+  recovery evidence before production composition or feature completion.
+
 ## 效果与保证
 - 支持在严格 10 章批次上限与防定稿冒充前提下跨批安全推进创作；
 - 提供精确的前驱冲突检测与只读保护；

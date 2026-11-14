@@ -1675,3 +1675,33 @@ The observations below retain their chronological state. The final acceptance at
   Root exact-path local commit and preservation checks follow.
   Next bounded phase repairs confirmed internal API task ownership and autonomous
   predecessor identity/save boundaries without opening production capabilities.
+
+## 2026-11-14 - Stage 87: Task Ownership And Predecessor Safety
+
+- Stage86 committed as `a40c8d713b8e643562ae2d9e651e9cc4725a22d1`; postcommit index
+  empty, protected tracked analysis and two untracked Stage1B3 files unchanged.
+- Freeze only API/MCP exact task ownership and AUTO complete predecessor/save
+  boundary. Agent2 Terra owns API/tests, Agent3 Sol owns AUTO/tests; root owns
+  shared contracts/ADRs/records/Git. Independent Luna reviews AUTO, independent
+  Agent4 Terra reviews API/MCP. No visible edits, persistence schema or dependency
+  change; the public MCP discovery schema deliberately tightens original grants.
+- Review closes actual same-owner/new-key task collision and discovery grant
+  defects; unknown and same-key replay barriers remain. Task lookup/resume
+  enforce project/caller/grant; discovery+validator require original nonblank
+  task grant. Unknown/foreign IDs use the same403; same-owner collision uses409.
+- AUTO freezes/compares six identity fields before/after generation and passes
+  the same expectation to atomic V2 save. Confirmed saved refs form the batch
+  chain. No unconditional fallback, invented provenance, unknown retry or save
+  success after an uncertain exception. Storage adapters remain test-only Maps.
+- Actual failures retained: API163/164 (MCP grant), range8/11 (NaN/fraction/end).
+  Final integrated13files334/334 after schema refinement; prior integrated334 is
+  overlapping, not additive. Fresh typecheck/lint/colors/i18n/build exit0.
+  [Stage87 evidence](stage-87-evidence.md) records exact commands/raw locations.
+- Only API001/AUTO002/MCP001 each gain one partial deterministic record. The35
+  statuses and all gate/dependency/old-evidence semantics remain14completed/
+  21in_progress. No real broker, persistent CAS, Electron/model/platform or
+  complete35 qualification is claimed. Final independent artifact review matches
+  46/46identities,22owned paths and344-file ordinal build tree; quality logs and
+  complete feature semantics match. Two record-wording findings are corrected
+  and re-reviewed. Root scoped commit follows; Stage88 next migrates the entire foreground reference sequence
+  to main without widening background authority or inventing visible design.

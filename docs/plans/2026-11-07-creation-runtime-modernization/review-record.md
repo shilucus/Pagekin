@@ -1234,3 +1234,31 @@ digest bcf2388445e3d49b4a4457a669d6668779c5215e95b27bb6f49d63119fd0d10f
 matches. It accepts the bounded integrated stage with no unresolved blocker,
 not the whole program. No executed source/test/raw/build bytes change after
 the runs; final record wording does not constitute another runtime execution.
+
+## 2026-11-14 - Stage 87 Independent Review
+
+Agent4 Terra initially finds MCP discovery lacks the original grant and same-owner
+new-key start reinitializes a task, including after unknown. Both are repaired;
+the first actual API report163/164 remains. Subsequent schema nonblank mismatch
+is fixed in discovery and tested. Final API/MCP source and raw13files334/334 are
+independently accepted with no remaining bounded blocker, not a real broker or
+whole-feature qualification.
+
+Luna independently reviews AUTO and finds invalid numeric ranges pass validation.
+Actual shared RED8/11 is followed by safe integer/end-range repair and11 executor
+zero-effect cases. Final source hashes and raw executor67/scratch40/shared11
+(included in334) are independently checked. Complete frozen identity, generated
+candidate races, original-expectation CAS, actual saved-ref batch chaining and
+uncertain-save confirmed-prefix boundaries have no remaining identified local
+correctness defect. No production adapter or durable CAS is newly qualified.
+
+Root runs final current-source334/334 with zero failed/pending/todo, fresh typecheck,
+lint/colors,i18n and build exit0. Agent4's final independent artifact audit matches
+46/46identities,22owned paths,all5reports,complete344-file ordinal build tree and
+the full feature JSON after exactly3appends are removed. Quality logs support the
+reported checks; root's actual shell exit0 is a separate observation, not an
+independent rerun. Its two record-wording findings (executed checklist36/36 and
+persistence-vs-public schema) are corrected and re-reviewed. Build identity equal
+to Stage86 is not production-composition evidence. Scoped Git preservation
+checks remain root-only; prior report counts are not added, failures/protected
+files remain.

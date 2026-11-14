@@ -151,3 +151,18 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
   cumulative35 qualification is claimed. Independent Agent4 accepts the bounded
   stage after45/45 identities and344/344 ordinal build-tree recomputation; its
   original locale-sorting finding is repaired and re-reviewed.
+
+## Stage87 Incremental Safety Evidence
+
+- [Stage87](stage-87-evidence.md) binds task project/caller/grant ownership,
+  duplicate-task no-effect rejection and explicit original-grant MCP discovery
+  to ADR0050/0058. API163/164 first failure is retained; the fix includes public
+  schema+call validation, not a fixture-only workaround.
+- ADR0053 storage V2 compares all six frozen predecessor fields, rereads after
+  generation and passes the same expectation into atomic compare-and-save.
+  Actual range8/11RED closes; invalid ranges are rejected before effects.
+- Final integrated13files334/334 and fresh quality/build exit0; independent
+  nonowner source/raw reviews accept the bounded changes. Three partial records
+  only; all35 flags/gates/dependencies remain14completed/21in_progress. No real
+  broker, persistent transaction/recovery, Electron/model/platform or complete
+  feature qualification is inferred.

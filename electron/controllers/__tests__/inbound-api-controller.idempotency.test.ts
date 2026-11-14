@@ -54,6 +54,30 @@ describe('in-process inbound idempotency at the controller boundary', () => {
     expect(controller.service.getEvents('fictional-task')).toHaveLength(2)
   })
 
+  it.each(['succeeded', 'unknown'] as const)('refuses a new key for an existing %s task without another effect', async status => {
+    const { controller, request } = fixture()
+    const first = { ...request, payload: { taskId: 'fictional-task', ...(status === 'unknown' ? { simulateTerminalStatus: 'unknown' } : {}) } }
+    const receipt = await controller.handleRequest(first)
+    expect(receipt.status).toBe(status)
+    if (status === 'succeeded') expect(await controller.handleRequest(first)).toEqual(receipt)
+    else await expect(controller.handleRequest(first)).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.UNKNOWN_STATUS_NON_RETRYABLE, status: 409 })
+    await expect(controller.handleRequest({ ...first, idempotencyKey: 'another-key' }))
+      .rejects.toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, status: 409 })
+    expect(controller.service.getEvents('fictional-task')).toHaveLength(2)
+  })
+
+  it('rejects a concurrent start with a different key for the same task', async () => {
+    const { controller, request } = fixture()
+    const first = { ...request, payload: { taskId: 'fictional-task' } }
+    const [a, b] = await Promise.allSettled([
+      controller.handleRequest(first), controller.handleRequest({ ...first, idempotencyKey: 'another-key' }),
+    ])
+    expect(a.status).toBe('fulfilled')
+    expect(b.status).toBe('rejected')
+    if (b.status === 'rejected') expect(b.reason).toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, status: 409 })
+    expect(controller.service.getEvents('fictional-task')).toHaveLength(2)
+  })
+
   it.each(['pending', 'completed'] as const)('keeps colon-bearing identity tuples separate when %s and queries each receipt', async (phase) => {
     const { controller } = fixture('c:g', 'x')
     const leftToken = controller.service.issueToken({ callerId: 'c:g', scopes: ['task'], allowedProjectIds: [projectId] })
@@ -123,14 +147,15 @@ describe('in-process inbound idempotency at the controller boundary', () => {
       if (result.status === 'rejected') expect(result.reason).toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED })
     }
     expect(controller.service.getEvents('fictional-task')).toEqual([])
+    await controller.handleRequest({ ...request, idempotencyKey: 'start-before-resume', payload: { taskId: 'fictional-task' } })
     const valid = { ...invalid, payload: { taskId: 'fictional-task' } }
     const receipt = await controller.handleRequest(valid)
     expect(receipt.status).toBe('succeeded')
     expect(receipt.result).toMatchObject({ taskId: 'fictional-task', state: 'resumed' })
-    expect(controller.service.getEvents('fictional-task')).toMatchObject([
+    expect(controller.service.getEvents('fictional-task')[2]).toMatchObject(
       { type: 'status_changed', data: { status: 'resumed' } },
-    ])
+    )
     expect(await controller.handleRequest(valid)).toEqual(receipt)
-    expect(controller.service.getEvents('fictional-task')).toHaveLength(1)
+    expect(controller.service.getEvents('fictional-task')).toHaveLength(3)
   })
 })

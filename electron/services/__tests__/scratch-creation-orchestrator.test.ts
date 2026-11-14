@@ -4,6 +4,7 @@ import { createScratchOrchestrationManifest, type ScratchCreationTaskGrant } fro
 import { AutonomousCreationExecutor, AutonomousExecutionInterruptedError, type ExecutionResult,
   type DraftStorageProvider, type ChapterGenerator } from '../autonomous-creation-executor'
 import type { PreliminaryAcceptanceService } from '../preliminary-acceptance-service'
+import type { PredecessorCandidateRef } from '../../../src/shared/autonomous-executor-contract'
 
 describe('ScratchCreationOrchestrator', () => {
   const createMockAutonomousExecutor = (overrides?: Partial<ExecutionResult>): AutonomousCreationExecutor => {
@@ -464,17 +465,23 @@ describe('ScratchCreationOrchestrator', () => {
     saveFailureAt?: number
     commitBeforeThrow?: boolean
   } = {}) {
-    const saved = new Map<number, { draftId: number; version: number; contentHash: string; content: string }>()
+    const saved = new Map<number, PredecessorCandidateRef & { content: string }>()
     const storage: DraftStorageProvider = {
+      contractVersion: 2,
       getDraft: vi.fn(options.read ?? (async chapterNumber => saved.get(chapterNumber) ?? null)),
-      saveCandidateDraft: vi.fn(async (chapterNumber, content) => {
-        const row = { draftId: 1000 + chapterNumber, version: 1, contentHash: `fictional-hash-${chapterNumber}`, content }
+      compareAndSaveCandidate: vi.fn(async ({ chapterNumber, content, expectedPredecessor }: Parameters<DraftStorageProvider['compareAndSaveCandidate']>[0]) => {
+        const actual = saved.get(chapterNumber - 1) ?? null
+        if (expectedPredecessor && (!actual || Object.entries(expectedPredecessor).some(([key, value]) => actual[key as keyof PredecessorCandidateRef] !== value))) {
+          return { status: 'predecessor_conflict' as const, actualPredecessor: actual }
+        }
+        const row = { chapterNumber, draftId: 1000 + chapterNumber, version: 1, contentHash: `fictional-hash-${chapterNumber}`, content,
+          sourceFingerprint: `fictional-source-${chapterNumber}`, receiptId: `fictional-receipt-${chapterNumber}` }
         if (options.saveFailureAt === chapterNumber) {
           if (options.commitBeforeThrow) saved.set(chapterNumber, row)
           throw new Error('PRIVATE_STORAGE_DETAIL_DO_NOT_RETAIN')
         }
         saved.set(chapterNumber, row)
-        return row
+        return { status: 'saved' as const, candidate: row }
       }),
     }
     const generator: ChapterGenerator = {
@@ -508,12 +515,13 @@ describe('ScratchCreationOrchestrator', () => {
     expect(manifest.draftingExecutionResults).toEqual([expect.objectContaining({ completedChapters: chapterNumber - 1,
       receipts: expect.arrayContaining([expect.objectContaining({ chapterNumber, status: 'unknown', draftId: 0 })]) })])
     expect(manifest.candidateChapterIds).toEqual(chapterNumber === 1 ? [] : ['1001'])
-    expect(f.storage.saveCandidateDraft).toHaveBeenCalledTimes(chapterNumber - 1)
+    expect(f.storage.compareAndSaveCandidate).toHaveBeenCalledTimes(chapterNumber - 1)
     await expectBarrierResumesInert(f, manifest)
   })
 
   it.each(['missing', 'changed'] as const)('retains the saved prefix and actual %s predecessor conflict without retry', async kind => {
-    const f = realDraftingFixture({ read: async () => kind === 'missing' ? null : { version: 2, contentHash: 'changed-fictional-predecessor' } })
+    const f = realDraftingFixture({ read: async () => kind === 'missing' ? null : { chapterNumber: 1, draftId: 1001, version: 2,
+      contentHash: 'changed-fictional-predecessor', sourceFingerprint: 'fictional-source-1', receiptId: 'fictional-receipt-1' } })
     const manifest = await f.orchestrator.startOrchestration(validGrant)
     expect(manifest.candidateDraftingBarrier).toBe('predecessor_conflict')
     expect(manifest.repairAttempts).toBe(0)
@@ -521,7 +529,7 @@ describe('ScratchCreationOrchestrator', () => {
     expect(manifest.draftingExecutionResults[0]).toMatchObject({ completedChapters: 1, stoppedDueToConflict: true })
     expect(manifest.draftingExecutionResults[0].receipts.map(receipt => receipt.status)).toEqual(['candidate_draft_created', 'predecessor_conflict_readonly'])
     expect(f.generator.generateChapter).toHaveBeenCalledTimes(1)
-    expect(f.storage.saveCandidateDraft).toHaveBeenCalledTimes(1)
+    expect(f.storage.compareAndSaveCandidate).toHaveBeenCalledTimes(1)
     await expectBarrierResumesInert(f, manifest)
   })
 
@@ -630,7 +638,7 @@ describe('ScratchCreationOrchestrator', () => {
     const f = realDraftingFixture({ generate: async () => ({ content: '', status: 'failed' }) })
     const manifest = await f.orchestrator.startOrchestration({ ...validGrant, maxRepairAttempts: 3 })
     expect(f.execute).toHaveBeenCalledTimes(3)
-    expect(f.storage.saveCandidateDraft).not.toHaveBeenCalled()
+    expect(f.storage.compareAndSaveCandidate).not.toHaveBeenCalled()
     expect(manifest.repairAttempts).toBe(3)
     expect(manifest.candidateDraftingBarrier).toBeUndefined()
     expect(manifest.suspendedAtStage).toBe('candidate_drafting')

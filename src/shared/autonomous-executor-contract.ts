@@ -106,18 +106,18 @@ export function validateAutonomousBatchConfig(
     )
   }
 
-  if (typeof cfg.startChapter !== 'number' || cfg.startChapter < 1) {
+  if (typeof cfg.startChapter !== 'number' || !Number.isSafeInteger(cfg.startChapter) || cfg.startChapter < 1) {
     throw new AutonomousExecutorError(
       EXECUTOR_ERROR_CODES.INVALID_PREDECESSOR_CHAIN,
-      'Invalid startChapter (must be >= 1)',
+      'Invalid startChapter (must be a safe integer >= 1)',
       400,
     )
   }
 
-  if (typeof cfg.chapterCount !== 'number' || cfg.chapterCount < 1) {
+  if (typeof cfg.chapterCount !== 'number' || !Number.isSafeInteger(cfg.chapterCount) || cfg.chapterCount < 1) {
     throw new AutonomousExecutorError(
       EXECUTOR_ERROR_CODES.INVALID_PREDECESSOR_CHAIN,
-      'Invalid chapterCount (must be >= 1)',
+      'Invalid chapterCount (must be a safe integer >= 1)',
       400,
     )
   }
@@ -127,6 +127,14 @@ export function validateAutonomousBatchConfig(
     throw new AutonomousExecutorError(
       EXECUTOR_ERROR_CODES.BATCH_CHAPTER_LIMIT_EXCEEDED,
       `Chapter count ${cfg.chapterCount} exceeds hard batch boundary limit of ${MAX_BATCH_CHAPTER_LIMIT} chapters`,
+      400,
+    )
+  }
+
+  if (!Number.isSafeInteger(cfg.startChapter + (cfg.chapterCount - 1))) {
+    throw new AutonomousExecutorError(
+      EXECUTOR_ERROR_CODES.INVALID_PREDECESSOR_CHAIN,
+      'Final chapter exceeds the safe integer range',
       400,
     )
   }

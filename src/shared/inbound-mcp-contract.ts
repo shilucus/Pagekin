@@ -108,7 +108,7 @@ export const INBOUND_MCP_TOOLS: readonly McpToolDefinition[] = [
         token: { type: 'string', description: 'Inbound authentication token' },
         callerId: { type: 'string', description: 'Optional caller identifier bound to token' },
         projectId: { type: 'string', description: 'Target project ID' },
-        grantId: { type: 'string', description: 'Task authorization grant ID' },
+        grantId: { type: 'string', pattern: '\\S', description: 'Task authorization grant ID' },
         idempotencyKey: { type: 'string', description: 'Unique idempotency key' },
         payload: {
           type: 'object',
@@ -127,6 +127,7 @@ export const INBOUND_MCP_TOOLS: readonly McpToolDefinition[] = [
         token: { type: 'string', description: 'Inbound authentication token' },
         callerId: { type: 'string', description: 'Optional caller identifier bound to token' },
         projectId: { type: 'string', description: 'Target project ID' },
+        grantId: { type: 'string', pattern: '\\S', description: 'Original task authorization grant ID' },
         payload: {
           type: 'object',
           properties: {
@@ -135,7 +136,7 @@ export const INBOUND_MCP_TOOLS: readonly McpToolDefinition[] = [
           required: ['taskId'],
         },
       },
-      required: ['token', 'projectId'],
+      required: ['token', 'projectId', 'grantId'],
     },
   },
   {
@@ -147,6 +148,7 @@ export const INBOUND_MCP_TOOLS: readonly McpToolDefinition[] = [
         token: { type: 'string', description: 'Inbound authentication token' },
         callerId: { type: 'string', description: 'Optional caller identifier bound to token' },
         projectId: { type: 'string', description: 'Target project ID' },
+        grantId: { type: 'string', pattern: '\\S', description: 'Original task authorization grant ID' },
         payload: {
           type: 'object',
           properties: {
@@ -156,7 +158,7 @@ export const INBOUND_MCP_TOOLS: readonly McpToolDefinition[] = [
           required: ['taskId'],
         },
       },
-      required: ['token', 'projectId'],
+      required: ['token', 'projectId', 'grantId'],
     },
   },
   {
@@ -168,6 +170,7 @@ export const INBOUND_MCP_TOOLS: readonly McpToolDefinition[] = [
         token: { type: 'string', description: 'Inbound authentication token' },
         callerId: { type: 'string', description: 'Optional caller identifier bound to token' },
         projectId: { type: 'string', description: 'Target project ID' },
+        grantId: { type: 'string', pattern: '\\S', description: 'Original task authorization grant ID' },
         payload: {
           type: 'object',
           properties: {
@@ -176,7 +179,7 @@ export const INBOUND_MCP_TOOLS: readonly McpToolDefinition[] = [
           },
         },
       },
-      required: ['token', 'projectId'],
+      required: ['token', 'projectId', 'grantId'],
     },
   },
   {
@@ -238,6 +241,12 @@ export function validateMcpToolCall(params: McpCallToolParams): { valid: boolean
 
   if (!args.token || typeof args.token !== 'string') {
     return { valid: false, reason: 'Missing or invalid authentication token' }
+  }
+
+  const definition = INBOUND_MCP_TOOLS.find(tool => tool.name === params.name)!
+  if (definition.inputSchema.required.includes('grantId')
+    && (typeof args.grantId !== 'string' || !args.grantId.trim())) {
+    return { valid: false, reason: 'Missing or invalid original task grantId' }
   }
 
   // Security check: Scan argument values for prohibited SQL injection or path traversal attempts

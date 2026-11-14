@@ -64,6 +64,20 @@ describe('autonomous-executor-contract', () => {
       expect(() => validateAutonomousBatchConfig(baseConfig)).not.toThrow()
     })
 
+    it.each(['startChapter', 'chapterCount'] as const)('rejects non-integer or nonfinite %s', field => {
+      for (const value of [NaN, Infinity, -Infinity, 1.5, 0, -1, Number.MAX_SAFE_INTEGER + 1]) {
+        expect(() => validateAutonomousBatchConfig({ ...baseConfig, [field]: value }))
+          .toThrowError(AutonomousExecutorError)
+      }
+    })
+
+    it('rejects a batch whose final chapter is outside the safe integer range', () => {
+      expect(() => validateAutonomousBatchConfig({ ...baseConfig, startChapter: Number.MAX_SAFE_INTEGER,
+        chapterCount: 2 })).toThrowError(AutonomousExecutorError)
+      expect(() => validateAutonomousBatchConfig({ ...baseConfig, startChapter: Number.MAX_SAFE_INTEGER,
+        chapterCount: 1 })).not.toThrow()
+    })
+
     it('rejects batch exceeding the 10-chapter limit', () => {
       const overLimit = {
         ...baseConfig,

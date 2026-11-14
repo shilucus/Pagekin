@@ -119,6 +119,14 @@ describe('InboundMcpAdapter', () => {
   it('queries events with cursor pagination and retrieves workflow receipt', async () => {
     const { adapter, taskToken } = createTestFixture()
 
+    const discovery = await adapter.handleMessage({ jsonrpc: '2.0', id: 40, method: 'tools/list' })
+    const tools = (discovery.result as { tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown>; required: string[] } }> }).tools
+    for (const name of ['pagekin_start_workflow', 'pagekin_get_workflow', 'pagekin_query_events', 'pagekin_get_receipt']) {
+      const schema = tools.find(tool => tool.name === name)?.inputSchema
+      expect(schema?.properties.grantId).toMatchObject({ type: 'string' })
+      expect(schema?.required).toContain('grantId')
+    }
+
     // 1. Start a workflow
     const startRes = await adapter.handleMessage({
       jsonrpc: '2.0',
@@ -139,6 +147,36 @@ describe('InboundMcpAdapter', () => {
     })
     expect(startRes.error).toBeUndefined()
 
+    const getRes = await adapter.handleMessage({
+      jsonrpc: '2.0', id: 42, method: 'tools/call', params: {
+        name: 'pagekin_get_workflow', arguments: {
+          token: taskToken.token, projectId: 'proj-novel-1', grantId: 'grant-mcp-events',
+          payload: { taskId: 'task-flow-101' },
+        },
+      },
+    })
+    const getResult = getRes.result as { content: Array<{ text: string }>; isError?: boolean }
+    expect(getResult.isError).toBeFalsy()
+    expect(JSON.parse(getResult.content[0].text)).toMatchObject({ status: 'succeeded', result: { taskId: 'task-flow-101' } })
+
+    const foreignGrantRes = await adapter.handleMessage({
+      jsonrpc: '2.0',
+      id: 41,
+      method: 'tools/call',
+      params: {
+        name: 'pagekin_query_events',
+        arguments: {
+          token: taskToken.token,
+          projectId: 'proj-novel-1',
+          grantId: 'grant-mcp-other',
+          payload: { taskId: 'task-flow-101', afterSequence: 0 },
+        },
+      },
+    })
+    const foreignGrantResult = foreignGrantRes.result as { content: Array<{ text: string }>; isError: boolean }
+    expect(foreignGrantResult.isError).toBe(true)
+    expect(JSON.parse(foreignGrantResult.content[0].text)).toMatchObject({ errorCode: 'PROJECT_GRANT_INVALID', status: 403 })
+
     // 2. Query events with afterSequence cursor
     const eventsRes = await adapter.handleMessage({
       jsonrpc: '2.0',
@@ -149,6 +187,7 @@ describe('InboundMcpAdapter', () => {
         arguments: {
           token: taskToken.token,
           projectId: 'proj-novel-1',
+          grantId: 'grant-mcp-events',
           payload: {
             taskId: 'task-flow-101',
             afterSequence: 0,
@@ -185,6 +224,24 @@ describe('InboundMcpAdapter', () => {
     expect(receiptData.status).toBe('succeeded')
     expect(receiptData.result?.receipt).toBeDefined()
   })
+
+  it.each(['pagekin_start_workflow', 'pagekin_get_workflow', 'pagekin_query_events', 'pagekin_get_receipt'] as const)(
+    'rejects missing or empty grant for %s', async name => {
+      const { adapter, taskToken } = createTestFixture()
+      for (const grant of [{}, { grantId: '' }]) {
+        const response = await adapter.handleMessage({
+          jsonrpc: '2.0', id: 43, method: 'tools/call', params: {
+            name, arguments: { token: taskToken.token, projectId: 'proj-novel-1', idempotencyKey: 'key',
+              payload: { taskId: 'task-a', targetIdempotencyKey: 'key' }, ...grant },
+          },
+        })
+        const result = response.result as { content: Array<{ text: string }>; isError?: boolean }
+        expect(result.isError).toBe(true)
+        expect(JSON.parse(result.content[0].text)).toMatchObject({ error: 'SECURITY_VALIDATION_FAILED' })
+        expect(result.content[0].text).toContain('grantId')
+      }
+    },
+  )
 
   it('rejects unauthorized tools outside the narrow whitelist', async () => {
     const { adapter, taskToken } = createTestFixture()
