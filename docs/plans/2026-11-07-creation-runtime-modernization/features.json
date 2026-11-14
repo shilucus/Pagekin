@@ -2877,8 +2877,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -2903,6 +2903,22 @@
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; automation-decision-authority.test.ts, automation-decision-contract.test.ts",
           "result": "Automation decision authority suites passed (16/16); typecheck, lint, check:i18n, build exit 0; TaskGrant constraints, anti-forgery, bounded repair retries and candidate-only default fully qualified",
           "limitations": "Chained predecessor candidate execution belongs to AUTO-002; scratch pipeline belongs to AUTO-003"
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "141bf679",
+          "artifactOrReceipt": "stage-81-evidence.md; stage-95-evidence.md",
+          "environment": "ADR-0035 auto decision review",
+          "result": "Decision source tracking and retry limits verified",
+          "limitations": "Real-model testing excluded per constraints"
+        },
+        {
+          "type": "electron",
+          "sourceSha": "141bf679",
+          "artifactOrReceipt": "stage-81-evidence.md; stage-95-evidence.md",
+          "environment": "Windows x64; Electron automation decision authority",
+          "result": "automation-decision-authority.test.ts (5/5) passed",
+          "limitations": "Mock provider fixtures only"
         }
       ]
     },
@@ -2951,8 +2967,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -2993,6 +3009,22 @@
           "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; isolated fictional in-memory storage V2 fixtures",
           "result": "Range RED8/11 closes in final13files334/334. Executor67, scratch40 and shared11 are included, not additional. Complete frozen predecessor identity, pre/post-generation recheck, unchanged expected atomic CAS, real saved-reference chaining and uncertain-save prefix/no-retry independently reviewed. Fresh quality/source build exit0.",
           "limitations": "Storage V2 is an internal contract with in-memory test adapters only, not database atomicity, real provenance, cross-crash recovery, production composition or complete AUTO-002 qualification; status remains in_progress/false."
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "141bf679",
+          "artifactOrReceipt": "stage-81-evidence.md; stage-95-evidence.md",
+          "environment": "ADR-0035 predecessor chain review",
+          "result": "Unfinalized candidate predecessor chain and resume verified",
+          "limitations": "Real-model testing excluded per constraints"
+        },
+        {
+          "type": "electron",
+          "sourceSha": "141bf679",
+          "artifactOrReceipt": "stage-81-evidence.md; stage-95-evidence.md",
+          "environment": "Windows x64; Electron autonomous creation executor",
+          "result": "autonomous-creation-executor.test.ts (67/67) passed",
+          "limitations": "Mock provider fixtures only"
         }
       ]
     },

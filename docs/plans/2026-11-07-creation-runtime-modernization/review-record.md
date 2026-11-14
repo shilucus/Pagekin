@@ -1456,3 +1456,16 @@ sample-only hooks and no owned-path filters; scoped commit/postcommit follow.
   - Sol (Agent 3) 独立审查生命周期与契约（PASS）：确认 UI-001 切书时 B 项目加载与保存 100% 独立于 A，A 的未保存缓冲严格保留；IMPORT-003/004 保证双书并行时 SQLite 连接与租约完全隔离，单书崩溃或取消不污染另一书的持久化事实；API-001/CLI-001 严格受限于本机 loopback 与白名单，未开放未经授权的写权限，approve 保持安全封闭。
   - Agent 4 (gpt-6.1-terra-2) 独立审查证据门禁与零泄漏（PASS）：核对 features.json 中 5 项功能的 requiredEvidenceTypes 均具备已验证的真实证据记录；依赖关系闭环；受保护文件及 stage-1b3 遗留文件未被修改；批准 features.json 晋升至 24 completed / 11 in_progress。
 - 结论：Stage 94 独立审查全票通过，具备本地提交条件。
+
+
+## 2026-11-15 - Stage 95 Review: 自动化任务创作策略与长篇跨批候选依赖收口
+
+- 范围：AUTO-001（自动化任务创作策略与重试上限）、AUTO-002（长篇跨批候选依赖与恢复）。
+- 实施与验证：
+  - 核心套件：决策权威与跨批执行器套件 139/139 通过；
+  - 门禁检查：`creation-runtime-feature-evidence.test.ts` 36/36 通过，i18n 及颜色检查零违规，各功能 AC1~AC3 全部闭环；
+  - 真实产物记录在 [stage-95-evidence.md](stage-95-evidence.md)。
+- 独立审查：
+  - Sol (Agent 3) 独立审查生命周期与契约（PASS）：确认 AUTO-001 区分算法自动采纳与作者手工确认，修复重试严格限制最多 2 次，超限阻断不入死循环；AUTO-002 前驱链条仅携带未定稿快照，绝不反向污染 finalized 权威；跨批断点恢复幂等且不造重复实体。
+  - Agent 4 (gpt-6.1-terra-2) 独立审查证据门禁与零泄漏（PASS）：核对 features.json 中 2 项功能的 requiredEvidenceTypes 均具备已验证的真实证据记录；依赖关系闭环；受保护文件及 stage-1b3 遗留文件未被修改；批准 features.json 晋升至 26 completed / 9 in_progress。
+- 结论：Stage 95 独立审查全票通过，具备本地提交条件。
