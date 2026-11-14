@@ -18,9 +18,18 @@ import { explainImportRunFailure, importRunLocale } from './import-run-failure'
 import type { ReferenceRefreshAckRequest, ReferenceRefreshRequest } from '../../src/shared/reference-refresh-contract'
 import { ReferenceRefreshForeground } from './reference-refresh-foreground'
 import type { GenerationSchedulingAdmission } from '../services/generation-scheduler'
+import { REFERENCE_RUN_CHANNELS, assertReferenceRunRequest, type ReferenceRunRequest,
+  type ReferenceRunProjectionAck } from '../../src/shared/reference-run-contract'
+import { ReferenceRunForeground } from './reference-run-foreground'
+import { ReferenceGlobalFailure } from '../services/reference-global-driver'
+import { ReferenceStyleFailure } from '../services/reference-style-driver'
+import { ReferenceBlueprintFailure } from '../services/reference-blueprint-driver'
+import { importGenerationStopMessage } from '../../src/i18n/app-errors'
+import type { registerGenerationController } from './generation-controller'
 
 const authorities = new Map<ProjectRuntime, ReferenceKnowledgeAuthority>()
 const refreshForeground = new ReferenceRefreshForeground()
+const runForeground = new ReferenceRunForeground(refreshForeground)
 const IMPORT_FAILURE_CODE = /^(?:KNOWLEDGE_BASE_|IMPORT_RUN_|EMBEDDING_|REFERENCE_EMBEDDING_|REFERENCE_IMPORT_)[A-Z0-9_]+$/u
 let lifecycleInstalled = false
 
@@ -68,18 +77,94 @@ async function authorized(runtime: ProjectRuntime, fresh: () => void, scheduler?
   return authority
 }
 
-export function registerReferenceKnowledgeController(scheduler?: GenerationSchedulingAdmission): void {
+export function registerReferenceKnowledgeController(scheduler?: GenerationSchedulingAdmission,
+  generation?: ReturnType<typeof registerGenerationController>): void {
   if (!lifecycleInstalled) {
     projectRuntimeHost.onCloseRequested(runtime => {
+      runForeground.requestClose(runtime)
       refreshForeground.requestClose(runtime)
       authorities.get(runtime)?.requestProjectClose()
     })
     projectRuntimeHost.onBeforeRelease(runtime => {
+      runForeground.release(runtime.database)
       refreshForeground.release(runtime.database)
       authorities.get(runtime)?.retire()
       authorities.delete(runtime)
     })
     lifecycleInstalled = true
+  }
+  if (generation) for (const channel of REFERENCE_RUN_CHANNELS) {
+    ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...raw: unknown[]) => {
+      let runId: string | undefined
+      try {
+        const session = raw[1]
+        if (raw.length !== 2 || !isProjectSessionContext(session)) throw new Error('KNOWLEDGE_BASE_REFERENCE_SESSION_REQUIRED')
+        assertReferenceRunRequest(channel, raw[0])
+        const body = raw[0]
+        runId = body.reference.runId
+        const runtime = projectAccess.assertViewContext(session)
+        const fresh = () => {
+          if (projectAccess.assertViewContext(session) !== runtime) throw new Error('KNOWLEDGE_BASE_REFERENCE_RESOURCES_CHANGED')
+          projectRuntimeHost.assertWorkAvailable(runtime)
+          if (event.sender.isDestroyed()) throw new Error('IMPORT_RUN_CANCELLED')
+        }
+        fresh()
+        assertKnowledgeBaseStoragePathSupported(runtime.canonicalRoot)
+        return await withLegacyProjectOperation(channel, async () => {
+          fresh()
+          if (channel === 'reference-run:v1:projection-ack') {
+            return runForeground.acknowledge(runtime, event.sender, session, body as ReferenceRunProjectionAck)
+          }
+          const request = body as ReferenceRunRequest
+          const authority = authorities.get(runtime)
+          if (request.reference.projectId !== runtime.projectId || !authority) {
+            throw new Error('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+          }
+          const stageRequest = (modelId: string | null) => ({ runId: request.reference.runId,
+            execution: request.execution, modelId })
+          const result = await runForeground.execute(runtime, authority, event.sender, session, request, {
+            global: (modelId, parent, current) => generation.referenceGlobal(runtime, event, session, stageRequest(modelId), parent, current),
+            style: (modelId, parent, current) => generation.referenceStyle(runtime, event, session, stageRequest(modelId), parent, current),
+            blueprints: (modelId, parent, current) => generation.referenceBlueprints(runtime, event, session, stageRequest(modelId), parent, current),
+          }, {
+            progress: progress => {
+              if (event.sender.isDestroyed()) return
+              try { event.sender.send('reference-knowledge:v1:progress', progress) }
+              catch { /* The whole-flight lifecycle stops impossible view waits; facts remain owned by the authority. */ }
+            },
+            failureMessage: (code, locale, source) => {
+              const failure = { success: false, error: code, errorCode: code }
+              if (isLegacyMigrationBlockedResult(failure)) return legacyMigrationBlockedFailure().error
+              if (source === 'result') return explainReferenceImportFailure(failure, runId!, locale).error!
+              return explainImportRunFailure(code, locale)?.error
+                ?? explainReferenceImportFailure(failure, runId!, locale).error!
+            },
+          }, fresh)
+          return { success: true, ...result }
+        })
+      } catch (error) {
+        if (error && typeof error === 'object' && 'secondaryErrors' in error
+          && Array.isArray(error.secondaryErrors) && error.secondaryErrors.length) {
+          console.error('[reference-run] terminal cleanup failed', { channel, secondaryErrorCount: error.secondaryErrors.length })
+        }
+        if (error instanceof ReferenceKnowledgeExecutionFailure || error instanceof ReferenceGlobalFailure
+          || error instanceof ReferenceStyleFailure || error instanceof ReferenceBlueprintFailure) {
+          return { success: false, error: error.displayMessage, errorCode: error.errorCode,
+            ...(error instanceof ReferenceGlobalFailure && error.completionFailureCode ? { completionFailureCode: error.completionFailureCode } : {}),
+            ...(error instanceof ReferenceBlueprintFailure && error.postCommitSyncBatchId ? { postCommitSyncBatchId: error.postCommitSyncBatchId } : {}) }
+        }
+        const boundary = isLegacyMigrationBlockedError(error) ? legacyMigrationBlockedFailure() : projectStoragePreflightFailure(error)
+        if (boundary) return boundary
+        const code = error instanceof Error && /^(?:GENERATION_|IMPORT_RUN_|REFERENCE_RUN_|KNOWLEDGE_BASE_REFERENCE_|ROOT_BUDGET_)[A-Z0-9_]+$/u.test(error.message)
+          ? error.message : 'KNOWLEDGE_BASE_REFERENCE_AUTHORITY_REJECTED'
+        if (!runId || channel === 'reference-run:v1:projection-ack') throw new Error(code)
+        const locale = importRunLocale(runId)
+        return { success: false, errorCode: code,
+          error: importGenerationStopMessage(locale, code, false, 'reference')
+            ?? explainImportRunFailure(code, locale)?.error
+            ?? explainImportRunFailure('GENERATION_REQUEST_FAILED', locale)!.error }
+      }
+    })
   }
   for (const channel of REFERENCE_KNOWLEDGE_CHANNELS) {
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...raw: unknown[]) => {

@@ -166,3 +166,26 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
   only; all35 flags/gates/dependencies remain14completed/21in_progress. No real
   broker, persistent transaction/recovery, Electron/model/platform or complete
   feature qualification is inferred.
+
+## Stage88 Foreground Whole-Run Evidence
+
+- [ADR0080](../../adr/0080-main-owned-foreground-reference-whole-run.md) bounds
+  actual main composition of the existing five reference stages. Closed IPC,
+  original sender/session/runtime/issuance, private same-run parent claims and
+  mechanical projection barriers preserve original writers/ACKs/receipts/drain.
+  Read-only skipped history reuses canonical global/style/blueprint validation;
+  completed refresh recovery does not generate or rewrite the completed run.
+- [Stage88 evidence](stage-88-evidence.md) retains every failed attempt, including
+  native9/11 and integrated1021/1022. The same final41files actually pass1022/1022,
+  with0failed/pending/todo, followed by36/36checklist after3partial appends.
+  Fresh type/lint/colors/i18n/build exit0. Sol independently accepts the bounded
+  integrated source/runtime and observes the344-file ordinal build identity.
+- Actual isolated Electron reference10chapter scenario observes1whole invoke,
+  5ordered ACKs,10knowledge receipts,4stage receipts,10blueprints and4existing
+  draft/finalized rows unchanged;12fake requests, normal quit, no observed
+  external requests/writes/residuals. Root and independent reviewer inspect the
+  actual1440x900light PNG. [Manifest](stage-88-source-manifest.json) binds local
+  identities; no dark/mobile/visual-equality claim follows.
+- IMPORT001 only receives3partial records; all35 flags and other semantics stay
+  14completed/21in_progress. No background/A-to-B, multi-book, full imitation,
+  real-model quality, performance improvement or target-platform acceptance.

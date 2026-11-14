@@ -5,6 +5,7 @@ import { RUNTIME_FEEDBACK_CHANNELS } from '../../src/shared/runtime-feedback-con
 import { WORKFLOW_DRIVER_CHANNELS } from '../../src/shared/workflow-driver-contract'
 import { WORKFLOW_BATCH_CHANNELS } from '../../src/shared/workflow-batch-contract'
 import { REFERENCE_KNOWLEDGE_CHANNELS } from '../../src/shared/reference-knowledge-contract'
+import { REFERENCE_RUN_CHANNELS } from '../../src/shared/reference-run-contract'
 import { IMPORT_GENERATION_CHANNELS } from '../../src/shared/import-generation'
 
 const electron = vi.hoisted(() => ({
@@ -16,6 +17,25 @@ vi.mock('electron', () => electron)
 await import('../preload')
 
 describe('桌面预加载接口', () => {
+  it('forwards only whole reference execute and mechanical ACK, not public stage or domain authority', async () => {
+    const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
+    const session = { projectId: 'fictional-project', leaseId: 'fictional-view', projectPath: 'C:/fictional' }
+    const reference = { projectId: session.projectId, runId: 'fictional-run',
+      grantId: '11111111-1111-4111-8111-111111111111', revision: 1 }
+    const execution = { owner: '22222222-2222-4222-8222-222222222222', epoch: 1 }
+    const inputs = [{ reference, execution, modelId: null }, { reference, execution, stage: 'global',
+      token: '33333333-3333-4333-8333-333333333333', decision: 'settled' }]
+    for (const [index, channel] of REFERENCE_RUN_CHANNELS.entries()) {
+      await bridge.invoke(channel, inputs[index], session)
+      expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(channel, inputs[index], session)
+    }
+    const before = electron.ipcRenderer.invoke.mock.calls.length
+    for (const channel of ['reference-run:v1:progress', 'reference-run:v1:advance', 'reference-run:v1:complete',
+      'reference-run:v1:grant', 'reference-run:v1:approve', 'reference-run:v2:execute']) {
+      await expect(bridge.invoke(channel, inputs[0], session)).rejects.toThrow('KNOWLEDGE_BASE_REFERENCE_CHANNEL_NOT_ALLOWED')
+    }
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(before)
+  })
   it('forwards only blueprints execution and batch readiness,not commit/sync/approval authority', async () => {
     const [, bridge] = electron.contextBridge.exposeInMainWorld.mock.calls[0] as [string, AiNovelAPI]
     const session = { projectId: 'fictional-project', leaseId: 'fictional-view', projectPath: 'C:/fictional' }

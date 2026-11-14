@@ -10,7 +10,7 @@ vi.mock('../../services/reference-global-driver', () => ({ executeReferenceGloba
 vi.mock('../../services/project-runtime', () => ({ projectRuntimeHost: { acquireLegacyOperation: mocks.acquire } }))
 vi.mock('../import-run-failure', () => ({ explainImportRunFailure: (code: string) => ({ error: `safe:${code}`, errorCode: code }) }))
 import { ReferenceGlobalForeground } from '../reference-global-foreground'
-import { assertImportStageUnmanagedMutationAllowed } from '../../services/import-stage-flight'
+import { acquireImportRunParentFlight, assertImportStageUnmanagedMutationAllowed } from '../../services/import-stage-flight'
 
 class Sender extends EventEmitter {
   destroyed = false
@@ -34,6 +34,18 @@ beforeEach(() => { mocks.execute.mockReset(); mocks.release.mockReset(); mocks.a
 afterEach(() => { vi.restoreAllMocks() })
 
 describe('foreground global readiness coordinator', () => {
+  it('requires the same parent before joining a managed child and retains the parent after child drain', async () => {
+    const coordinator = new ReferenceGlobalForeground(), book = runtime(), sender = new Sender(), drain = deferred()
+    const parent = acquireImportRunParentFlight(book.database, request.runId)
+    mocks.execute.mockImplementation(async () => { await drain.promise; return result })
+    const operation = coordinator.execute(book, owner, subject(sender), session, request, () => {}, parent.token)
+    expect(() => coordinator.execute(book, owner, subject(sender), session, request, () => {})).toThrow('GENERATION_OWNER_BUSY')
+    expect(coordinator.execute(book, owner, subject(sender), session, request, () => {}, parent.token)).toBe(operation)
+    expect(() => parent.release()).toThrow('GENERATION_OWNER_BUSY')
+    drain.resolve(); await operation
+    expect(() => assertImportStageUnmanagedMutationAllowed(book.database, request.runId)).toThrow('GENERATION_OWNER_BUSY')
+    parent.release()
+  })
   it('joins exactly one sender/session/execution/model and permits only the original readiness token', async () => {
     const coordinator = new ReferenceGlobalForeground(), book = runtime(), sender = new Sender(), drain = deferred()
     mocks.execute.mockImplementation(async ({ hooks }) => { await hooks.opened({ handle, modelId: request.modelId }); await drain.promise; return result })

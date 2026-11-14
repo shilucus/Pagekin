@@ -6,7 +6,7 @@ import type { ReferenceBlueprintAckRequest, ReferenceBlueprintAckResult, Referen
 import { importGenerationStopMessage } from '../../src/i18n/app-errors'
 import { executeReferenceBlueprints } from '../services/reference-blueprint-driver'
 import type { createMainGenerationOwner } from '../services/main-generation-owner'
-import { acquireImportStageFlight } from '../services/import-stage-flight'
+import { acquireImportStageFlight, assertImportRunParentFlightAccess, type ImportRunParentFlightToken } from '../services/import-stage-flight'
 import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
 import { explainImportRunFailure } from './import-run-failure'
 
@@ -35,7 +35,8 @@ export class ReferenceBlueprintForeground {
   private readonly flights = new Map<Database.Database, Flight>()
 
   execute(runtime: ProjectRuntime, owner: Owner, sender: WebContents, session: ProjectSessionContext,
-    request: ReferenceBlueprintRequest, assertCurrent: () => void): Promise<ReferenceBlueprintResult> {
+    request: ReferenceBlueprintRequest, assertCurrent: () => void, parentToken?: ImportRunParentFlightToken): Promise<ReferenceBlueprintResult> {
+    assertImportRunParentFlightAccess(runtime.database, request.runId, parentToken)
     const prior = this.flights.get(runtime.database)
     if (prior && !prior.finished) {
       if (prior.sender !== sender || !sameSession(prior.session, session) || prior.request.runId !== request.runId
@@ -44,7 +45,7 @@ export class ReferenceBlueprintForeground {
     }
     if (sender.isDestroyed()) throw new Error('GENERATION_ACTION_CANCELLED')
     assertCurrent()
-    const releaseStage = acquireImportStageFlight(runtime.database, request.runId, 'blueprints')
+    const releaseStage = acquireImportStageFlight(runtime.database, request.runId, 'blueprints', parentToken)
     let releaseWork: () => void
     try { releaseWork = projectRuntimeHost.acquireLegacyOperation('import-generation:v1:blueprints') }
     catch (error) { releaseStage(); throw error }

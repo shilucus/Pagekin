@@ -1440,6 +1440,30 @@
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; 8 integration suites across reference knowledge, style, global, blueprint, refresh and import orchestrator",
           "result": "All 8 integration suites passed (264/264); typecheck, lint, check:i18n, build exit 0; main-process ownership, lease and session isolation, receipt settlement before advance, rollback to raw materials fully qualified",
           "limitations": "Multi-book parallel isolation and cross-book reference qualification belong to IMPORT-003 and IMPORT-004; no real-model network calls"
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "4b7ba33a1e3f16bd3b9808fb1ecf053220b01afa + stage-88-source-manifest.json final source identities",
+          "artifactOrReceipt": "../../adr/0080-main-owned-foreground-reference-whole-run.md; stage-88-evidence.md",
+          "environment": "F2 sections4.4-4.5; ADR0074-78; independent Sol integrated source review",
+          "result": "Bounded main-owned foreground five-stage composition preserves original private issuance, owner/epoch, root/model/budget, durable writers, child ACKs and physical drain. Same-run parent claims fence legacy mutation through projection gaps; canonical global/style/blueprint history is checked before skipped projections.",
+          "limitations": "Partial IMPORT-001 only. No new background grant, A-to-B qualification, universal core-field CAS, full imitation path or feature promotion. Final runtime/artifact review is separately recorded in Stage88 evidence."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "4b7ba33a1e3f16bd3b9808fb1ecf053220b01afa + stage-88-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-88-evidence.md; .runtime/creation-runtime-modernization/stage-88/impact-retest.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; serial isolated fictional SQLite/Lance and controlled fetch",
+          "result": "Current41files1022/1022,zero failed/pending/todo,including real registered whole-run11/11 and retained five-stage regressions. Covers joins, selected-model recovery, skipped ACK barriers, corrupt/unknown history, grant retry, cleanup retention, cancel/revoke/drain and original author-buffer projections. Fresh quality/build exit0.",
+          "limitations": "All initial failures and filtered reports remain; reports overlap and are not summed. No full background import/imitation, real-model quality, performance improvement or platform qualification."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "4b7ba33a1e3f16bd3b9808fb1ecf053220b01afa + stage-88-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-88-evidence.md; .runtime/creation-runtime-modernization/stage-88/desktop/f537-reference-whole-10-light.json; f537-reference-whole-10-light.png",
+          "environment": "Actual isolated Windows x64 Electron; fictional10chapter reference; loopback fake provider; inspected1440x900light screenshot",
+          "result": "One whole execute and five ordered settled ACKs finish the original run/grant;10knowledge receipts,4committed stage receipts,10blueprints and4existing draft/finalized rows unchanged. Twelve fake requests, normal quit, no observed external requests/writes or residual processes; complete344-file build tree bound in manifest.",
+          "limitations": "One foreground fake-provider observation, not A-to-B/multi-book, real-model quality, speedup, visual comparison, package/platform or full35 acceptance."
         }
       ]
     },

@@ -5,6 +5,7 @@ import { isRuntimeFeedbackChannel } from '../src/shared/runtime-feedback-contrac
 import { isWorkflowDriverChannel } from '../src/shared/workflow-driver-contract'
 import { isWorkflowBatchChannel } from '../src/shared/workflow-batch-contract'
 import { isReferenceKnowledgeChannel } from '../src/shared/reference-knowledge-contract'
+import { isReferenceRunChannel } from '../src/shared/reference-run-contract'
 import { isImportGenerationChannel } from '../src/shared/import-generation'
 
 /**
@@ -29,6 +30,9 @@ contextBridge.exposeInMainWorld('aiNovelAPI', {
       return Promise.reject(new Error('WORKFLOW_BATCH_CHANNEL_NOT_ALLOWED'))
     }
     if (channel.startsWith('reference-knowledge:') && !isReferenceKnowledgeChannel(channel)) {
+      return Promise.reject(new Error('KNOWLEDGE_BASE_REFERENCE_CHANNEL_NOT_ALLOWED'))
+    }
+    if (channel.startsWith('reference-run:') && !isReferenceRunChannel(channel)) {
       return Promise.reject(new Error('KNOWLEDGE_BASE_REFERENCE_CHANNEL_NOT_ALLOWED'))
     }
     if (channel.startsWith('import-generation:') && !isImportGenerationChannel(channel)) {

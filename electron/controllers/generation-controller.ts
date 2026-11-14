@@ -49,6 +49,10 @@ import { getEmbeddingConfig } from './kb-controller'
 import { recordPerformanceComputedMetric, recordPerformanceCount } from '../services/performance-diagnostics'
 import { isAgentGlobalToolAction, issueAgentGlobalToolExecution, revokeAgentGlobalToolExecutions } from '../services/agent-global-tool-admission'
 import { assertReferenceStyleRequest, assertReferenceStyleAckRequest } from '../../src/shared/reference-style-contract'
+import type { ReferenceStyleRequest } from '../../src/shared/reference-style-contract'
+import type { ReferenceGlobalRequest } from '../../src/shared/reference-global-contract'
+import type { ReferenceBlueprintRequest } from '../../src/shared/reference-blueprint-contract'
+import type { ImportRunParentFlightToken } from '../services/import-stage-flight'
 import { ReferenceStyleForeground } from './reference-style-foreground'
 import { assertReferenceGlobalRequest, assertReferenceGlobalAckRequest } from '../../src/shared/reference-global-contract'
 import { ReferenceGlobalForeground } from './reference-global-foreground'
@@ -1011,4 +1015,32 @@ export function registerGenerationController(options: {
     return admitPreparedDraft(owner, request, () => owner.restart(handle, request))
   })
   register('generation:discard-candidate', 2, (owner, handle, artifactId) => owner.discardCandidate(handle, artifactId))
+
+  // Trusted composition reuses the same authorized owner and child foreground ACKs, never internal IPC calls.
+  return {
+    referenceGlobal(runtime: ProjectRuntime, event: IpcMainInvokeEvent, session: ProjectSessionContext,
+      request: ReferenceGlobalRequest, parentToken: ImportRunParentFlightToken, assertCurrent: () => void) {
+      assertReferenceGlobalRequest(request)
+      const owner = authorizedOwner(session, event)
+      if (ownerRuntimes.get(owner) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+      return withRuntimeHandler(runtime, () => referenceGlobals.execute(runtime, owner, event.sender, session,
+        request, assertCurrent, parentToken))
+    },
+    referenceStyle(runtime: ProjectRuntime, event: IpcMainInvokeEvent, session: ProjectSessionContext,
+      request: ReferenceStyleRequest, parentToken: ImportRunParentFlightToken, assertCurrent: () => void) {
+      assertReferenceStyleRequest(request)
+      const owner = authorizedOwner(session, event)
+      if (ownerRuntimes.get(owner) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+      return withRuntimeHandler(runtime, () => referenceStyles.execute(runtime, owner, event.sender, session,
+        request, assertCurrent, parentToken))
+    },
+    referenceBlueprints(runtime: ProjectRuntime, event: IpcMainInvokeEvent, session: ProjectSessionContext,
+      request: ReferenceBlueprintRequest, parentToken: ImportRunParentFlightToken, assertCurrent: () => void) {
+      assertReferenceBlueprintRequest(request)
+      const owner = authorizedOwner(session, event)
+      if (ownerRuntimes.get(owner) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+      return withRuntimeHandler(runtime, () => referenceBlueprints.execute(runtime, owner, event.sender, session,
+        request, assertCurrent, parentToken))
+    },
+  }
 }

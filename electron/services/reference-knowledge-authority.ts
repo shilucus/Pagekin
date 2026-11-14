@@ -4,7 +4,7 @@ import { ImportRunRepository, type CapturedImportRunContext } from '../repositor
 import { ReferenceImportGrantRepository } from '../repositories/reference-import-grant-repository'
 import { assertReferenceImportGrantOperationId, type ReferenceImportGrant, type ReferenceImportGrantRef } from '../../src/shared/reference-import-grant'
 import { createImportRunChapterBatchCheckpointId, importStagesFor, IMPORT_RUN_KNOWLEDGE_BATCH_SIZE,
-  type ImportRunChapterSnapshot, type ImportRunExecutionLease, type ImportRunLocale,
+  type ImportRunChapterSnapshot, type ImportRunExecutionAuthority, type ImportRunExecutionLease, type ImportRunLocale,
   type ImportRunSnapshot, type ImportRunStartResult } from '../../src/shared/import-run'
 import { normalizeEmbeddingOptions, type EmbeddingModel } from '../../src/shared/embedding-options'
 import { chunkText } from '../embedding'
@@ -17,7 +17,9 @@ import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 import { projectRuntimeHost, type ProjectRuntime } from './project-runtime'
 import { referenceEmbeddingBudgetFailure, type ReferenceEmbeddingBudgetPlan } from './reference-embedding-budget-contract'
 import { LEGACY_VECTOR_MIGRATION_BLOCKED } from './knowledge-base-migration-error'
-import { acquireImportStageFlight, assertImportStageUnmanagedMutationAllowed, hasImportStageFlight } from './import-stage-flight'
+import { acquireImportStageFlight, assertImportRunParentFlightAccess, assertImportRunParentFlightCurrent,
+  assertImportStageUnmanagedMutationAllowed, hasImportStageChildFlight, hasImportStageFlight,
+  type ImportRunParentFlightToken } from './import-stage-flight'
 
 interface Subject {
   isDestroyed(): boolean
@@ -51,6 +53,7 @@ interface Issuance {
   budget: ReferenceEmbeddingBudgetCapability
   knowledgeActive: boolean
   knowledgeOperation: Promise<ImportRunStartResult> | null
+  wholeActive: ImportRunParentFlightToken | null
   inFlight: number
   lifecycle: { revoked: boolean; destroyed: boolean }
   destroyedListener: (() => void) | null
@@ -204,7 +207,7 @@ export class ReferenceKnowledgeAuthority {
   }
 
   private erase(issuance: Issuance): void {
-    if (issuance.inFlight || issuance.knowledgeActive) return
+    if (issuance.inFlight || issuance.knowledgeActive || issuance.wholeActive) return
     this.clearEmbedding(issuance)
     this.issuances.delete(issuance.reference.grantId)
     if (issuance.destroyedListener) {
@@ -246,7 +249,7 @@ export class ReferenceKnowledgeAuthority {
     try {
       const grant = this.revokeGrant(issuance)
       this.cancel(issuance)
-      if (issuance.inFlight === 0) {
+      if (issuance.inFlight === 0 && !issuance.knowledgeActive && !issuance.wholeActive) {
         this.cleanupFailures.delete(issuance.reference.grantId)
         this.erase(issuance)
       }
@@ -254,7 +257,7 @@ export class ReferenceKnowledgeAuthority {
     } catch (error) {
       const safe = safeFailure(error)
       this.cleanupFailures.set(issuance.reference.grantId, safe)
-      if (issuance.inFlight === 0) this.clearEmbedding(issuance)
+      if (issuance.inFlight === 0 && !issuance.knowledgeActive && !issuance.wholeActive) this.clearEmbedding(issuance)
       throw safe
     }
   }
@@ -269,6 +272,7 @@ export class ReferenceKnowledgeAuthority {
       throw failure('KNOWLEDGE_BASE_REFERENCE_PAYLOAD_INVALID')
     }
     assertReferenceImportGrantOperationId(request.executionOwner)
+    assertImportStageUnmanagedMutationAllowed(this.context.database, request.runId)
     const prior = this.grants().getByOperation(request.operationId)
     if (prior) {
       const retained = this.issuances.get(prior.grantId)
@@ -278,7 +282,6 @@ export class ReferenceKnowledgeAuthority {
       ImportRunRepository.assertExecutionAuthority(retained.runId, retained.execution, Date.now(), this.context.database)
       return { reference: retained.reference, execution: retained.execution }
     }
-    assertImportStageUnmanagedMutationAllowed(this.context.database, request.runId)
     for (const old of this.issuances.values()) if (old.runId === request.runId && old.knowledgeActive) {
       throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
     }
@@ -353,7 +356,7 @@ export class ReferenceKnowledgeAuthority {
     const issuance: Issuance = { sender: subject, reference: started.reference, operationId: request.operationId, runId: request.runId,
       manifestFingerprint: scope.manifestFingerprint, execution: started.execution, embedding, requestHash: started.hash,
       admission: started.admission, budget: started.budget, lifecycle: started.lifecycle,
-      knowledgeActive: false, knowledgeOperation: null, inFlight: 0, destroyedListener: null, resumed: false }
+      knowledgeActive: false, knowledgeOperation: null, wholeActive: null, inFlight: 0, destroyedListener: null, resumed: false }
     this.issuances.set(started.reference.grantId, issuance)
     const destroyedListener = () => {
       issuance.lifecycle.destroyed = true
@@ -379,16 +382,96 @@ export class ReferenceKnowledgeAuthority {
     return { run: resumedRun, execution }
   }
 
+  beginRun(subject: Subject, reference: ReferenceKnowledgeReference, execution: ImportRunExecutionAuthority,
+    parentToken: ImportRunParentFlightToken): () => void {
+    assertImportRunParentFlightCurrent(this.context.database, reference.runId, parentToken)
+    const issuance = this.require(subject, reference)
+    if (issuance.wholeActive || issuance.knowledgeActive || issuance.inFlight) throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
+    if (execution.owner !== issuance.execution.owner || execution.epoch !== issuance.execution.epoch) {
+      throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_MISMATCH')
+    }
+    const run = ImportRunRepository.get(issuance.runId, this.context)
+    if (run?.status === 'completed' && run.stage === 'completed') {
+      const scope = ImportRunRepository.captureReferenceGrantScope(issuance.runId, this.context)
+      const grant = this.grants().get(issuance.reference.grantId)
+      if (!grant || grant.state !== 'active' || grant.projectId !== reference.projectId
+        || grant.runId !== issuance.runId || grant.revision !== reference.revision
+        || grant.manifestFingerprint !== issuance.manifestFingerprint || grant.requestHash !== issuance.requestHash
+        || scope.runId !== issuance.runId || scope.manifestFingerprint !== issuance.manifestFingerprint
+        || scope.status !== 'completed' || scope.stage !== 'completed' || run.purpose !== 'reference') {
+        throw failure('REFERENCE_IMPORT_GRANT_SCOPE_MISMATCH')
+      }
+    } else {
+      issuance.admission.assertCurrent(this.resources, issuance.runId)
+      ImportRunRepository.assertExecutionAuthority(issuance.runId, issuance.execution, Date.now(), this.context.database)
+    }
+    issuance.wholeActive = parentToken
+    let released = false
+    return () => {
+      if (released) return
+      if (issuance.knowledgeActive || issuance.inFlight) throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
+      if (hasImportStageChildFlight(this.context.database, issuance.runId)) throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
+      if (issuance.wholeActive !== parentToken) { released = true; return }
+      if (issuance.lifecycle.revoked || issuance.lifecycle.destroyed) {
+        this.cancelRunAtBoundary(subject, reference, execution, parentToken)
+        this.quiesce(issuance)
+      }
+      issuance.wholeActive = null
+      released = true
+      if (issuance.lifecycle.revoked || issuance.lifecycle.destroyed) {
+        this.cleanupFailures.delete(issuance.reference.grantId)
+        this.erase(issuance)
+      }
+    }
+  }
+
+  assertRunCurrent(subject: Subject, reference: ReferenceKnowledgeReference, execution: ImportRunExecutionAuthority,
+    parentToken: ImportRunParentFlightToken): void {
+    assertImportRunParentFlightCurrent(this.context.database, reference.runId, parentToken)
+    const issuance = this.require(subject, reference)
+    if (issuance.wholeActive !== parentToken || execution.owner !== issuance.execution.owner
+      || execution.epoch !== issuance.execution.epoch) throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_MISMATCH')
+    issuance.admission.assertCurrent(this.resources, issuance.runId)
+    ImportRunRepository.assertExecutionAuthority(issuance.runId, issuance.execution, Date.now(), this.context.database)
+  }
+
+  async withRunHeartbeat<T>(subject: Subject, reference: ReferenceKnowledgeReference, execution: ImportRunExecutionAuthority,
+    parentToken: ImportRunParentFlightToken, operation: () => Promise<T>): Promise<T> {
+    this.assertRunCurrent(subject, reference, execution, parentToken)
+    const issuance = this.require(subject, reference)
+    return this.withKnowledgeHeartbeat(issuance, operation)
+  }
+
+  cancelRunAtBoundary(subject: Subject, reference: ReferenceKnowledgeReference, execution: ImportRunExecutionAuthority,
+    parentToken: ImportRunParentFlightToken): void {
+    assertImportRunParentFlightCurrent(this.context.database, reference.runId, parentToken)
+    const issuance = this.issuances.get(reference.grantId)
+    if (!issuance || issuance.sender !== subject || issuance.wholeActive !== parentToken
+      || issuance.reference.projectId !== reference.projectId || issuance.reference.runId !== reference.runId
+      || issuance.reference.revision !== reference.revision || issuance.execution.owner !== execution.owner
+      || issuance.execution.epoch !== execution.epoch) throw failure('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+    if (issuance.knowledgeActive || issuance.inFlight || hasImportStageChildFlight(this.context.database, issuance.runId)) {
+      throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
+    }
+    const row = this.context.database.prepare('SELECT status, execution_owner, execution_epoch FROM import_runs WHERE id=?')
+      .get(issuance.runId) as { status: string; execution_owner: string; execution_epoch: number } | undefined
+    if (!row || row.status !== 'running' || row.execution_owner !== execution.owner || row.execution_epoch !== execution.epoch) return
+    ImportRunRepository.assertExecutionAuthority(issuance.runId, issuance.execution, Date.now(), this.context.database)
+    ImportRunRepository.cancelAtBoundary(issuance.runId, issuance.execution, this.context)
+  }
+
   executeKnowledge(subject: Subject, request: ExecuteReferenceKnowledgeRequest,
-    hooks: ReferenceKnowledgeExecutionHooks): Promise<ImportRunStartResult> {
+    hooks: ReferenceKnowledgeExecutionHooks, parentToken?: ImportRunParentFlightToken): Promise<ImportRunStartResult> {
     const issuance = this.require(subject, request.reference)
+    assertImportRunParentFlightAccess(this.context.database, issuance.runId, parentToken)
+    if (parentToken && issuance.wholeActive !== parentToken) throw failure('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
     if (request.execution.owner !== issuance.execution.owner || request.execution.epoch !== issuance.execution.epoch) {
       throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_MISMATCH')
     }
     if (issuance.knowledgeOperation) return issuance.knowledgeOperation
     if (issuance.inFlight > 0) throw failure('KNOWLEDGE_BASE_REFERENCE_IMPORT_IN_FLIGHT')
 
-    const releaseStage = acquireImportStageFlight(this.context.database, issuance.runId, 'knowledge')
+    const releaseStage = acquireImportStageFlight(this.context.database, issuance.runId, 'knowledge', parentToken)
     let releaseWork: () => void
     try { releaseWork = this.resources.acquireWork() }
     catch (error) { releaseStage(); throw error }
@@ -678,9 +761,10 @@ export class ReferenceKnowledgeAuthority {
   }
 
   async executeRefresh(subject: Subject, request: ReferenceRefreshRequest,
-    hooks: ReferenceRefreshExecutionHooks): Promise<ReferenceRefreshSuccess> {
+    hooks: ReferenceRefreshExecutionHooks, parentToken?: ImportRunParentFlightToken): Promise<ReferenceRefreshSuccess> {
     this.assertRuntime(false)
     hooks.assertCurrent()
+    assertImportRunParentFlightAccess(this.context.database, request.reference.runId, parentToken)
     if (subject.isDestroyed() || request.reference.projectId !== this.context.projectId) {
       throw failure('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
     }
@@ -705,6 +789,7 @@ export class ReferenceKnowledgeAuthority {
     }
 
     const issuance = this.require(subject, request.reference)
+    if (parentToken && issuance.wholeActive !== parentToken) throw failure('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
     if (request.execution.owner !== issuance.execution.owner || request.execution.epoch !== issuance.execution.epoch) {
       throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_MISMATCH')
     }
@@ -725,7 +810,7 @@ export class ReferenceKnowledgeAuthority {
       throw failure('IMPORT_RUN_STAGE_MISMATCH')
     }
 
-    const releaseStage = acquireImportStageFlight(this.context.database, issuance.runId, 'refresh')
+    const releaseStage = acquireImportStageFlight(this.context.database, issuance.runId, 'refresh', parentToken)
     let releaseWork: () => void
     try { releaseWork = this.resources.acquireWork() }
     catch (error) { releaseStage(); throw error }
@@ -864,11 +949,11 @@ export class ReferenceKnowledgeAuthority {
   }
 
   retire(): void {
-    this.retired = true
     if (this.cleanupFailures.size) throw new AggregateError([...this.cleanupFailures.values()], 'KNOWLEDGE_BASE_REFERENCE_CLOSE_CLEANUP_FAILED')
-    if ([...this.issuances.values()].some(issuance => issuance.inFlight > 0 || issuance.knowledgeActive)) {
+    if ([...this.issuances.values()].some(issuance => issuance.inFlight > 0 || issuance.knowledgeActive || issuance.wholeActive)) {
       throw failure('KNOWLEDGE_BASE_REFERENCE_IMPORT_IN_FLIGHT')
     }
+    this.retired = true
     for (const issuance of this.issuances.values()) this.erase(issuance)
   }
 }

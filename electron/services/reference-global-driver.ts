@@ -118,7 +118,7 @@ function assertRequestExecution(row: RunLeaseRow, request: ReferenceGlobalReques
   if (row.execution_owner !== request.execution.owner || row.execution_epoch !== request.execution.epoch) throw new Error('IMPORT_RUN_EXECUTION_STALE')
   if (row.purpose !== 'reference') throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
 }
-function assertEffectHistoryKnown(runtime: ProjectRuntime, runId: string): void {
+export function assertEffectHistoryKnown(runtime: ProjectRuntime, runId: string): void {
   const table = runtime.database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_effect_ledger'").pluck().get()
   if (!table) return
   const unknown = runtime.database.prepare(`SELECT 1 FROM import_effect_ledger WHERE run_id=? AND stage='global'
@@ -133,6 +133,16 @@ function receiptGlobal(receipt: ImportRunEffectReceipt): ImportGlobalFactsReceip
   const value = receipt.state === 'committed' ? receipt.effectReceipt : undefined
   if (!value || typeof value !== 'object' || typeof (value as { operationId?: unknown }).operationId !== 'string') throw new Error('IMPORT_RUN_RECEIPT_PAYLOAD_INVALID')
   return value as ImportGlobalFactsReceipt
+}
+export function readReferenceGlobalHistory(runtime: ProjectRuntime, runId: string): ImportRunEffectReceipt | null {
+  assertEffectHistoryKnown(runtime, runId)
+  return ImportRunRepository.getEffectReceipt(runId, 'global', 'done', runtime)
+}
+
+export function assertReferenceGlobalSkippedHistory(runtime: ProjectRuntime, runId: string, completed: boolean): void {
+  const receipt = readReferenceGlobalHistory(runtime, runId)
+  if (!receipt || receipt.state !== 'committed') throw new Error('IMPORT_RUN_RECEIPT_PAYLOAD_INVALID')
+  if (!completed && !receiptHandle(receipt)) throw new Error('GENERATION_IMPORT_EFFECT_HANDLE_REQUIRED')
 }
 function noInferenceFailure(locale: ImportRunLocale): ReferenceGlobalFailure {
   return new ReferenceGlobalFailure('GENERATION_REQUEST_FAILED', locale === 'zh-CN'
@@ -267,8 +277,7 @@ export async function executeReferenceGlobal({ runtime, owner, viewEpoch, reques
     assertResources()
     const row = readRunLease(runtime, request.runId)
     locale = row.locale
-    assertEffectHistoryKnown(runtime, request.runId)
-    const existingReceipt = ImportRunRepository.getEffectReceipt(request.runId, 'global', 'done', context)
+    const existingReceipt = readReferenceGlobalHistory(runtime, request.runId)
     if (existingReceipt?.state === 'committed' && row.purpose === 'reference' && row.status === 'completed' && row.stage === 'completed') {
       handle = receiptHandle(existingReceipt)
       const run = ImportRunRepository.get(request.runId, context)

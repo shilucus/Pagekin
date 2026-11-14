@@ -56,7 +56,7 @@ export function registerIPCHandlers() {
   registerFSController()
   registerExternalFileGrantController()
   const networkScheduler = createMainNetworkScheduler()
-  registerGenerationController(registerLLMController({ scheduler: networkScheduler }))
+  const referenceGeneration = registerGenerationController(registerLLMController({ scheduler: networkScheduler }))
   registerDatabaseController()
   registerCharacterAvatarController({
     resolveService(_event, context) {
@@ -74,7 +74,7 @@ export function registerIPCHandlers() {
   registerFinalizationController()
   registerChapterLifecycleController()
   registerKBController(undefined, networkScheduler)
-  registerReferenceKnowledgeController(networkScheduler)
+  registerReferenceKnowledgeController(networkScheduler, referenceGeneration)
   registerImportController()
 
   console.log('[AI Novel IPC] 所有 Controller 已注册完成')

@@ -39,6 +39,23 @@ afterEach(() => {
 })
 
 describe('project-scoped IPC session transport', () => {
+  it('keeps the whole reference run and mechanical projection ACK on the original frozen view', async () => {
+    const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
+    const reference = { projectId: 'project-A', runId: 'fictional-run', grantId: '11111111-1111-4111-8111-111111111111', revision: 1 }
+    const execution = { owner: '22222222-2222-4222-8222-222222222222', epoch: 1 }
+    const request = { reference, execution, modelId: null }
+    const ack = { reference, execution, stage: 'global' as const,
+      token: '33333333-3333-4333-8333-333333333333', decision: 'settled' as const }
+    setActiveProjectSessionContext({ projectId: 'project-B', leaseId: 'lease-B', projectPath: 'C:/projects/B' })
+    await ipc.invokeWithProjectSession(frozen, 'reference-run:v1:execute', request)
+    expect(invoke).toHaveBeenLastCalledWith('reference-run:v1:execute', request, frozen)
+    await ipc.invokeWithProjectSession(frozen, 'reference-run:v1:projection-ack', ack)
+    expect(invoke).toHaveBeenLastCalledWith('reference-run:v1:projection-ack', ack, frozen)
+    setActiveProjectSessionContext(null)
+    await expect(ipc.invoke('reference-run:v1:execute', request)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    await expect(ipc.invoke('reference-run:v1:projection-ack', ack)).rejects.toThrow('GENERATION_PROJECT_SESSION_REQUIRED')
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
   it('keeps reference refresh and its projection ACK on the frozen view,never a replacement execution lease', async () => {
     const frozen = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
     const reference = { projectId: 'project-A', runId: 'fictional-run', grantId: '11111111-1111-4111-8111-111111111111', revision: 1 }

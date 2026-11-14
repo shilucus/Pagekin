@@ -6,6 +6,7 @@ import type { ReferenceRefreshAckRequest, ReferenceRefreshAckResult, ReferenceRe
   ReferenceRefreshRequest, ReferenceRefreshSuccess } from '../../src/shared/reference-refresh-contract'
 import type { ReferenceKnowledgeAuthority } from '../services/reference-knowledge-authority'
 import type { ProjectRuntime } from '../services/project-runtime'
+import { assertImportRunParentFlightAccess, type ImportRunParentFlightToken } from '../services/import-stage-flight'
 import { explainImportRunFailure } from './import-run-failure'
 
 function deferred<T>() {
@@ -34,8 +35,10 @@ export class ReferenceRefreshForeground {
   private readonly flights = new Map<Database.Database, Flight>()
 
   execute(runtime: ProjectRuntime, authority: ReferenceKnowledgeAuthority, sender: WebContents,
-    session: ProjectSessionContext, request: ReferenceRefreshRequest, assertCurrent: () => void): Promise<ReferenceRefreshSuccess> {
+    session: ProjectSessionContext, request: ReferenceRefreshRequest, assertCurrent: () => void,
+    parentToken?: ImportRunParentFlightToken): Promise<ReferenceRefreshSuccess> {
     assertCurrent()
+    assertImportRunParentFlightAccess(runtime.database, request.reference.runId, parentToken)
     const prior = this.flights.get(runtime.database)
     if (prior && !prior.finished) {
       if (prior.sender !== sender || !sameSession(prior.session, session) || !sameReference(prior.request.reference, request.reference)
@@ -71,7 +74,7 @@ export class ReferenceRefreshForeground {
       },
       progress: progress => emit({ kind: 'progress', progress }),
       failureMessage: (code, locale) => explainImportRunFailure(code, locale)!.error,
-    })).finally(() => {
+    }, parentToken)).finally(() => {
       flight.finished = true
       sender.removeListener('destroyed', stop)
       flight.gate?.ready.reject(new Error('KNOWLEDGE_BASE_REFERENCE_OPERATION_FAILED'))

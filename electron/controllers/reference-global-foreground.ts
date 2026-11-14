@@ -6,7 +6,7 @@ import type { ReferenceGlobalAckRequest, ReferenceGlobalAckResult, ReferenceGlob
 import { importGenerationStopMessage } from '../../src/i18n/app-errors'
 import { executeReferenceGlobal } from '../services/reference-global-driver'
 import type { createMainGenerationOwner } from '../services/main-generation-owner'
-import { acquireImportStageFlight } from '../services/import-stage-flight'
+import { acquireImportStageFlight, assertImportRunParentFlightAccess, type ImportRunParentFlightToken } from '../services/import-stage-flight'
 import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
 import { explainImportRunFailure } from './import-run-failure'
 
@@ -35,7 +35,8 @@ export class ReferenceGlobalForeground {
   private readonly flights = new Map<Database.Database, Flight>()
 
   execute(runtime: ProjectRuntime, owner: Owner, sender: WebContents, session: ProjectSessionContext,
-    request: ReferenceGlobalRequest, assertCurrent: () => void): Promise<ReferenceGlobalResult> {
+    request: ReferenceGlobalRequest, assertCurrent: () => void, parentToken?: ImportRunParentFlightToken): Promise<ReferenceGlobalResult> {
+    assertImportRunParentFlightAccess(runtime.database, request.runId, parentToken)
     const prior = this.flights.get(runtime.database)
     if (prior && !prior.finished) {
       if (prior.sender !== sender || !sameSession(prior.session, session) || prior.request.runId !== request.runId
@@ -44,7 +45,7 @@ export class ReferenceGlobalForeground {
     }
     if (sender.isDestroyed()) throw new Error('GENERATION_ACTION_CANCELLED')
     assertCurrent()
-    const releaseStage = acquireImportStageFlight(runtime.database, request.runId, 'global')
+    const releaseStage = acquireImportStageFlight(runtime.database, request.runId, 'global', parentToken)
     let releaseWork: () => void
     try { releaseWork = projectRuntimeHost.acquireLegacyOperation('import-generation:v1:global') }
     catch (error) { releaseStage(); throw error }

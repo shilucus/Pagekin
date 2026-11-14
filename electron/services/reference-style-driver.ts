@@ -129,6 +129,16 @@ function receiptHandle(receipt: ImportRunEffectReceipt): MainGenerationRunHandle
   return value && typeof value === 'object' ? value as MainGenerationRunHandle : null
 }
 
+export function readReferenceStyleHistory(runtime: ProjectRuntime, runId: string): ImportRunEffectReceipt | null {
+  return ImportRunRepository.getEffectReceipt(runId, 'style', 'done', runtime)
+}
+
+export function assertReferenceStyleSkippedHistory(runtime: ProjectRuntime, runId: string): void {
+  const receipt = readReferenceStyleHistory(runtime, runId)
+  if (!receipt || receipt.state !== 'committed') throw new Error('IMPORT_RUN_RECEIPT_PAYLOAD_INVALID')
+  receiptStyle(receipt)
+}
+
 function fallbackFinalized(db: ProjectRuntime['database']): {
   samples: string[]
   selectedFinalizedDraftIds: number[]
@@ -284,7 +294,7 @@ export async function executeReferenceStyle({ runtime, owner, viewEpoch, request
     assertResources()
     const row = readRunLease(runtime, request.runId)
     locale = row.locale
-    const existingReceipt = ImportRunRepository.getEffectReceipt(request.runId, 'style', 'done', context)
+    const existingReceipt = readReferenceStyleHistory(runtime, request.runId)
     if (existingReceipt?.state === 'committed' && row.purpose === 'reference'
       && row.status === 'completed' && row.stage === 'completed') {
       handle = receiptHandle(existingReceipt)

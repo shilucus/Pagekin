@@ -158,6 +158,55 @@ function assertEffectHistoryKnown(runtime: ProjectRuntime, runId: string, batchI
   if (row) throw new Error('IMPORT_RUN_EFFECT_HISTORY_UNKNOWN')
 }
 
+export function readReferenceBlueprintHistory(runtime: ProjectRuntime, runId: string) {
+  assertEffectHistoryKnown(runtime, runId)
+  const snapshot = ImportRunRepository.get(runId, runtime)
+  if (!snapshot) throw new Error('IMPORT_RUN_NOT_FOUND')
+  if (snapshot.purpose !== 'reference') throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
+  const rows = runtime.database.prepare(`SELECT batch_id FROM import_run_receipts WHERE run_id=? AND stage='blueprints' ORDER BY rowid`)
+    .all(runId) as { batch_id: string }[]
+  const rawReceipts = rows.map(row => {
+    if (!parseImportRunChapterBatchCheckpointId(row.batch_id)) throw new Error('IMPORT_RUN_CHECKPOINT_CORRUPT')
+    assertEffectHistoryKnown(runtime, runId, row.batch_id)
+    const receipt = ImportRunRepository.getEffectReceipt(runId, 'blueprints', row.batch_id, runtime)
+    if (!receipt) throw new Error('IMPORT_RUN_RECEIPT_PAYLOAD_INVALID')
+    return receipt
+  })
+  const byBatch = new Map(rawReceipts.map(receipt => [receipt.batchId, receipt]))
+  const completedBatches = snapshot.completedBatches.blueprints ?? []
+  for (const batchId of completedBatches) {
+    if (!byBatch.has(batchId)) throw new Error('IMPORT_RUN_RECEIPT_PAYLOAD_INVALID')
+  }
+  const orderedReceipts = [...rawReceipts].sort((left, right) => {
+    const a = parseImportRunChapterBatchCheckpointId(left.batchId)!
+    const b = parseImportRunChapterBatchCheckpointId(right.batchId)!
+    return a.startChapter - b.startChapter
+  })
+  const committedReceipts = orderedReceipts.filter(receipt => receipt.state === 'committed')
+  const preparedReceipts = orderedReceipts.filter(receipt => receipt.state === 'prepared')
+  if (orderedReceipts.some(receipt => receipt.state !== 'prepared' && receipt.state !== 'committed')) throw new Error('IMPORT_RUN_EFFECT_HISTORY_UNKNOWN')
+  const covered = new Set<number>()
+  const canonicalByBatch = new Map<string, BlueprintRangeCommitReceipt>()
+  for (const receipt of committedReceipts) {
+    if (!completedBatches.includes(receipt.batchId)) throw new Error('IMPORT_RUN_EFFECT_LEDGER_MISMATCH')
+    const canonical = canonicalRangeReceipt(receipt, runtime.database)
+    const range = parseImportRunChapterBatchCheckpointId(receipt.batchId)!
+    if (range.endChapter - range.startChapter + 1 > MAX_RANGE || canonical.chapterNumbers.length !== range.endChapter - range.startChapter + 1
+      || canonical.chapterNumbers.some((chapter, index) => chapter !== range.startChapter + index)) throw new Error('IMPORT_RUN_CHECKPOINT_CORRUPT')
+    for (let chapter = range.startChapter; chapter <= range.endChapter; chapter++) {
+      if (covered.has(chapter)) throw new Error('IMPORT_RUN_CHECKPOINT_CORRUPT')
+      covered.add(chapter)
+    }
+    canonicalByBatch.set(receipt.batchId, canonical)
+  }
+  return { snapshot, orderedReceipts, committedReceipts, preparedReceipts, covered, canonicalByBatch }
+}
+
+export function assertReferenceBlueprintSkippedHistory(runtime: ProjectRuntime, runId: string): void {
+  const { committedReceipts } = readReferenceBlueprintHistory(runtime, runId)
+  if (!committedReceipts.length) throw new Error('IMPORT_RUN_STAGE_INCOMPLETE')
+}
+
 function importedBlueprint(item: ReturnType<typeof parseBlueprintSemanticResponseText>[number]): BlueprintData {
   return { ...item, relationshipHints: item.relationshipHints, userGuidance: '', notes: '', notesUpdatedAt: '' }
 }
@@ -342,52 +391,13 @@ export async function executeReferenceBlueprints({ runtime, owner, viewEpoch, re
     return completed.completionReceipt as BlueprintCharacterSyncCompletionReceipt
   }
 
-  const readRangeRows = () => runtime.database.prepare(`SELECT batch_id FROM import_run_receipts WHERE run_id=? AND stage='blueprints' ORDER BY rowid`)
-    .all(request.runId) as { batch_id: string }[]
   try {
     const runRow = readRunLease(runtime, request.runId)
     locale = runRow.locale
     signal.addEventListener('abort', onAbort, { once: true })
     if (signal.aborted) onAbort()
     assertResources()
-    assertEffectHistoryKnown(runtime, request.runId)
-    const snapshot = ImportRunRepository.get(request.runId, context)
-    if (!snapshot) throw new Error('IMPORT_RUN_NOT_FOUND')
-    if (snapshot.purpose !== 'reference') throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
-    const rawReceipts = readRangeRows().map(row => {
-      if (!parseImportRunChapterBatchCheckpointId(row.batch_id)) throw new Error('IMPORT_RUN_CHECKPOINT_CORRUPT')
-      assertEffectHistoryKnown(runtime, request.runId, row.batch_id)
-      const receipt = ImportRunRepository.getEffectReceipt(request.runId, 'blueprints', row.batch_id, context)
-      if (!receipt) throw new Error('IMPORT_RUN_RECEIPT_PAYLOAD_INVALID')
-      return receipt
-    })
-    const byBatch = new Map(rawReceipts.map(receipt => [receipt.batchId, receipt]))
-    const completedBatches = snapshot.completedBatches.blueprints ?? []
-    for (const batchId of completedBatches) {
-      if (!byBatch.has(batchId)) throw new Error('IMPORT_RUN_RECEIPT_PAYLOAD_INVALID')
-    }
-    const orderedReceipts = [...rawReceipts].sort((left, right) => {
-      const a = parseImportRunChapterBatchCheckpointId(left.batchId)!
-      const b = parseImportRunChapterBatchCheckpointId(right.batchId)!
-      return a.startChapter - b.startChapter
-    })
-    const committedReceipts = orderedReceipts.filter(receipt => receipt.state === 'committed')
-    const preparedReceipts = orderedReceipts.filter(receipt => receipt.state === 'prepared')
-    if (orderedReceipts.some(receipt => receipt.state !== 'prepared' && receipt.state !== 'committed')) throw new Error('IMPORT_RUN_EFFECT_HISTORY_UNKNOWN')
-    const covered = new Set<number>()
-    const canonicalByBatch = new Map<string, BlueprintRangeCommitReceipt>()
-    for (const receipt of committedReceipts) {
-      if (!completedBatches.includes(receipt.batchId)) throw new Error('IMPORT_RUN_EFFECT_LEDGER_MISMATCH')
-      const canonical = canonicalRangeReceipt(receipt, runtime.database)
-      const range = parseImportRunChapterBatchCheckpointId(receipt.batchId)!
-      if (range.endChapter - range.startChapter + 1 > MAX_RANGE || canonical.chapterNumbers.length !== range.endChapter - range.startChapter + 1
-        || canonical.chapterNumbers.some((chapter, index) => chapter !== range.startChapter + index)) throw new Error('IMPORT_RUN_CHECKPOINT_CORRUPT')
-      for (let chapter = range.startChapter; chapter <= range.endChapter; chapter++) {
-        if (covered.has(chapter)) throw new Error('IMPORT_RUN_CHECKPOINT_CORRUPT')
-        covered.add(chapter)
-      }
-      canonicalByBatch.set(receipt.batchId, canonical)
-    }
+    const { snapshot, orderedReceipts, committedReceipts, preparedReceipts, covered, canonicalByBatch } = readReferenceBlueprintHistory(runtime, request.runId)
 
     if (runRow.status === 'completed' && runRow.stage === 'completed') {
       const last = [...committedReceipts].at(-1)

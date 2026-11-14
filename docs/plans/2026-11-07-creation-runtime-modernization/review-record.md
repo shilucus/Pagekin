@@ -1262,3 +1262,35 @@ persistence-vs-public schema) are corrected and re-reviewed. Build identity equa
 to Stage86 is not production-composition evidence. Scoped Git preservation
 checks remain root-only; prior report counts are not added, failures/protected
 files remain.
+
+## 2026-11-14 - Stage 88 Independent Whole-Run Review
+
+Sol independently reviews actual production composition, closed IPC and trusted
+facades, original issuance/lease/model/receipts, renderer projection order and
+physical drain. A real P1 static finding requires main to validate persisted
+global/style/blueprint history before each skipped projection. Existing driver
+validators are extracted and reused without new writes, source fallback or
+generation replay. Actual registered native counterexamples reject legacy
+unknown global and completed corrupt style/unknown blueprint histories before
+refresh. Private cleanup retains tokens/claims until cancellation/quiesce succeed;
+real SQLite UPDATE-failure tests retain original issuance and retry correctly.
+
+Initial native9/11 and integrated1021/1022 failures are not waived: prepare/resume
+must reject, mutating DB advance must resolve its existing localized busy failure,
+and completed refresh must not emit a new child projection. Source-based test
+repairs retain explicit busy codes, whole projection barriers, unchanged durable
+history and no-new-model-request assertions. The same41file retest actually
+passes1022/1022,0failed/pending/todo; checklist after3partial evidence appends is
+36/36, an overlapping subset. Typecheck/lint/colors/i18n/build actually exit0.
+
+Final Sol review directly reads complete raw results and latest quality logs,
+inspects the actual isolated desktop PNG/scenario and independently recomputes
+all344built files:413f266da2c6c3c73bf678aaa3c35a587b2db87413802f72138b5f79e32b185f.
+It accepts bounded source/runtime with no identified remaining blocker, not all
+35 or full import. Parent fence remains same-run, not universal core CAS. No
+background/A-to-B, genuine model/quality, speedup or package/platform acceptance.
+Agent4 separately accepts131/131source/raw/selected-build/protected identities,
+the exact42owned paths,12report statistics and complete344-file ordinal build
+tree. Its own parent/history source relies on Sol's independent acceptance.
+Root observes an empty index, unchanged protected files, sample-only hooks and
+no owned-path Git filters; scoped commit/postcommit checks remain root-only.

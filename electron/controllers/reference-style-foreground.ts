@@ -6,7 +6,7 @@ import type { ReferenceStyleAckRequest, ReferenceStyleAckResult, ReferenceStyleP
 import { importGenerationStopMessage } from '../../src/i18n/app-errors'
 import { executeReferenceStyle } from '../services/reference-style-driver'
 import type { createMainGenerationOwner } from '../services/main-generation-owner'
-import { acquireImportStageFlight } from '../services/import-stage-flight'
+import { acquireImportStageFlight, assertImportRunParentFlightAccess, type ImportRunParentFlightToken } from '../services/import-stage-flight'
 import { projectRuntimeHost, type ProjectRuntime } from '../services/project-runtime'
 import { explainImportRunFailure } from './import-run-failure'
 
@@ -43,7 +43,8 @@ export class ReferenceStyleForeground {
   private readonly flights = new Map<Database.Database, Flight>()
 
   execute(runtime: ProjectRuntime, owner: Owner, sender: WebContents, session: ProjectSessionContext,
-    request: ReferenceStyleRequest, assertCurrent: () => void): Promise<ReferenceStyleResult> {
+    request: ReferenceStyleRequest, assertCurrent: () => void, parentToken?: ImportRunParentFlightToken): Promise<ReferenceStyleResult> {
+    assertImportRunParentFlightAccess(runtime.database, request.runId, parentToken)
     const prior = this.flights.get(runtime.database)
     if (prior && !prior.finished) {
       if (prior.sender !== sender || !sameSession(prior.session, session) || prior.request.runId !== request.runId
@@ -52,7 +53,7 @@ export class ReferenceStyleForeground {
     }
     if (sender.isDestroyed()) throw new Error('GENERATION_ACTION_CANCELLED')
     assertCurrent()
-    const releaseStage = acquireImportStageFlight(runtime.database, request.runId, 'style')
+    const releaseStage = acquireImportStageFlight(runtime.database, request.runId, 'style', parentToken)
     let releaseWork: () => void
     try { releaseWork = projectRuntimeHost.acquireLegacyOperation('import-generation:v1:style') }
     catch (error) { releaseStage(); throw error }

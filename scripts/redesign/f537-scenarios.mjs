@@ -180,6 +180,92 @@ async function stopAuthorInference(context) {
 }
 
 export const F537_SCENARIOS = {
+  'f537-reference-whole-10': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
+    const { app, page, roots, fake } = context
+    const draftSnapshot = db => db.prepare(`SELECT d.*, c.body AS content_body FROM drafts_all d
+      JOIN contents c ON c.id=d.content_id ORDER BY d.id`).all()
+    const before = readDb(context, draftSnapshot)
+    assert.ok(before.some(row => row.status === 'finalized'), '隔离夹具包含既有定稿')
+    assert.ok(before.some(row => row.status !== 'finalized'), '隔离夹具包含既有草稿')
+    fake.replyImport()
+    assert.ok(await app.evaluate(({ ipcMain }) => {
+      const handlers = ipcMain._invokeHandlers
+      const execute = handlers.get('reference-run:v1:execute')
+      const acknowledge = handlers.get('reference-run:v1:projection-ack')
+      if (!execute || !acknowledge) return false
+      const state = { calls: [], acks: [], settled: false, success: false }
+      const wrappedExecute = async (event, request, ...rest) => {
+        state.calls.push({ runId: request?.reference?.runId, grantId: request?.reference?.grantId,
+          revision: request?.reference?.revision })
+        try {
+          const response = await execute(event, request, ...rest)
+          state.success = response?.success === true
+          return response
+        } finally { state.settled = true }
+      }
+      const wrappedAck = async (event, request, ...rest) => {
+        const response = await acknowledge(event, request, ...rest)
+        state.acks.push({ stage: request?.stage, decision: request?.decision,
+          runId: request?.reference?.runId, grantId: request?.reference?.grantId, revision: request?.reference?.revision })
+        return response
+      }
+      handlers.set('reference-run:v1:execute', wrappedExecute)
+      handlers.set('reference-run:v1:projection-ack', wrappedAck)
+      globalThis.__f537Whole = { state, execute, acknowledge, wrappedExecute, wrappedAck }
+      return true
+    }), '整轮执行和阶段 ACK handler 可观察')
+    try {
+      await startImport(app, page, referenceNovel(roots, 10), 10)
+      let observed
+      for (const deadline = Date.now() + 5 * 60_000; ; await new Promise(resolve => setTimeout(resolve, 250))) {
+        observed = await app.evaluate(() => globalThis.__f537Whole.state)
+        if (observed.settled) break
+        assert.ok(Date.now() < deadline, '5 分钟内整轮导入未结束')
+      }
+      assert.equal(observed.success, true, '整轮 IPC 返回成功')
+      await runSheet.waitUntilOpen(page)
+      await runSheet.waitForRunDone(page, 90_000)
+      observed = await app.evaluate(() => globalThis.__f537Whole.state)
+      assert.equal(observed.calls.length, 1, 'renderer 只调用一次整轮执行')
+      const [issued] = observed.calls
+      assert.ok(issued.runId && issued.grantId && issued.revision > 0, '整轮使用原始授权引用')
+      assert.deepEqual(observed.acks.map(({ stage, decision }) => ({ stage, decision })),
+        ['knowledge', 'global', 'style', 'blueprints', 'refresh'].map(stage => ({ stage, decision: 'settled' })))
+      for (const ack of observed.acks) {
+        assert.deepEqual({ runId: ack.runId, grantId: ack.grantId, revision: ack.revision }, issued)
+      }
+      const measured = readDb(context, db => ({
+        run: db.prepare('SELECT id, purpose, stage, status FROM import_runs WHERE id=?').get(issued.runId),
+        grants: db.prepare('SELECT grant_id, revision, state FROM reference_import_grants WHERE import_run_id=? ORDER BY grant_id').all(issued.runId),
+        knowledge: db.prepare("SELECT COUNT(*) FROM import_run_knowledge_receipts WHERE run_id=? AND state='committed'").pluck().get(issued.runId),
+        receipts: db.prepare('SELECT stage, batch_id, state FROM import_run_receipts WHERE run_id=? ORDER BY stage, batch_id').all(issued.runId),
+        blueprints: db.prepare('SELECT chapter_number FROM blueprints WHERE chapter_number BETWEEN 1 AND 10 ORDER BY chapter_number').pluck().all(),
+        drafts: draftSnapshot(db),
+      }))
+      assert.deepEqual(measured.run, { id: issued.runId, purpose: 'reference', stage: 'completed', status: 'completed' })
+      assert.deepEqual(measured.grants, [{ grant_id: issued.grantId, revision: issued.revision, state: 'completed' }])
+      assert.equal(measured.knowledge, 10)
+      for (const stage of ['global', 'style', 'blueprints']) {
+        assert.ok(measured.receipts.some(receipt => receipt.stage === stage && receipt.state === 'committed'), `${stage} 有已提交收据`)
+      }
+      assert.ok(measured.receipts.every(receipt => receipt.state === 'committed'), '没有遗留 prepared 收据')
+      assert.deepEqual(measured.blueprints, Array.from({ length: 10 }, (_, index) => index + 1))
+      assert.deepEqual(measured.drafts, before, '参考导入不改变既有定稿和草稿')
+      return { run: measured.run, grants: measured.grants.length, knowledgeReceipts: measured.knowledge,
+        committedReceipts: measured.receipts.length, blueprints: measured.blueprints.length,
+        unchangedDrafts: before.length, wholeCalls: observed.calls.length, stageAcks: observed.acks.map(ack => ack.stage) }
+    } finally {
+      await app.evaluate(({ ipcMain }) => {
+        const fixture = globalThis.__f537Whole
+        if (!fixture) return
+        if (ipcMain._invokeHandlers.get('reference-run:v1:execute') === fixture.wrappedExecute)
+          ipcMain._invokeHandlers.set('reference-run:v1:execute', fixture.execute)
+        if (ipcMain._invokeHandlers.get('reference-run:v1:projection-ack') === fixture.wrappedAck)
+          ipcMain._invokeHandlers.set('reference-run:v1:projection-ack', fixture.acknowledge)
+        delete globalThis.__f537Whole
+      })
+    }
+  } },
   // 252 章参考小说导入当前作品：知识库、全局、文风、全部蓝图一次跑完，导入根按 252 章定额（770 次、86 625 000 毫秒）。
   'f537-import-252': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
     const { app, page, roots, fake, shoot } = context

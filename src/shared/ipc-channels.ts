@@ -14,6 +14,7 @@ import type { ReferenceKnowledgeChannels, ReferenceKnowledgeEvents } from './ref
 import type { ReferenceStyleEvents } from './reference-style-contract'
 import type { ReferenceGlobalEvents } from './reference-global-contract'
 import type { ReferenceBlueprintEvents } from './reference-blueprint-contract'
+import type { ReferenceRunChannels, ReferenceRunEvents } from './reference-run-contract'
 import type { WorkflowDriverChannels } from './workflow-driver-contract'
 import type { WorkflowBatchChannels } from './workflow-batch-contract'
 import type { CharacterAvatarChannels } from './character-avatar'
@@ -1396,8 +1397,8 @@ export interface MCPChannels {
 }
 
 // ===== 合并所有频道 =====
-export type AllInvokeChannels = ReferenceKnowledgeChannels & WorkflowBatchChannels & WorkflowDriverChannels & RuntimeFeedbackChannels & PlanningFeedbackChannels & LegacyRosterGenerationChannels & CharacterAvatarChannels & CloudBackupChannels & GraphGenerationChannels & FinalizationGenerationChannels & EditorInlineGenerationChannels & ImportGenerationChannels & AgentGenerationChannels & ReviewRevisionGenerationInvokeChannels & FinalizedCharacterGenerationChannels & CharacterProposalChannels & GenerationOwnerChannels & StartupChannels & WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
-export type AllEventChannels = ReferenceBlueprintEvents & ReferenceGlobalEvents & ReferenceStyleEvents & ReferenceKnowledgeEvents & GenerationOwnerEvents & LLMStreamEvents & UpdateStateEvents & WindowEvents
+export type AllInvokeChannels = ReferenceRunChannels & ReferenceKnowledgeChannels & WorkflowBatchChannels & WorkflowDriverChannels & RuntimeFeedbackChannels & PlanningFeedbackChannels & LegacyRosterGenerationChannels & CharacterAvatarChannels & CloudBackupChannels & GraphGenerationChannels & FinalizationGenerationChannels & EditorInlineGenerationChannels & ImportGenerationChannels & AgentGenerationChannels & ReviewRevisionGenerationInvokeChannels & FinalizedCharacterGenerationChannels & CharacterProposalChannels & GenerationOwnerChannels & StartupChannels & WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
+export type AllEventChannels = ReferenceRunEvents & ReferenceBlueprintEvents & ReferenceGlobalEvents & ReferenceStyleEvents & ReferenceKnowledgeEvents & GenerationOwnerEvents & LLMStreamEvents & UpdateStateEvents & WindowEvents
 
 /** 提取 invoke 频道名 */
 export type InvokeChannel = keyof AllInvokeChannels

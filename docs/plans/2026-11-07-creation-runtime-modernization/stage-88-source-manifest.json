@@ -1,0 +1,715 @@
+{
+  "schemaVersion": 1,
+  "stage": 88,
+  "sourceSha": "4b7ba33a1e3f16bd3b9808fb1ecf053220b01afa",
+  "productionSourcesChanged": true,
+  "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12",
+  "sourceFiles": [
+    {
+      "path": "docs/adr/0074-main-owned-foreground-knowledge-driver.md",
+      "sha256": "8e8a818fb9186bd9de41851918a654067e633475c6c9a671e2e0327bb4e2207f"
+    },
+    {
+      "path": "docs/adr/0075-main-owned-foreground-reference-style.md",
+      "sha256": "5d2eedd7453e1317829c66b6abed882074bc0eafe65c6f7211883529b6a65742"
+    },
+    {
+      "path": "docs/adr/0076-main-owned-foreground-reference-global.md",
+      "sha256": "589b78010d4071809d4d5fc5168168ea92d577baab992e549b5153fa629b50b1"
+    },
+    {
+      "path": "docs/adr/0077-main-owned-foreground-reference-blueprints.md",
+      "sha256": "16a6f66257a5ec6d4d309994e4bdc74fd5a48aa5cacfd822858d19a1d67a259a"
+    },
+    {
+      "path": "docs/adr/0078-main-owned-foreground-reference-refresh.md",
+      "sha256": "15c16c2ed165fca72754895d52a1c706b640a4676413ed0103f59af51cc03888"
+    },
+    {
+      "path": "docs/adr/0079-shared-main-outbound-network-admission.md",
+      "sha256": "ae986ef34f2514e4896931d155e3dd595de05639165c9d62aa4bb60768bdc124"
+    },
+    {
+      "path": "docs/adr/0080-main-owned-foreground-reference-whole-run.md",
+      "sha256": "31e195cfd355c780612289f3ccd36255038318481a886d15e987b174b8b36c97"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/README.md",
+      "sha256": "5302a8930d95da9cd618bc528dd8d40d99f2c59957ce91b6332bc0e974c8b5c3"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/features.json",
+      "sha256": "44094afcef4a3df672b239451b71b1a3404152f8f30f48ce9f14ec9668264359"
+    },
+    {
+      "path": "electron/__tests__/preload-bridge.test.ts",
+      "sha256": "4eb7e7c926bfecd93ecc9e6b389bcf5b824cf893287234044b7a9d59d5ea3009"
+    },
+    {
+      "path": "electron/controllers/__tests__/db-controller-project-context.test.ts",
+      "sha256": "1b011536170f64b122fe31d973eb0a2be1d23e9259130f136be97e35609f83c3"
+    },
+    {
+      "path": "electron/controllers/__tests__/db-controller-read-only.test.ts",
+      "sha256": "ff5417151bd65b93d616cc5205d86a463a8cb98d3fc2545f840f275b21aaac54"
+    },
+    {
+      "path": "electron/controllers/__tests__/generation-controller.test.ts",
+      "sha256": "c4ec0f8ef8495f83e63fa5a499391c07b19ca87db76225adaeecb5545f0b17d6"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-blueprint-driver.integration.test.ts",
+      "sha256": "236761f0f65a0d2e1654022e3ce101c5dbd61def29dc47d555910677adfb75dc"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-blueprint-foreground.test.ts",
+      "sha256": "cc08a3c744580765ca14eeb413c0d592d157b82d1ee3cb2da21f99404c9ec9b1"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-global-driver.integration.test.ts",
+      "sha256": "87357c0af6f3f7a9fef32050366255c956519a64085a0e2aa669ba5dbe3b7a07"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-global-foreground.test.ts",
+      "sha256": "ea6e6be9080aed8006c1df6bd7b6b7cc43a9410b2d354d566308a2c79a0e38e0"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-knowledge-controller.integration.test.ts",
+      "sha256": "88a12b97c47f7e90970d4e217c9ce13726105f4b7d72d7be6b43cfdecd1f6e33"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-knowledge-driver.integration.test.ts",
+      "sha256": "1d16b7bfc48e609504caa120b6074b4e78abd75fc51aeac8f6d4be9e93be8ed0"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-refresh-driver.integration.test.ts",
+      "sha256": "d630a030b0cb92e3f8860b9892e5d01afd4ac1883a2c6b0a70dab9db750b5a49"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-refresh-failure.test.ts",
+      "sha256": "6cd21f8c2fc3b1ca1c86a29e60a91be4535647b39d7b45958f0967e87f5d08a0"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-refresh-foreground.test.ts",
+      "sha256": "6e81ffa14acb9fb980f1127c7a9cce60334338aa10c59e304539bdd6a118820f"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-run-driver.integration.test.ts",
+      "sha256": "45e4dce7d935b432bdeefba85e73b1d8e9067afd5cfb3f69a2924c2e29d02372"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-run-foreground.test.ts",
+      "sha256": "27381f872a60295d827f62adbd7c05e156cad914ff5c33fbaa21f87e30426964"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-style-driver.integration.test.ts",
+      "sha256": "abb98d5ede44221198afe3c3045078b3abb4a495a702677f54e3aac1b9590b83"
+    },
+    {
+      "path": "electron/controllers/__tests__/reference-style-foreground.test.ts",
+      "sha256": "39b3fb849041fb0fdee4e617bd0e32fe0671899781d0322609704d5e41233ed9"
+    },
+    {
+      "path": "electron/controllers/db-controller.ts",
+      "sha256": "ed1b993ea849194080f55b1880d8f963bd7e589ddd5ff817550b8c91d596a2b8"
+    },
+    {
+      "path": "electron/controllers/generation-controller.ts",
+      "sha256": "ee10824607fddd2eab470e8b937744f8700426b90f0427f8eb8dfce9c83d6382"
+    },
+    {
+      "path": "electron/controllers/reference-blueprint-foreground.ts",
+      "sha256": "22686b34f653e14c9c0f32347a509868e52eeb8f09668d1ff83839467102295c"
+    },
+    {
+      "path": "electron/controllers/reference-global-foreground.ts",
+      "sha256": "681464ab362a86e95a88c1c4de3850ecc14cae0fa9300407b36b723b8f953733"
+    },
+    {
+      "path": "electron/controllers/reference-knowledge-controller.ts",
+      "sha256": "39248d78e7b43301a98dbd1d5e4ab84c8c413bdf42b610b321b27e8a69b39115"
+    },
+    {
+      "path": "electron/controllers/reference-refresh-foreground.ts",
+      "sha256": "26327675ead04614b2229dc30b8e12c5aa0fd7f1c0ff3b3619cadac2a2797096"
+    },
+    {
+      "path": "electron/controllers/reference-run-foreground.ts",
+      "sha256": "ec4440cba8760d39b41380ab9a0c8e2f248b0bd26105d5c9f6f63b2399c37d4d"
+    },
+    {
+      "path": "electron/controllers/reference-style-foreground.ts",
+      "sha256": "79232444d11e74124c83944d7a992ce8e7fab0832857dc6e6602ad1ee0b0ce45"
+    },
+    {
+      "path": "electron/ipc-handlers.ts",
+      "sha256": "ed8a4b8883c0f84e097815fe4952c60e65bfe820a342e70e8ba33cf82c8ed2d1"
+    },
+    {
+      "path": "electron/preload.ts",
+      "sha256": "0e9311c5a02a537bf160ea7880e6b21b401c55db69c1e5b83b87bdc2d1473573"
+    },
+    {
+      "path": "electron/repositories/__tests__/reference-import-grant-repository.test.ts",
+      "sha256": "3b505262d4dfadbae74d7d4f438406a3253d9f0fa044c5da7f9168e1d4b25738"
+    },
+    {
+      "path": "electron/repositories/reference-import-grant-repository.ts",
+      "sha256": "3c807b67cd5a1acc42106f0397fc57a5298e319be2a7fd78b023129c21261896"
+    },
+    {
+      "path": "electron/services/__tests__/import-generation-captured-admission.test.ts",
+      "sha256": "68528049288f86eae78506e6020863652d3876ae48c6fe9618a1e21b54124640"
+    },
+    {
+      "path": "electron/services/__tests__/import-stage-flight.test.ts",
+      "sha256": "571fd0987f3c9b553f9d921ff3d500d64d16b2a13638046825008b81aeaca638"
+    },
+    {
+      "path": "electron/services/__tests__/reference-blueprint-driver.test.ts",
+      "sha256": "e86f4959d681747df62e70ff91afbfd9e6e41a1589d99886bddc1624545a94bf"
+    },
+    {
+      "path": "electron/services/__tests__/reference-global-driver.test.ts",
+      "sha256": "265eaf6d22043dd33bf49dc7988a3d98c6d5f7e2dcad4a4b167fe7a8784bf309"
+    },
+    {
+      "path": "electron/services/__tests__/reference-import-admission.test.ts",
+      "sha256": "edfb901f227bd35a0cdbe0542b0c1b0bb7ffb9972702ae674625bf6bae310040"
+    },
+    {
+      "path": "electron/services/__tests__/reference-import-grant-portable.test.ts",
+      "sha256": "c8dfeb434abd6397319be00817caa74fa347da13b50e8ab945a0605cc3d04650"
+    },
+    {
+      "path": "electron/services/__tests__/reference-import-history.test.ts",
+      "sha256": "b1291cf27143911abd541dd26c298981dc13611b24f3f63998ec9c8e12445601"
+    },
+    {
+      "path": "electron/services/__tests__/reference-import-main-coordinator.test.ts",
+      "sha256": "ae6eee7260975705c1eb062fd75d6f6ae5729aba5f20be72a780f39d2fb624f7"
+    },
+    {
+      "path": "electron/services/__tests__/reference-knowledge-driver.test.ts",
+      "sha256": "6a65d51e1c2a8e5f848c9b0252084df375e8ac08674881179d91c4d25d6e4dd3"
+    },
+    {
+      "path": "electron/services/__tests__/reference-refresh-driver.test.ts",
+      "sha256": "c7569f12da073d8c439370d3772f24f920031369b875fbea8f20bc8d6abc3495"
+    },
+    {
+      "path": "electron/services/__tests__/reference-style-driver.test.ts",
+      "sha256": "926f7fc91b913501b128ecccd1d2552331ed6dd6e74d64136d1af55f7bc3f0b2"
+    },
+    {
+      "path": "electron/services/import-generation-source.ts",
+      "sha256": "08dbe755b3ef3881ef7e1de1134dd30598e128f2494cb86ea2dfda06d96e4824"
+    },
+    {
+      "path": "electron/services/import-stage-flight.ts",
+      "sha256": "c3cd5b0e0c11bcb9d13401bf89ce53414ae2e387334404b0a388f09375cac181"
+    },
+    {
+      "path": "electron/services/main-generation-owner.ts",
+      "sha256": "f649bf96bb6942abc66d336083b7823453ebb0b5d8148138af1c63cd988408b0"
+    },
+    {
+      "path": "electron/services/reference-blueprint-driver.ts",
+      "sha256": "0a76d9806de1c323832864609cdf0f7d6ccdcf562c2f8e08806c0f05b45e69aa"
+    },
+    {
+      "path": "electron/services/reference-global-driver.ts",
+      "sha256": "5b162e3b93575b2939574c756dc5990f04e8febeb3c30105fcd4b65cf0c3c3fd"
+    },
+    {
+      "path": "electron/services/reference-import-admission.ts",
+      "sha256": "50f9bd2bd12f97b79f3dc3f280fb492f0d65887d2c455f8894e1612deb2babf9"
+    },
+    {
+      "path": "electron/services/reference-import-history.ts",
+      "sha256": "ba5e0518cda94638028ab85cff223eabde39459fb6ce58870becbe3a865cad3d"
+    },
+    {
+      "path": "electron/services/reference-import-main-coordinator.ts",
+      "sha256": "260c5def43ef0480b504b9452e8225813bfbf1e5589d7db215221c1cafb9bf8d"
+    },
+    {
+      "path": "electron/services/reference-knowledge-authority.ts",
+      "sha256": "a8409661b36ca2cebeaff5338ff024150e64f4cad8c088316f12d7ed6b490778"
+    },
+    {
+      "path": "electron/services/reference-style-driver.ts",
+      "sha256": "e0df3ba617cd47540be8d8bac6f022d1b5486b4690b92e22cfef3c4cd5cc9cf5"
+    },
+    {
+      "path": "package.json",
+      "sha256": "aa4cbf80b48400a90dd254fc340b86d3fe57452421438cf6e5971f5ccaf026c6"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "e235a794f493ce2a5fd0af786efcc573093bab34b70679c17beff931d6e5926f"
+    },
+    {
+      "path": "scripts/__tests__/creation-runtime-feature-evidence.test.ts",
+      "sha256": "0ca582e88bd8a2468892d0eb5d86324f42deed400c029ddb725815b7f0057f5a"
+    },
+    {
+      "path": "scripts/redesign/f537-scenarios.mjs",
+      "sha256": "b7673f3889b4834a8412e47236e0126c4be1f391c2f68073e117dc0587d62371"
+    },
+    {
+      "path": "src/services/__tests__/ipc-client-project-session.test.ts",
+      "sha256": "1d41b51f4ed6ea5eb996cb1c34532ae66575740862281192ae3e047ed7db2954"
+    },
+    {
+      "path": "src/services/ipc-client.ts",
+      "sha256": "9466f95a220162f335909b85ed31eb26690035d25a22224154331a28b3b2e699"
+    },
+    {
+      "path": "src/services/workflows/__tests__/import-run-orchestrator.test.ts",
+      "sha256": "a0270e52094cf1f8613abc365ead32024619197427cd3b7f9f6040a415284589"
+    },
+    {
+      "path": "src/services/workflows/__tests__/import-workflow.test.ts",
+      "sha256": "b9ed19be6d55390913f61ae89f7ecddcb2c09c7438a1c42d53c0de76b79adb0a"
+    },
+    {
+      "path": "src/services/workflows/__tests__/reference-import-projection.test.ts",
+      "sha256": "3fe7a9fea7793809703ced2b46706d566f00a7e1227e72dcf9fc9fc16be0a418"
+    },
+    {
+      "path": "src/services/workflows/__tests__/structured-batch-executor.test.ts",
+      "sha256": "62535673a9d0355fc3db2f4f9cd20f01d1f6b9f84f3f93825f810997d6ca10d2"
+    },
+    {
+      "path": "src/services/workflows/import-run-orchestrator.ts",
+      "sha256": "3d236836ac079926859666b057630ede454275b72ef4c1a2d6495de0cc60fe50"
+    },
+    {
+      "path": "src/services/workflows/import-workflow.ts",
+      "sha256": "ee6066d102f85673f2d34d5cb80a92045daeaaeda87157be05f44eb5ef313d1a"
+    },
+    {
+      "path": "src/services/workflows/reference-import-projection.ts",
+      "sha256": "8c1ba084afce76b4da0e82b0ed14341c5195df9632d3c3cb77174d81b7090a81"
+    },
+    {
+      "path": "src/shared/__tests__/reference-blueprint-contract.test.ts",
+      "sha256": "b5e55679a54773cc66ab8b0f388d57b12c897732f4d60d58e8f6291259bf053c"
+    },
+    {
+      "path": "src/shared/__tests__/reference-global-contract.test.ts",
+      "sha256": "15957dad36157ca4b63d4ed616d65105357373d7890334e452139f0c01c66b66"
+    },
+    {
+      "path": "src/shared/__tests__/reference-knowledge-contract.test.ts",
+      "sha256": "7f74124ad373bbd1bcf94dcf8355900f33ec1276da8a6c80ccfe70ff79cfb60c"
+    },
+    {
+      "path": "src/shared/__tests__/reference-refresh-contract.test.ts",
+      "sha256": "0963329a11309051c594c0c5d9c1f7043d7b5f9ce16b4f66772951394b1ea454"
+    },
+    {
+      "path": "src/shared/__tests__/reference-run-contract.test.ts",
+      "sha256": "ed3afbff7d59621ec94d42c4d90c58fa67445d7f38cfd7bb7ce1817044877ea0"
+    },
+    {
+      "path": "src/shared/__tests__/reference-style-contract.test.ts",
+      "sha256": "2ad472a53e944dab72f41973074b900cab7344416370746d202e17e7c752291b"
+    },
+    {
+      "path": "src/shared/ipc-channels.ts",
+      "sha256": "723bbc1d058a12a2032dc4bcd37e2a70dced649d96c430fcdf59a1d47985fd40"
+    },
+    {
+      "path": "src/shared/reference-run-contract.ts",
+      "sha256": "4b5db99fbf5fcc1c34c9d105bcf6e7725f7e03eb73d39acf6cec68664896411f"
+    },
+    {
+      "path": "vite.config.ts",
+      "sha256": "daca389a0e2d1d557e4256dd85e1c66b2e2f2a5619a5f037f56c5aaf218fcc47"
+    }
+  ],
+  "rawArtifacts": [
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/build-final.log",
+      "sha256": "57e37b5f4316358bc86c4f4815ddf2cee5a7f9d834ad76f847ad6ceb32978bdf"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/build-first.log",
+      "sha256": "1e0e84892b95cf6019cb529a7a17c76c3c17957f35dd7fef6386d9ad71c437f6"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/build-retest.log",
+      "sha256": "263567efcac10afa94bc6b5b1ad8946b78f710dab3a9874381fe7fcb6a389b1b"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/checklist-final.json",
+      "sha256": "6847558bb7af8c07fc319c99f6bb73a6112bc013de673f720354274e31346242"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/checklist-final.log",
+      "sha256": "b3a1b6be2b82bd1ead86363a48f0f6017c4190014352d66bc533cedd1975de90"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/desktop.log",
+      "sha256": "13322f4e56fed858c0f3b1e24d20ed6b328f954101a14fbc22ba3d1a8e0b8fe3"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/focused-first-filtered.json",
+      "sha256": "38d1c4cd121acdc1a22ee8787fdf77606ef4fbac3f9963d53323a6807d6abab7"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/focused-first-filtered.log",
+      "sha256": "f9e00b3592c4c3ce9ae2c7ef923f5af6e252fe9170722a10f2925374c1333697"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/focused-first.log",
+      "sha256": "c0a2f7a192465a7259c8d78d082ad174b5a4800b911820637c4a1943cb0a96ed"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/focused-second.json",
+      "sha256": "8ac543dc1d34157d39e401ccbf9919b82edc08aa3f572033f8db861a38a124c6"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/focused-second.log",
+      "sha256": "84901e67253981b8c2e14714d0e2b2719f12ab7be7ed465f501081ea5d9742bd"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/focused-third.json",
+      "sha256": "cd7fec81bd3a5cd76657f756e4d9d96dc177874a306af6098b7cd9471d601d16"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/focused-third.log",
+      "sha256": "f8d97736ee29020c01ba4acb0c29576b1b66e9bbee997f26165786a33f16b2ba"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/history-first.json",
+      "sha256": "0b3cf44d131f04d011eace0acf936d5a7a8e80346fd1632b14f6c54eeb9b60bc"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/history-first.log",
+      "sha256": "b7fc9c672a3088c99252da466438eda666d108ce3607e063feddc1ea81148477"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/i18n-first.log",
+      "sha256": "1f1e2679cf0836650c355ff8a6144d0c81403b5c6b0091a61d560b18cd627aac"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/impact-final.json",
+      "sha256": "3d91c7793683524bcb4ba14329fbaefecb86e76bd521b443f2e921e57d78e155"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/impact-final.log",
+      "sha256": "a233bf0a2c32a4cbcdb727e2470329fbef567470f0cddd5b22cbcb9df7834446"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/impact-retest.json",
+      "sha256": "90bc64758ba02c2f642ac8cd164887258f36f162a20e749a73e6561c59a95138"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/impact-retest.log",
+      "sha256": "e803b99c85f7e43a6851d13ac20a049d5b66480c5da6789bae6fde7347a23149"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/lint-final.log",
+      "sha256": "b4a7aad86a31f05f7ca6e6772278cf5eb7cf64bba20ebcce6becdbdc17edcb81"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/lint-first.log",
+      "sha256": "48734c8ae2e954112ddeed8cd1f143f45e5e4ed911648fe156100c5dc052ff3f"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/lint-retest.log",
+      "sha256": "86347cbdd9563d2f837779c12eab9c34c6b40d0ada53c44272b38c4e7904ddc5"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/native-first.log",
+      "sha256": "236f844faed5c830762a770980be8d9d3babcda345b31f18a41e1f4dc57866bc"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/native-full-first.json",
+      "sha256": "7083f399144edf388ee188892cc9dcf5181889a6236b36d6764a059d6e38b224"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/native-full-first.log",
+      "sha256": "18d87e2d4ae8377accdefc8c6c876bf3de1db8d5d8d8a85b05679b2a3336b3e0"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/native-second.json",
+      "sha256": "42cf53883431db8d61babe6ccd87a6ba343dffa50fe4318bc41431c713cf0aae"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/native-second.log",
+      "sha256": "05154b99ffdb97afe948296f548a69372170b5b048079beccf50f5968f68668d"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/native-smoke.json",
+      "sha256": "fbbb04442a66e28275d12ce0696c190aa614e17c46af955b4b72137ed9864d71"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/native-smoke.log",
+      "sha256": "957480441e2a01826b4c2da0b3eba9a73887a28debd792a47be02b3caee4d9b2"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/renderer-first.json",
+      "sha256": "1b8678c0b72c6ca93b9d09f531eff152064e0ead391267709b343c1e4a7dfdb0"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/renderer-first.log",
+      "sha256": "984a3b1c0d319e9b83358fb18b00e7ef269b8233e3bb1dcd6354ead39e4ca9bc"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/renderer-second.json",
+      "sha256": "ca1f6d70b7a5c262dab679d00e63ca8809742b6beeb3b728dbe7ee5ffaedb110"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/renderer-second.log",
+      "sha256": "8b7f16cf630d5cd156b07f2245cf8988c811bd767aedd51a6c6670b4e66bab75"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/typecheck-final.log",
+      "sha256": "f772f01e938da6e5a72f3e091d3dd856e03b8298cbe3c43143975425455b9774"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/typecheck-first.log",
+      "sha256": "3f60c73e1e259489bacc04aabcd55210a6c005b6000e3af0a5a911ac0be91bbb"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/typecheck-retest.log",
+      "sha256": "cea74f48d41eb8452235da6d2a7823613ea9b868ef8b620da18b400b78d234b9"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/typecheck-second.log",
+      "sha256": "ef78b7538037d86dfc24252dc01f7b8fb9f42c1e689ad2b34fccf7e6159046dd"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/typecheck-third.log",
+      "sha256": "e844a57970de8ac48c015bb7f25a5e7614d479bfe91fb6a5deb9cc64e3690170"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/desktop/f537-reference-whole-10-light.aria.yml",
+      "sha256": "76e1a8d0edcb6f9049001c1625b5b28057ffd8bfa63903d66d09ad622f1602be"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/desktop/f537-reference-whole-10-light.console.log",
+      "sha256": "9c6c2e3ce9fdb9721d90002e2291ff485ca6bbb7f1db798764901320c6856601"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/desktop/f537-reference-whole-10-light.dom.html",
+      "sha256": "a0b0f7d216acb1a1ed3218d2a12459c361a3175815574dd91bdb1e4e5c0bc729"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/desktop/f537-reference-whole-10-light.json",
+      "sha256": "eae2aade0ba5bdf98ab853e43e5c239dc4a420c3b47ccb0c263c172581b87cbd"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/desktop/f537-reference-whole-10-light.png",
+      "sha256": "d6f4ca0a80544c4d739d1fa1fca5c6a8d0ed499ee8f4d1a8f624e628bf275b52"
+    }
+  ],
+  "selectedBuiltFiles": [
+    {
+      "path": "dist/index.html",
+      "sha256": "5b1aaeb9118d78dfbb5a9230eceba5f1067cde31b2039bdd42890c6f3c40c466"
+    },
+    {
+      "path": "dist-electron/main.js",
+      "sha256": "e9b757b37e3d4f04760a7a63908167dade562c9f34eece82104f4ed4f64ab008"
+    },
+    {
+      "path": "dist-electron/preload.mjs",
+      "sha256": "699cd2465764fc6090fa1ca93bd9f5967a628a2bccf3f7894778d85c1e660ceb"
+    }
+  ],
+  "buildTree": {
+    "roots": [
+      "dist",
+      "dist-electron"
+    ],
+    "fileCount": 344,
+    "algorithm": "SHA256 of UTF8 path:lowercase-sha256 lines, ordinal path sort, LF including final newline",
+    "sha256": "413f266da2c6c3c73bf678aaa3c35a587b2db87413802f72138b5f79e32b185f"
+  },
+  "protectedFiles": [
+    {
+      "path": "docs/repository-analysis-2026-11-07.md",
+      "sha256": "bb6866223c596c690e4d2e35c38faa9ebb05e45084776ee1b285083bad89a74b"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-evidence.md",
+      "sha256": "5aa85559b9a71022d378cfa7b50eb55e1539beabd77e1766050d819fa336f1f9"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-source-manifest.json",
+      "sha256": "7ae7d4318c58dc872664bb89bd455a3995a3c02e5c2de4e2c8fe7d3d9ad48130"
+    }
+  ],
+  "reports": [
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/checklist-final.json",
+      "files": 1,
+      "total": 36,
+      "passed": 36,
+      "failed": 0,
+      "pending": 0,
+      "todo": 0,
+      "success": true
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/focused-first-filtered.json",
+      "files": 9,
+      "total": 101,
+      "passed": 101,
+      "failed": 0,
+      "pending": 0,
+      "todo": 0,
+      "success": true
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/focused-second.json",
+      "files": 8,
+      "total": 207,
+      "passed": 201,
+      "failed": 6,
+      "pending": 0,
+      "todo": 0,
+      "success": false
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/focused-third.json",
+      "files": 11,
+      "total": 127,
+      "passed": 127,
+      "failed": 0,
+      "pending": 0,
+      "todo": 0,
+      "success": true
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/history-first.json",
+      "files": 2,
+      "total": 15,
+      "passed": 15,
+      "failed": 0,
+      "pending": 0,
+      "todo": 0,
+      "success": true
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/impact-final.json",
+      "files": 41,
+      "total": 1022,
+      "passed": 1021,
+      "failed": 1,
+      "pending": 0,
+      "todo": 0,
+      "success": false
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/impact-retest.json",
+      "files": 41,
+      "total": 1022,
+      "passed": 1022,
+      "failed": 0,
+      "pending": 0,
+      "todo": 0,
+      "success": true
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/native-full-first.json",
+      "files": 1,
+      "total": 11,
+      "passed": 9,
+      "failed": 2,
+      "pending": 0,
+      "todo": 0,
+      "success": false
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/native-second.json",
+      "files": 1,
+      "total": 9,
+      "passed": 3,
+      "failed": 6,
+      "pending": 0,
+      "todo": 0,
+      "success": false
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/native-smoke.json",
+      "files": 1,
+      "total": 9,
+      "passed": 1,
+      "failed": 0,
+      "pending": 8,
+      "todo": 0,
+      "success": true
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/renderer-first.json",
+      "files": 2,
+      "total": 114,
+      "passed": 113,
+      "failed": 1,
+      "pending": 0,
+      "todo": 0,
+      "success": false
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/stage-88/renderer-second.json",
+      "files": 2,
+      "total": 115,
+      "passed": 115,
+      "failed": 0,
+      "pending": 0,
+      "todo": 0,
+      "success": true
+    }
+  ],
+  "ownedPaths": [
+    "docs/adr/0080-main-owned-foreground-reference-whole-run.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/evidence-map.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/features.json",
+    "docs/plans/2026-11-07-creation-runtime-modernization/implementation-log.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/review-record.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-88-evidence.md",
+    "docs/plans/2026-11-07-creation-runtime-modernization/stage-88-source-manifest.json",
+    "electron/__tests__/preload-bridge.test.ts",
+    "electron/controllers/__tests__/reference-global-foreground.test.ts",
+    "electron/controllers/__tests__/reference-run-driver.integration.test.ts",
+    "electron/controllers/__tests__/reference-run-foreground.test.ts",
+    "electron/controllers/generation-controller.ts",
+    "electron/controllers/reference-blueprint-foreground.ts",
+    "electron/controllers/reference-global-foreground.ts",
+    "electron/controllers/reference-knowledge-controller.ts",
+    "electron/controllers/reference-refresh-foreground.ts",
+    "electron/controllers/reference-run-foreground.ts",
+    "electron/controllers/reference-style-foreground.ts",
+    "electron/ipc-handlers.ts",
+    "electron/preload.ts",
+    "electron/services/__tests__/import-stage-flight.test.ts",
+    "electron/services/__tests__/reference-import-history.test.ts",
+    "electron/services/__tests__/reference-import-main-coordinator.test.ts",
+    "electron/services/__tests__/reference-knowledge-driver.test.ts",
+    "electron/services/__tests__/reference-refresh-driver.test.ts",
+    "electron/services/import-stage-flight.ts",
+    "electron/services/reference-blueprint-driver.ts",
+    "electron/services/reference-global-driver.ts",
+    "electron/services/reference-import-history.ts",
+    "electron/services/reference-import-main-coordinator.ts",
+    "electron/services/reference-knowledge-authority.ts",
+    "electron/services/reference-style-driver.ts",
+    "scripts/redesign/f537-scenarios.mjs",
+    "src/services/__tests__/ipc-client-project-session.test.ts",
+    "src/services/ipc-client.ts",
+    "src/services/workflows/__tests__/import-workflow.test.ts",
+    "src/services/workflows/__tests__/reference-import-projection.test.ts",
+    "src/services/workflows/import-workflow.ts",
+    "src/services/workflows/reference-import-projection.ts",
+    "src/shared/__tests__/reference-run-contract.test.ts",
+    "src/shared/ipc-channels.ts",
+    "src/shared/reference-run-contract.ts"
+  ],
+  "limitations": "Binds selected current sources, all Stage88 local raw artifacts and complete local source-build tree. Reports overlap and are not summed. One fictional foreground desktop run is not complete IMPORT-001/002, background switching, model quality, performance improvement or platform qualification."
+}

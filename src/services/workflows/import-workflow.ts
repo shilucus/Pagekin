@@ -1,5 +1,5 @@
 /** Persisted, resumable reference-import workflow. */
-import type { NovelConfig, ProjectSessionContext } from '../../shared/ipc-channels'
+import type { AllInvokeChannels, NovelConfig, ProjectSessionContext } from '../../shared/ipc-channels'
 import {
   assertImportRunEffectReceiptMetadata,
   type ImportRunChapterSnapshot,
@@ -42,8 +42,25 @@ import { BoundedCompletionFailure } from './bounded-completion'
 import { getImportInferenceTopics } from '../../shared/import-inference-materials'
 import { globalEventBus } from '../../shared/event-bus'
 import { displayedErrorMessage } from '../../i18n/app-errors'
+import { ReferenceImportProjection, ReferenceRunFailure } from './reference-import-projection'
+import type { ReferenceRunStage } from '../../shared/reference-run-contract'
+import { isWorkflowCancellation, WorkflowCancelledError } from './workflow-cancellation'
 
 type ReferenceKnowledgeIssuance = { reference: ReferenceKnowledgeReference; execution: ImportRunExecutionLease }
+
+interface ReferenceStageResults {
+  knowledge: AllInvokeChannels['reference-knowledge:v1:execute']['return']
+  global: AllInvokeChannels['import-generation:v1:global']['return']
+  style: AllInvokeChannels['import-generation:v1:style']['return']
+  blueprints: AllInvokeChannels['import-generation:v1:blueprints']['return']
+  refresh: AllInvokeChannels['reference-knowledge:v1:refresh']['return']
+}
+
+interface ReferenceStageBridge {
+  on: typeof ipc.on
+  wait<S extends keyof ReferenceStageResults>(stage: S): Promise<ReferenceStageResults[S]>
+  openedStyle(sequence: number): { config?: NovelConfig; error?: unknown } | undefined
+}
 
 export interface ImportWorkflowParams {
   projectPath: string
@@ -133,6 +150,55 @@ function currentNovelConfigSummary(writingLanguage: WritingLanguage): string {
   )
 }
 
+async function projectReferenceGlobal(run: ImportRunSnapshot, context: WorkflowContext, callbacks: StepCallbacks) {
+  const { projectSession: session, projectPath } = context
+  const receipt = await ipc.invokeWithProjectSession(session, 'db:import-run-effect-receipt-get', run.id, 'global', 'done', projectPath)
+  if (!receipt || receipt.state !== 'committed' || receipt.stage !== 'global' || receipt.batchId !== 'done'
+    || receipt.kind !== 'project-global-facts' || !receipt.effectReceipt) throw new Error('GENERATION_REQUEST_FAILED')
+  assertImportRunEffectReceiptMetadata(receipt, run)
+  const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
+  if (!core) throw new Error(textForLocale(run.locale, '无法读取已保存的导入配置。', 'Could not read committed project configuration.'))
+  context.data.importGlobalFactsReceipt = receipt.effectReceipt
+  const fields = configFieldsFromCore(core)
+  const unknown = promptLanguageText(context.writingLanguage, '未知', 'Unknown')
+  const none = promptLanguageText(context.writingLanguage, '（无）', '(none)')
+  context.data.novelConfigSummary = promptLanguageText(context.writingLanguage,
+    `类型: ${fields.genre || unknown} | 子类型: ${fields.subGenre || unknown} | 受众: ${fields.targetAudience || unknown}\n大纲: ${fields.coreOutline || none}\n世界观: ${fields.worldSetting || none}\n金手指: ${fields.goldenFinger || none}\n主角: ${fields.protagonistProfile || none}`,
+    `Genre: ${fields.genre || unknown} | Subgenre: ${fields.subGenre || unknown} | Audience: ${fields.targetAudience || unknown}\nOutline: ${fields.coreOutline || none}\nWorld: ${fields.worldSetting || none}\nCentral advantage: ${fields.goldenFinger || none}\nProtagonist: ${fields.protagonistProfile || none}`)
+  const current = useProjectStore.getState().currentProject
+  if (current && sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
+    useProjectStore.getState().publishSavedNovelConfig(fields, session, 'unsaved-edits')
+  } else callbacks.log(textForLocale(run.locale, '当前正在查看其他作品，导入事实已安全保存至目标作品库', 'Viewing another project; imported facts saved safely to the target project database.'))
+  globalEventBus.emit('REFRESH_RESOURCE', { resources: ['fileTree', 'characterCards'], projectPath, projectSession: session })
+  return receipt
+}
+
+async function projectReferenceStyle(run: ImportRunSnapshot, context: WorkflowContext, callbacks: StepCallbacks) {
+  const { projectSession: session, projectPath } = context
+  const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
+  if (!core) throw new Error(textForLocale(run.locale, '无法读取已保存的导入配置。', 'Could not read committed project configuration.'))
+  const current = useProjectStore.getState().currentProject
+  if (current && sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
+    useProjectStore.getState().publishSavedNovelConfig(configFieldsFromCore(core), session, 'unsaved-edits')
+    context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
+  } else callbacks.log(textForLocale(run.locale, '导入结果已持久化入库；前台正浏览其他作品，跳过前台界面同步。', 'Import effect persisted to storage; foreground is viewing another project, skipping UI sync.'))
+}
+
+async function validateSkippedBlueprints(run: ImportRunSnapshot, context: WorkflowContext) {
+  const batches = run.completedBatches.blueprints ?? []
+  if (!batches.length) throw new Error('GENERATION_REQUEST_FAILED')
+  for (const batchId of batches) {
+    if (!isReferenceBlueprintBatchId(batchId)) throw new Error('GENERATION_REQUEST_FAILED')
+    const receipt = await ipc.invokeWithProjectSession(context.projectSession, 'db:import-run-effect-receipt-get',
+      run.id, 'blueprints', batchId, context.projectPath)
+    if (!receipt || receipt.state !== 'committed' || receipt.stage !== 'blueprints' || receipt.batchId !== batchId
+      || receipt.kind !== 'chapter-blueprint-range' || !receipt.effectReceipt) throw new Error('GENERATION_REQUEST_FAILED')
+    assertImportRunEffectReceiptMetadata(receipt, run)
+    const committed = receipt.effectReceipt as BlueprintRangeCommitReceipt
+    if (!committed.characterSyncOperation?.operationId || !Array.isArray(committed.snapshot)) throw new Error('GENERATION_REQUEST_FAILED')
+  }
+}
+
 function styleLog(locale: ImportRunSnapshot['locale'], log: ReferenceStyleLog, count?: number): string {
   switch (log) {
     case 'imported-samples': return textForLocale(locale, `正在分析导入文本样本文风（${count} 段）...`, `Analyzing ${count} imported text ${count === 1 ? 'sample' : 'samples'}...`)
@@ -193,6 +259,7 @@ function productionDependencies(
   context: WorkflowContext,
   callbacks: StepCallbacks,
   referenceKnowledge?: ReferenceKnowledgeIssuance,
+  bridge?: ReferenceStageBridge,
 ): ImportRunOrchestratorDependencies {
   const session = context.projectSession
   const projectPath = context.projectPath
@@ -236,7 +303,7 @@ function productionDependencies(
         let sequence = 0
         let projectionError: unknown
         let queue = Promise.resolve()
-        const unsubscribe = ipc.on('reference-knowledge:v1:refresh-progress', event => {
+        const unsubscribe = (bridge?.on ?? ipc.on)('reference-knowledge:v1:refresh-progress', event => {
           if (!active || !isReferenceRefreshProgress(event) || event.leaseId !== session.leaseId
             || event.reference.projectId !== reference.projectId || event.reference.runId !== reference.runId
             || event.reference.grantId !== reference.grantId || event.reference.revision !== reference.revision
@@ -266,7 +333,7 @@ function productionDependencies(
           }).catch(error => { projectionError ??= error })
         })
         try {
-          const result = await ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:refresh', { reference, execution })
+          const result = await (bridge ? bridge.wait('refresh') : ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:refresh', { reference, execution }))
             .catch(async error => { await queue; throw error })
           await queue
           if (!result || typeof result.success !== 'boolean') throw new Error('GENERATION_REQUEST_FAILED')
@@ -313,30 +380,12 @@ function productionDependencies(
           if (!result.success) throw new Error(result.error || 'IMPORT_RUN_CANCEL_REQUEST_FAILED')
         }
         const projectCommitted = async () => {
-          const receipt = await ipc.invokeWithProjectSession(session, 'db:import-run-effect-receipt-get', run.id, 'global', 'done', projectPath)
-          if (!receipt || receipt.state !== 'committed' || receipt.stage !== 'global' || receipt.batchId !== 'done'
-            || receipt.kind !== 'project-global-facts' || !receipt.effectReceipt) throw new Error('GENERATION_REQUEST_FAILED')
-          assertImportRunEffectReceiptMetadata(receipt, run)
-          const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
-          if (!core) throw new Error(textForLocale(run.locale, '无法读取已保存的导入配置。', 'Could not read committed project configuration.'))
-          projectedReceipt = receipt
-          context.data.importGlobalFactsReceipt = receipt.effectReceipt
-          const fields = configFieldsFromCore(core)
-          const unknown = promptLanguageText(context.writingLanguage, '未知', 'Unknown')
-          const none = promptLanguageText(context.writingLanguage, '（无）', '(none)')
-          context.data.novelConfigSummary = promptLanguageText(context.writingLanguage,
-            `类型: ${fields.genre || unknown} | 子类型: ${fields.subGenre || unknown} | 受众: ${fields.targetAudience || unknown}\n大纲: ${fields.coreOutline || none}\n世界观: ${fields.worldSetting || none}\n金手指: ${fields.goldenFinger || none}\n主角: ${fields.protagonistProfile || none}`,
-            `Genre: ${fields.genre || unknown} | Subgenre: ${fields.subGenre || unknown} | Audience: ${fields.targetAudience || unknown}\nOutline: ${fields.coreOutline || none}\nWorld: ${fields.worldSetting || none}\nCentral advantage: ${fields.goldenFinger || none}\nProtagonist: ${fields.protagonistProfile || none}`)
-          const current = useProjectStore.getState().currentProject
-          if (current && sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
-            useProjectStore.getState().publishSavedNovelConfig(fields, session, 'unsaved-edits')
-          } else callbacks.log(textForLocale(run.locale, '当前正在查看其他作品，导入事实已安全保存至目标作品库', 'Viewing another project; imported facts saved safely to the target project database.'))
-          globalEventBus.emit('REFRESH_RESOURCE', { resources: ['fileTree', 'characterCards'], projectPath, projectSession: session })
+          projectedReceipt = await projectReferenceGlobal(run, context, callbacks)
         }
         const unsubscribeProject = useProjectStore.subscribe(state => {
           if (!sameProjectSessionContext(session, projectSessionContextFromProject(state.currentProject))) clearReasoning()
         })
-        const unsubscribe = ipc.on('import-generation:v1:global-progress', event => {
+        const unsubscribe = (bridge?.on ?? ipc.on)('import-generation:v1:global-progress', event => {
           if (!active || !isReferenceGlobalProgress(event) || event.projectId !== session.projectId || event.leaseId !== session.leaseId
             || event.runId !== run.id || event.execution.owner !== execution.owner || event.execution.epoch !== execution.epoch
             || event.sequence <= sequence) return
@@ -383,7 +432,7 @@ function productionDependencies(
           }).catch(error => { projectionError = error })
         })
         try {
-          const result = await ipc.invokeWithProjectSession(session, 'import-generation:v1:global', { runId: run.id, execution, modelId }).catch(async error => { await queue; throw error })
+          const result = await (bridge ? bridge.wait('global') : ipc.invokeWithProjectSession(session, 'import-generation:v1:global', { runId: run.id, execution, modelId })).catch(async error => { await queue; throw error })
           await queue
           if (!result || typeof result.success !== 'boolean') throw new Error('GENERATION_REQUEST_FAILED')
           if (!result.success) {
@@ -483,7 +532,7 @@ function productionDependencies(
         const unsubscribeProject = useProjectStore.subscribe(state => {
           if (!sameProjectSessionContext(session, projectSessionContextFromProject(state.currentProject))) useWorkflowReasoningStore.getState().clear(context.runId)
         })
-        const unsubscribe = ipc.on('import-generation:v1:blueprints-progress', event => {
+        const unsubscribe = (bridge?.on ?? ipc.on)('import-generation:v1:blueprints-progress', event => {
           if (!active || !isReferenceBlueprintProgress(event) || event.projectId !== session.projectId || event.leaseId !== session.leaseId
             || event.runId !== run.id || event.execution.owner !== execution.owner || event.execution.epoch !== execution.epoch
             || event.sequence <= sequence) return
@@ -543,7 +592,7 @@ function productionDependencies(
           }).catch(error => { projectionError ??= error })
         })
         try {
-          const result = await ipc.invokeWithProjectSession(session, 'import-generation:v1:blueprints', { runId: run.id, execution, modelId }).catch(async error => { await queue; throw error })
+          const result = await (bridge ? bridge.wait('blueprints') : ipc.invokeWithProjectSession(session, 'import-generation:v1:blueprints', { runId: run.id, execution, modelId })).catch(async error => { await queue; throw error })
           await queue
           if (!result || typeof result.success !== 'boolean') throw new Error('GENERATION_REQUEST_FAILED')
           if (!result.success) {
@@ -618,7 +667,7 @@ function productionDependencies(
         const unsubscribeProject = useProjectStore.subscribe(state => {
           if (!sameProjectSessionContext(session, projectSessionContextFromProject(state.currentProject))) clearReasoning()
         })
-        const unsubscribe = ipc.on('import-generation:v1:style-progress', event => {
+        const unsubscribe = (bridge?.on ?? ipc.on)('import-generation:v1:style-progress', event => {
           if (!active || !isReferenceStyleProgress(event) || event.projectId !== session.projectId
             || event.leaseId !== session.leaseId || event.runId !== run.id || event.execution.owner !== execution.owner
             || event.execution.epoch !== execution.epoch || event.sequence <= sequence) return
@@ -627,9 +676,16 @@ function productionDependencies(
           let openedError: unknown
           if (event.kind === 'opened') {
             try {
-              const project = useProjectStore.getState().currentProject
-              if (!project || !sameProjectSessionContext(session, projectSessionContextFromProject(project))) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
-              openedConfig = structuredClone(project.novelConfig)
+              if (bridge) {
+                const captured = bridge.openedStyle(event.sequence)
+                if (!captured) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
+                openedConfig = captured.config
+                openedError = captured.error
+              } else {
+                const project = useProjectStore.getState().currentProject
+                if (!project || !sameProjectSessionContext(session, projectSessionContextFromProject(project))) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
+                openedConfig = structuredClone(project.novelConfig)
+              }
             } catch (error) { openedError = error }
           }
           queue = queue.then(async () => {
@@ -693,7 +749,7 @@ function productionDependencies(
           }).catch(error => { projectionError = error })
         })
         try {
-          const result = await ipc.invokeWithProjectSession(session, 'import-generation:v1:style', { runId: run.id, execution, modelId }).catch(async error => {
+          const result = await (bridge ? bridge.wait('style') : ipc.invokeWithProjectSession(session, 'import-generation:v1:style', { runId: run.id, execution, modelId })).catch(async error => {
             await queue
             throw error
           })
@@ -726,12 +782,7 @@ function productionDependencies(
           if (projectionError) throw projectionError
           if (projection.runtime) await projection.runtime.read()
           if (result.replayed) {
-            const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
-            if (!core) throw new Error(textForLocale(run.locale, '无法读取已保存的导入配置。', 'Could not read committed project configuration.'))
-            const current = useProjectStore.getState().currentProject
-            if (current && sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
-              useProjectStore.getState().publishSavedNovelConfig(configFieldsFromCore(core), session, 'unsaved-edits')
-            } else callbacks.log(textForLocale(run.locale, '导入结果已持久化入库；前台正浏览其他作品，跳过前台界面同步。', 'Import effect persisted to storage; foreground is viewing another project, skipping UI sync.'))
+            await projectReferenceStyle(run, context, callbacks)
           }
           const current = useProjectStore.getState().currentProject
           if (current && sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
@@ -754,7 +805,7 @@ function productionDependencies(
         }
         const authority = { owner: execution.owner, epoch: execution.epoch }
         let active = true
-        const unsubscribe = ipc.on('reference-knowledge:v1:progress', event => {
+        const unsubscribe = (bridge?.on ?? ipc.on)('reference-knowledge:v1:progress', event => {
           if (!active || !isReferenceKnowledgeProgress(event) || event.reference.projectId !== reference.projectId
             || event.reference.runId !== reference.runId || event.reference.grantId !== reference.grantId
             || event.reference.revision !== reference.revision || event.execution.owner !== authority.owner
@@ -765,7 +816,7 @@ function productionDependencies(
             `Reference Chapter ${event.chapterNumber} is in the knowledge base${event.idempotent ? ' (already present)' : ''}.`))
         })
         try {
-          const result = await ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:execute', { reference, execution: authority })
+          const result = await (bridge ? bridge.wait('knowledge') : ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:execute', { reference, execution: authority }))
           if (!result || typeof result !== 'object' || typeof result.success !== 'boolean') throw new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
           if (!result.success) {
             if (typeof result.error !== 'string' || typeof result.errorCode !== 'string' || !result.errorCode) {
@@ -1193,6 +1244,77 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
   const importStep = (run: ImportRunSnapshot, owner: string, stage: ImportWorkflowStage,
     name: [string, string], description: [string, string]) =>
     createImportStep(run, owner, stage, name, description, referenceKnowledge)
+  let referenceProjection: ReferenceImportProjection | undefined
+  const referenceStep = (stage: ReferenceRunStage, name: [string, string], description: [string, string]) => ({
+    name: textForLocale(params.run.locale, ...name),
+    description: textForLocale(params.run.locale, ...description),
+    executor: async (_step: WorkflowStep, context: WorkflowContext, callbacks: StepCallbacks) => {
+      if (!referenceKnowledge) throw new Error('KNOWLEDGE_BASE_REFERENCE_ISSUANCE_REQUIRED')
+      if (!referenceProjection) {
+        referenceProjection = new ReferenceImportProjection(session, {
+          reference: referenceKnowledge.reference,
+          execution: { owner: referenceKnowledge.execution.owner, epoch: referenceKnowledge.execution.epoch },
+          modelId: context.generationModelId?.trim() || routeModelId('import-global-facts') || null,
+        }, params.run.rootRunId)
+        referenceProjection.start()
+      }
+      const projection = referenceProjection
+      const observe = importStageObservation(stage)
+      const state: { completion?: Awaited<ReturnType<ReferenceImportProjection['completion']>>; skipToken?: string; ackIssued?: boolean } = {}
+      try {
+        const entry = await projection.entry(stage)
+        if (entry.kind === 'skipped') {
+          state.skipToken = entry.token
+          if (stage === 'global') await projectReferenceGlobal(entry.run, context, callbacks)
+          else if (stage === 'style') await projectReferenceStyle(entry.run, context, callbacks)
+          else if (stage === 'blueprints') await validateSkippedBlueprints(entry.run, context)
+          state.ackIssued = true
+          await projection.acknowledge(stage, entry.token, context.cancelled || context.cancelRequested ? 'cancelled' : 'settled')
+        } else {
+          const bridge: ReferenceStageBridge = {
+            on: projection.on,
+            openedStyle: sequence => projection.openedStyle(sequence),
+            wait: async <S extends keyof ReferenceStageResults>(requested: S): Promise<ReferenceStageResults[S]> => {
+              try { state.completion = await projection.completion(requested) }
+              catch (error) {
+                if (error instanceof ReferenceRunFailure) return error.response as ReferenceStageResults[S]
+                throw error
+              }
+              const result = state.completion.completion.result
+              return { success: true, ...result } as ReferenceStageResults[S]
+            },
+          }
+          const dependencies = productionDependencies(context, callbacks, referenceKnowledge, bridge)
+          if (stage === 'knowledge') await dependencies.executeReferenceKnowledge!(entry.run, params.executionOwner)
+          else if (stage === 'global') await dependencies.executeReferenceGlobal!(entry.run, params.executionOwner)
+          else if (stage === 'style') await dependencies.executeReferenceStyle!(entry.run, params.executionOwner)
+          else if (stage === 'blueprints') await dependencies.executeReferenceBlueprints!(entry.run, params.executionOwner)
+          else await dependencies.executeReferenceRefresh!(entry.run, params.executionOwner)
+          if (!state.completion) throw new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
+          state.ackIssued = true
+          await projection.acknowledge(stage, state.completion.token, context.cancelled || context.cancelRequested ? 'cancelled' : 'settled')
+        }
+        if (stage === 'refresh') await projection.finish()
+      } catch (error) {
+        const token = state.completion?.token ?? state.skipToken
+        if (token && !state.ackIssued) {
+          try { await projection.acknowledge(stage, token, context.cancelled || context.cancelRequested ? 'cancelled' : 'projection-failed') }
+          catch { /* Preserve the original projection failure. */ }
+        }
+        if (context.cancellationRequest) await context.cancellationRequest.catch(() => undefined)
+        else {
+          try { await ipc.invoke('reference-knowledge:v1:revoke', referenceKnowledge.reference) }
+          catch { /* Preserve the original projection failure. */ }
+        }
+        projection.close()
+        if ((context.cancelled || context.cancelRequested) && isWorkflowCancellation(error)) {
+          await context.cancellationRequest?.catch(() => undefined)
+          throw new WorkflowCancelledError(textForLocale(params.run.locale, '导入已取消，停在了已保存的进度处。', 'Import cancelled at a safe boundary.'), true)
+        }
+        throw error
+      } finally { observe?.() }
+    },
+  })
   const count = params.run.totalChapters
   const chapterCountEn = `${count} ${count === 1 ? 'chapter' : 'chapters'}`
   const contextReadResourceKeys = [
@@ -1301,19 +1423,19 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
     ],
     ...durableCancelHooks,
     steps: [
-      importStep(params.run, params.executionOwner, 'knowledge',
+      referenceStep('knowledge',
         ['导入参照文本与构建知识库', 'Import reference text and build the knowledge base'],
         [`按有界批次导入 ${count} 章参照文本，不写入草稿或正文`, `Import ${chapterCountEn} of reference text in bounded batches without creating drafts or manuscript text`]),
-      importStep(params.run, params.executionOwner, 'global',
+      referenceStep('global',
         ['AI 推演全局配置与架构', 'AI infers global configuration and architecture'],
         ['从有界样本推演小说配置、故事架构与角色卡', 'Infer the novel configuration, architecture, and character cards from bounded samples.']),
-      importStep(params.run, params.executionOwner, 'style',
+      referenceStep('style',
         ['AI 拆解文风与仿写指南', 'AI analyzes writing style and imitation guidance'],
         ['从有界样本提取文风与仿写约束', 'Extract a style profile and imitation guidance from bounded samples.']),
-      importStep(params.run, params.executionOwner, 'blueprints',
+      referenceStep('blueprints',
         ['AI 分批推演章节蓝图', 'AI infers chapter blueprints in batches'],
         [`以最多 5 章一批生成 ${count} 章蓝图`, `Infer ${chapterCountEn} of blueprints in batches of at most five.`]),
-      importStep(params.run, params.executionOwner, 'refresh',
+      referenceStep('refresh',
         ['刷新项目状态', 'Refresh project state'],
         ['刷新项目树、角色卡与蓝图', 'Refresh the project tree, character cards, and blueprints.']),
     ],

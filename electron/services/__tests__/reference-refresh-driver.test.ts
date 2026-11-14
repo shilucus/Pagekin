@@ -14,6 +14,7 @@ import { openCanonicalProjectFixture } from '../../../test/helpers/canonical-pro
 import { removeTemporaryTree } from '../../../test/helpers/remove-temporary-tree.mjs'
 import { projectRuntimeHost, type ProjectRuntime } from '../project-runtime'
 import { ReferenceKnowledgeAuthority, ReferenceKnowledgeExecutionFailure } from '../reference-knowledge-authority'
+import { acquireImportRunParentFlight } from '../import-stage-flight'
 
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
 const apiKey = Buffer.alloc(32, 31)
@@ -116,6 +117,33 @@ afterEach(() => {
 })
 
 describe('main-owned reference refresh completion', () => {
+  it('allows only the original issuance to join a completed run and finish its active grant', async () => {
+    runtime.database.exec("CREATE TRIGGER fictional_refresh_grant_failure BEFORE UPDATE OF state ON reference_import_grants WHEN NEW.state='completed' BEGIN SELECT RAISE(ABORT,'fictional grant failure'); END")
+    await expect(authority.executeRefresh(sender, refreshRequest(), hooks())).rejects.toBeInstanceOf(ReferenceKnowledgeExecutionFailure)
+    expect(ImportRunRepository.get(runId)).toMatchObject({ status: 'completed', stage: 'completed' })
+    runtime.database.exec('DROP TRIGGER fictional_refresh_grant_failure')
+    const request = refreshRequest()
+    const parent = acquireImportRunParentFlight(runtime.database, runId)
+    const other = Object.assign(new EventEmitter(), { isDestroyed: () => false })
+    expect(() => authority.beginRun(other, request.reference, request.execution, parent.token))
+      .toThrow('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+    expect(() => authority.beginRun(sender, request.reference, { ...request.execution, epoch: request.execution.epoch + 1 }, parent.token))
+      .toThrow('KNOWLEDGE_BASE_REFERENCE_EXECUTION_MISMATCH')
+    const grantId = prepared.reference.grantId
+    const originalHash = runtime.database.prepare('SELECT request_hash FROM reference_import_grants WHERE grant_id=?').pluck().get(grantId)
+    runtime.database.prepare('UPDATE reference_import_grants SET request_hash=? WHERE grant_id=?').run(digest('other'), grantId)
+    expect(() => authority.beginRun(sender, request.reference, request.execution, parent.token))
+      .toThrow('REFERENCE_IMPORT_GRANT_SCOPE_MISMATCH')
+    runtime.database.prepare('UPDATE reference_import_grants SET request_hash=? WHERE grant_id=?').run(originalHash, grantId)
+    const releaseRun = authority.beginRun(sender, request.reference, request.execution, parent.token)
+    const refreshHooks = hooks()
+    const result = await authority.executeRefresh(sender, request, refreshHooks, parent.token)
+    expect(result).toMatchObject({ run: { status: 'completed' }, execution: null, replayed: true })
+    expect(refreshHooks.refresh).not.toHaveBeenCalled()
+    expect(authority.hasIssuance(grantId)).toBe(true)
+    releaseRun(); parent.release()
+    expect(authority.hasIssuance(grantId)).toBe(false)
+  })
   it('preserves projection, checkpoint, progress, run completion, then original grant completion order', async () => {
     const order: string[] = []
     const refreshHooks = hooks({ refresh: vi.fn(async () => { order.push('projection') }),

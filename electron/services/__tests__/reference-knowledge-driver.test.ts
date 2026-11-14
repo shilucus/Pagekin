@@ -15,6 +15,7 @@ import { removeTemporaryTree } from '../../../test/helpers/remove-temporary-tree
 import { projectRuntimeHost, type ProjectRuntime } from '../project-runtime'
 import { ReferenceKnowledgeAuthority, ReferenceKnowledgeExecutionFailure,
   assertReferenceKnowledgeUnmanagedMutationAllowed } from '../reference-knowledge-authority'
+import { acquireImportRunParentFlight, assertImportRunParentFlightCurrent } from '../import-stage-flight'
 
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
 const apiKey = Buffer.alloc(32, 31)
@@ -35,6 +36,8 @@ let authority: ReferenceKnowledgeAuthority
 let runId: string
 let request: ImportRunPrepareRequest
 let prepared: ReturnType<ReferenceKnowledgeAuthority['prepare']>
+let preparationOperationId: string
+let preparationOwner: string
 let importReference: ReturnType<typeof vi.fn<FixtureImport>>
 
 function verifiedCleanupRoot(): string {
@@ -86,8 +89,10 @@ function makeAuthority() {
     } }),
     importReference: importReference,
   })
+  preparationOperationId = randomUUID()
+  preparationOwner = randomUUID()
   prepared = authority.prepare(sender, {
-    operationId: randomUUID(), runId, executionOwner: randomUUID(),
+    operationId: preparationOperationId, runId, executionOwner: preparationOwner,
   }, () => projectRuntimeHost.assertOpen(runtime))
 }
 
@@ -144,6 +149,85 @@ afterEach(() => {
 })
 
 describe('main-owned reference knowledge driver', () => {
+  it('keeps whole-run ownership across knowledge drain and rejects prior preparation and unmanaged joins', async () => {
+    const parent = acquireImportRunParentFlight(runtime.database, runId)
+    const input = executionRequest()
+    const releaseRun = authority.beginRun(sender, prepared.reference, input.execution, parent.token)
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    importReference.mockImplementationOnce(async ({ binding }: { binding: FixtureBinding }) => {
+      await gate
+      return createDocument(binding)
+    })
+    const operation = authority.executeKnowledge(sender, input, hooks(), parent.token)
+    void operation.catch(() => {})
+    try {
+      await vi.waitFor(() => expect(importReference).toHaveBeenCalledOnce())
+      expect(() => authority.executeKnowledge(sender, input, hooks())).toThrow('GENERATION_OWNER_BUSY')
+      expect(() => authority.prepare(sender, { operationId: preparationOperationId, runId,
+        executionOwner: preparationOwner }, () => projectRuntimeHost.assertOpen(runtime))).toThrow()
+      expect(() => releaseRun()).toThrow('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
+      expect(() => parent.release()).toThrow('GENERATION_OWNER_BUSY')
+    } finally { release(); await operation }
+    expect(() => assertReferenceKnowledgeUnmanagedMutationAllowed(runtime.database, runId)).toThrow('GENERATION_OWNER_BUSY')
+    expect(() => authority.assertRunCurrent(sender, prepared.reference, input.execution, parent.token)).not.toThrow()
+    releaseRun(); parent.release()
+    expect(() => assertReferenceKnowledgeUnmanagedMutationAllowed(runtime.database, runId)).not.toThrow()
+  })
+
+  it('retains a revoked issuance during the parent gap and applies cancellation before releasing it', () => {
+    const parent = acquireImportRunParentFlight(runtime.database, runId)
+    const input = executionRequest()
+    const releaseRun = authority.beginRun(sender, prepared.reference, input.execution, parent.token)
+    authority.requestProjectClose()
+    expect(authority.hasIssuance(prepared.reference.grantId)).toBe(true)
+    expect(ImportRunRepository.get(runId)?.cancelRequested).toBe(true)
+    expect(() => authority.retire()).toThrow('KNOWLEDGE_BASE_REFERENCE_IMPORT_IN_FLIGHT')
+    releaseRun()
+    expect(ImportRunRepository.get(runId)?.status).toBe('cancelled')
+    expect(authority.hasIssuance(prepared.reference.grantId)).toBe(false)
+    parent.release()
+  })
+
+  it.each(['grant', 'cancel'] as const)('retains the parent and retries a failed %s cleanup', failureKind => {
+    const parent = acquireImportRunParentFlight(runtime.database, runId)
+    const input = executionRequest()
+    const releaseRun = authority.beginRun(sender, prepared.reference, input.execution, parent.token)
+    if (failureKind === 'grant') {
+      runtime.database.exec("CREATE TRIGGER fictional_whole_cleanup_failure BEFORE UPDATE OF state ON reference_import_grants WHEN NEW.state='revoked' BEGIN SELECT RAISE(ABORT,'fictional revoke failure'); END")
+      expect(() => authority.revoke(sender, prepared.reference)).toThrow()
+    } else {
+      runtime.database.exec("CREATE TRIGGER fictional_whole_cleanup_failure BEFORE UPDATE OF status ON import_runs WHEN NEW.status='cancelled' BEGIN SELECT RAISE(ABORT,'fictional cancel failure'); END")
+      authority.revoke(sender, prepared.reference)
+    }
+    expect(() => releaseRun()).toThrow()
+    expect(authority.hasIssuance(prepared.reference.grantId)).toBe(true)
+    expect(() => assertImportRunParentFlightCurrent(runtime.database, runId, parent.token)).not.toThrow()
+    expect(() => authority.retire()).toThrow()
+    runtime.database.exec('DROP TRIGGER fictional_whole_cleanup_failure')
+    expect(() => releaseRun()).not.toThrow()
+    expect(ImportRunRepository.get(runId)?.status).toBe('cancelled')
+    expect(authority.hasIssuance(prepared.reference.grantId)).toBe(false)
+    expect(() => assertImportRunParentFlightCurrent(runtime.database, runId, parent.token)).not.toThrow()
+    parent.release()
+  })
+
+  it('renews while a parent stage handoff is pending and applies explicit cancellation at its boundary', async () => {
+    const parent = acquireImportRunParentFlight(runtime.database, runId)
+    const input = executionRequest()
+    const releaseRun = authority.beginRun(sender, prepared.reference, input.execution, parent.token)
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const operation = authority.withRunHeartbeat(sender, prepared.reference, input.execution, parent.token, async () => {
+      await gate
+      return 'acknowledged'
+    })
+    release()
+    await expect(operation).resolves.toBe('acknowledged')
+    authority.cancelRunAtBoundary(sender, prepared.reference, input.execution, parent.token)
+    expect(ImportRunRepository.get(runId)?.status).toBe('cancelled')
+    releaseRun(); parent.release()
+  })
   it('imports in original contiguous batches, persists receipts before progress, advances to global, and replays without fetch', async () => {
     const events: unknown[] = []
     const receiptCountsAtChapterProgress: number[] = []

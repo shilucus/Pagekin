@@ -1705,3 +1705,56 @@ The observations below retain their chronological state. The final acceptance at
   complete feature semantics match. Two record-wording findings are corrected
   and re-reviewed. Root scoped commit follows; Stage88 next migrates the entire foreground reference sequence
   to main without widening background authority or inventing visible design.
+
+## 2026-11-14 - Stage 88: Foreground Reference Whole-Run Integration
+
+- Entry `4b7ba33a1e3f16bd3b9808fb1ecf053220b01afa`; Stage87 scoped commit verified,
+  index empty and all46 reviewed identities unchanged. Existing analysis and
+  two untracked Stage1B3 documents remain protected.
+- Freeze: F2 section4.4-4.5 and ADR0074-78 authorize main-owned existing reference
+  stages, not new background/A-to-B authority. The existing five visible steps,
+  localized text, original author-buffer ACKs and author-manuscript route stay.
+- Luna owns a main coordinator plus focused tests; Terra2 owns renderer projection
+  plus tests; Terra4 owns opaque parent flight/issuance/child adapters plus tests.
+  Root owns closed IPC/foreground composition/records/Git. Sol independently
+  reviews integrated requirements, lifecycle, safety, persistence and tests.
+- Stage mapping: knowledge/global/style/blueprints/refresh use their existing
+  durable writers and original receipts; previous stages only project a persisted
+  skip. Freeze one existing author-selected planning modelId (nullable), never
+  guess a default or overwrite recovered original root/model/budget.
+- Validation mapping: closed contract and transport tests; coordinator transition
+  and model tests; renderer single execute, buffered identity-filtered projection,
+  unsaved-config and mechanical ACK tests; actual registered isolated native IPC
+  composition including whole-flight conflicts, cancel/drain, prepared/unknown,
+  completed grant retry; retained stage regressions; fresh quality/build and an
+  inspected isolated Electron driver where applicable. At this scope freeze,
+  no stage acceptance had yet been made; actual acceptance is recorded below.
+- Implemented actual production main whole-run entry plus identity-filtered
+  buffered renderer projection; old stage writers, child ACKs, original model /
+  root/budget, knowledge grant and author path remain. Main validates canonical
+  global/style/blueprint history before skipped ACK barriers. Cleanup failures
+  retain parent/work/issuance until a successful retry; no early physical drain.
+- Actual failed reports and their source/test repairs remain in
+  [Stage88 evidence](stage-88-evidence.md). Native9/11 and integrated1021/1022
+  are followed by the same41files1022/1022,0failed/pending/todo,544.83s; included
+  whole native11/11. After exactly3IMPORT001 partial appends, checklist36/36.
+  Fresh typecheck/lint/colors/i18n/build exit0, including quality rechecks after
+  the final assertion-only repair. No reports are summed or overwritten.
+- Actual reviewed isolated `f537-reference-whole-10` Electron command exits0:
+  1whole invocation,5ordered settled ACKs,10knowledge receipts,4committed stage
+  receipts,10blueprints,4existing draft/finalized rows unchanged,12fake requests,
+  normal quit and no observed external requests/writes/residuals. Root and Sol
+  inspect the actual1440x900light PNG; this is not real-model or visual parity.
+- Sol final independent source/runtime review accepts the bounded integration
+  after reading raw results and independently recomputing344built files with
+  ordinal digest413f266da2c6c3c73bf678aaa3c35a587b2db87413802f72138b5f79e32b185f.
+  All35flag/gate/dependency/old-evidence semantics remain14completed/21in_progress;
+  no complete import/imitation, background or quality/platform qualification.
+- Agent4's final nonowner artifact audit accepts131/131identities, exact42owned
+  paths, all12report statistics and the complete344-file ordinal build tree.
+  Root checks empty index, unchanged protected files, sample-only hooks and no
+  owned-path filters; scoped commit and postcommit preservation checks follow. A
+  separate readonly audit finds `batch_generate` falsely background-qualified
+  while its author route still requires currentProject. Next bounded stage will
+  restore existing unqualified switch protection, not invent visible controls;
+  API's uncomposed fake running acceptance is a subsequent independent repair.
