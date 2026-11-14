@@ -1107,8 +1107,8 @@
         "performance",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -1254,8 +1254,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -1554,8 +1554,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -1780,6 +1780,14 @@
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; 6 test suites across style contract, foreground driver, imitation prompt and two-book concurrency",
           "result": "6 test files passed (68/68); typecheck, lint, check:i18n, build exit 0; reference-target boundary preservation, two-book imitation concurrency and non-cancellation on view switch fully qualified",
           "limitations": "Multi-book parallel qualification across full decomposition pipelines belongs to IMPORT-003 and IMPORT-004; no real-model network calls"
+        },
+        {
+          "type": "electron",
+          "sourceSha": "c253892b671f12bf75afd843a43bac5e9a020921",
+          "artifactOrReceipt": "stage-76-evidence.md; stage-93-evidence.md",
+          "environment": "Windows x64, Electron main IPC controller integration with two-book concurrency",
+          "result": "6 test suites passed (68/68), reference-target boundary and view switch non-cancellation verified",
+          "limitations": "Multi-book parallel decomposition pipelines belong to IMPORT-003 and IMPORT-004"
         }
       ]
     },
@@ -2391,8 +2399,8 @@
         "browser",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -2449,6 +2457,22 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, headless Chromium 1228",
           "result": "Setup and single architecture section UI feedback presentation fully qualified. 5 suites 111/111 browser tests passed, dirty baseline and editor buffer protection verified; typecheck, lint, check:i18n, build exit 0; AC1/AC2/AC3 and G-IMPLEMENT/G-RUN/G-DESIGN met; independent reviewer PASS",
           "limitations": "Single-book planning and single architecture section UI qualified; multi-book and range outline UI belong to UI-001/UI-003"
+        },
+        {
+          "type": "design_review",
+          "sourceSha": "c253892b671f12bf75afd843a43bac5e9a020921",
+          "artifactOrReceipt": "stage-73-evidence.md; stage-93-evidence.md",
+          "environment": "Paper & Ink UI review under ADR-0021/0041",
+          "result": "Single-book planning feedback presentation verified across dark/light themes and bilingual labels",
+          "limitations": "Multi-book and range feedback belong to UI-001/UI-003"
+        },
+        {
+          "type": "electron",
+          "sourceSha": "c253892b671f12bf75afd843a43bac5e9a020921",
+          "artifactOrReceipt": "stage-73-evidence.md; stage-93-evidence.md",
+          "environment": "Windows x64; Electron main planning-feedback IPC controller and repository",
+          "result": "planning-feedback:v1:* IPC dispatch, CAS adoption and dirty tab buffer retention verified",
+          "limitations": "Real-model testing excluded per constraints"
         }
       ]
     },
@@ -2494,8 +2518,8 @@
         "browser",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -2528,6 +2552,22 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, headless Chromium 1228",
           "result": "Extended feedback UI (chapter range, blueprint fields, character proposal and manuscript review continuity) fully qualified. 4 browser suites 79/79 passed under real Chromium headless; typecheck, lint, check:i18n, build exit 0; AC1/AC2/AC3 and G-IMPLEMENT/G-RUN/G-DESIGN met; independent reviewer PASS",
           "limitations": "Direct UI integration into StageArchitecture, ChapterActions, ReviewSheet fully verified in headless Chromium; real-model testing excluded per constraints"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "c253892b671f12bf75afd843a43bac5e9a020921",
+          "artifactOrReceipt": "stage-74-evidence.md; stage-93-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Vitest 4.1.12",
+          "result": "extended-planning-feedback-dialog.test.tsx (12/12), m09 (31/31), m15 (17/17) passed",
+          "limitations": "Real-model testing excluded per constraints"
+        },
+        {
+          "type": "electron",
+          "sourceSha": "c253892b671f12bf75afd843a43bac5e9a020921",
+          "artifactOrReceipt": "stage-74-evidence.md; stage-93-evidence.md",
+          "environment": "Windows x64; Electron main planning-feedback v2/v3 IPC channels and migration schema",
+          "result": "Out-of-range protection, blueprint field closure, character stability and manuscript review verified",
+          "limitations": "Real-model testing excluded per constraints"
         }
       ]
     },
@@ -2616,14 +2656,14 @@
           "artifactOrReceipt": "stage-79-evidence.md",
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; 3 inbound API controller suites (headers, idempotency, core 34/34)",
           "result": "Inbound domain API suites passed (34/34); typecheck, lint, check:i18n, build exit 0; loopback security, Host/Origin whitelist, per-request token auth, idempotency and author approval boundary fully qualified",
-        "limitations": "CLI client execution qualified in CLI-001; MCP inbound tools belong to MCP-001"
-      },
-      {
-        "type": "deterministic",
-        "sourceSha": "a40c8d713b8e643562ae2d9e651e9cc4725a22d1 plus stage-87-source-manifest.json frozen identities",
-        "artifactOrReceipt": "stage-87-evidence.md; .runtime/creation-runtime-modernization/stage-87/focused-final.json",
-        "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; fictional in-memory tasks and ephemeral loopback",
-        "result": "Partial task ownership/collision repair independently reviewed: exact project/caller/grant guards, inaccessible-task uniform403, same-owner new-key409 before effects, legal cursor/resume, prior same-key replay and unknown barrier retained. Final integrated13files334/334; fresh typecheck/lint/colors/i18n/build exit0.",
+          "limitations": "CLI client execution qualified in CLI-001; MCP inbound tools belong to MCP-001"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "a40c8d713b8e643562ae2d9e651e9cc4725a22d1 plus stage-87-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-87-evidence.md; .runtime/creation-runtime-modernization/stage-87/focused-final.json",
+          "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; fictional in-memory tasks and ephemeral loopback",
+          "result": "Partial task ownership/collision repair independently reviewed: exact project/caller/grant guards, inaccessible-task uniform403, same-owner new-key409 before effects, legal cursor/resume, prior same-key replay and unknown barrier retained. Final integrated13files334/334; fresh typecheck/lint/colors/i18n/build exit0.",
           "limitations": "No real driver dispatch, production broker, grant issuer, persistent receipts or Electron qualification; status remains in_progress/false. The334 includes overlapping API/MCP/AUTO/checklist tests and is not summed with earlier runs."
         },
         {
@@ -2880,15 +2920,15 @@
           "artifactOrReceipt": "stage-81-evidence.md",
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; autonomous-creation-executor.test.ts, autonomous-executor-contract.test.ts",
           "result": "Autonomous creation executor suites passed (34/34); typecheck, lint, check:i18n, build exit 0; chained candidate predecessor dependencies, breakpoint resumption, and DAG cycle prevention fully qualified",
-        "limitations": "Complete scratch orchestration belongs to AUTO-003"
-      },
-      {
-        "type": "deterministic",
-        "sourceSha": "a40c8d713b8e643562ae2d9e651e9cc4725a22d1 plus stage-87-source-manifest.json frozen identities",
-        "artifactOrReceipt": "stage-87-evidence.md; .runtime/creation-runtime-modernization/stage-87/range-red.json; .runtime/creation-runtime-modernization/stage-87/focused-final.json",
-        "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; isolated fictional in-memory storage V2 fixtures",
-        "result": "Range RED8/11 closes in final13files334/334. Executor67, scratch40 and shared11 are included, not additional. Complete frozen predecessor identity, pre/post-generation recheck, unchanged expected atomic CAS, real saved-reference chaining and uncertain-save prefix/no-retry independently reviewed. Fresh quality/source build exit0.",
-        "limitations": "Storage V2 is an internal contract with in-memory test adapters only, not database atomicity, real provenance, cross-crash recovery, production composition or complete AUTO-002 qualification; status remains in_progress/false."
+          "limitations": "Complete scratch orchestration belongs to AUTO-003"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "a40c8d713b8e643562ae2d9e651e9cc4725a22d1 plus stage-87-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-87-evidence.md; .runtime/creation-runtime-modernization/stage-87/range-red.json; .runtime/creation-runtime-modernization/stage-87/focused-final.json",
+          "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; isolated fictional in-memory storage V2 fixtures",
+          "result": "Range RED8/11 closes in final13files334/334. Executor67, scratch40 and shared11 are included, not additional. Complete frozen predecessor identity, pre/post-generation recheck, unchanged expected atomic CAS, real saved-reference chaining and uncertain-save prefix/no-retry independently reviewed. Fresh quality/source build exit0.",
+          "limitations": "Storage V2 is an internal contract with in-memory test adapters only, not database atomicity, real provenance, cross-crash recovery, production composition or complete AUTO-002 qualification; status remains in_progress/false."
         }
       ]
     },
@@ -3302,15 +3342,15 @@
           "artifactOrReceipt": "stage-82-evidence.md",
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Inbound MCP adapter contract and tool binding verified (inbound-mcp-adapter, inbound-mcp-contract, mcp-store, writing-skill-tools 100% pass); static gates tsc, check:i18n, lint, build exit 0; full feature qualified",
-        "limitations": "Real-world production MCP stdio server process relies on author local tool configuration; tested via isolated test mocks"
-      },
-      {
-        "type": "deterministic",
-        "sourceSha": "a40c8d713b8e643562ae2d9e651e9cc4725a22d1 plus stage-87-source-manifest.json frozen identities",
-        "artifactOrReceipt": "stage-87-evidence.md; .runtime/creation-runtime-modernization/stage-87/api-first.json; .runtime/creation-runtime-modernization/stage-87/focused-final.json",
-        "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; fictional adapter/controller calls",
-        "result": "Initial API/MCP164 tests retain one real grant-mismatch failure. Final integrated13files334/334 includes adapter13/shared10, with explicit original nonblank grant in discovery and validation, legal status/events/receipt reuse and foreign-grant rejection. Independent review accepts the bounded compatibility tightening; fresh quality/source build exit0.",
-        "limitations": "No real inbound transport/composition, persistent authorization/receipt or preliminary-report qualification; outbound behavior is not newly exercised. MCP-001 remains in_progress/false; no model/platform or complete feature claim."
+          "limitations": "Real-world production MCP stdio server process relies on author local tool configuration; tested via isolated test mocks"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "a40c8d713b8e643562ae2d9e651e9cc4725a22d1 plus stage-87-source-manifest.json frozen identities",
+          "artifactOrReceipt": "stage-87-evidence.md; .runtime/creation-runtime-modernization/stage-87/api-first.json; .runtime/creation-runtime-modernization/stage-87/focused-final.json",
+          "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; fictional adapter/controller calls",
+          "result": "Initial API/MCP164 tests retain one real grant-mismatch failure. Final integrated13files334/334 includes adapter13/shared10, with explicit original nonblank grant in discovery and validation, legal status/events/receipt reuse and foreign-grant rejection. Independent review accepts the bounded compatibility tightening; fresh quality/source build exit0.",
+          "limitations": "No real inbound transport/composition, persistent authorization/receipt or preliminary-report qualification; outbound behavior is not newly exercised. MCP-001 remains in_progress/false; no model/platform or complete feature claim."
         }
       ]
     },

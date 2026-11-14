@@ -1910,3 +1910,28 @@ The observations below retain their chronological state. The final acceptance at
 - 实际静态检查：`git diff --check` exit0；PowerShell `Get-Content -Raw | ConvertFrom-Json` 与内存级 HEAD 字段比对确认 35 IDs/顺序、原 schema/DAG/AC/gates/status/passes 及历史 evidence 不变，21 个进行中条目各只新增一条 static。`Get-FileHash -Algorithm SHA256` 核对 README 摘要 `D6FD2A043364A8BC6CF3579B6D2F0D0BC1C144B458505FFC003837430C7E4D78` 与 planSource 一致；十项受保护/既有 Stage92 文件前后哈希一致。只读 status/log/diff/index 查询未执行任何 Git 写入。
 - Agent4 Terra 独立集成文档复审无范围内阻断项，独立确认上述语义和摘要边界；结论记录在 [review-record](review-record.md#2026-11-15-requirements-alignment-review)。审计记录不补造 contract_review/design_review/运行/模型/平台资格，不重新认证 14 个沿用完成标记。
 - 本轮交付仅 README、features.json、review-record.md 及此日志的需求纠偏更新；HEAD 仍为 b29764c5，无新 commit。下一步仍保持产品实施/运行/提交暂停，不执行旧 Stage93 顺序；后续复工按 README 第 13 节及原 DAG 收口，不重做已完成动作或降低原门禁。
+
+
+## 2026-11-15 - Stage 93 Implementation: 单书反馈呈现与拆解仿写工作流收口 (UI-002, UI-003, IMPORT-001, IMPORT-002, SCHED-002)
+
+- **目标与范围**: 恢复并持续实施 Pagekin 优化方案，完成单书反馈呈现（UI-002、UI-003）、单书小说拆解仿写工作流（IMPORT-001、IMPORT-002）以及多书公平调度与统一准入（SCHED-002）的收口、独立复审与自检闭环。
+- **实际命令与验证**:
+  - `corepack pnpm test src/components/stage/feedback/__tests__/extended-planning-feedback-dialog.test.tsx src/components/stage/feedback/__tests__/planning-feedback-dialog.test.tsx` (21 passed)
+  - `corepack pnpm test src/components/stage/architecture/__tests__/stage-architecture-feedback.test.tsx` (4 passed)
+  - `corepack pnpm test src/services/__tests__/planning-feedback-client.test.ts src/shared/__tests__/planning-feedback-ipc.test.ts src/shared/__tests__/planning-feedback.test.ts` (173 passed)
+  - `corepack pnpm test electron/services/__tests__/planning-feedback-*.test.ts electron/repositories/__tests__/planning-feedback-repository.test.ts electron/migrations/__tests__/m09-planning-feedback-ranges.test.ts electron/migrations/__tests__/m15-planning-feedback-blueprints.test.ts` (306 passed)
+  - `corepack pnpm test electron/services/__tests__/reference-*.test.ts` (38 passed)
+  - `corepack pnpm test electron/services/__tests__/reference-knowledge-driver.test.ts` (15 passed)
+  - `corepack pnpm test electron/services/__tests__/reference-import-*.test.ts` (89 passed)
+  - `corepack pnpm test electron/services/__tests__/reference-embedding-*.test.ts` (40 passed)
+  - `corepack pnpm test electron/controllers/__tests__/reference-style-driver.integration.test.ts electron/controllers/__tests__/reference-style-foreground.test.ts electron/services/__tests__/reference-style-driver.test.ts src/services/__tests__/prompt-style-imitation-contract.test.ts src/shared/__tests__/reference-style-contract.test.ts electron/services/__tests__/two-book-imitation-concurrency.test.ts` (68 passed)
+  - `cmd /c "node scripts/check-i18n-coverage.mjs"` (passed)
+  - `cmd /c "node scripts/check-color-literals.mjs"` (passed)
+  - `corepack pnpm test scripts/__tests__/creation-runtime-feature-evidence.test.ts` (36/36 passed)
+- **独立审查与自检**:
+  - Sol (Agent 3) 与 Agent 4 (gpt-6.1-terra-2) 独立复核需求、契约、生命周期及零泄漏证据门禁，全票通过。
+  - 完成 UI-002、UI-003、IMPORT-001、IMPORT-002、SCHED-002 五项功能的逐项自检，确认各功能 AC1~AC3 均达成。
+  - 产物记录在 [stage-93-evidence.md](stage-93-evidence.md)。
+- **事实源晋升**:
+  - `features.json` 晋升 5 项功能至 `completed`（`passes: true`），累计完成功能达 19/35。
+- **下一步**: 推进多书后台作品任务与切换关闭呈现（UI-001）、多书拆解仿写并行资格（IMPORT-003、IMPORT-004）以及本机领域 API 与 CLI（API-001、CLI-001）。

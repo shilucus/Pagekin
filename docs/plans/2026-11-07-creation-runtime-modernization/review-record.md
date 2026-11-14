@@ -1430,3 +1430,16 @@ sample-only hooks and no owned-path filters; scoped commit/postcommit follow.
   - Sol (Agent 3) 独立审查需求与生命周期：确认未增加新公开 IPC、未削弱现有租约与所有权栅栏，真实清理在物理 drain 与持久化对账完成前不释放 claim 与 busy 状态，true-close 重试仅清理不重发。
   - Agent 4 独立审查故障覆盖与产物：`workflow-batch-authority.test.ts` 22 项、`workflow-batch-controller.test.ts` 27 项、`main-generation-owner.test.ts` 寂静测试及特征清单测试全部通过；i18n 及颜色检查通过；无越权修改或虚假完成声明。
 - 结论：Stage 92 修复闭环并具备提交条件；不提升 SCHED-002 状态，SCHED-002 领域准入在后续阶段独立推进。
+
+
+## 2026-11-15 - Stage 93 Review: 单书反馈呈现与拆解仿写工作流收口
+
+- 范围：UI-002（单书反馈试点呈现）、UI-003（范围与蓝图扩展反馈呈现）、IMPORT-001（单书完整拆解工作流）、IMPORT-002（单书完整仿写工作流）、SCHED-002（多书公平调度与统一准入）。
+- 实施与验证：
+  - 核心套件：反馈组件与客户端套件 452/452 通过，拆解仿写 5 大 driver 及多书并发套件 245/245 通过，批处理与调度套件 50/50 通过；
+  - 门禁检查：`creation-runtime-feature-evidence.test.ts` 36/36 通过，i18n 及颜色检查零违规，各功能 AC1~AC3 全部闭环；
+  - 真实产物记录在 [stage-93-evidence.md](stage-93-evidence.md)。
+- 独立审查：
+  - Sol (Agent 3) 独立审查生命周期与契约（PASS）：确认 UI-002/003 严格保留作者未保存缓冲（dirty buffer），范围外章节 100% 字节不被篡改，角色闭包校验与定稿重开保护完备；IMPORT-001/002 维持参考材料与目标作品事实的绝对隔离，切换视图不取消后台获准任务；SCHED-002 在 Stage 92 闭环 cleanup debt 保持后，统一资源准入与调度无死锁或泄漏风险。
+  - Agent 4 (gpt-6.1-terra-2) 独立审查证据门禁与零泄漏（PASS）：核对 features.json 中 5 项功能的 requiredEvidenceTypes 均具备已验证的真实证据记录，无虚构或缺少类型；依赖 DAG 闭环；受保护文件及 stage-1b3 遗留文件未被修改；批准 features.json 晋升至 19 completed / 16 in_progress。
+- 结论：Stage 93 独立审查全票通过，具备本地提交条件。
