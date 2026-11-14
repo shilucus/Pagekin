@@ -434,7 +434,11 @@ export async function generateEmbeddings(
   const queueStop = new AbortController()
   const siblingStopped = Symbol('embedding sibling stopped')
   const externalSignals = [signal, scheduling?.signal].filter((value): value is AbortSignal => value !== undefined)
-  const physicalSignal = externalSignals.length ? AbortSignal.any(externalSignals) : undefined
+  const physicalSignal = externalSignals.length === 1
+    ? externalSignals[0]
+    : externalSignals.length > 1
+      ? AbortSignal.any(externalSignals)
+      : undefined
   const queueSignal = AbortSignal.any([...externalSignals, ...(scheduling?.queueSignal ? [scheduling.queueSignal] : []), queueStop.signal])
   const assertBatchActive = () => {
     if (!scheduling) { assertActive?.(); return }

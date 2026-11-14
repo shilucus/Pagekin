@@ -1099,8 +1099,8 @@
         "performance",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "contract_review",
@@ -1149,6 +1149,22 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Multi-project session scheduler concurrency isolation and queue boundary passed (4/4 tests passed in multi-project-session-scheduler.test.ts, 60/60 all scheduler tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Single desktop node in-process memory scheduler; cross-machine distributed coordination belongs to future cloud extensions"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "6dee331d59cabf651a0244a06317255c058d3b86",
+          "artifactOrReceipt": "stage-71-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Shared main-process model network admission (ADR-0079) wired into LLM generate, stream, test-connection and model discovery. 7 test suites 58/58 passed; typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
+          "limitations": "Full two-book scheduling closure and scenario verification qualified in Stage 72"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-72-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Multi-book fair scheduling and unified resource admission fully qualified. 9 suites 158/158 core scheduler tests passed, 2 suites 54/54 performance pressure tests passed; single-signal transparent reference preserved; typecheck, lint, check:i18n, build exit 0; AC1/AC2/AC3 and G-IMPLEMENT/G-RUN/G-CONTRACT/G-STORAGE met; independent reviewer PASS",
+          "limitations": "Desktop in-process memory scheduler and IPC boundaries qualified; real-model testing excluded per project constraints"
         }
       ]
     },

@@ -1408,3 +1408,14 @@ The observations below retain their chronological state. The final acceptance at
 - Actual execution: 7 focused test files (58 tests) passed, 0 failed. Related suites passed: import-query-overlap-controller (8/8), knowledge-base-runtime-authority (5/5), project-runtime-lifecycle (47/47).
 - Static quality & build: corepack pnpm run typecheck, corepack pnpm run lint, corepack pnpm run check:i18n, and corepack pnpm run build all exited 0.
 - ADR-0079 accepted for Stage71 scope. No feature promotion yet; SCHED-002 remains in_progress pending Stage72 domain-writer admission and dual-book qualification.
+- Stage71 committed 6dee331d59cabf651a0244a06317255c058d3b86, parent 710a170f0f0621d9be5d513a93d961bf9b5abe49, 27 paths. Protected staged repository-analysis intact, untracked Stage1B3 files preserved.
+
+## 2026-11-14 - Stage72 Multi-Book Fair Scheduling and Unified Resource Admission Qualification
+
+- Entry 6dee331d59cabf651a0244a06317255c058d3b86. Features.json SCHED-002 qualified and promoted from in_progress to completed (passes=true).
+- Repaired single-signal AbortSignal transparent reference in electron/embedding.ts to eliminate extraneous composite Signal/WeakRef allocations and preserve identity equality under single-signal execution.
+- Executed 9 core scheduling suites: 158 tests passed, 0 failed (main-process-scheduler 49/49, generation-scheduler-embedding 6/6, embedding-scheduling 3/3, generation-scheduler 11/11, generation-scheduler-query-overlap 9/9, shared-network-scheduler 6/6, scheduled-generation-scenario 12/12, multi-project-session-scheduler 4/4, main-generation-owner.scheduling 58/58).
+- Executed 2 performance pressure & lifecycle scenario suites: 54 tests passed, 0 failed (performance-pressure-scenarios 32/32, performance-inspection-lifecycle-scenarios 22/22).
+- Static quality gates all passed: typecheck exit 0, lint exit 0, check:i18n exit 0, source build exit 0.
+- AC 1 (bounded queue/fairness/two-book concurrency), AC 2 (atomic pre-dispatch re-admission/reserve refusal), AC 3 (physical permit drain/quarantine/abort debt) and G-IMPLEMENT, G-RUN, G-CONTRACT, G-STORAGE fully qualified.
+- Features.json updated: SCHED-002 completed, passes=true. Total 35 features: 12 completed, 23 in_progress. Next bounded stage: Stage 73 (FEEDBACK-002 + UI-002: setup & architecture revision closure).
