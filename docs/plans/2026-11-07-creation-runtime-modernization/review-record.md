@@ -1443,3 +1443,16 @@ sample-only hooks and no owned-path filters; scoped commit/postcommit follow.
   - Sol (Agent 3) 独立审查生命周期与契约（PASS）：确认 UI-002/003 严格保留作者未保存缓冲（dirty buffer），范围外章节 100% 字节不被篡改，角色闭包校验与定稿重开保护完备；IMPORT-001/002 维持参考材料与目标作品事实的绝对隔离，切换视图不取消后台获准任务；SCHED-002 在 Stage 92 闭环 cleanup debt 保持后，统一资源准入与调度无死锁或泄漏风险。
   - Agent 4 (gpt-6.1-terra-2) 独立审查证据门禁与零泄漏（PASS）：核对 features.json 中 5 项功能的 requiredEvidenceTypes 均具备已验证的真实证据记录，无虚构或缺少类型；依赖 DAG 闭环；受保护文件及 stage-1b3 遗留文件未被修改；批准 features.json 晋升至 19 completed / 16 in_progress。
 - 结论：Stage 93 独立审查全票通过，具备本地提交条件。
+
+
+## 2026-11-15 - Stage 94 Review: 多书后台切换、拆解仿写并行与 API/CLI 收口
+
+- 范围：UI-001（后台作品任务与切换呈现）、IMPORT-003（小说拆解多书并行）、IMPORT-004（仿写多书并行）、API-001（本机领域 Inbound API）、CLI-001（可等待 CLI 与稳定 JSON）。
+- 实施与验证：
+  - 核心套件：后台切换与作品生命周期套件 68/68 通过，多书拆解仿写并行与会话调度套件 16/16 通过，Inbound API 与 CLI 驱动套件 175/175 通过；
+  - 门禁检查：`creation-runtime-feature-evidence.test.ts` 36/36 通过，i18n 及颜色检查零违规，各功能 AC1~AC3 全部闭环；
+  - 真实产物记录在 [stage-94-evidence.md](stage-94-evidence.md)。
+- 独立审查：
+  - Sol (Agent 3) 独立审查生命周期与契约（PASS）：确认 UI-001 切书时 B 项目加载与保存 100% 独立于 A，A 的未保存缓冲严格保留；IMPORT-003/004 保证双书并行时 SQLite 连接与租约完全隔离，单书崩溃或取消不污染另一书的持久化事实；API-001/CLI-001 严格受限于本机 loopback 与白名单，未开放未经授权的写权限，approve 保持安全封闭。
+  - Agent 4 (gpt-6.1-terra-2) 独立审查证据门禁与零泄漏（PASS）：核对 features.json 中 5 项功能的 requiredEvidenceTypes 均具备已验证的真实证据记录；依赖关系闭环；受保护文件及 stage-1b3 遗留文件未被修改；批准 features.json 晋升至 24 completed / 11 in_progress。
+- 结论：Stage 94 独立审查全票通过，具备本地提交条件。

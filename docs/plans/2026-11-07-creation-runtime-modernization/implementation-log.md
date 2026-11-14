@@ -1935,3 +1935,23 @@ The observations below retain their chronological state. The final acceptance at
 - **事实源晋升**:
   - `features.json` 晋升 5 项功能至 `completed`（`passes: true`），累计完成功能达 19/35。
 - **下一步**: 推进多书后台作品任务与切换关闭呈现（UI-001）、多书拆解仿写并行资格（IMPORT-003、IMPORT-004）以及本机领域 API 与 CLI（API-001、CLI-001）。
+
+
+## 2026-11-15 - Stage 94 Implementation: 多书后台切换、拆解仿写并行与 API/CLI 收口 (UI-001, IMPORT-003, IMPORT-004, API-001, CLI-001)
+
+- **目标与范围**: 收口多书后台作品任务呈现（UI-001）、多书拆解并行资格（IMPORT-003）、多书仿写并行资格（IMPORT-004）、本机领域 Inbound API（API-001）以及可等待 CLI 与稳定 JSON（CLI-001）的验证、独立复审与自检闭环。
+- **实际命令与验证**:
+  - `corepack pnpm test src/stores/__tests__/project-transition-background.test.ts src/stores/__tests__/project-close-lifecycle.test.ts electron/controllers/__tests__/project-switch-renderer.integration.test.ts` (68 passed)
+  - `corepack pnpm test electron/services/__tests__/multi-book-import-concurrency.test.ts electron/services/__tests__/two-book-imitation-concurrency.test.ts electron/services/__tests__/multi-project-session-scheduler.test.ts electron/services/__tests__/shared-network-scheduler.test.ts` (16 passed)
+  - `corepack pnpm test electron/controllers/__tests__/inbound-api-controller.test.ts electron/controllers/__tests__/inbound-api-controller.headers.test.ts electron/controllers/__tests__/inbound-api-controller.idempotency.test.ts electron/controllers/__tests__/inbound-api-controller.ownership.test.ts src/shared/__tests__/inbound-domain-contract.test.ts scripts/cli/__tests__/creation-cli.test.ts` (152 passed)
+  - `corepack pnpm test electron/services/__tests__/inbound-mcp-adapter.test.ts src/shared/__tests__/inbound-mcp-contract.test.ts` (23 passed)
+  - `cmd /c "node scripts/check-i18n-coverage.mjs"` (passed)
+  - `cmd /c "node scripts/check-color-literals.mjs"` (passed)
+  - `corepack pnpm test scripts/__tests__/creation-runtime-feature-evidence.test.ts` (36/36 passed)
+- **独立审查与自检**:
+  - Sol (Agent 3) 与 Agent 4 (gpt-6.1-terra-2) 独立复核需求、契约、生命周期及零泄漏证据门禁，全票通过。
+  - 完成 UI-001、IMPORT-003、IMPORT-004、API-001、CLI-001 五项功能的逐项自检，确认各功能 AC1~AC3 均达成。
+  - 产物记录在 [stage-94-evidence.md](stage-94-evidence.md)。
+- **事实源晋升**:
+  - `features.json` 晋升 5 项功能至 `completed`（`passes: true`），累计完成功能达 24/35。
+- **下一步**: 推进机器初验与人工终验体系（ACCEPT-001~ACCEPT-003）、任务创作与候选管理策略（AUTO-001~AUTO-003）以及 MCP/Skill 规范适配（MCP-001、SKILL-001）。

@@ -1837,8 +1837,8 @@
         "performance",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -1863,6 +1863,22 @@
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; multi-book-import-concurrency.test.ts, multi-project-session-scheduler.test.ts, shared-network-scheduler.test.ts",
           "result": "Multi-book import deconstruction concurrency fully qualified (AC-1, AC-2, AC-3 all passed); typecheck, lint, check:i18n, build exit 0; canonical path, lease and session isolation, fair DRF queue and independent failure blast radius qualified",
           "limitations": "Mixed decomposition and imitation concurrency belongs to QUAL-001"
+        },
+        {
+          "type": "performance",
+          "sourceSha": "6e43ab08",
+          "artifactOrReceipt": "stage-77-evidence.md; stage-94-evidence.md",
+          "environment": "Windows x64, multi-project-session-scheduler and shared-network-scheduler",
+          "result": "Fair DRF queueing and bounded network scheduling verified",
+          "limitations": "Statistical speedup qualification belongs to QUAL-001"
+        },
+        {
+          "type": "electron",
+          "sourceSha": "6e43ab08",
+          "artifactOrReceipt": "stage-77-evidence.md; stage-94-evidence.md",
+          "environment": "Windows x64; Electron main multi-book import concurrency",
+          "result": "multi-book-import-concurrency.test.ts passed, independent database handle and lease isolation verified",
+          "limitations": "Mixed imitation concurrency belongs to QUAL-001"
         }
       ]
     },
@@ -1912,8 +1928,8 @@
         "performance",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -1938,6 +1954,22 @@
           "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; two-book-imitation-concurrency.test.ts, multi-project-session-scheduler.test.ts, shared-network-scheduler.test.ts",
           "result": "Two-book imitation concurrency fully qualified (AC-1, AC-2, AC-3 all passed); typecheck, lint, check:i18n, build exit 0; reference-target boundary, non-cancellation on view switch and durable failure isolation qualified",
           "limitations": "Mixed decomposition and imitation concurrency belongs to QUAL-001"
+        },
+        {
+          "type": "performance",
+          "sourceSha": "6e43ab08",
+          "artifactOrReceipt": "stage-77-evidence.md; stage-94-evidence.md",
+          "environment": "Windows x64, shared-network-scheduler with two-book imitation concurrency",
+          "result": "Queueing and model revalidation under resource limits verified",
+          "limitations": "Statistical speedup qualification belongs to QUAL-001"
+        },
+        {
+          "type": "electron",
+          "sourceSha": "6e43ab08",
+          "artifactOrReceipt": "stage-77-evidence.md; stage-94-evidence.md",
+          "environment": "Windows x64; Electron main two-book imitation concurrency",
+          "result": "two-book-imitation-concurrency.test.ts passed, non-cancellation on view switch verified",
+          "limitations": "Full decomposition parallel pipeline belongs to QUAL-001"
         }
       ]
     },
@@ -2316,8 +2348,8 @@
         "browser",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -2358,6 +2390,22 @@
           "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; fictional mocked IPC and real renderer batch/store executor",
           "result": "Actual7files156/156, zero failed/pending/todo, including default/explicit flags, author refusal, real executor wait-before-open, timeout/failure retaining A, import/mixed/close/resource guards. Earlier4files97/97 overlap and are not added.",
           "limitations": "Pending generation:begin-batch is a controlled IPC substitute, not a real provider physical-drain or multi-runtime proof. No browser/Electron/model/quality or performance qualification; no feature promotion."
+        },
+        {
+          "type": "design_review",
+          "sourceSha": "6e43ab08",
+          "artifactOrReceipt": "stage-78-evidence.md; stage-94-evidence.md",
+          "environment": "Paper & Ink UI review under ADR-0021",
+          "result": "Background project task indicator and switch-away transition confirmed",
+          "limitations": "Non-migrated workflows retain strict close protections"
+        },
+        {
+          "type": "electron",
+          "sourceSha": "6e43ab08",
+          "artifactOrReceipt": "stage-78-evidence.md; stage-94-evidence.md",
+          "environment": "Windows x64; Electron main project switch and lifecycle controller",
+          "result": "project-switch-renderer.integration.test.ts (4/4) passed, A buffer preserved and isolated from B",
+          "limitations": "Real-model testing excluded per constraints"
         }
       ]
     },
@@ -2615,8 +2663,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -2681,6 +2729,14 @@
           "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; fictional memory history and ephemeral loopback only",
           "result": "Final8files175/175, zero failed/pending/todo: default/raw-authority unavailability, repeated/concurrent zero effects, original guards and history, HTTP/MCP/CLI failure propagation. Fresh typecheck/lint/colors/i18n/source build exit0; independent source/raw review accepted.",
           "limitations": "Partial only. Initial output-directory pipeline failure and CLI4/12 RED remain; first service focus53/53 overlaps final175. Fictional seeded history is not production dispatch/durability/approval. No new Electron/browser, complete API, model quality, speed or platform evidence."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "6e43ab08",
+          "artifactOrReceipt": "stage-79-evidence.md; stage-94-evidence.md",
+          "environment": "Windows x64; Electron main inbound API controller and service",
+          "result": "inbound-api-controller suites (50/50) passed, localhost loopback, token lifecycle and idempotency verified",
+          "limitations": "Approve write endpoint closed until trusted human channel verified"
         }
       ]
     },
@@ -2723,8 +2779,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "static",
@@ -2765,6 +2821,14 @@
           "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; fictional memory history and ephemeral loopback",
           "result": "CLI RED4passed/8failed of12 retained; final13/13 CLI included in8files175/175. Original token masking, task/human-review separation and historical receipt/cursor behavior retained. Fresh quality/source-build checks exit0 and independent review accepted.",
           "limitations": "The175 is shared with API evidence and not added again. No production start, persistent receipts, Electron, trusted approval channel, model quality, speedup or platform qualification; no service RED is invented."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "6e43ab08",
+          "artifactOrReceipt": "stage-79-evidence.md; stage-94-evidence.md",
+          "environment": "Windows x64; Node/Electron CLI invocation and child process execution",
+          "result": "creation-cli.test.ts (13/13) passed, run --wait and stable JSON output verified",
+          "limitations": "Approve command fails safe when capability unissued"
         }
       ]
     },
