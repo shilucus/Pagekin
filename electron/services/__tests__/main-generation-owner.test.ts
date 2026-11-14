@@ -57,7 +57,8 @@ afterEach(() => { vi.unstubAllGlobals(); for (const cleanup of cleanups.splice(0
 const task = { purpose: 'chapter-draft', output: 'visible-text' as const, messages: [{ role: 'user' as const, content: '保留作者事实，创作中文段落。' }] }
 function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silicon = false,
   onReasoning?: (event: { projectId: string; epoch: string; rootActionId: string; runId: string; attemptId: string; text: string }) => void,
-  onSnapshot?: import('../main-generation-owner').MainGenerationOwnerDependencies['onSnapshot'], freezeWritingLanguage = false) {
+  onSnapshot?: import('../main-generation-owner').MainGenerationOwnerDependencies['onSnapshot'], freezeWritingLanguage = false,
+  lifecycle: Pick<import('../main-generation-owner').MainGenerationOwnerDependencies, 'assertRetirementResources' | 'assertNoRuntimeClaims'> = {}) {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/s05-owner-tests')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'owner-'))
@@ -81,7 +82,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
       readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => JSON.stringify(getBuiltinPromptTemplate(key, language)), readBuiltinSkill: readBuiltinWritingSkill }
     return createMainGenerationOwner({ database: capturedDb, projectPath: root, projectId: 'project', epoch: capturedEpoch,
       assertCurrent: () => { if (!current || capturedEpoch !== epoch || capturedDb !== db) throw new Error('GENERATION_EPOCH_STALE') },
-      leases, loadModel, dispatch, mode,
+      ...lifecycle, leases, loadModel, dispatch, mode,
       ...(mode === 'workflow-batch' ? { workflowDriver: { assertActive: () => {}, assertDispatchAdmission: () => {} } } : {}),
       onReasoning,
       onSnapshot,
@@ -134,6 +135,24 @@ function acceptOutline(owner: ReturnType<typeof fixture>['owner'], handle: Param
   const text = joinPlotOutlineEntries(progress.composition?.text ?? '', progress.cursor.text)
   return owner.composeVisible(handle, [...(progress.composition?.artifactIds ?? []), ...progress.cursor.artifactIds], textHash(text), PLOT_OUTLINE_PROTOCOL)
 }
+
+describe('private cleanup quiescence', () => {
+  it('checks captured resources and service quiescence during close without bypassing the outer retirement fence', () => {
+    let current = true, fenced = true
+    const assertRetirementResources = vi.fn(() => { if (!current) throw new Error('FICTIONAL_CAPTURED_RESOURCES_CHANGED') })
+    const assertNoRuntimeClaims = vi.fn(() => { if (fenced) throw new Error('FICTIONAL_OUTER_CLEANUP_FENCE') })
+    const f = fixture(undefined, false, undefined, undefined, false, { assertRetirementResources, assertNoRuntimeClaims })
+    f.owner.requestProjectClose()
+    expect(() => f.owner.assertCleanupQuiescent()).not.toThrow()
+    expect(assertRetirementResources).toHaveBeenCalled()
+    expect(assertNoRuntimeClaims).not.toHaveBeenCalled()
+    expect(() => f.owner.assertRetirable()).toThrow('FICTIONAL_OUTER_CLEANUP_FENCE')
+    fenced = false
+    expect(() => f.owner.assertRetirable()).not.toThrow()
+    current = false
+    expect(() => f.owner.assertCleanupQuiescent()).toThrow('FICTIONAL_CAPTURED_RESOURCES_CHANGED')
+  })
+})
 
 describe('read-only run diagnostics', () => {
   const transport = { startedAt: 1234, elapsedMs: 15, firstResponseMs: 0, lastResponseMs: 10, lastOutputMs: 12,
@@ -2873,8 +2892,10 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     expect(result.run.artifacts[0].text).toBe('')
     expect(result.run.unsavedTails?.[0].text).toBe('未保存原文\r\n')
     expect(f.owner.read(view.handle).unsavedTails?.[0].text).toBe('未保存原文\r\n')
+    expect(() => f.owner.assertCleanupQuiescent()).toThrow('GENERATION_UNSAVED_TAIL_PRESENT')
     expect(() => f.owner.suspendForProjectClose()).toThrow('GENERATION_UNSAVED_TAIL_PRESENT')
     f.owner.discardCandidate(view.handle, result.run.artifacts[0].artifactId)
+    expect(() => f.owner.assertCleanupQuiescent()).not.toThrow()
     expect(() => f.owner.suspendForProjectClose()).not.toThrow()
   })
   it('rejects changed legacy DeepSeek capability receipts and preserves unknown work through explicit restart', async () => {

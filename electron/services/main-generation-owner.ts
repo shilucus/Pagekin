@@ -280,12 +280,15 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return (...args: unknown[]) => { assertAdmission(); return Reflect.apply(value, object, args) }
     },
   })
-  const assertRetirable = () => {
+  const assertCleanupQuiescent = () => {
     if (closed || !deps.database.open) throw new Error('GENERATION_OWNER_CLOSED')
     if (deps.assertRetirementResources) deps.assertRetirementResources()
     else deps.assertCurrent()
     if (physicalDispatches || pending.size || pendingQueries.size || agents.hasActiveToolClaims()) throw new Error('GENERATION_OWNER_BUSY')
     service.assertRetirable()
+  }
+  const assertRetirable = () => {
+    assertCleanupQuiescent()
     deps.assertNoRuntimeClaims?.()
   }
   const modelReceipt = (binding: RunBinding): SafeGenerationModelReceipt => {
@@ -2729,6 +2732,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     hasPhysicalInFlight: () => physicalDispatches > 0 || pending.size > 0 || pendingQueries.size > 0 || agents.hasActiveToolClaims(),
     whenPhysicalIdle: () => physicalDispatches === 0 ? Promise.resolve() : new Promise<void>(resolve => { physicalIdleWaiters.add(resolve) }),
+    assertCleanupQuiescent,
     requestProjectClose: () => {
       if (closed) return
       closing = true
@@ -2770,5 +2774,5 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
   }
   return guardWork(api, name => /^(read|list|find|has|cancel|pause)/u.test(name)
-    || ['execute', 'whenPhysicalIdle', 'requestProjectClose', 'assertRetirable', 'retireIdle', 'suspendForProjectClose', 'rollbackRuntimeFieldFeedbackPreparation', 'rollbackWorkflowDriverPreparation'].includes(name))
+    || ['execute', 'whenPhysicalIdle', 'assertCleanupQuiescent', 'requestProjectClose', 'assertRetirable', 'retireIdle', 'suspendForProjectClose', 'rollbackRuntimeFieldFeedbackPreparation', 'rollbackWorkflowDriverPreparation'].includes(name))
 }

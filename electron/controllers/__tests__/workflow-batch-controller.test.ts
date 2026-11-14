@@ -12,7 +12,7 @@ import type { StartWorkflowBatchRequest, WorkflowBatchChannels, WorkflowBatchRef
 import { WORKFLOW_BATCH_CHANNELS } from '../../../src/shared/workflow-batch-contract'
 import { countDraftUnits } from '../../../src/shared/draft-units'
 import { composeDraftVisibleContinuation, DRAFT_VISIBLE_TEXT_VERSION } from '../../../src/shared/draft-visible-text'
-import { textHash } from '../../repositories/generation-run-repository'
+import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>
 const mocks = vi.hoisted(() => ({ handlers: new Map<string, Handler>(), globalRoot: '' }))
@@ -30,6 +30,7 @@ import { restorePortableProject } from '../../services/project-restore-service'
 import { ReviewRepository } from '../../repositories/review-repository'
 import { ReviewCycleRepository } from '../../repositories/review-cycle-repository'
 import { RevisionRepository } from '../../repositories/revision-repository'
+import { WorkflowBatchAuthority } from '../../services/workflow-batch-authority'
 
 type Channels = WorkflowBatchChannels & GenerationOwnerChannels & ReviewRevisionGenerationInvokeChannels
 const model: ModelProfile = { id: 'fictional-batch', name: 'Synthetic batch model', provider: 'openai', protocol: 'openai',
@@ -454,6 +455,93 @@ describe('planned batch registered main IPC and real native effects', () => {
       expect(runtime.database.open).toBe(false)
       expect(transport.fetch).toHaveBeenCalledTimes(1)
     } finally { transport.release() }
+  })
+
+  it.each([
+    ['task', 'pause'], ['task', 'cancel'], ['root', 'pause'], ['root', 'cancel'],
+  ] as const)('retains native %s cleanup debt after %s until the original control retries', async (boundary, action) => {
+    const cleanup = vi.spyOn(WorkflowBatchAuthority.prototype as unknown as {
+      finishCleanup(item: unknown, work: { engineSettled: boolean; physicalIdle: boolean }): void
+    }, 'finishCleanup')
+    const transport = stream({ hold: true })
+    try {
+      const issued = await call('workflow-batch:v2:start', request(), sender, session)
+      await transport.started
+      const rootId = runtime.database.prepare('SELECT root_action_id FROM generation_runs WHERE run_id=?')
+        .pluck().get(issued.receipt.task.batchRunId) as string
+      expect(new GenerationRunRepository(() => runtime.database).hasPhysicalFlight(rootId)).toBe(true)
+      const legacyRequest: BeginGenerationRequest = { operation: 'draft', uiActionNonce: randomUUID(), modelId: model.id,
+        selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['first_chapter_draft'], skillStages: [], output: 'visible-text' }
+      const table = boundary === 'task' ? 'workflow_batch_tasks' : 'generation_roots'
+      const changed = boundary === 'task' ? "NEW.state IN ('paused','cancelled','blocked')"
+        : "json_extract(NEW.action_json,'$.status') IN ('paused','cancelled')"
+      runtime.database.exec(`CREATE TRIGGER reject_batch_cleanup BEFORE UPDATE ON ${table}
+        WHEN ${changed} BEGIN SELECT RAISE(ABORT,'fictional-cleanup-write-failure'); END`)
+      await expect(call(`workflow-batch:v2:${action}`, { reference: issued.reference! })).rejects.toThrow()
+      transport.release()
+      await vi.waitFor(() => expect(new GenerationRunRepository(() => runtime.database).hasPhysicalFlight(rootId)).toBe(false))
+      await vi.waitFor(() => expect(cleanup.mock.calls.some(([, work]) => work.engineSettled && work.physicalIdle)).toBe(true))
+      expect(() => projectRuntimeHost.assertTaskAvailable(runtime)).toThrow('PROJECT_RUNTIME_BUSY')
+      const before = counts()
+      const receipt = await call('workflow-batch:v2:read-receipt', { reference: issued.reference! })
+      expect(() => projectRuntimeHost.assertTaskAvailable(runtime)).toThrow('PROJECT_RUNTIME_BUSY')
+      await expect(call('workflow-batch:v2:pause', { reference: { ...issued.reference!, revision: receipt.task.revision } }, new Sender()))
+        .rejects.toThrow('WORKFLOW_BATCH_CAPABILITY_REQUIRED')
+      await expect(call('workflow-batch:v2:start', request(), sender, session)).rejects.toThrow('WORKFLOW_BATCH_TASK_BUSY')
+      const admission = vi.spyOn(projectRuntimeHost, 'assertTaskAvailable')
+      await expect(call('generation:begin', legacyRequest, sender, session)).rejects.toThrow('GENERATION_REQUEST_FAILED')
+      expect(admission).toHaveBeenCalledWith(runtime)
+      expect(admission.mock.results.at(-1)).toMatchObject({ type: 'throw', value: { message: 'PROJECT_RUNTIME_BUSY' } })
+      expect(counts()).toEqual(before)
+      expect(transport.fetch).toHaveBeenCalledTimes(1)
+      runtime.database.exec('DROP TRIGGER reject_batch_cleanup')
+      const retried = await call(`workflow-batch:v2:${action}`,
+        { reference: { ...issued.reference!, revision: receipt.task.revision } })
+      expect(retried.receipt.task.state).toBe(action === 'pause' ? 'paused' : 'cancelled')
+      await vi.waitFor(() => expect(() => projectRuntimeHost.assertTaskAvailable(runtime)).not.toThrow())
+      expect(runtime.database.prepare("SELECT json_extract(action_json,'$.status') FROM generation_roots WHERE root_action_id=?")
+        .pluck().get(rootId)).toBe(action === 'pause' ? 'paused' : 'cancelled')
+      expect(transport.fetch).toHaveBeenCalledTimes(1)
+      expect(counts().drafts).toBe(0)
+      const legacy = await call('generation:begin', legacyRequest, sender, session)
+      expect(legacy.handle.projectId).toBe(project.projectId)
+      expect(transport.fetch).toHaveBeenCalledTimes(1)
+    } finally {
+      transport.release()
+      if (runtime.database.open) runtime.database.exec('DROP TRIGGER IF EXISTS reject_batch_cleanup')
+    }
+  })
+
+  it.each([false, true])('retries true close without dropping failed native cleanup, destroyed=%s', async destroyed => {
+    const cleanup = vi.spyOn(WorkflowBatchAuthority.prototype as unknown as {
+      finishCleanup(item: unknown, work: { engineSettled: boolean; physicalIdle: boolean }): void
+    }, 'finishCleanup')
+    const transport = stream({ hold: true })
+    try {
+      const issued = await call('workflow-batch:v2:start', request(), sender, session)
+      await transport.started
+      const rootId = runtime.database.prepare('SELECT root_action_id FROM generation_runs WHERE run_id=?')
+        .pluck().get(issued.receipt.task.batchRunId) as string
+      expect(new GenerationRunRepository(() => runtime.database).hasPhysicalFlight(rootId)).toBe(true)
+      runtime.database.exec(`CREATE TRIGGER reject_close_cleanup BEFORE UPDATE ON workflow_batch_tasks
+        WHEN NEW.state IN ('paused','cancelled','blocked') BEGIN SELECT RAISE(ABORT,'fictional-close-write-failure'); END`)
+      if (destroyed) sender.destroy()
+      await expect(projectRuntimeHost.requestClose(runtime, { timeoutMs: 0 })).rejects.toThrow('GENERATION_PROJECT_CLOSE_FAILED')
+      expect(runtime.database.open).toBe(true)
+      transport.release()
+      await vi.waitFor(() => expect(new GenerationRunRepository(() => runtime.database).hasPhysicalFlight(rootId)).toBe(false))
+      await vi.waitFor(() => expect(cleanup.mock.calls.some(([, work]) => work.engineSettled && work.physicalIdle)).toBe(true))
+      await expect(projectRuntimeHost.requestClose(runtime, { timeoutMs: 0 })).rejects.toThrow('GENERATION_PROJECT_CLOSE_FAILED')
+      expect(runtime.database.open).toBe(true)
+      expect(transport.fetch).toHaveBeenCalledTimes(1)
+      runtime.database.exec('DROP TRIGGER reject_close_cleanup')
+      await projectRuntimeHost.requestClose(runtime)
+      expect(runtime.database.open).toBe(false)
+      expect(transport.fetch).toHaveBeenCalledTimes(1)
+    } finally {
+      transport.release()
+      if (runtime.database.open) runtime.database.exec('DROP TRIGGER IF EXISTS reject_close_cleanup')
+    }
   })
 
   it('reopens the original project under a new execution epoch and reconciles an unknown step without resending', async () => {

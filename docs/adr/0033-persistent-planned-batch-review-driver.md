@@ -16,6 +16,37 @@ Only the existing desktop main broker may issue a private caller-bound capabilit
 
 V2 IPC is a closed literal set: `workflow-batch:v2:start`, `read-receipt`, `pause`, `cancel`, `resume`, `reauthorize`, `read-history`. Start, reauthorize and history require a fresh exact author-view session. Other operations require the actual private sender issuance. No public approve endpoint is added. The generation firewall recognizes the batch root and every draft/review run, refusing generic or legacy access. It must not disable the existing explicitly confirmed author revision/recheck workflow described below.
 
+### Cleanup Failure Retention
+
+Stage92 clarifies the existing ownership invariant without adding IPC, durable
+authority or a new retry policy. Pause/cancel report durable logical state only;
+they do not attest physical drain. A known task/root persistence or cleanup
+failure is returned as failure and retains the private cleanup intent, runtime
+work and owner/busy fence. Logical claim revocation alone cannot retire an owner.
+
+Release requires engine settlement, actual physical drain, full owner quiescence
+and successful durable task/root/read reconciliation. The physical-idle promise
+alone does not cover pending operations, queries or tool claims. Failure at any
+required boundary retains debt; eventual release is idempotent and happens once.
+Acquire runtime work before first durable root effects so acquisition rejection
+cannot publish an unprotected active task. Preparation rollback failure likewise
+cannot be relabeled successful cleanup.
+
+Only the original private subject with the current task revision, or the existing
+true project-close path, may retry retained cleanup. This is not resume or model
+retry: no dispatch, unknown resend, source recapture, new grant or owner handoff
+is permitted. A cancellation intent cannot be downgraded by later pause/close.
+Concurrent cleanup attempts coalesce. Read-only receipts do not trigger cleanup;
+they can supply the actual current revision for an explicit authorized control.
+If physical idle still leaves other pending owner work, retain the fence until
+it ends and a subsequent authorized control/true-close retries reconciliation.
+Sender destruction does not erase debt or give a new sender its capability.
+
+This private in-memory recovery seam does not add portable authority, change
+author-visible controls or replace the existing restart/unknown receipt rules.
+Its acceptance requires actual injected failure regressions and independent
+review recorded in [Stage92](../plans/2026-11-07-creation-runtime-modernization/stage-92-evidence.md).
+
 ### Existing Author Followup
 
 An ordinary machine review is still a valid starting point for the existing author confirmation, generated revision, manual merge and single recheck. These actions do not belong to the automatic batch template and do not grant access to its root or registered steps. Before any lease or unrelated admission side effect, the legacy owner obtains a readonly proof from the private captured review-revision context. It binds the actual cycle, original saved review receipt, registered v2 review step, exact parent root and live nonportable source. The native transaction repeats those checks before root activation/run creation. Only a successful COMMIT publishes a process-local exception for the exact new author child; rollback publishes none.

@@ -337,7 +337,7 @@ export function registerGenerationController(options: {
     let entry = owners.get(database)
     const handoff = Boolean(entry && (entry.mode !== 'legacy' || entry.session.projectId !== session.projectId || entry.session.leaseId !== session.leaseId))
     if (!entry || handoff) {
-      projectRuntimeHost.assertWorkAvailable(runtime)
+      projectRuntimeHost.assertTaskAvailable(runtime)
       if (entry) assertRetirable(runtime, entry)
       const captured = Object.freeze({ ...session })
       const subscribers = new Set<WebContents>()

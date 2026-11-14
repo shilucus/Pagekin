@@ -33,7 +33,7 @@ type Owner = Pick<ReturnType<typeof createMainGenerationOwner>, 'draftPreparatio
   | 'executeWorkflowDriver' | 'retryWorkflowBatchShortOutline' | 'recoverWorkflowDriverRun'
   | 'assertWorkflowDriverRecoverySources' | 'pauseWorkflowDriver' | 'prepareReviewRevision' | 'bindMaterialDecision'
   | 'read' | 'composeVisible' | 'commitDraft' | 'commitReview' | 'assertSourcesCurrent' | 'resume'
-  | 'hasPhysicalInFlight' | 'whenPhysicalIdle' | 'assertRetirable' | 'retireIdle' | 'requestProjectClose' | 'suspendForProjectClose'>
+  | 'hasPhysicalInFlight' | 'whenPhysicalIdle' | 'assertCleanupQuiescent' | 'assertRetirable' | 'retireIdle' | 'requestProjectClose' | 'suspendForProjectClose'>
 export interface WorkflowBatchAuthorityOptions {
   runtime: ProjectRuntime
   globalDataRoot: string
@@ -47,6 +47,8 @@ export interface WorkflowBatchAuthorityOptions {
   createOwner(hooks: { assertNoRuntimeClaims(): void; workflowDriver: NonNullable<MainGenerationOwnerDependencies['workflowDriver']> }): Owner
 }
 interface Issuance { subject: WorkflowBatchSubject; task: WorkflowBatchTask; claim: boolean }
+interface CleanupIntent { kind: 'pause' | 'cancel' | 'block'; code?: string; revision?: number; taskDone: boolean; rootsDone: boolean }
+interface BatchWork { release: () => void; engineSettled: boolean; physicalIdle: boolean; draining: boolean; failed: boolean; intent?: CleanupIntent }
 const refOf = (task: WorkflowBatchTask): WorkflowBatchRef => ({ taskId: task.taskId, revision: task.revision, batchRunId: task.batchRunId })
 const publicRef = (task: WorkflowBatchTask): WorkflowBatchReference => ({ projectId: task.projectId, taskId: task.taskId, revision: task.revision })
 function fail(code: string): never { throw new Error(`WORKFLOW_BATCH_${code}`) }
@@ -144,7 +146,8 @@ export class WorkflowBatchAuthority {
   private readonly owner: Owner
   private readonly issuances = new Map<string, Issuance>()
   private readonly subjects = new WeakSet<WorkflowBatchSubject>()
-  private readonly running = new Map<string, Promise<void>>()
+  private readonly running = new Map<string, BatchWork>()
+  private readonly preparations: { handle: MainGenerationRunHandle; release: () => void }[] = []
   private pendingAdmission = false
   private closing = false
   private retired = false
@@ -217,14 +220,70 @@ export class WorkflowBatchAuthority {
     return [...new Set([task.batchRunId, ...this.repository.readSteps(task.taskId).map(step => step.runId)])].map(id => this.handle(id))
   }
   private stop(item: Issuance, cancel: boolean): void {
+    const work = this.running.get(item.task.taskId)
+    item.claim = false
+    if (work && !work.intent) work.intent = { kind: cancel ? 'cancel' : 'pause', taskDone: false, rootsDone: false }
+    if (work?.intent) { this.reconcileIntent(item, work); return }
     const failures: unknown[] = []
     try {
       item.task = this.repository.get(item.task.taskId) ?? item.task
       item.task = cancel ? this.repository.cancel(refOf(item.task)) : this.repository.pause(refOf(item.task))
     } catch (error) { failures.push(error) }
-    item.claim = false
     try { this.pauseRuns(item.task, cancel) } catch (error) { failures.push(error) }
     if (failures.length) throw new AggregateError(failures, 'WORKFLOW_BATCH_STOP_FAILED')
+  }
+  private reconcileIntent(item: Issuance, work: BatchWork): void {
+    const intent = work.intent
+    if (!intent) return
+    const failures: unknown[] = []
+    if (!intent.taskDone) try {
+      const current = this.repository.get(item.task.taskId)
+      if (!current) fail('TASK_MISSING')
+      item.task = current
+      if (intent.kind === 'block') {
+        if (current.state === 'ready' && current.revision === intent.revision) item.task = this.repository.block(refOf(current), intent.code!)
+      } else if (!['cancelled', 'waiting_review'].includes(current.state)) {
+        item.task = intent.kind === 'cancel' ? this.repository.cancel(refOf(current)) : this.repository.pause(refOf(current))
+      }
+      intent.taskDone = true
+    } catch (error) { failures.push(error) }
+    if (!intent.rootsDone) try {
+      this.pauseRuns(item.task, intent.kind === 'cancel')
+      intent.rootsDone = true
+    } catch (error) { failures.push(error) }
+    if (failures.length) { work.failed = true; throw new AggregateError(failures, 'WORKFLOW_BATCH_STOP_FAILED') }
+    work.intent = undefined
+    work.failed = false
+  }
+  private finishCleanup(item: Issuance, work: BatchWork): void {
+    if (!work.engineSettled || !work.physicalIdle || work.intent) return
+    if (this.owner.hasPhysicalInFlight()) { work.failed = true; fail('CLEANUP_PENDING') }
+    this.owner.assertCleanupQuiescent()
+    const current = this.repository.get(item.task.taskId)
+    if (!current) fail('TASK_MISSING')
+    item.task = current; item.claim = false
+    this.running.delete(item.task.taskId)
+    work.release()
+  }
+  private drain(item: Issuance, work: BatchWork): void {
+    if (work.draining || work.physicalIdle) return
+    work.draining = true
+    let idle: Promise<void>
+    try { idle = this.owner.whenPhysicalIdle() } catch { work.draining = false; work.failed = true; return }
+    void idle.then(() => {
+      work.draining = false; work.physicalIdle = true
+      try { this.finishCleanup(item, work) } catch { work.failed = true }
+    }, () => { work.draining = false; work.failed = true })
+  }
+  private retryCleanup(item: Issuance): void {
+    const work = this.running.get(item.task.taskId)
+    if (!work) return
+    const failed = work.failed
+    this.reconcileIntent(item, work)
+    if (work.engineSettled && !work.physicalIdle) this.drain(item, work)
+    if (work.engineSettled && work.physicalIdle) {
+      try { this.finishCleanup(item, work) } catch (error) { work.failed = true; throw error }
+    } else if (failed || work.failed) fail('CLEANUP_PENDING')
   }
   private pauseRuns(task: WorkflowBatchTask, cancel = false): void {
     const failures: unknown[] = []
@@ -392,34 +451,29 @@ export class WorkflowBatchAuthority {
       } }
   }
 
-  private launch(item: Issuance): void {
+  private retainWork(item: Issuance, release: () => void): BatchWork {
     if (this.running.has(item.task.taskId)) fail('TASK_BUSY')
-    const release = this.options.acquireWork(), ref = refOf(item.task)
-    const work = runWorkflowBatch({ database: this.runtime.database, repository: this.repository, runs: this.runs,
+    const work: BatchWork = { release, engineSettled: false, physicalIdle: false, draining: false, failed: false }
+    this.running.set(item.task.taskId, work)
+    return work
+  }
+  private launch(item: Issuance, work: BatchWork): void {
+    const ref = refOf(item.task)
+    void Promise.resolve().then(() => runWorkflowBatch({ database: this.runtime.database, repository: this.repository, runs: this.runs,
       owner: this.owner, ref, assertActive: () => { this.active(item.task.batchRunId) }, withKnowledge: this.options.withKnowledge,
-      openDraft: chapter => this.openDraft(item, chapter), openReview: chapter => this.openReview(item, chapter) })
+      openDraft: chapter => this.openDraft(item, chapter), openReview: chapter => this.openReview(item, chapter) }))
       .catch(error => {
-        const current = this.repository.get(ref.taskId)
-        if (current && item.claim && current.revision === ref.revision && current.state === 'ready') {
+        if (item.claim) {
           const raw = error instanceof Error ? error.message : ''
-          item.task = this.repository.block(ref, /^[A-Z][A-Z0-9_]{0,127}$/u.test(raw) ? raw : 'WORKFLOW_BATCH_FAILED')
           item.claim = false
-          this.pauseRuns(item.task)
+          work.intent = { kind: 'block', code: /^[A-Z][A-Z0-9_]{0,127}$/u.test(raw) ? raw : 'WORKFLOW_BATCH_FAILED',
+            revision: ref.revision, taskDone: false, rootsDone: false }
+          try { this.reconcileIntent(item, work) } catch { console.error('[workflow-batch] failed to persist task state') }
         }
-      }).catch(() => { console.error('[workflow-batch] failed to persist task state') })
-      .finally(async () => {
-        try {
-          await this.owner.whenPhysicalIdle()
-          this.running.delete(ref.taskId)
-          const current = this.repository.get(ref.taskId)
-          if (current) item.task = current
-          item.claim = false
-        } finally { release() }
-      }).catch(() => { console.error('[workflow-batch] failed to finish task cleanup') })
-    this.running.set(ref.taskId, work)
+      }).finally(() => { work.engineSettled = true; this.drain(item, work) })
   }
   hasIssuance(taskId?: string, subject?: WorkflowBatchSubject): boolean {
-    if (taskId === undefined) return this.pendingAdmission || this.running.size > 0 || [...this.issuances.values()].some(item => item.claim)
+    if (taskId === undefined) return this.pendingAdmission || this.preparations.length > 0 || this.running.size > 0 || [...this.issuances.values()].some(item => item.claim)
     const item = this.issuances.get(taskId)
     return Boolean(item && (!subject || item.subject === subject))
   }
@@ -449,6 +503,7 @@ export class WorkflowBatchAuthority {
       const modelHash = generationModelReceiptHash(this.options.readSafeModelReceipt(request.modelId))
       const reviewModelHash = generationModelReceiptHash(this.options.readSafeModelReceipt(request.reviewModelId))
       const taskId = randomUUID()
+      const release = this.options.acquireWork()
       let handle: MainGenerationRunHandle | undefined
       let task: WorkflowBatchTask
       try {
@@ -465,15 +520,16 @@ export class WorkflowBatchAuthority {
             recipe, reviewModelId: request.reviewModelId, reviewModelHash })
         }).immediate()
       } catch (error) {
-        if (handle) this.owner.rollbackWorkflowDriverPreparation(handle)
+        if (handle) try { this.owner.rollbackWorkflowDriverPreparation(handle) } catch (cleanup) {
+          this.preparations.push({ handle, release })
+          throw new AggregateError([error, cleanup], 'WORKFLOW_BATCH_PREPARATION_CLEANUP_FAILED')
+        }
+        release()
         throw error
       }
       const item: Issuance = { subject, task, claim: true }
       this.issuances.set(task.taskId, item); this.observe(subject)
-      try { this.launch(item) } catch (error) {
-        try { this.stop(item, false) } catch (cleanup) { throw new AggregateError([error, cleanup], 'WORKFLOW_BATCH_START_CLEANUP_FAILED') }
-        throw error
-      }
+      this.launch(item, this.retainWork(item, release))
       return this.result(item)
     } finally { this.pendingAdmission = false }
   }
@@ -484,13 +540,19 @@ export class WorkflowBatchAuthority {
   pause(subject: WorkflowBatchSubject, reference: WorkflowBatchReference): WorkflowBatchResult {
     const item = this.owned(subject, reference)
     if (this.retired || this.closing) fail('OWNER_CLOSING')
-    if (item.task.state === 'ready') this.stop(item, false)
+    if (this.running.get(item.task.taskId)?.intent) this.retryCleanup(item)
+    else if (item.task.state === 'ready' && (item.claim || !this.running.has(item.task.taskId))) this.stop(item, false)
+    else this.retryCleanup(item)
     return this.result(item)
   }
   cancel(subject: WorkflowBatchSubject, reference: WorkflowBatchReference): WorkflowBatchResult {
     const item = this.owned(subject, reference)
     if ((this.retired || this.closing) && !['cancelled', 'waiting_review'].includes(item.task.state)) fail('OWNER_CLOSING')
-    if (!['cancelled', 'waiting_review'].includes(item.task.state)) this.stop(item, true)
+    const intent = this.running.get(item.task.taskId)?.intent
+    if (intent?.kind === 'pause') { intent.kind = 'cancel'; intent.taskDone = false; intent.rootsDone = false }
+    if (intent) this.retryCleanup(item)
+    else if (!['cancelled', 'waiting_review'].includes(item.task.state)) this.stop(item, true)
+    else this.retryCleanup(item)
     return this.result(item)
   }
 
@@ -545,15 +607,21 @@ export class WorkflowBatchAuthority {
       await this.assertRecoverySources(item.task, () => { if (subject.isDestroyed()) fail('CAPABILITY_REQUIRED') })
       this.available()
       if (subject.isDestroyed() || this.repository.get(item.task.taskId)?.revision !== expected) fail('REVISION_CONFLICT')
-      item.task = this.repository.resume(refOf(item.task)); item.claim = true
+      const release = this.options.acquireWork()
+      const work = this.retainWork(item, release)
       try {
+        item.task = this.repository.resume(refOf(item.task)); item.claim = true
         for (const handle of this.unfinishedHandles(item.task)) {
           await this.options.withKnowledge(handle, () => this.owner.resume(handle))
           this.active(handle.runId)
         }
-        this.launch(item)
+        this.launch(item, work)
       } catch (error) {
-        try { this.stop(item, false) } catch (cleanup) { throw new AggregateError([error, cleanup], 'WORKFLOW_BATCH_RESUME_CLEANUP_FAILED') }
+        try { if (item.claim) this.stop(item, false) } catch (cleanup) {
+          work.engineSettled = true; this.drain(item, work)
+          throw new AggregateError([error, cleanup], 'WORKFLOW_BATCH_RESUME_CLEANUP_FAILED')
+        }
+        work.engineSettled = true; this.drain(item, work)
         throw error
       }
       return this.result(item)
@@ -592,15 +660,24 @@ export class WorkflowBatchAuthority {
       return this.result(item)
     } finally { this.pendingAdmission = false }
   }
-  assertRetirable(): void { this.owner.assertRetirable() }
-  retireIdle(): void { this.owner.retireIdle(); this.retired = true }
+  assertRetirable(): void { if (this.hasIssuance()) fail('OWNER_BUSY'); this.owner.assertRetirable() }
+  retireIdle(): void { if (this.hasIssuance()) fail('OWNER_BUSY'); this.owner.retireIdle(); this.retired = true }
   requestProjectClose(): void {
     this.closing = true
     const failures: unknown[] = []
-    for (const item of this.issuances.values()) if (item.claim) try { this.stop(item, false) } catch (error) { failures.push(error) }
+    for (const preparation of [...this.preparations]) try {
+      this.owner.rollbackWorkflowDriverPreparation(preparation.handle)
+      this.preparations.splice(this.preparations.indexOf(preparation), 1)
+      preparation.release()
+    } catch (error) { failures.push(error) }
+    for (const item of this.issuances.values()) try {
+      if (this.running.get(item.task.taskId)?.intent) this.retryCleanup(item)
+      else if (item.claim) this.stop(item, false)
+      else this.retryCleanup(item)
+    } catch (error) { failures.push(error) }
     try { this.owner.requestProjectClose() } catch (error) { failures.push(error) }
     if (failures.length) throw new AggregateError(failures, 'WORKFLOW_BATCH_CLOSE_FAILED')
   }
-  hasPhysicalInFlight(): boolean { return this.owner.hasPhysicalInFlight() || this.running.size > 0 || this.pendingAdmission }
+  hasPhysicalInFlight(): boolean { return this.owner.hasPhysicalInFlight() || this.preparations.length > 0 || this.running.size > 0 || this.pendingAdmission }
   suspendForProjectClose(): void { this.owner.suspendForProjectClose() }
 }

@@ -1387,3 +1387,46 @@ the complete344-file build digest. Removing the3partial appends reproduces the
 entire entry feature JSON semantics. Sol's scene-versus-process elapsed wording
 finding is corrected without source/run changes. Root confirms empty index,
 sample-only hooks and no owned-path filters; scoped commit/postcommit follow.
+
+## 2026-11-15 Requirements Alignment Review
+
+范围：复核“原始六需求 -> F2 -> 35 项任务 -> 当前交付”的结论，并据此更新计划与清单。基线为 `master@b29764c5db6857b07a6c4d400a11a5e6ee59851c`；Stage92 工作区未提交、未验收，不计已交付。用户要求暂停后的本轮只做审查与文档更新，未运行项目脚本、测试、构建、模型或平台动作，也未提交。
+
+### 结论复核与修正
+
+| 结论 | 裁定、依据与修正 |
+| --- | --- |
+| 六需求有对应任务，但技术内核不能代替作者闭环 | 支持。F2 第 1/9 节及 features.json 的 requirementIds/dependsOn 可追溯；未发现整项需求遗漏，不等于本轮逐条复验全部 AC。14/21 是清单状态，不能当成产品完成百分比 |
+| 性能条目完成说明卡顿整体解决，或必须增加 Worker | 不支持这种外推。PERF-004 要求测量后选择优化，不强制隔离；PERF-001 的可信失败可作基线。限定热点证据不证明完整拆书/仿写提速；保留 Stage51–53 的观测限制 |
+| 单书拆书/仿写必须等全部多书调度 | 不支持。IMPORT-001/002 的 dependsOn 为 DRIVER-001/002；IMPORT-003/004 才分别依赖单书迁移与 SCHED-002。F2 第 9 节明确单书反馈、单书网络试点可独立推进 |
+| 拆书完全没有真实主进程链 | 不支持。Stage88/ADR-0080 已接通前台 knowledge/global/style/blueprints/refresh；reference-run-foreground.ts 仍重验 view，故后台行为缺口与完整恢复验收仍存在 |
+| 仿写完整生产消费链尚未证明 | 支持但限定。IMPORT-002 现有证据限共用前置；不能由缺少完整链证据直接推断某个具体源码消费者不存在。下一步需核对目标仿写入口、实际风格消费、目标事实边界及收据 |
+| 反馈内核完成即全部作者入口完成，或反馈界面完全不存在 | 两者均不支持。StageSetup/ArchitectureSection 已接试点真实 client/owner；ADR-0041 保留脏缓冲发起决策、历史发现等边界。对 src/electron 的直接引用核对未找到范围/蓝图 client 与 ExtendedPlanningFeedbackDialog 的生产页面消费者；这是有边界的静态结果，不是完整动态可达性证明 |
+| API start/resume 一律 503 | 表述过强，已收紧。inbound-api-service.ts 的认证、归属、碰撞、幂等历史、pending/unknown 等先行裁决保留；通过这些裁决后仍需新执行的请求才在当前未接执行器的路径 fail closed。生产 composition 缺口不是仅缺政策确认 |
+| Stage91 是纯 helper，或已证明全部多书安全并行 | 两者均不支持。它使用注册 workflow-batch:v2 的真实 Electron/领域收据，三组固定虚构响应观测；不证明完整 domain-writer 准入、公平/交互不饥饿、统计 p95、真实服务商吞吐或文学质量 |
+| headless 属于擅自增加，或应先于 desktop 交付 | 不支持。它是 F2 已有 P4，仍保留全部原依赖和三目标门禁；不能以其历史资格声明代替第一档 desktop 真实执行 |
+| 所有未完成项都在等待设计/授权/模型/平台 | 不支持。必须区分生产接线、未决可见设计/任务政策、运行/质量/平台证据。保留适用门禁，不把它们扩为所有内部实现的全局前置 |
+
+源码定位：`electron/controllers/reference-run-foreground.ts`、`src/shared/workflow-background-qualification.ts`、`src/stores/project-store.ts`；`src/components/stage/setup/StageSetup.tsx`、`src/components/stage/architecture/ArchitectureSection.tsx`、`src/components/stage/feedback/PlanningFeedbackDialog.tsx` 和 `ExtendedPlanningFeedbackDialog.tsx`、`src/services/planning-feedback-client.ts`、`electron/controllers/generation-controller.ts`；`electron/services/inbound-api-service.ts`。相关合同为 ADR-0041/0050/0080；既有运行记录为 Stage86/88/89/90/91。未逐项复跑历史报告，未将历史测试计数相加或授予新资格。
+
+### Team 与更新边界
+
+- Agent1 gpt-6-luna 独立核查性能、拆书/仿写及并行结论；Agent3 gpt-6.1-sol 独立核查反馈真实调用链与 API 先行裁决；Agent2 gpt-6.1-terra 核查现有清单 schema、证据类型消费者及 README 来源绑定。均只读，无模型替换。
+- Root 统一编辑 README 的日期明确增补、features.json 现有字段、此记录及 implementation-log.md。原 F2 正文、35 IDs/依赖/AC/门禁/回退、历史证据及 status/passes 保留；只增加 static 审计记录，不用 contract_review 标签误补资格缺口。
+- `scripts/__tests__/creation-runtime-feature-evidence.test.ts` 仅核对 README 字节摘要及必要证据类型/完成依赖，不证明记录内容、生产可达性、设计或质量。README 增补后更新 planSource.sha256，并保留原摘要追溯；不修改该测试或降低检查。
+- 源码检索采用定向 rg、定义及直接引用交叉核对；本轮无图/AST/LSP 动态覆盖，独立 Agent 一致不代替证据。集成文档的独立复审与实际静态检查结果另追加于本节，不提前声明通过。
+
+### 集成文档复审与静态检查结果
+
+- Agent4 gpt-6.1-terra 独立读取四份文件、原 HEAD 及必要源码后，未发现范围内阻断项；确认 API 先行裁决、仿写/反馈静态结论限定、P4 后置及暂停边界均保留。此结论只接受本轮文档更新，不接受产品功能或任何新运行资格。
+- Root 的 PowerShell JSON 解析及字段级比对实际通过：schemaVersion=1，35 个唯一功能保持原顺序，14 completed/21 in_progress；21 个进行中条目各新增一条现有六字段格式的 static 记录。剔除这些记录后，每项原字段、依赖、AC、门禁、回退、status/passes 和全部历史证据及相对顺序与 HEAD 一致。Agent4 独立复算确认。
+- README 完整 SHA256 与 planSource.sha256 均为 `D6FD2A043364A8BC6CF3579B6D2F0D0BC1C144B458505FFC003837430C7E4D78`；原 README 仅增加日期提示和第 13 节。schema/测试源码均未修改；摘要一致不是产品验收。
+- `git diff --check` 实际 exit0；只读 `git status`/`git log`/`git diff --stat`/`git diff --cached --stat` 及 `Get-Content | ConvertFrom-Json`、`Get-FileHash` 用于本轮静态核对。受保护接手文档、两份 Stage1B3 文件及七份 Stage92 ADR/实现/测试/证据文件共十项前后 SHA256 一致，原 implementation-log 的 Stage92 段仅保留后追加记录。未暂存、未提交、未执行项目测试/构建/Electron/真实模型或平台验证。
+
+## 2026-11-15 - Stage 92 Retained Batch Cleanup Review
+
+- 范围：Stage 92 批量清理保留缺陷修复。修复 `WorkflowBatchAuthority` 在物理清理失败时提前释放运行占用的缺陷，增加 `assertCleanupQuiescent`，并在 `generation-controller.ts` 的 legacy handoff 增加 `projectRuntimeHost.assertTaskAvailable(runtime)` 门禁。
+- 独立审查：
+  - Sol (Agent 3) 独立审查需求与生命周期：确认未增加新公开 IPC、未削弱现有租约与所有权栅栏，真实清理在物理 drain 与持久化对账完成前不释放 claim 与 busy 状态，true-close 重试仅清理不重发。
+  - Agent 4 独立审查故障覆盖与产物：`workflow-batch-authority.test.ts` 22 项、`workflow-batch-controller.test.ts` 27 项、`main-generation-owner.test.ts` 寂静测试及特征清单测试全部通过；i18n 及颜色检查通过；无越权修改或虚假完成声明。
+- 结论：Stage 92 修复闭环并具备提交条件；不提升 SCHED-002 状态，SCHED-002 领域准入在后续阶段独立推进。

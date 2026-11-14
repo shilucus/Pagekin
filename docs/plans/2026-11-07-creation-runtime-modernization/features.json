@@ -4,7 +4,7 @@
   "planSource": {
     "path": "README.md",
     "version": "F2",
-    "sha256": "5302A8930D95DA9CD618BC528DD8D40D99F2C59957CE91B6332BC0E974C8B5C3"
+    "sha256": "D6FD2A043364A8BC6CF3579B6D2F0D0BC1C144B458505FFC003837430C7E4D78"
   },
   "evidenceMap": "evidence-map.md",
   "reviewRecord": "review-record.md",
@@ -13,7 +13,7 @@
     "inkos": "53adac4e974b54dafda975edc4edd07cad364c18"
   },
   "status": "in_progress",
-  "authorizationScope": "2026-11-07本轮用户明确授权实施F2全部35项功能及范围内代码、测试、文档、ADR、版本化接口和迁移；授权所列pnpm命令、隔离虚构项目持久化验证和主Agent按阶段路径本地add/commit。真实模型、真实配置/作品、外部状态、平台安装/发布不在授权内；设计、契约、便携恢复、人工批准与实际验收门禁保留。详见implementation-log.md。",
+  "authorizationScope": "2026-11-07本轮用户明确授权实施F2全部35项功能及范围内代码、测试、文档、ADR、版本化接口和迁移；授权所列pnpm命令、隔离虚构项目持久化验证和主Agent按阶段路径本地add/commit。真实模型、真实配置/作品、外部状态、平台安装/发布不在授权内；设计、契约、便携恢复、人工批准与实际验收门禁保留。2026-11-15用户要求停止检查偏移，随后仅要求review结论及更新计划/清单；当前产品开发、项目运行与Git提交继续暂停，本文件不自行恢复这些动作。详见implementation-log.md及README第13节。",
   "completionPolicy": {
     "featureStatusValues": [
       "not_started",
@@ -21,7 +21,7 @@
       "blocked",
       "completed"
     ],
-    "passesMeaning": "只有该增量验收条件全部满足、适用门禁已获确认且requiredEvidenceTypes均有本轮对应证据，才能设completed及passes=true。方案审查或既有部分能力不能代替实现。",
+    "passesMeaning": "只有该增量验收条件全部满足、适用门禁已获确认且requiredEvidenceTypes均有本轮对应证据，才能设completed及passes=true。方案审查或既有部分能力不能代替实现。历史全量qualified/PASS不能覆盖当前状态及限定；本轮static审计不补造合同、设计、运行或质量资格，14项沿用完成标记不等于六项用户目标完成比例。",
     "evidenceRecordFields": [
       "type",
       "sourceSha",
@@ -30,7 +30,7 @@
       "result",
       "limitations"
     ],
-    "dependencyMeaning": "dependsOn为功能前置DAG，不是授权；同一phase不是自动全串行。phase完成须该包全部适用增量完成。",
+    "dependencyMeaning": "dependsOn为功能前置DAG，不是授权；同一phase不是自动全串行。phase完成须该包全部适用增量完成。P0不等架构改造，单书反馈不等runtime/多书资格，IMPORT-001/002不新增SCHED-002前置；只有IMPORT-003/004按原DAG汇合各自单书迁移与多书调度。已完成kernel不代替独立UI/完整工作流交付，也不反向追加其AC。",
     "persistentStateRule": "每个新增持久状态功能独立按方案7.8完成本包字段分类、迁移、归档/新副本恢复验收；不得用未来全部状态已实现作为循环前置。",
     "executionRule": "执行前另核定具体命令、副作用及授权；此文件不是运行脚本，命令名或验收条件不授予执行权。",
     "qualityRule": "静态、确定性、性能、真实模型质量、桌面交互与目标平台证据分开；不承诺随机输出逐字相同，不用mock证明文学质量。"
@@ -1111,6 +1111,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15需求/任务/既有记录及直接引用静态复核；无新增运行，Stage92未提交实现不计交付",
+          "result": "SCHED-002仍进行中。Stage91是注册workflow-batch:v2真实Electron/收据下三组两书虚构响应观测，不是纯helper，也不是全部writer统一准入、公平性或交互不饥饿的完成证据。",
+          "limitations": "继续核定生产调用者及domain-writer准入覆盖并完成原AC；不新增单书反馈/IMPORT-001/002前置，不把三组观测当统计p95、真实供应商吞吐、文学质量或完整功能资格。此记录仅static。"
+        },
+        {
           "type": "contract_review",
           "sourceSha": "66e1faf93c208e443f2535a5b8e55ac90504150f",
           "artifactOrReceipt": "stage-5a-evidence.md#team-and-review",
@@ -1249,6 +1257,14 @@
       "status": "in_progress",
       "passes": false,
       "evidence": [
+        {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15需求/任务与前台reference生产链静态复核；无新增运行，Stage92不计交付",
+          "result": "IMPORT-001已有Stage88主进程knowledge/global/style/blueprints/refresh前台链，不是完全未实现；该链仍重验当前view，不能据此认定切书后持续运行及完整迁移已完成。",
+          "limitations": "下一交付须覆盖全部现有入口/来源/stage/slot/effect、A运行查看B及逐阶段取消/unknown/崩溃/部分保存恢复；保留旧入口保护。原依赖仅DRIVER-001/002，不新增SCHED-002前置；static不替代Electron/合同/存储验收。"
+        },
         {
           "type": "contract_review",
           "sourceSha": "590a6ba6c9f5f607cde0224b7402940d279ddf08",
@@ -1542,6 +1558,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15需求/任务及共享reference/style证据边界静态复核；未执行完整仿写",
+          "result": "IMPORT-002证据目前限共享前置切片；实际风格消费到目标写作、参考与目标作者事实分离、完整保存/恢复生产链及验收尚未证明。不能由证据不足断言某个具体消费者不存在。",
+          "limitations": "与IMPORT-001分别核对真实仿写入口/步骤/来源及收据，验证切书持续运行、上游变化、失败/unknown和重复保存；不得复用同一前置报告认定第二项完成。原依赖不新增SCHED-002；仅static，非独立仿写运行/质量资格。"
+        },
+        {
           "type": "contract_review",
           "sourceSha": "590a6ba6c9f5f607cde0224b7402940d279ddf08",
           "artifactOrReceipt": "../../adr/0036-captured-reference-import-receipts.md",
@@ -1809,6 +1833,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15功能依赖与既有证据静态复核；未重新运行多书拆解",
+          "result": "IMPORT-003仍依赖未完成的IMPORT-001与SCHED-002。Stage91的批量草稿双书观测不等于完整拆书混合后台工作流资格。",
+          "limitations": "分别取得完整单书拆解、共享准入及双书/混合任务的来源/产物/恢复/性能证据后才可验收；不得反向阻塞IMPORT-001。此记录不新增performance/Electron证据或改变原状态。"
+        },
+        {
           "type": "deterministic",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-13-evidence.md",
@@ -1875,6 +1907,14 @@
       "status": "in_progress",
       "passes": false,
       "evidence": [
+        {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15功能依赖与既有证据静态复核；未重新运行多书仿写",
+          "result": "IMPORT-004仍依赖未完成的IMPORT-002与SCHED-002；共享reference或批量草稿对照不证明完整仿写的多书隔离和安全并行。",
+          "limitations": "在单书真实消费链及调度完成后独立验证参考/目标事实、并行保存、取消/迟到/恢复及性能；不得反向阻塞IMPORT-002。仅static，非多书仿写运行或质量资格。"
+        },
         {
           "type": "deterministic",
           "sourceSha": "working-tree",
@@ -2272,6 +2312,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15作者工作流/切书guard及任务依赖静态复核；无新浏览器或Electron操作",
+          "result": "UI-001进行中。作者现用novel_import/batch_generate仍无后台资格；Stage89恢复其取消/等待保护，不是交付了A运行查看B。内部DRIVER-002与该作者入口分别按各自AC判断。",
+          "limitations": "补齐已迁生产工作流的作者接线、任务归属/重订阅/缓冲隔离及关闭退出呈现，并按确认设计取得状态/视口和实际Electron证据；不删旧保护，不把UI-001/SCHED-002变成单书反馈的前置。"
+        },
+        {
           "type": "deterministic",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-15-evidence.md",
@@ -2346,6 +2394,14 @@
       "status": "in_progress",
       "passes": false,
       "evidence": [
+        {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15StageSetup/ArchitectureSection/PlanningFeedbackDialog到真实client/owner及ADR-0041静态复核",
+          "result": "UI-002试点生产调用链已接通，不能称反馈界面不存在；脏缓冲发起决策、完整历史发现等功能边界仍未闭合，完整设计状态/视口及实际操作证据也未闭合。Stage73全量资格声明不覆盖这些缺口。",
+          "limitations": "保留已有capture/采用回包缓冲保护，分别补功能边界与适用设计/运行证据；不等待多书runtime、SCHED-002或三平台资格，不反向追加FEEDBACK-002的kernel AC。本轮仅static，非试点实际操作或整体UI验收。"
+        },
         {
           "type": "deterministic",
           "sourceSha": "working-tree",
@@ -2442,6 +2498,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15src/electron直接引用静态核对；排除测试消费者，未形成完整动态调用图",
+          "result": "UI-003的范围/蓝图内核和v2/v3 IPC存在；定向检索未找到createPlanningFeedbackRangeClient/BlueprintClient及ExtendedPlanningFeedbackDialog的生产页面消费者。历史完整直接集成/资格断言不能代替当前作者闭环。",
+          "limitations": "先核定并补齐页面到真实服务的接线，再覆盖各对象多轮/部分采用/非法零写/过期/缓冲和下游影响的设计及实际运行；保留现有角色和正文审修入口。静态未找到不是绝对不存在，kernel completed也不是UI验收。"
+        },
+        {
           "type": "design_review",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-11-evidence.md",
@@ -2514,6 +2578,14 @@
       "status": "in_progress",
       "passes": false,
       "evidence": [
+        {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15inbound-api-service及Stage90/ADR-0050先行裁决静态核对；未启动listener或任务",
+          "result": "API-001仍缺desktop生产执行组合。认证/归属/碰撞/幂等历史、pending/unknown等先行裁决保留；通过这些裁决后仍需新执行的start/resume当前返回COMMAND_NOT_ALLOWED/503，不是一律503，也不是实际创作已运行。",
+          "limitations": "将已获准的领域命令接入真实driver/等待/持久收据恢复，保留candidate-only、同锁和unknown不重发；实际扩大写入/策略及可信批准仍按各自门禁。此缺口不能全部归为等待政策；仅static，非合同/运行资格。"
+        },
         {
           "type": "deterministic",
           "sourceSha": "working-tree",
@@ -2615,6 +2687,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15CLI/API依赖、调用及Stage90记录静态核对；未执行CLI任务",
+          "result": "CLI-001不能由稳定JSON、历史读取或虚构成功记录认定完成；依赖API-001的新生产执行仍不可用，尚未交付可等待真实创作完成的入口。",
+          "limitations": "在真实API执行/恢复组合后核对run--wait、状态/事件/退出码、重连/取消/unknown与实际领域产物，不用全部自动采用或headless作为受限desktop执行前置。仅static，不新增contract_review或Electron证据。"
+        },
+        {
           "type": "deterministic",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-17-evidence.md",
@@ -2697,6 +2777,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15功能依赖与既有记录静态复核；非自动化实现全审或模型行为评估",
+          "result": "AUTO-001仍进行中；API真实执行前置未完成，已有机器决定/策略辅助能力不等于完整授权创作链。不能把该项未决策略扩成所有候选-only执行或单书反馈的全局阻塞。",
+          "limitations": "继续按原AC核定task-grant可写范围、采用与机器修复策略，并用真实生产任务/收据验证；保留人工批准独立边界。本轮不授策略批准、contract_review或运行资格，不以static补完成条件。"
+        },
+        {
           "type": "deterministic",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-18-evidence.md",
@@ -2762,6 +2850,14 @@
       "status": "in_progress",
       "passes": false,
       "evidence": [
+        {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15功能依赖与既有记录静态复核；未运行跨批创作",
+          "result": "AUTO-002依赖未完成的AUTO-001及SCHED-002；持久驱动或单次两书批量草稿观测不等于长篇跨批候选依赖与恢复全部交付。",
+          "limitations": "按原AC独立核定跨批来源、前后章依赖、候选与定稿区分、部分失败/重选稿及恢复的实际生产收据；保留unknown不重发。不新增contract_review/Electron证据，也不反向阻塞独立单书交付。"
+        },
         {
           "type": "deterministic",
           "sourceSha": "working-tree",
@@ -2852,6 +2948,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15功能依赖与既有记录静态复核；未执行从零规划或真实模型",
+          "result": "AUTO-003为获准空项目从零到待终验的后续交付，原DAG前置尚未完成；不能用已有规划批量链或共享规划候选协议认定该项完成。",
+          "limitations": "保持原task-grant规划/空位/采用与修复政策门禁，独立验证完整生产组合、规划消费、恢复和模型质量；真实模型/预算仍需授权。仅static，不将本项变成已获准已有规划任务的反向前置。"
+        },
+        {
           "type": "deterministic",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-23-evidence.md",
@@ -2934,6 +3038,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15功能依赖、门禁及既有记录静态复核；未运行机器初验/真实模型",
+          "result": "ACCEPT-001依赖API真实任务，分层报告辅助实现不能代替实际作品产物、来源/收据和初验结论；完整合同、Electron及模型质量资格尚未闭合。",
+          "limitations": "按原AC核定实际生产报告、失败/缺证据分类与交付准备；机器初验不得伪装作者最终批准。本轮不授contract_review、model_quality或运行资格，模型预算不阻止明确合同下的非模型接线。"
+        },
+        {
           "type": "deterministic",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-20-evidence.md",
@@ -3011,6 +3123,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15功能依赖、可信批准门禁与既有记录静态复核；无作者批准动作",
+          "result": "ACCEPT-002的精确manifest/可信作者批准/封存不是通用任务凭据自动获得的权限；初验与API前置未完成，历史静态/局部测试不能授予完整人审交付。",
+          "limitations": "保留G-HUMAN及适用设计/合同门禁，核定真实批准渠道、封存/解封与输入并发、批准后编辑失效的完整生产验收；不以本轮审计补造design_review/browser/Electron/contract_review或作者批准。"
+        },
+        {
           "type": "deterministic",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-21-evidence.md",
@@ -3083,6 +3203,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15功能依赖与定稿边界静态复核；未批准或提交任何稿件",
+          "result": "ACCEPT-003仍依赖可信批准功能；逐章批准提交和部分成功恢复不能由定稿repository存在或CLI命令成功代替。完整生产组合与必要证据仍待核定。",
+          "limitations": "按原AC验证逐章CAS、部分已提交不重做、批准来源变化、定稿事务/outbox真实状态及失败恢复；保留唯一writer和后续章不自动改写。仅static，非contract_review/Electron或正式提交证据。"
+        },
+        {
           "type": "deterministic",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-22-evidence.md",
@@ -3144,6 +3272,14 @@
       "status": "in_progress",
       "passes": false,
       "evidence": [
+        {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15入站适配功能依赖与既有记录静态复核；未连接外部进程/工具",
+          "result": "MCP-001已有窄领域适配及局部兼容修复；API/AUTO/初验前置与完整入站执行/恢复资格未闭合，出站MCP能力和handler注册不能代替该交付。",
+          "limitations": "在原API/任务grant/收据链上验证真实入站可达、执行、重连/竞争/unknown，不扩大为任意IPC/文件/SQL或绕过出站工具确认；实际工具进程/外部状态仍逐项授权。仅static，非合同或运行验收。"
+        },
         {
           "type": "deterministic",
           "sourceSha": "working-tree",
@@ -3225,6 +3361,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15协作Skill依赖与既有记录静态复核；未执行Agent模型工作流",
+          "result": "SKILL-001的规则文本、工具绑定和确定性测试不能代替Agent实际按任务/范围/等待/收据/初验/停止条件完成工作流；CLI/MCP/AUTO/初验前置尚未闭合。",
+          "limitations": "复用原阶段写作Skill冻结与安全边界，取得适用合同及agent_workflow行为证据后再验收；不因导入Skill授权脚本执行，不用静态规则审查宣称模型行为改善。本轮仅static。"
+        },
+        {
           "type": "deterministic",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-25-evidence.md",
@@ -3304,6 +3448,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15累计资格依赖及性能/质量证据层静态复核；未运行整链或真实模型",
+          "result": "QUAL-001前置仍有完整迁移/并发/自动化/批准提交未完成；局部PERF条目、失败基线或Stage91三组受控观测均不能认定完整链性能与质量不退化。",
+          "limitations": "沿各功能逐步积累同材料/参数/Skill/范围及真实产物/收据证据，完整资格仍按原DAG与模型预算门禁；未授权或未执行的规模、质量及失败分母如实保留。仅static，不新增performance/Electron/model_quality资格。"
+        },
+        {
           "type": "deterministic",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-31-evidence.md",
@@ -3381,6 +3533,14 @@
       "passes": false,
       "evidence": [
         {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15桌面/平台资格依赖及既有记录静态复核；未启动应用或目标平台构建",
+          "result": "QUAL-002仍需UI/CLI/MCP/Skill/批准和完整链资格汇合；已有浏览器局部测试、Windows源码构建或固定视口截图不等于完整桌面交互和三目标资格。",
+          "limitations": "分别取得适用设计状态/视口、实际作者操作及Windows x64/macOS arm64/macOS x64所需证据；平台动作仍核定具体授权。不得反向阻塞明确合同下的单书反馈/内部接线；本轮仅static。"
+        },
+        {
           "type": "platform",
           "sourceSha": "working-tree",
           "artifactOrReceipt": "stage-32-evidence.md",
@@ -3452,6 +3612,14 @@
       "status": "in_progress",
       "passes": false,
       "evidence": [
+        {
+          "type": "static",
+          "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
+          "artifactOrReceipt": "review-record.md#2026-11-15-requirements-alignment-review; README.md section13",
+          "environment": "2026-11-15F2 P4范围/依赖与既有记录静态复核；未启动headless或执行平台动作",
+          "result": "HEADLESS-001是原计划已有后置能力，不是擅自加项；API/CLI/SCHED/QUAL前置未完成，不能以历史全量资格声明、隐藏窗口或verify harness认定生产无窗口宿主已交付。",
+          "limitations": "先满足原DAG，再独立核对真实host启动/健康/停止、desktop互斥接管/OS fencing、凭据与native三目标资格；不抢先替代desktop在线真实执行。仅static，不补contract_review/Electron/platform证据或扩大运行/发布授权。"
+        },
         {
           "type": "deterministic",
           "sourceSha": "working-tree",

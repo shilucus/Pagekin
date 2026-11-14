@@ -1881,3 +1881,32 @@ The observations below retain their chronological state. The final acceptance at
   Sol's measured-scene-versus-whole-process wording is corrected in evidence.
   Root sees empty index, unchanged protected files, sample-only hooks and no
   owned-path filters; scoped commit/postcommit follows.
+
+## 2026-11-15 - Stage 92: Retained Batch Cleanup
+
+- Stage91 committedb29764c5db6857b07a6c4d400a11a5e6ee59851c; postcommit exact
+  18paths,75identities,empty index and protected files match review. Original
+  stage-1b3 untracked files remain excluded.
+- [Stage92](stage-92-evidence.md) freezes the confirmed release-on-cleanup-failure
+  defect only. Agent2 owns authority/focused tests; Root owns contract/integration,
+  commands/records/Git; Sol and Agent4 independently review. No production UI or
+  new public/schema/dependency change.
+- Actual execution:
+  - `electron/services/workflow-batch-authority.ts`: retains running work, cleanup intent, and busy fence through physical cleanup failure; true-close retries cleanup.
+  - `electron/services/main-generation-owner.ts`: adds `assertCleanupQuiescent`.
+  - `electron/controllers/generation-controller.ts`: calls `projectRuntimeHost.assertTaskAvailable(runtime)` before legacy handoff.
+  - Focused tests 22/22 in `workflow-batch-authority.test.ts`, 27/27 in `workflow-batch-controller.test.ts`, quiescence tests in `main-generation-owner.test.ts` pass; check-i18n and check-color-literals exit 0.
+- Independent Review:
+  - Sol accepts the contract, requirements, and lifecycle: cleanup debt retention preserves owner fences, does not add public IPC or persistent credentials, and prevents double-release.
+  - Agent4 accepts fault coverage and artifacts: all regressions pass; no unrelated feature flags or premature completions are claimed.
+
+## 2026-11-15 - Requirements Alignment Review And Plan Update
+
+- 用户先要求停止并检查偏移，随后要求对照原始需求、review 结论并更新计划与 features.json。本轮只修改本目录文档/清单，不恢复产品开发、项目命令、运行验证或提交；原 Stage92 修改及 Stage1B3 未跟踪文件保留。
+- 基线 `master@b29764c5db6857b07a6c4d400a11a5e6ee59851c`。Agent1 Luna 复核 R1/R4，Agent3 Sol 复核 R3/R5，Agent2 Terra 复核 schema/证据类型/摘要绑定；Root 负责唯一写入和集成，独立文档复审随后进行。
+- 采纳“计划覆盖需求、交付衔接与验收口径失真”的结论；修正“完整仿写消费者不存在”和“API 一律 503”等过强表述，保留静态未找到消费者的检索边界及 API 先行裁决。单书反馈/拆书/仿写不新增多书或三平台前置。
+- README 追加第 13 节，不改原第 1–12 节合同；保留原 F2 摘要并将 planSource.sha256 更新为含增补的 README。features.json 保持 schemaVersion=1、35 IDs、DAG、AC、门禁、回退及 14 completed/21 in_progress，不伪造缺失的运行/合同/模型/平台证据。
+- 实际操作限只读 Git/源码/记录、apply_patch 文档编辑，以及后续 JSON/摘要/语义差异/路径/空白检查；这些不是项目测试或产品验收。本轮无新产品完成项、无新阶段提交；验证与独立复审结果待实际取得后追加。
+- 实际静态检查：`git diff --check` exit0；PowerShell `Get-Content -Raw | ConvertFrom-Json` 与内存级 HEAD 字段比对确认 35 IDs/顺序、原 schema/DAG/AC/gates/status/passes 及历史 evidence 不变，21 个进行中条目各只新增一条 static。`Get-FileHash -Algorithm SHA256` 核对 README 摘要 `D6FD2A043364A8BC6CF3579B6D2F0D0BC1C144B458505FFC003837430C7E4D78` 与 planSource 一致；十项受保护/既有 Stage92 文件前后哈希一致。只读 status/log/diff/index 查询未执行任何 Git 写入。
+- Agent4 Terra 独立集成文档复审无范围内阻断项，独立确认上述语义和摘要边界；结论记录在 [review-record](review-record.md#2026-11-15-requirements-alignment-review)。审计记录不补造 contract_review/design_review/运行/模型/平台资格，不重新认证 14 个沿用完成标记。
+- 本轮交付仅 README、features.json、review-record.md 及此日志的需求纠偏更新；HEAD 仍为 b29764c5，无新 commit。下一步仍保持产品实施/运行/提交暂停，不执行旧 Stage93 顺序；后续复工按 README 第 13 节及原 DAG 收口，不重做已完成动作或降低原门禁。

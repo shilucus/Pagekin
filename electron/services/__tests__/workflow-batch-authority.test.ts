@@ -13,6 +13,7 @@ type ReadAttempt = { receipt: { run: { runId: string }; attempt: { attemptId: st
 const fixture = vi.hoisted(() => ({ task: null as WorkflowBatchTask | null,
   steps: [] as WorkflowBatchStep[], effects: [] as WorkflowBatchEffect[], history: false,
   transaction: false, occupied: false, missingChapter: false, commitFailure: false, revision: 1, modelHash: 'a'.repeat(64),
+  failGet: false, failPause: false, failBlock: false,
   runs: new Map<string, { rootActionId: string; binding: { projectId: string; epoch: string;
     fingerprint: { modelLeaseRevision: string }; sourceManifest: Record<string, unknown> } }>(),
   engine: vi.fn<(options: WorkflowBatchEngineOptions) => Promise<void>>(),
@@ -51,7 +52,7 @@ vi.mock('../../repositories/generation-run-repository', async importOriginal => 
   } }
 })
 vi.mock('../../repositories/workflow-batch-repository', () => ({ WorkflowBatchRepository: class {
-  get() { return fixture.task }
+  get() { if (fixture.failGet) throw new Error('FICTIONAL_GET_FAILED'); return fixture.task }
   getByOperation(key: string) { return fixture.task?.operationKey === key ? fixture.task : null }
   readSteps() { return fixture.steps }
   readEffects() { return fixture.effects }
@@ -69,10 +70,10 @@ vi.mock('../../repositories/workflow-batch-repository', () => ({ WorkflowBatchRe
   }
   assertDispatch(...args: unknown[]) { fixture.assertDispatch(...args) }
   acknowledgeFromReceipt() { return null }
-  pause() { return this.change('paused') }
+  pause() { if (fixture.failPause) throw new Error('FICTIONAL_PAUSE_FAILED'); return this.change('paused') }
   cancel() { return this.change('cancelled') }
   resume() { return this.change('ready') }
-  block(_ref: unknown, code: string) { const task = this.change('blocked'); task.blockedCode = code; return task }
+  block(_ref: unknown, code: string) { if (fixture.failBlock) throw new Error('FICTIONAL_BLOCK_FAILED'); const task = this.change('blocked'); task.blockedCode = code; return task }
   change(state: WorkflowBatchTask['state']) {
     if (!fixture.task) throw new Error('MISSING')
     fixture.task = { ...fixture.task, state, revision: ++fixture.revision, blockedCode: null }
@@ -130,7 +131,7 @@ function setup() {
     }),
     rollbackWorkflowDriverPreparation: vi.fn(), pauseWorkflowDriver: vi.fn(), hasPhysicalInFlight: vi.fn(() => false),
     whenPhysicalIdle: vi.fn(() => physical.promise), requestProjectClose: vi.fn(), suspendForProjectClose: vi.fn(),
-    assertRetirable: vi.fn(() => hooks.assertNoRuntimeClaims()), retireIdle: vi.fn(() => hooks.assertNoRuntimeClaims()),
+    assertCleanupQuiescent: vi.fn(), assertRetirable: vi.fn(() => hooks.assertNoRuntimeClaims()), retireIdle: vi.fn(() => hooks.assertNoRuntimeClaims()),
     assertWorkflowDriverRecoverySources: vi.fn(), recoverWorkflowDriverRun: vi.fn(), resume: vi.fn(),
   }
   const createOwner = vi.fn((value: Parameters<WorkflowBatchAuthorityOptions['createOwner']>[0]) => {
@@ -152,6 +153,7 @@ beforeEach(() => {
   fixture.task = null; fixture.steps = []; fixture.effects = []; fixture.history = false
   fixture.transaction = false; fixture.occupied = false; fixture.missingChapter = false; fixture.revision = 1
   fixture.commitFailure = false
+  fixture.failGet = false; fixture.failPause = false; fixture.failBlock = false
   fixture.modelHash = 'a'.repeat(64); fixture.runs.clear(); fixture.rows = []; fixture.views.clear(); fixture.rowsByRun.clear()
 })
 
@@ -184,7 +186,8 @@ describe('workflow batch private authority', () => {
       projectId: 'project', epoch: 'epoch', rootActionId: 'root', runId: 'batch',
     })
     expect(test.authority.hasIssuance()).toBe(false)
-    expect(test.acquireWork).not.toHaveBeenCalled()
+    expect(test.acquireWork).toHaveBeenCalledTimes(1)
+    expect(test.release).toHaveBeenCalledTimes(1)
     expect(fixture.task).toBeNull()
   })
   it('refuses occupied or unplanned targets before creating a real root', async () => {
@@ -265,6 +268,152 @@ describe('workflow batch private authority', () => {
       .rejects.toThrow('WORKFLOW_BATCH_OWNER_CLOSING')
     expect(test.authority.hasPhysicalInFlight()).toBe(true)
     await test.finish()
+  })
+  it('acquires work before creating the durable root, leaving no issuance when acquisition fails', async () => {
+    const test = setup()
+    test.acquireWork.mockImplementationOnce(() => { throw new Error('FICTIONAL_ACQUIRE_FAILED') })
+    await expect(test.authority.start(test.caller, request, test.assertFresh)).rejects.toThrow('FICTIONAL_ACQUIRE_FAILED')
+    expect(test.owner.beginWorkflowBatchRoot).not.toHaveBeenCalled()
+    expect(fixture.issue).not.toHaveBeenCalled()
+    expect(test.authority.hasIssuance()).toBe(false)
+    expect(test.release).not.toHaveBeenCalled()
+  })
+  it('retains failed transaction rollback work for true-close cleanup retry', async () => {
+    const test = setup()
+    fixture.commitFailure = true
+    test.owner.rollbackWorkflowDriverPreparation.mockImplementationOnce(() => { throw new Error('FICTIONAL_ROLLBACK_FAILED') })
+    await expect(test.authority.start(test.caller, request, test.assertFresh)).rejects.toThrow()
+    expect(test.release).not.toHaveBeenCalled()
+    expect(test.authority.hasPhysicalInFlight()).toBe(true)
+    fixture.commitFailure = false
+    test.authority.requestProjectClose()
+    await flush()
+    expect(test.owner.rollbackWorkflowDriverPreparation).toHaveBeenCalledTimes(2)
+    expect(test.release).toHaveBeenCalledTimes(1)
+    expect(test.authority.hasPhysicalInFlight()).toBe(false)
+  })
+  it('retains pause persistence failure until a current authorized cleanup-only retry', async () => {
+    const test = setup(), result = await test.authority.start(test.caller, request, test.assertFresh)
+    fixture.failPause = true
+    expect(() => test.authority.pause(test.caller, result.reference!)).toThrow()
+    test.engine.resolve(); test.physical.resolve(); await flush()
+    expect(test.release).not.toHaveBeenCalled()
+    expect(test.authority.hasPhysicalInFlight()).toBe(true)
+    expect(() => test.authority.pause(subject(), result.reference!)).toThrow('WORKFLOW_BATCH_CAPABILITY_REQUIRED')
+    expect(() => test.authority.pause(test.caller, { ...result.reference!, revision: 999 })).toThrow('WORKFLOW_BATCH_REVISION_CONFLICT')
+    expect(() => test.authority.pause(test.caller, result.reference!)).toThrow()
+    fixture.failPause = false
+    expect(test.authority.pause(test.caller, result.reference!).receipt.task.state).toBe('paused')
+    await flush()
+    expect(test.release).toHaveBeenCalledTimes(1)
+    expect(test.owner.resume).not.toHaveBeenCalled()
+    expect(fixture.engine).toHaveBeenCalledTimes(1)
+  })
+  it('revokes execution even when both task and root pause fail', async () => {
+    const test = setup(), result = await test.authority.start(test.caller, request, test.assertFresh)
+    fixture.failPause = true
+    test.owner.pauseWorkflowDriver.mockImplementationOnce(() => { throw new Error('FICTIONAL_ROOT_FAILED') })
+    expect(() => test.authority.pause(test.caller, result.reference!)).toThrow()
+    expect(() => test.hooks().workflowDriver.assertActive('batch')).toThrow('WORKFLOW_BATCH_CAPABILITY_REQUIRED')
+    expect(test.release).not.toHaveBeenCalled()
+    test.engine.resolve(); test.physical.resolve(); await flush()
+    fixture.failPause = false
+    test.authority.pause(test.caller, result.reference!)
+    expect(test.release).toHaveBeenCalledTimes(1)
+  })
+  it('retains cancelled intent when root cancellation persistence fails and never downgrades it', async () => {
+    const test = setup(), result = await test.authority.start(test.caller, request, test.assertFresh)
+    test.owner.pauseWorkflowDriver.mockImplementationOnce(() => { throw new Error('FICTIONAL_ROOT_FAILED') })
+    expect(() => test.authority.cancel(test.caller, result.reference!)).toThrow()
+    expect(fixture.task?.state).toBe('cancelled')
+    test.engine.resolve(); test.physical.resolve(); await flush()
+    expect(test.release).not.toHaveBeenCalled()
+    const reference = { ...result.reference!, revision: fixture.task!.revision }
+    test.authority.cancel(test.caller, reference)
+    await flush()
+    expect(fixture.task?.state).toBe('cancelled')
+    expect(test.owner.pauseWorkflowDriver).toHaveBeenLastCalledWith(expect.anything(), true)
+    expect(test.release).toHaveBeenCalledTimes(1)
+  })
+  it('upgrades failed pause cleanup to cancellation without later pause downgrading it', async () => {
+    const test = setup(), result = await test.authority.start(test.caller, request, test.assertFresh)
+    test.owner.pauseWorkflowDriver.mockImplementationOnce(() => { throw new Error('FICTIONAL_ROOT_FAILED') })
+    expect(() => test.authority.pause(test.caller, result.reference!)).toThrow()
+    expect(fixture.task?.state).toBe('paused')
+    test.engine.resolve(); test.physical.resolve(); await flush()
+    test.owner.pauseWorkflowDriver.mockImplementationOnce(() => { throw new Error('FICTIONAL_CANCEL_ROOT_FAILED') })
+    expect(() => test.authority.cancel(test.caller, { ...result.reference!, revision: fixture.task!.revision })).toThrow()
+    expect(fixture.task?.state).toBe('cancelled')
+    test.authority.pause(test.caller, { ...result.reference!, revision: fixture.task!.revision })
+    expect(test.owner.pauseWorkflowDriver).toHaveBeenLastCalledWith(expect.anything(), true)
+    expect(fixture.task?.state).toBe('cancelled')
+    expect(test.release).toHaveBeenCalledTimes(1)
+  })
+  it('retains work while full cleanup quiescence fails after physical idle', async () => {
+    const test = setup(), result = await test.authority.start(test.caller, request, test.assertFresh)
+    const paused = test.authority.pause(test.caller, result.reference!)
+    test.owner.assertCleanupQuiescent.mockImplementation(() => { throw new Error('FICTIONAL_SERVICE_BUSY') })
+    test.engine.resolve(); test.physical.resolve(); await flush()
+    expect(test.release).not.toHaveBeenCalled()
+    expect(() => test.authority.pause(test.caller, paused.reference!)).toThrow('FICTIONAL_SERVICE_BUSY')
+    expect(test.authority.hasPhysicalInFlight()).toBe(true)
+    test.owner.assertCleanupQuiescent.mockImplementation(() => {})
+    test.authority.pause(test.caller, paused.reference!)
+    expect(test.release).toHaveBeenCalledTimes(1)
+  })
+  it('retains an unknown engine block persistence failure without redispatch', async () => {
+    const test = setup()
+    fixture.failBlock = true
+    fixture.engine.mockRejectedValueOnce(new Error('WORKFLOW_BATCH_ATTEMPT_UNRESOLVED'))
+    const result = await test.authority.start(test.caller, request, test.assertFresh)
+    test.physical.resolve(); await flush()
+    expect(test.release).not.toHaveBeenCalled()
+    expect(test.authority.hasPhysicalInFlight()).toBe(true)
+    fixture.failBlock = false
+    test.authority.pause(test.caller, result.reference!)
+    await flush()
+    expect(fixture.task?.state).toBe('blocked')
+    expect(fixture.task?.blockedCode).toBe('WORKFLOW_BATCH_ATTEMPT_UNRESOLVED')
+    expect(test.owner.resume).not.toHaveBeenCalled()
+    expect(fixture.engine).toHaveBeenCalledTimes(1)
+    expect(test.release).toHaveBeenCalledTimes(1)
+  })
+  it('retains destroyed sender cleanup failure and retries via true close', async () => {
+    const test = setup()
+    await test.authority.start(test.caller, request, test.assertFresh)
+    fixture.failPause = true
+    test.caller.destroy()
+    test.engine.resolve(); test.physical.resolve(); await flush()
+    expect(test.release).not.toHaveBeenCalled()
+    expect(() => test.authority.requestProjectClose()).toThrow()
+    fixture.failPause = false
+    test.authority.requestProjectClose()
+    await flush()
+    expect(fixture.task?.state).toBe('paused')
+    expect(test.release).toHaveBeenCalledTimes(1)
+  })
+  it('retains failed final read, physical drain failure and nonphysical work until explicit retry', async () => {
+    const test = setup(), result = await test.authority.start(test.caller, request, test.assertFresh)
+    const paused = test.authority.pause(test.caller, result.reference!)
+    test.owner.whenPhysicalIdle.mockRejectedValueOnce(new Error('FICTIONAL_DRAIN_FAILED'))
+    test.engine.resolve(); await flush()
+    expect(test.release).not.toHaveBeenCalled()
+    expect(test.authority.hasPhysicalInFlight()).toBe(true)
+    test.physical.resolve()
+    test.owner.hasPhysicalInFlight.mockReturnValue(true)
+    expect(() => test.authority.pause(test.caller, paused.reference!)).toThrow()
+    await flush()
+    expect(test.release).not.toHaveBeenCalled()
+    test.owner.hasPhysicalInFlight.mockReturnValue(false)
+    fixture.failGet = true
+    expect(() => test.authority.pause(test.caller, paused.reference!)).toThrow()
+    expect(test.release).not.toHaveBeenCalled()
+    fixture.failGet = false
+    test.authority.pause(test.caller, paused.reference!)
+    await flush()
+    expect(test.release).toHaveBeenCalledTimes(1)
+    test.authority.pause(test.caller, paused.reference!)
+    expect(test.release).toHaveBeenCalledTimes(1)
   })
   it('reads a frozen partial history without creating an owner or hydrating excluded run bindings', async () => {
     const test = setup()
