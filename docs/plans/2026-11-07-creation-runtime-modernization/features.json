@@ -2212,8 +2212,8 @@
         "browser",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -2222,6 +2222,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Background project tasks and transition presentation tests passed (12/12 passed, 52/52 lifecycle regression passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "In-app background multi-project presentation qualified; external API and CLI admission belongs to subsequent features"
+        },
+        {
+          "type": "browser",
+          "sourceSha": "fc7938060cf51b6d4e067d64ac21aca8788f15af",
+          "artifactOrReceipt": "stage-78-evidence.md",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; Chromium 1228 headless shell; 3 unit/integration suites (63/63) and 4 browser suites (69/69)",
+          "result": "All 3 unit/integration suites (63/63) and 4 browser suites (69/69) passed; typecheck, lint, check:i18n, build exit 0; background project task qualification, unsaved buffer protection on switch, and multi-state presentation qualified",
+          "limitations": "Headless CLI and external API qualification belongs to API-001 and CLI-001"
         }
       ]
     },

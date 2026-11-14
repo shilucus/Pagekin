@@ -1475,3 +1475,16 @@ The observations below retain their chronological state. The final acceptance at
   - `IMPORT-003` 与 `IMPORT-004` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT, G-STORAGE）。
   - 更新 `features.json`: `IMPORT-003` 与 `IMPORT-004` 均标记为 `status: "completed"`, `passes: true`。累计 21 项完成，14 项待完成。
   - 产出 `stage-77-evidence.md`。下一步：Stage 78（`UI-001` 后台作品任务与切换关闭呈现）。
+
+## 2026-11-14 - Stage 78: UI-001 后台作品任务与切换关闭呈现全量闭环
+
+- **范围**: `UI-001` (后台作品任务与切换关闭呈现)。
+- **执行命令与验证**:
+  - 运行 3 套核心状态生命周期与渲染进程切换测试：`corepack pnpm test src/stores/__tests__/project-transition-background.test.ts src/stores/__tests__/project-close-lifecycle.test.ts electron/controllers/__tests__/project-switch-renderer.integration.test.ts`，共计 63/63 测试全部通过。
+  - 运行 4 套真实 Chromium 1228 浏览器测试：`corepack pnpm run test:browser src/components/panels/__tests__/project-transition-unsaved.browser.tsx src/components/dialogs/__tests__/import-novel-resume.browser.tsx src/components/panels/__tests__/GenerationBudgetDiagnostics.browser.tsx src/components/backups/__tests__/project-backup-panel.browser.tsx`，共计 69/69 浏览器测试全部通过。
+  - 覆盖 AC-1（仅已迁工作流支持后台运行、未迁模式阻断与取消等待提示）、AC-2（A运行查看B不串缓冲不串落库、同项目再次激活不冗余重开、未保存草稿确认拦截）、AC-3（中英文、纸墨色彩令牌、视口适配与各种空/忙/错误/冲突状态呈现规范）。
+  - 静态门禁全量通过：`node ./node_modules/typescript/bin/tsc --noEmit` (0 错误)、`corepack pnpm run lint` (0 错误)、`corepack pnpm run check:i18n` (0 遗漏)、`corepack pnpm run build` (tsc && vite build 正常退出 0)。
+- **成果与结论**:
+  - `UI-001` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-DESIGN）。
+  - 更新 `features.json`: `UI-001` 标记为 `status: "completed"`, `passes: true`。累计 22 项完成，13 项待完成。
+  - 产出 `stage-78-evidence.md`。下一步：Stage 79（`API-001` + `CLI-001` 本机领域 API 与可等待 CLI）。
