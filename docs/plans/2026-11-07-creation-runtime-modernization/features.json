@@ -1214,8 +1214,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "contract_review",
@@ -1424,6 +1424,14 @@
           "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; fictional mocks/SQLite; existing Chrome150.0.7871.115 temporary profile for browser",
           "result": "Partial classification-preservation evidence: actual15files363/363 retains three reference-driver public/persisted failure and mixed-cancel priority,structured executor physical receipts and existing bilingual import templates for all25 presentation-only diagnostics. Fresh typecheck/lint/colors/i18n/source build exit0;independent bounded source/runtime/quality review accepted.",
           "limitations": "The53-code source scan is repaired at display/template/internal boundaries,not by broadening safe-code admission. All failed and zero-test reports remain. No complete import/background/Electron/real-model/quality/platform qualification;feature stays in_progress/passes=false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "8a57fe0100934b8d171d9da24add267703fce5ec",
+          "artifactOrReceipt": "stage-75-evidence.md",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; 8 integration suites across reference knowledge, style, global, blueprint, refresh and import orchestrator",
+          "result": "All 8 integration suites passed (264/264); typecheck, lint, check:i18n, build exit 0; main-process ownership, lease and session isolation, receipt settlement before advance, rollback to raw materials fully qualified",
+          "limitations": "Multi-book parallel isolation and cross-book reference qualification belong to IMPORT-003 and IMPORT-004; no real-model network calls"
         }
       ]
     },

@@ -1439,3 +1439,15 @@ The observations below retain their chronological state. The final acceptance at
 - Static quality gates all passed: typecheck exit 0, lint exit 0, check:i18n exit 0, source build exit 0.
 - AC 1 (outline range and blueprint field multi-round feedback revision), AC 2 (character identity stability, whole-batch regeneration gate, human review manuscript continuity), AC 3 (extended feedback UI presentation for range, blueprint, character and manuscript) fully qualified.
 - Features.json updated: FEEDBACK-003, FEEDBACK-004, UI-003 completed, passes=true. Total 35 features: 17 completed, 18 in_progress. Next bounded stage: Stage 75 (IMPORT-001: single-book novel decomposition complete migration qualification).
+
+## 2026-11-14 - Stage 75: IMPORT-001 单书完整小说拆解工作流迁移全量闭环
+
+- **范围**: `IMPORT-001` (单书完整小说拆解工作流迁移)。
+- **执行命令与验证**:
+  - 运行 8 套拆解驱动与编排集成测试：`corepack pnpm test electron/controllers/__tests__/reference-knowledge-driver.integration.test.ts electron/controllers/__tests__/reference-style-driver.integration.test.ts electron/controllers/__tests__/reference-global-driver.integration.test.ts electron/controllers/__tests__/reference-blueprint-driver.integration.test.ts electron/controllers/__tests__/reference-refresh-driver.integration.test.ts electron/services/__tests__/import-generation.test.ts electron/repositories/__tests__/import-run-orchestrator-integration.test.ts src/services/workflows/__tests__/import-run-orchestrator.test.ts`，共计 264/264 测试全部通过。
+  - 覆盖知识库切片、文风提取、全局设定、蓝图逆向、增量刷新五大 driver 的全链路集成，验证会话租约、收据对账、取消与错误排空、切书隔离与持久化完整性。
+  - 静态门禁全量通过：`node ./node_modules/typescript/bin/tsc --noEmit` (0 错误)、`corepack pnpm run lint` (0 错误)、`corepack pnpm run check:i18n` (0 遗漏)、`corepack pnpm run build` (tsc && vite build 正常退出 0)。
+- **成果与结论**:
+  - `IMPORT-001` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT, G-STORAGE）。
+  - 更新 `features.json`: `IMPORT-001` 标记为 `status: "completed"`, `passes: true`。累计 18 项完成，17 项待完成。
+  - 产出 `stage-75-evidence.md`。下一步：Stage 76（`IMPORT-002` 单书完整仿写工作流迁移全量闭环）。
