@@ -1419,3 +1419,13 @@ The observations below retain their chronological state. The final acceptance at
 - Static quality gates all passed: typecheck exit 0, lint exit 0, check:i18n exit 0, source build exit 0.
 - AC 1 (bounded queue/fairness/two-book concurrency), AC 2 (atomic pre-dispatch re-admission/reserve refusal), AC 3 (physical permit drain/quarantine/abort debt) and G-IMPLEMENT, G-RUN, G-CONTRACT, G-STORAGE fully qualified.
 - Features.json updated: SCHED-002 completed, passes=true. Total 35 features: 12 completed, 23 in_progress. Next bounded stage: Stage 73 (FEEDBACK-002 + UI-002: setup & architecture revision closure).
+- Stage72 committed cc1addf7f34933931454c2b6e2718a6e7400b400, parent 6dee331d59cabf651a0244a06317255c058d3b86, 4 paths. Protected staged repository-analysis intact, untracked Stage1B3 files preserved.
+
+## 2026-11-14 - Stage73 Setup & Architecture Feedback Revision and Presentation Qualification
+
+- Entry cc1addf7f34933931454c2b6e2718a6e7400b400. Features.json FEEDBACK-002 and UI-002 qualified and promoted from in_progress to completed (passes=true).
+- Executed 10 core planning feedback unit & native suites: 456 tests passed, 0 failed (planning-feedback-service 11/11, planning-feedback-client 72/72, planning-feedback-ipc 71/71, planning-feedback-generation 5/5, planning-feedback 30/30, stage-architecture-feedback 4/4, planning-feedback-repository, planning-feedback-owner, planning-feedback-portable, runtime-feedback-controller).
+- Executed 5 browser suites under real headless Chromium 1228: 111 tests passed, 0 failed (setup-feedback-adoption 36/36, architecture-feedback-editor-baseline 1/1, stage-architecture-adoption 8/8, setup 22/22, architecture 44/44).
+- Static quality gates all passed: typecheck exit 0, lint exit 0, check:i18n exit 0, source build exit 0.
+- AC 1 (explicit feedback revision for setup fields and single architecture section), AC 2 (candidate isolation, writer submission only on adoption, unselected field preservation), AC 3 (buffer protection and existing generation preservation) fully qualified for FEEDBACK-002 and UI-002.
+- Features.json updated: FEEDBACK-002 and UI-002 completed, passes=true. Total 35 features: 14 completed, 21 in_progress. Next bounded stage: Stage 74 (FEEDBACK-003 + FEEDBACK-004 + UI-003: outline range & chapter blueprint revision and UI presentation).

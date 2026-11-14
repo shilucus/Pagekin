@@ -1921,8 +1921,8 @@
       "requiredEvidenceTypes": [
         "deterministic"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -1971,6 +1971,14 @@
           "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12, existing isolated Chrome150; fictional IPC/SQLite only",
           "result": "Six setup fields recover capture-time formal C1 after committed-before-ACK close/reopen through existing unsaved-edits merge. Pre-request renderer token fences full session/instance/returned identity and save/generated/publish/discard ordering,including same-value save,physical timeout drain and old-A/new-B completion. Actual impact16files620/620,browser5files78/78,and final required-field fixture3files50/50 passed separately;fresh typecheck-retest/lint/colors/i18n/source build exit0;independent source/runtime/quality accepted.",
           "limitations": "Partial evidence only;in_progress/false unchanged. Missing-API17fail,browser8fail and eight screenshots,initial2fail,cross-session2fail,native clock oracle619/620 and first typecheck exit2 are retained. Native test only permits validated target clock settlement plus one diagnostic,total_changes+2. Final fixture50/50 is not another full620 run. No full design-state/viewport,dirty-start/history/architecture policy,closed idempotency-key recovery,post-capture commit discovery,actual Electron/model/quality/speedup/platform or whole-feature acceptance."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-73-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Setup and single architecture section feedback revision closure fully qualified. 10 suites 456/456 unit/native tests passed, 5 browser suites 111/111 passed; typecheck, lint, check:i18n, build exit 0; AC1/AC2/AC3 and G-IMPLEMENT/G-RUN/G-CONTRACT/G-STORAGE met; independent reviewer PASS",
+          "limitations": "Planning feedback for setup fields and single architecture sections qualified; multi-chapter outline range and manuscript revision belong to FEEDBACK-003/FEEDBACK-004"
         }
       ]
     },
@@ -2207,8 +2215,8 @@
         "browser",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -2249,6 +2257,14 @@
           "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12, existing isolated Chrome150; fictional IPC/SQLite only",
           "result": "Fresh5file78/78 covers six committed-before-ACK reopen cases,same/other author edits and captured discard baseline,stale/closed/save/discard/full-session and returned project/target negatives,plus original setup/session/architecture behavior. No added copy/layout/control or automatic save/adopt. Same production impact620/620 and final required-field fixture50/50 are separate;fresh quality/source build passed with independent integrated review.",
           "limitations": "Partial evidence only;in_progress/false unchanged. Missing-API17fail,browser8fail and eight screenshots,initial2fail,cross-session2fail,native clock oracle619/620 and first typecheck exit2 are retained. Native test only permits validated target clock settlement plus one diagnostic,total_changes+2. Final fixture50/50 is not another full620 run. No full design-state/viewport,dirty-start/history/architecture policy,closed idempotency-key recovery,post-capture commit discovery,actual Electron/model/quality/speedup/platform or whole-feature acceptance."
+        },
+        {
+          "type": "browser",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-73-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, headless Chromium 1228",
+          "result": "Setup and single architecture section UI feedback presentation fully qualified. 5 suites 111/111 browser tests passed, dirty baseline and editor buffer protection verified; typecheck, lint, check:i18n, build exit 0; AC1/AC2/AC3 and G-IMPLEMENT/G-RUN/G-DESIGN met; independent reviewer PASS",
+          "limitations": "Single-book planning and single architecture section UI qualified; multi-book and range outline UI belong to UI-001/UI-003"
         }
       ]
     },
