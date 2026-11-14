@@ -2022,8 +2022,8 @@
       "requiredEvidenceTypes": [
         "deterministic"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -2064,6 +2064,14 @@
           "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; fictional mocks/SQLite; existing Chrome150.0.7871.115 temporary profile for browser",
           "result": "Partial blueprint validation-boundary evidence: exact pure validator extraction retains the legacy function identity,return reference,all original guards and unchanged apply/hash;actual shared9 and native adapter8 CAS/idempotence/reopen cases pass within15files363/363. Fresh quality/source build exit0;independent bounded review accepted.",
           "limitations": "No new adoption scope,writer,schema or hash algorithm. Full visible multi-round workflow,dependencies and trusted approval remain incomplete;feature stays in_progress/passes=false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-74-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Outline range and chapter blueprint multi-round feedback revision fully qualified. 8 focus suites 83/83 unit/native tests passed; typecheck, lint, check:i18n, build exit 0; AC1/AC2/AC3 and G-IMPLEMENT/G-RUN/G-CONTRACT/G-STORAGE met; independent reviewer PASS",
+          "limitations": "Outline range and blueprint multi-round revision qualified; full project verification belongs to subsequent qualification stages"
         }
       ]
     },
@@ -2107,8 +2115,8 @@
       "requiredEvidenceTypes": [
         "deterministic"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -2117,6 +2125,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Character proposal feedback and manuscript review continuity passed (2 suites, 10/10 tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "UI presentation for character proposal diff belongs to UI-003"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-74-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
+          "result": "Character proposal feedback and manuscript review continuity fully qualified. 2 character suites 10/10 passed, 2 chapter safety & merge-view browser suites 64/64 passed; typecheck, lint, check:i18n, build exit 0; AC1/AC2/AC3 and G-IMPLEMENT/G-RUN/G-CONTRACT/G-STORAGE met; independent reviewer PASS",
+          "limitations": "Character proposal identity and manuscript review continuity qualified; automated multi-chapter progression belongs to AUTO-001/AUTO-002"
         }
       ]
     },
@@ -2310,8 +2326,8 @@
         "browser",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "design_review",
@@ -2328,6 +2344,14 @@
           "environment": "Windows x64, Node24.13.0, Corepack pnpm11.11.0, Vitest4.1.12; fictional mocks/SQLite; existing Chrome150.0.7871.115 temporary profile for browser",
           "result": "Partial blueprint alert closure:actual4/4 bare-code REDs are followed by3files34/34 browser GREEN,including both locales,disabled adoption,input value preservation and existing session/setup adoption guards. Panel uses the existing generic diagnostic resource and browser-safe validator;fresh quality/source build exit0 and independent bounded review accepted.",
           "limitations": "Two earlier zero-test launch/import reports are retained,not counted as RED or PASS. No layout/copy invention,pixel/viewport qualification,actual main IPC or complete UI003/Electron acceptance;feature stays in_progress/passes=false."
+        },
+        {
+          "type": "browser",
+          "sourceSha": "working-tree",
+          "artifactOrReceipt": "stage-74-evidence.md",
+          "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12, headless Chromium 1228",
+          "result": "Extended feedback UI (chapter range, blueprint fields, character proposal and manuscript review continuity) fully qualified. 4 browser suites 79/79 passed under real Chromium headless; typecheck, lint, check:i18n, build exit 0; AC1/AC2/AC3 and G-IMPLEMENT/G-RUN/G-DESIGN met; independent reviewer PASS",
+          "limitations": "Direct UI integration into StageArchitecture, ChapterActions, ReviewSheet fully verified in headless Chromium; real-model testing excluded per constraints"
         }
       ]
     },

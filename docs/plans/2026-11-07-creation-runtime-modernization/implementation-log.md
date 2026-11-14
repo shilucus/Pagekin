@@ -1429,3 +1429,13 @@ The observations below retain their chronological state. The final acceptance at
 - Static quality gates all passed: typecheck exit 0, lint exit 0, check:i18n exit 0, source build exit 0.
 - AC 1 (explicit feedback revision for setup fields and single architecture section), AC 2 (candidate isolation, writer submission only on adoption, unselected field preservation), AC 3 (buffer protection and existing generation preservation) fully qualified for FEEDBACK-002 and UI-002.
 - Features.json updated: FEEDBACK-002 and UI-002 completed, passes=true. Total 35 features: 14 completed, 21 in_progress. Next bounded stage: Stage 74 (FEEDBACK-003 + FEEDBACK-004 + UI-003: outline range & chapter blueprint revision and UI presentation).
+- Stage73 committed 583a5d0bbbb67986d2e627c106834d41619a71a3, parent cc1addf7f34933931454c2b6e2718a6e7400b400, 3 paths. Protected staged repository-analysis intact, untracked Stage1B3 files preserved.
+
+## 2026-11-14 - Stage74 Outline Range, Blueprint Fields, Character Proposals & Manuscript Review UI Qualification
+
+- Entry 583a5d0bbbb67986d2e627c106834d41619a71a3. Features.json FEEDBACK-003, FEEDBACK-004 and UI-003 qualified and promoted from in_progress to completed (passes=true).
+- Executed 8 core unit & native suites: 83 tests passed, 0 failed (extended-planning-feedback-dialog 12/12, planning-feedback-dialog 9/9, blueprint-feedback-adapter 8/8, character-feedback-continuity 7/7, blueprint-feedback-contract 9/9, feedback-outline-range 4/4, character-and-manuscript-feedback-continuity 3/3, m09-planning-feedback-ranges 31/31).
+- Executed 4 browser suites under real headless Chromium 1228: 79 tests passed, 0 failed (chapter-safety 59/59, planning-feedback-adoption-session 11/11, merge-view 5/5, blueprint-field-diagnostic 4/4).
+- Static quality gates all passed: typecheck exit 0, lint exit 0, check:i18n exit 0, source build exit 0.
+- AC 1 (outline range and blueprint field multi-round feedback revision), AC 2 (character identity stability, whole-batch regeneration gate, human review manuscript continuity), AC 3 (extended feedback UI presentation for range, blueprint, character and manuscript) fully qualified.
+- Features.json updated: FEEDBACK-003, FEEDBACK-004, UI-003 completed, passes=true. Total 35 features: 17 completed, 18 in_progress. Next bounded stage: Stage 75 (IMPORT-001: single-book novel decomposition complete migration qualification).
