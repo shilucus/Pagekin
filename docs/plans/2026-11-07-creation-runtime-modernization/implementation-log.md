@@ -1613,3 +1613,24 @@ The observations below retain their chronological state. The final acceptance at
   - 更新 `features.json`: `HEADLESS-001` 标记为 `status: "completed"`, `passes: true`。
   - **全部 35 项特性（35/35）已全部达到 `status: "completed"`, `passes: true` 验收状态！**
   - 产出 `stage-84-evidence.md`。下一步：Stage 85（全量 35 项特性累积 Team 审查与最终交付报告）。
+
+## Stage 85: 全量 35 项特性累积 Team 独立审查、跨阶段集成验证与最终交付完成
+
+- **执行时间**: 2026-11-14
+- **审查与验证范围**:
+  - 全量 35 项特性（`PERF-001` ~ `PERF-004`, `RUNTIME-001` ~ `RUNTIME-003`, `DRIVER-001` ~ `DRIVER-002`, `SCHED-001` ~ `SCHED-002`, `FEEDBACK-001` ~ `FEEDBACK-004`, `UI-001` ~ `UI-003`, `IMPORT-001` ~ `IMPORT-004`, `API-001`, `CLI-001`, `ACCEPT-001` ~ `ACCEPT-003`, `AUTO-001` ~ `AUTO-003`, `MCP-001`, `SKILL-001`, `QUAL-001`, `QUAL-002`, `HEADLESS-001`）。
+  - 累计阶段提交跨度：从 Stage 72 至 Stage 84（共 13 次原子阶段提交，当前 HEAD: `82597527`）。
+  - 覆盖六大架构目标：多书后台公平调度、渐进式人机反馈采用、拆书/仿写全量迁移隔离、本地领域 API/CLI、自动化闭环与机器初验定稿、全链性能与无窗口宿主互斥接管。
+- **验证事实与数据统计**:
+  - `features.json`: 35 项特性全部标记为 `status: "completed"`, `passes: true`，0 项待决，事实源 100% 闭环。
+  - 门禁全量通过：
+    - `node ./node_modules/typescript/bin/tsc --noEmit` (0 错误退出)
+    - `corepack pnpm run check:i18n` (通过，无未国际化或漏翻文案)
+    - `corepack pnpm run lint` (ESLint 0 warnings 0 errors, check-color-literals 校验通过)
+    - `corepack pnpm run build` (tsc && vite build 正常退出 0，完整生成 dist/ 与 dist-electron/)
+  - Git 仓库保护检查：
+    - 历史受保护暂存文件 `docs/repository-analysis-2026-11-07.md` (blob `1f53891b6ae9547e444762c4389433ea7cf5f304`) 全程毫发无损，未发生任何夹带。
+    - 排除未跟踪文件保持隔离。
+- **边界与未执行项**:
+  - 全部测试与断言在本地隔离环境（隔离虚构项目与 SQLite）与无消耗 Mock 模型传输下执行，未产生真实线上 LLM token liability 或外部网络开销。
+  - 三目标（Windows x64 / macOS arm64 / macOS x64）最终正式安装包分发需在各自独立 CI Runner 上执行。
