@@ -246,13 +246,21 @@ function pinnedVersion(value, label) {
 function installedPnpmVersion(cwd) {
   const isWindows = process.platform === 'win32'
   const executable = isWindows ? (process.env.ComSpec ?? 'cmd.exe') : 'pnpm'
-  const argumentsList = isWindows ? ['/d', '/s', '/c', 'pnpm --version'] : ['--version']
-  const result = spawnSync(executable, argumentsList, {
+  const argumentsList = isWindows ? ['/d', '/s', '/c', 'corepack pnpm --version'] : ['--version']
+  let result = spawnSync(executable, argumentsList, {
     cwd,
     encoding: 'utf8',
     shell: false,
     windowsHide: true,
   })
+  if (result.error || result.status !== 0) {
+    result = spawnSync(executable, isWindows ? ['/d', '/s', '/c', 'pnpm --version'] : ['--version'], {
+      cwd,
+      encoding: 'utf8',
+      shell: false,
+      windowsHide: true,
+    })
+  }
   assert(!result.error && result.status === 0, `Unable to read installed pnpm version: ${result.error?.message ?? `exit ${result.status}`}`)
   const version = String(result.stdout ?? '').trim()
   return pinnedVersion(version, 'Installed pnpm version')

@@ -279,7 +279,7 @@ function comparisonDatabase(sourceCopy, root) {
   }
   const snapshot = path.join(root, 'sql-comparison.db')
   // SQLite merges any committed WAL entries into this independent, read-only comparison input.
-  execFileSync(macMode ? 'python3' : 'python', ['-c', `import sqlite3,sys
+  execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `import sqlite3,sys
 source=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
 target=sqlite3.connect(sys.argv[2])
 source.backup(target)
@@ -541,7 +541,7 @@ const editorBody = locator => locator.evaluate(element => Array.from(element.que
 }).join('\n'))
 
 function draftBodies(target) {
-  return JSON.parse(execFileSync(macMode ? 'python3' : 'python', ['-c', `import json,sqlite3,sys
+  return JSON.parse(execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `import json,sqlite3,sys
 db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
 print(json.dumps([r[0] for r in db.execute('select body from contents')]))
 db.close()`, path.join(target, '.ai-novel', 'project.db')], { encoding: 'utf8' }))

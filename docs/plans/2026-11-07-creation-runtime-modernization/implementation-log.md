@@ -1560,3 +1560,34 @@ The observations below retain their chronological state. The final acceptance at
   - `MCP-001` 与 `SKILL-001` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT）。
   - 更新 `features.json`: 两项功能均标记为 `status: "completed"`, `passes: true`。累计 32 项完成，3 项待完成。
   - 产出 `stage-82-evidence.md`。下一步：Stage 83（`QUAL-001` + `QUAL-002` 完整链性能与桌面三目标回归资格）。
+
+## Stage 83: QUAL-001 + QUAL-002 完整链性能评估与桌面三目标回归资格全量闭环
+
+- **执行时间**: 2026-11-14
+- **范围与目标**:
+  - `QUAL-001`: 完整链性能与质量不退化评估，包含 1000 章大书与全链路生成/拆解/仿写的吞吐、延迟、内存开销与微基准测试。
+  - `QUAL-002`: 桌面交互与三目标（Windows x64, macOS arm64, macOS x64）回归资格，包含官网烟雾测试、双语主题、LanceDB 向量库重构升级与发布档案合同。
+- **实际命令与验证**:
+  - 性能套件（`QUAL-001`）：6 套性能压力与诊断测试全部通过（164/164 passed）：
+    - `performance-pressure-scenarios.test.mjs` (32 tests passed)
+    - `performance-inspection-lifecycle-scenarios.test.mjs` (passed)
+    - `performance-parse-scenarios.test.mjs` (passed)
+    - `performance-baseline.test.mjs` (passed)
+    - `drive-performance-output.test.mjs` (passed)
+    - `performance-diagnostics.test.ts` (11 tests passed, 1000 章 warm 耗时 4.2ms)
+  - 目标平台与发布套件（`QUAL-002`）：3 套测试全部通过（21/21 passed）：
+    - `release-official-homepage-smoke.test.ts` (2 tests passed)
+    - `release-vector-smoke.test.ts` (2 tests passed)
+    - `smoke-macos-dmg-acceptance-contract.test.ts` (17 tests passed)
+  - 环境与跨平台修复：
+    - `scripts/release-evidence-v2.mjs`: 增加优先调用 `corepack pnpm --version`，确保 Windows 环境正确命中项目约定的 11.11.0 版本。
+    - `scripts/f05-a11-offline-import-journey.mjs`: 修复 Windows 模拟测试 `macMode` 时调用硬编码 `python3` 的问题，统一为 `process.platform === 'win32' ? 'python' : 'python3'`。
+  - 静态门禁全量通过：
+    - `node ./node_modules/typescript/bin/tsc --noEmit` (0 错误退出)
+    - `corepack pnpm run check:i18n` (通过，无漏翻文案)
+    - `corepack pnpm run lint` (ESLint 0 warnings 0 errors, check-color-literals 通过)
+    - `corepack pnpm run build` (tsc && vite build 正常退出 0)
+- **成果与结论**:
+  - `QUAL-001` 与 `QUAL-002` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-MODEL, G-STORAGE, G-POLICY）。
+  - 更新 `features.json`: 两项功能均标记为 `status: "completed"`, `passes: true`。累计 34 项完成，1 项待完成。
+  - 产出 `stage-83-evidence.md`。下一步：Stage 84（`HEADLESS-001` 生产无窗口宿主与桌面互斥接管）。
