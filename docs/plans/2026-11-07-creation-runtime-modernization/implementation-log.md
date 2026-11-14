@@ -1488,3 +1488,15 @@ The observations below retain their chronological state. The final acceptance at
   - `UI-001` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-DESIGN）。
   - 更新 `features.json`: `UI-001` 标记为 `status: "completed"`, `passes: true`。累计 22 项完成，13 项待完成。
   - 产出 `stage-78-evidence.md`。下一步：Stage 79（`API-001` + `CLI-001` 本机领域 API 与可等待 CLI）。
+
+## 2026-11-14 - Stage 79: API-001 + CLI-001 本机领域 API 与可等待 CLI 全量闭环
+
+- **范围**: `API-001` (本机领域 API 与入站安全) 与 `CLI-001` (可等待 CLI 与离线任务驱动)。
+- **执行命令与验证**:
+  - 运行 4 套控制器安全与 CLI 驱动测试：`corepack pnpm test electron/controllers/__tests__/inbound-api-controller.headers.test.ts electron/controllers/__tests__/inbound-api-controller.idempotency.test.ts electron/controllers/__tests__/inbound-api-controller.test.ts scripts/cli/__tests__/creation-cli.test.ts`，共计 46/46 测试全部通过。
+  - 覆盖 AC-1（127.0.0.1 本机回环、Authorization Bearer 令牌校验、Host/Origin 白名单、绝不暴露通用文件/shell/原始配置）、AC-2（工作流 submit/events/wait/cancel/resume、主进程准入写者边界、长任务断开重连不影响主进程执行）、AC-3（作者审批门禁不绕过、结构化收据与领域错误码一致性）。
+  - 静态门禁全量通过：`node ./node_modules/typescript/bin/tsc --noEmit` (0 错误)、`corepack pnpm run lint` (0 错误)、`corepack pnpm run check:i18n` (0 遗漏)、`corepack pnpm run build` (tsc && vite build 正常退出 0)。
+- **成果与结论**:
+  - `API-001` 与 `CLI-001` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT, G-SECURITY）。
+  - 更新 `features.json`: `API-001` 与 `CLI-001` 均标记为 `status: "completed"`, `passes: true`。累计 24 项完成，11 项待完成。
+  - 产出 `stage-79-evidence.md`。下一步：Stage 80（`ACCEPT-001` ~ `ACCEPT-003` 机器初验、作者批准封存、逐章批准提交）。

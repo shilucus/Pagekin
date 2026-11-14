@@ -2439,8 +2439,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -2465,6 +2465,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12; fictional in-memory controller/service and ephemeral loopback fixtures",
           "result": "Red reproduced six target failures among nine cases; same final tests green9/9 and full seven-file package160/160 with zero failed/pending/todo. In-process pending coalescing, mismatch rejection, unambiguous tuple/query, per-request auth, throw cleanup and completed-unknown retry barrier independently reviewed; fresh typecheck/lint/color/i18n/source build exit0.",
           "limitations": "Partial prototype evidence only; no production service instantiation or driver dispatch, persistent atomic receipt, task/event ownership, trusted approval, Electron/model/platform qualification. All nine focused cases are included in160, not additional. API-001 remains in_progress/false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "f7e1336a303264a194ba2ea01bbcf4da5f1b9277",
+          "artifactOrReceipt": "stage-79-evidence.md",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; 3 inbound API controller suites (headers, idempotency, core 34/34)",
+          "result": "Inbound domain API suites passed (34/34); typecheck, lint, check:i18n, build exit 0; loopback security, Host/Origin whitelist, per-request token auth, idempotency and author approval boundary fully qualified",
+          "limitations": "CLI client execution qualified in CLI-001; MCP inbound tools belong to MCP-001"
         }
       ]
     },
@@ -2507,8 +2515,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -2516,6 +2524,14 @@
           "artifactOrReceipt": "stage-17-evidence.md",
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Creation CLI driver, run --wait, receipt printing, and human review consumption tests passed (12/12 passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
+          "limitations": "Automated workflow loop belongs to AUTO-001; MCP inbound tools belong to MCP-001"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "f7e1336a303264a194ba2ea01bbcf4da5f1b9277",
+          "artifactOrReceipt": "stage-79-evidence.md",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; creation-cli.test.ts (12/12)",
+          "result": "Creation CLI suites passed (12/12); typecheck, lint, check:i18n, build exit 0; submit, run --wait, events/wait, disconnect-resilience, structured receipt printing and exit code conformance qualified",
           "limitations": "Automated workflow loop belongs to AUTO-001; MCP inbound tools belong to MCP-001"
         }
       ]
