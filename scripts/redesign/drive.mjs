@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { isDeepStrictEqual } from 'node:util'
 import { _electron as electron } from 'playwright'
 
 import { chooseProjectDirectoryGrant } from '../project-directory-grant.mjs'
@@ -469,6 +470,19 @@ export async function harvestModelLog(app, modelLog, sessionErrors) {
   }
 }
 
+export function captureFixtureRequestCutoff(fake) {
+  return { requests: fake.requests.length, timings: fake.chatTimings.map(({ index, startMs, endMs, statusCode, completed }) =>
+    ({ index, startMs, endMs, statusCode, completed })) }
+}
+
+export function observeFixtureQuitCutoff(fake, cutoff) {
+  const after = captureFixtureRequestCutoff(fake)
+  return { modelRequestsAfterFinalCutoff: after.requests - cutoff.requests,
+    modelTimingRecordsAfterFinalCutoff: after.timings.length - cutoff.timings.length,
+    unchanged: after.requests === cutoff.requests && isDeepStrictEqual(after.timings, cutoff.timings)
+      && after.timings.every(item => Number.isFinite(item.startMs) && Number.isFinite(item.endMs) && item.endMs >= item.startMs) }
+}
+
 /**
  * 真实模式会话收尾：汇总模型请求，删掉隔离目录里的模型配置。
  * 删除失败只记进 sessionErrors：会话照常走结果路径，隔离目录因会话不干净而保留，交给收尾的密钥扫描。
@@ -695,15 +709,16 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
     if (options.console) writeConsoleLog(`${base(sessionName)}.console.log`, performanceBaseline
       ? [`PERFORMANCE_DIAGNOSTICS_REDACTED:${diagnostics.length}`] : diagnostics, sessionErrors, realKey)
     if (launched && realKey) await harvestModelLog(launched.app, modelLog, sessionErrors)
-    const fixtureRequestsBeforeQuit = fake?.requests.length
+    const fixtureCutoff = performanceBaseline && fake ? captureFixtureRequestCutoff(fake) : null
     const cleanupMessage = error => performanceBaseline
       ? performanceMessageOf(error, 'cleanup', 'quit', shared.failureDiagnostics ??= []) : messageOf(error)
     if (launched) shared.quit = await quit(launched.app).catch(error => { sessionErrors.push(cleanupMessage(error)); return null })
     await fake?.close().catch(error => { sessionErrors.push(cleanupMessage(error)) })
     if (fake) shared.modelRequests = fake.requests.length
     if (performanceBaseline && fake) {
-      shared.modelRequestsAfterFinalCutoff = fake.requests.length - fixtureRequestsBeforeQuit
-      if (shared.modelRequestsAfterFinalCutoff !== 0) {
+      const { unchanged, ...counts } = observeFixtureQuitCutoff(fake, fixtureCutoff)
+      Object.assign(shared, counts)
+      if (!unchanged) {
         sessionErrors.push('PERFORMANCE_REQUESTS_DURING_QUIT')
         appendPerformanceFailureDiagnostic(shared.failureDiagnostics ??= [], new Error('PERFORMANCE_REQUESTS_DURING_QUIT'), 'cleanup', 'quit')
         for (const result of results) if (result.measured) {

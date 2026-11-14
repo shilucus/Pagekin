@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { chooseProjectDirectoryGrant } from '../project-directory-grant.mjs'
 import { FAKE_MODEL } from './fake-model.mjs'
 import { runScheduledGenerationScenario } from './scheduled-generation-scenario.mjs'
+import { runWorkflowBatchComparisonScenario } from './workflow-batch-comparison-scenario.mjs'
 
 const hash = text => createHash('sha256').update(text, 'utf8').digest('hex')
 const prose = [
@@ -408,4 +409,5 @@ export const WORKFLOW_BATCH_SCENARIOS = {
   'workflow-batch-unknown-v2': { model: true, shell: 'stage', timeout: 120_000, run: runWorkflowBatchUnknownScenario },
   'workflow-batch-restart-v2': { model: true, shell: 'stage', timeout: 120_000, run: runWorkflowBatchRestartScenario },
   'scheduled-generation-v1': { model: true, shell: 'stage', timeout: 120_000, run: runScheduledGenerationScenario },
+  'workflow-batch-serial-parallel-v1': { performance: true, model: true, shell: 'stage', timeout: 180_000, run: runWorkflowBatchComparisonScenario },
 }

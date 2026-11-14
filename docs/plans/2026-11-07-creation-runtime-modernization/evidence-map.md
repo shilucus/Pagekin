@@ -221,3 +221,24 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
   build tree; unchanged build is not proof of production composition. API001 and
   CLI001 each gain2partial records only; entire previous JSON semantics and14/21
   flags remain. No new Electron/browser, model, speedup or platform qualification.
+
+## Stage91 Two-Book Observation
+
+- [Stage91](stage-91-evidence.md) registers an isolated existing workflow-batch:v2
+  IPC/main-owner scene, not new production policy. Real receipt/attempt/output
+  bindings and full parsed request parameter hashes constrain three paired
+  serial/parallel observations. Failure counts preserve actual partial progress;
+  accepted requests and timing metadata both remain frozen across quit.
+- Final11files242/242 pass with0failed/pending/todo. The first registration test,
+  lint and Electron fixture-path failures remain in raw evidence. The unchanged
+  production Windows preflight is exercised by a path regression, not bypassed.
+  Typecheck/i18n/build and final lint/colors actually exit0.
+- Actual Electron retest completes12fictional books and36requests, six rounds
+  with peak1/2 and matching input/output identities. Normal quit has0cleanup
+  failures,0post-cutoff accepted/timing deltas and no observed external fetch,
+  profile writes or residual processes. PNG is the post-close light bookshelf,
+  not a workflow UI or visual-equality proof. [Manifest](stage-91-source-manifest.json)
+  binds current drivers, raw attempts and the unchanged344-file build.
+- SCHED002 gains only partial evidence; all35 feature statuses remain14completed/
+  21in_progress. Three local pairs with fixed500ms response delay do not qualify
+  statistical speedup, workflow p95, real models, full domain admission or targets.

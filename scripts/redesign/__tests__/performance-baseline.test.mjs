@@ -559,6 +559,16 @@ describe('performance baseline contract', () => {
     expect(JSON.stringify(saved)).not.toMatch(/private-|PRIVATE_SECRET/u)
   })
 
+  it('retains fixed comparison failure codes without copying arbitrary messages', () => {
+    const codes = ['PERFORMANCE_COMPARISON_TIMEOUT', 'PERFORMANCE_COMPARISON_SETUP_FAILED', 'PERFORMANCE_COMPARISON_INPUT_MISMATCH',
+      'PERFORMANCE_COMPARISON_RECEIPT_INVALID', 'PERFORMANCE_COMPARISON_REQUEST_MISMATCH',
+      'PERFORMANCE_COMPARISON_CLEANUP_FAILED', 'PERFORMANCE_COMPARISON_FINAL_REQUEST_EVIDENCE_FAILED']
+    const entries = []
+    for (const code of codes) appendPerformanceFailureDiagnostic(entries, Object.assign(new Error('private-prompt'), { code }), 'scenario', 'verify')
+    expect(entries.map(item => item.code)).toEqual(codes)
+    expect(JSON.stringify(entries)).not.toContain('private-prompt')
+  })
+
   it('rejects a malformed renderer heartbeat even when metrics exist', async () => {
     vi.useFakeTimers()
     const app = { evaluate: async callback => callback() }

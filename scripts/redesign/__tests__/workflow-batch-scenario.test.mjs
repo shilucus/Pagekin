@@ -129,8 +129,10 @@ function fixture(options = {}) {
 
 describe('workflow batch scenario assertions (mock orchestration only)', () => {
   it('registers all isolated bounded scenarios', () => {
-    expect(Object.keys(WORKFLOW_BATCH_SCENARIOS)).toEqual(['workflow-batch-v2', 'workflow-batch-unknown-v2', 'workflow-batch-restart-v2', 'scheduled-generation-v1'])
-    for (const scene of Object.values(WORKFLOW_BATCH_SCENARIOS)) expect(scene).toMatchObject({ model: true, shell: 'stage', timeout: 120000 })
+    const existing = ['workflow-batch-v2', 'workflow-batch-unknown-v2', 'workflow-batch-restart-v2', 'scheduled-generation-v1']
+    expect(Object.keys(WORKFLOW_BATCH_SCENARIOS)).toEqual([...existing, 'workflow-batch-serial-parallel-v1'])
+    for (const name of existing) expect(WORKFLOW_BATCH_SCENARIOS[name]).toMatchObject({ model: true, shell: 'stage', timeout: 120000 })
+    expect(WORKFLOW_BATCH_SCENARIOS['workflow-batch-serial-parallel-v1']).toMatchObject({ model: true, performance: true, shell: 'stage', timeout: 180000 })
   })
   it('requires actual-looking per-chapter draft and review receipts after detaching', async () => {
     const f = fixture(), receipt = await runWorkflowBatchScenario(f.context, f.dependencies)

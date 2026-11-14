@@ -1817,3 +1817,67 @@ The observations below retain their chronological state. The final acceptance at
   14owned paths,344built files and full prior feature semantics. Root confirms
   empty index, unchanged protected files and no effective hooks/owned filters;
   scoped Git/postcommit preservation checks follow.
+
+## 2026-11-14 - Stage 91: Two-Book Serial/Parallel Observation
+
+- Stage90 committed2191c287c8c1593c392ce55de795f75b94541ed3. Root postcommit
+  confirms exact14paths,40matching identities, empty index and unchanged protected
+  files. No previous staged or unrelated contents are included.
+- Freeze the actual registered two-book fixture comparator, not production
+  policy changes or full SCHED002. [Stage91](stage-91-evidence.md) maps requirements,
+  ownership, three-pair/36-request sampling and actual Electron/quality gates.
+- Luna owns comparison/registration, Terra2 owns fake delay/timing, Root owns
+  strict report projection/records/commands/Git; Sol and Agent4 review independently.
+  Source/domain admission remains a later executable phase, not a credential gap.
+- Projection RED crosses midnight November14/15:2files34/35, the new scene name
+  is rejected before registration in the whitelist. GREEN2files35/35, then fresh
+  source-hash retest35/35 on November15; both include fake-model12/12. Raw reports
+  remain in `.runtime/creation-runtime-modernization/stage-91/`. Sol and Agent4
+  independently accept this projection/fake focus only, not the pending scene.
+- Agent4 identifies missing report-level review source identity; Root adds
+  `reviewSourceContentHash` and poison coverage. Scene must derive it from the
+  actual review source content and compare the actual draft receipt, not copy
+  an expected value. No Electron or performance acceptance is claimed yet.
+- First impact11files227/228 exposes the old registration list; Root updates
+  only the new entry and distinct180s timeout. Independent scene source review
+  rejects short prose, incomplete actual parameter hashes, mixed scene/book
+  failure denominators and lost partial rounds; Sol also requires stronger step
+  receipt bindings. Luna repairs scene/oracle/counters, Terra2 supplies full-body
+  parameter digests, Root updates bounded projection/diagnostics. Retest pending.
+- Fresh typecheck/i18n/build exit0 on November15, full344-file build unchanged
+  from90. Protected3file/package/lock hashes are unchanged; diff check is clean.
+- Repaired impact11files235/235 pass, but fresh lint has2inner-declaration
+  errors. Second independent review catches false-zero partial request counts,
+  a quit-time late-received request gap and a live-shape model-artifact oracle
+  gap. Luna repairs scene/control-flow tests; Root repairs driver final cutoff.
+  Actual cutoff3files43/43 pass with real local HTTP delayed-close counterexample;
+  Agent4 accepts only that increment. New bytes still require full focus/lint,
+  source rereview and actual isolated Electron; no feature flag is promoted.
+- Integrated second-review focus11files241/241 and lint/colors exit0; Sol and
+  Agent4 accept respective live-shape/counter/cutoff fixes. First actual Electron
+  fails at first fictional create,0books/0requests,29.54ms; probe insufficient,
+  cleanupFailures1. Normal quit and no observed external/write/residual activity
+  do not turn it into workflow success. Long fixture parent exceeds unchanged
+  Windows derived-storage preflight. Compact s1/p1 parents plus a real preflight
+  scene-path regression pass11files242/242 and Sol source review; old raw retained.
+- Actual second Electron exits0,12books/36requests/36settled physical attempts/
+  72effects. Three paired rounds have serial4610.6011/4417.8102/4424.2878ms,
+  parallel2558.2691/2478.3507/2492.9699ms, actual peaks1/2 and matching full
+  request/parameter/draft/review/source hashes. Normal quit,0cleanup failures,
+  0post-cutoff accepted/timing deltas, no observed external fetch/profile writes
+  or residual processes. Root inspects actual post-close1440x900light bookshelf
+  PNG; it does not prove workflow UI interaction. Fixed500ms local responses and
+  three pairs are not real-model speedup, workflow p95 or statistical proof.
+- Entry SHA is temporarily supplied for the retest; exact uncommitted driver
+  sources and unchanged344-file build are bound separately. First failed output
+  remains. Full SCHED002 and domain admission stay open; next phase first repairs
+  the confirmed batch cleanup-retention defect before domain-writer admission.
+- Sol and Agent4 independently accept the current source and actual raw/log with
+  the stated bounds; neither implementer solely accepts its own important work.
+  Exactly3SCHED002 partial records are added, all prior semantics/statuses stay
+  14/21; actual metadata36/36passes. Final identity/owned-path audit follows.
+- Agent4 independently accepts75/75identities,10Vitest/2Electron summaries,
+  exact18owned paths, full feature semantics and complete344-file build identity.
+  Sol's measured-scene-versus-whole-process wording is corrected in evidence.
+  Root sees empty index, unchanged protected files, sample-only hooks and no
+  owned-path filters; scoped commit/postcommit follows.

@@ -1,7 +1,9 @@
 import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'node:http'
+import { performance } from 'node:perf_hooks'
 
 // 与 f05-u05、f05-u12 旅程相同的做法：主进程 fetch 改道到本机假 OpenAI 兼容服务，零真实模型调用。
 export const FAKE_MODEL = Object.freeze({ id: 'redesign-drive-fixture', name: '驱动夹具模型', provider: 'openai', protocol: 'openai',
@@ -16,6 +18,11 @@ const FIXTURE_REVISED = `${FIXTURE_PROSE}林岚把这句话记进日志，又核
 const REVIEW = JSON.stringify({ summary: '时间线需要核对。', items: [
   { category: '连续性', severity: 'warning', description: '核对钟声提前一刻与潮位的关系。', quote: '昨夜的钟声比往常早了一刻' },
 ], goalReviews: [] })
+
+function requestParametersHash(body) {
+  const parameters = Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'messages'))
+  return createHash('sha256').update(JSON.stringify(parameters), 'utf8').digest('hex')
+}
 
 /** 创作资料角色提取：每个资料块回一张守塔人与一张林岚（示例作品已有林岚，可以对应已有角色）。 */
 function characterExtraction(prompt, cards) {
@@ -122,6 +129,12 @@ export async function startFakeModel(diagnostics) {
   const requests = []
   /** 对话请求的模型与消息原文，按到达顺序；场景用它核对两边发给模型的参数是否一致。 */
   const chats = []
+  const chatTimings = []
+  let chatDelayMs = 0
+  const setChatDelay = ms => {
+    if (!Number.isSafeInteger(ms) || ms < 0 || ms > 2000) throw new RangeError('setChatDelay requires an integer from 0 to 2000 ms')
+    chatDelayMs = ms
+  }
   let held = null
   let holdEmbeddings = false
   let waiting = 0
@@ -151,6 +164,31 @@ export async function startFakeModel(diagnostics) {
     if (!held) return
     waiting++
     try { await held.promise } finally { waiting-- }
+  }
+  const waitForChat = async response => {
+    const timing = { index: chatTimings.length, startMs: performance.now(), endMs: null, statusCode: null, completed: false }
+    chatTimings.push(timing)
+    const delay = chatDelayMs
+    let ended = false
+    const finish = completed => {
+      if (ended) return
+      ended = true
+      timing.endMs = performance.now()
+      timing.completed = completed
+      timing.statusCode = completed ? response.statusCode : null
+    }
+    response.once('finish', () => finish(true))
+    response.once('close', () => finish(false))
+    await pass()
+    if (response.destroyed) return false
+    if (delay > 0) {
+      await new Promise(resolve => {
+        const done = () => { clearTimeout(timer); response.off('close', done); resolve() }
+        const timer = setTimeout(done, delay)
+        response.once('close', done)
+      })
+    }
+    return !response.destroyed
   }
   /** 之后的正文回复按 chunks 逐块发出，块间隔 intervalMs；每块发出的时刻记进 streamLog（epoch 毫秒与累计块数）。 */
   const streamProse = plan => { stream = plan; streamLog.length = 0 }
@@ -196,10 +234,10 @@ export async function startFakeModel(diagnostics) {
     if (request.method === 'POST' && request.url.endsWith('/v1/messages')) {
       if (request.headers['x-api-key'] !== FAKE_MODEL.apiKey) { response.writeHead(401).end(); return }
       const body = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
-      await pass()
+      if (!await waitForChat(response)) return
       const prompt = [body.system ?? '', ...(body.messages ?? []).map(message => message.content)].join('\n')
       const { kind, content } = responseFor(prompt, { extraction, plotTree, review, characterState, importInference })
-      chats.push({ kind, model: body.model, messages: body.messages, protocol: 'anthropic',
+      chats.push({ kind, model: body.model, messages: body.messages, requestParametersHash: requestParametersHash(body), protocol: 'anthropic',
         anthropicVersion: request.headers['anthropic-version'] ?? null, system: body.system ?? null, maxTokens: body.max_tokens, stream: body.stream === true })
       record(kind, `anthropic ${prompt.slice(0, 100).replace(/\s+/g, ' ')}`)
       const usage = { input_tokens: 400, output_tokens: 200 }
@@ -234,7 +272,7 @@ export async function startFakeModel(diagnostics) {
       return
     }
     if (request.url !== '/v1/chat/completions') { response.writeHead(404).end(); return }
-    await pass()
+    if (!await waitForChat(response)) return
     if (rateLimited) {
       record('rate-limit', 'fixture HTTP 429')
       response.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '1' })
@@ -250,7 +288,7 @@ export async function startFakeModel(diagnostics) {
     const reply = responseFor(prompt, { extraction, plotTree, review, characterState, importInference })
     const { kind } = reply
     const content = kind === 'character-state' && brokenCharacterState ? '角色状态暂时无法整理。' : reply.content
-    chats.push({ kind, model: body.model, messages: body.messages,
+    chats.push({ kind, model: body.model, messages: body.messages, requestParametersHash: requestParametersHash(body),
       maxTokens: body.max_tokens ?? body.max_completion_tokens ?? null, temperature: body.temperature ?? null })
     record(kind, prompt.slice(0, 120).replace(/\s+/g, ' '))
     response.writeHead(200, { 'Content-Type': 'text/event-stream' })
@@ -284,6 +322,6 @@ export async function startFakeModel(diagnostics) {
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
   server.unref()
-  return { port: server.address().port, requests, chats, gate, streamProse, streamLog, rejectRateLimit, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview, replyCharacterState, acceptKeylessEmbeddings, replyImport, rejectContextLength, embeddingAuthorizations,
+  return { port: server.address().port, requests, chats, chatTimings, setChatDelay, gate, streamProse, streamLog, rejectRateLimit, replyCharacterCards, breakCharacterState, dropCharacterState, replyPlotTree, failProse, replyReview, replyCharacterState, acceptKeylessEmbeddings, replyImport, rejectContextLength, embeddingAuthorizations,
     close: () => new Promise(resolve => { server.closeAllConnections(); server.close(() => resolve()) }) }
 }

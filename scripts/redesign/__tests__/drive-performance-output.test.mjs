@@ -39,6 +39,71 @@ afterEach(() => {
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true })
 })
 
+it('preserves only explicit two-book paired timing and receipt identities', () => {
+  const scenario = 'workflow-batch-serial-parallel-v1'
+  const hash = 'a'.repeat(64)
+  const book = { slot: 'A', state: 'waiting_review', attempts: 3, effects: 6,
+    draftContentHash: hash, reviewContentHash: hash, reviewSourceContentHash: hash, requestMessagesHashes: [hash, hash, hash],
+    parameterHashes: [hash, hash, hash] }
+  const round = { status: 'completed', startedBooks: 2, completedBooks: 2, wallMs: 1700.5, peakInFlight: 2, guardedFetchRequests: 6, fakeProviderRequests: 6,
+    books: [book, { ...book, slot: 'B' }] }
+  const comparison = { schemaVersion: 1, samples: 3, booksPerRound: 2, responseDelayMs: 500, plannedBooks: 12, startedBooks: 12, completedBooks: 12,
+    source: 'isolated-electron-registered-ipc-main-owner', sampling: 'three-local-pairs-not-statistical-qualification',
+    pairs: [1, 2, 3].map(pair => ({ pair, order: pair === 2 ? ['parallel', 'serial'] : ['serial', 'parallel'],
+      serial: round, parallel: round })), sameInputHashes: true }
+  const raw = { scenario, session: scenario, measured: { scenario, attempted: 6, failed: 0,
+    pairedComparison: comparison } }
+  const before = structuredClone(raw)
+  const projected = projectPerformanceResult(raw)
+  assert.deepEqual(raw, before)
+  assert.equal(projected.scenario, scenario)
+  assert.equal(projected.session, scenario)
+  assert.deepEqual(projected.measured, raw.measured)
+
+  const poisoned = structuredClone(raw)
+  poisoned.measured.pairedComparison.secret = 'private-comparison'
+  const pair = poisoned.measured.pairedComparison.pairs[0]
+  pair.projectPath = 'private-path'
+  pair.serial.prompt = 'private-prompt'
+  pair.serial.wallMs = Infinity
+  pair.serial.peakInFlight = -1
+  pair.serial.books[0].slot = 'private-book'
+  pair.serial.books[0].draftContentHash = 'private-content'
+  pair.serial.books[0].reviewSourceContentHash = 'private-source-content'
+  pair.serial.books[0].requestMessagesHashes = ['private-message']
+  pair.serial.books[0].token = 'private-token'
+  const safe = projectPerformanceResult(poisoned)
+  assert.equal(safe.measured.pairedComparison.pairs.length, 3)
+  assert.equal(safe.measured.attempted, 6)
+  assert.equal(safe.measured.failed, 0)
+  assert.equal(safe.measured.pairedComparison.pairs[0].serial.wallMs, null)
+  assert.equal(safe.measured.pairedComparison.pairs[0].serial.peakInFlight, null)
+  assert.equal(safe.measured.pairedComparison.pairs[0].serial.books[0].slot, null)
+  assert.equal(safe.measured.pairedComparison.pairs[0].serial.books[0].draftContentHash, null)
+  assert.equal(safe.measured.pairedComparison.pairs[0].serial.books[0].reviewSourceContentHash, null)
+  assert.deepEqual(safe.measured.pairedComparison.pairs[0].serial.books[0].requestMessagesHashes, [null])
+  assert.equal(JSON.stringify(safe).includes('private-'), false)
+  assert.deepEqual(projectPerformanceResult({ measured: { limitations: ['three-local-pairs-not-statistical-qualification',
+    'not-real-model-speed-or-p95', 'private-limitation'] } }).measured.limitations,
+  ['three-local-pairs-not-statistical-qualification', 'not-real-model-speed-or-p95', null])
+})
+
+it('retains an incomplete comparison and separates planned books from actual scene failure', () => {
+  const measured = { attempted: 1, failed: 1, success: false, pairedComparison: { schemaVersion: 1, samples: 3,
+    booksPerRound: 2, responseDelayMs: 500, plannedBooks: 12, startedBooks: 1, completedBooks: 0,
+    source: 'isolated-electron-registered-ipc-main-owner', sampling: 'three-local-pairs-not-statistical-qualification', sameInputHashes: false,
+    pairs: [{ pair: 1, order: ['serial', 'parallel'], status: 'failed', startedBooks: 1, completedBooks: 0, serial: { status: 'failed', wallMs: 23.5,
+      startedBooks: 1, completedBooks: 0, books: [] }, parallel: { status: 'not_started', startedBooks: 0, completedBooks: 0, books: [] } }] } }
+  assert.deepEqual(projectPerformanceResult({ measured }).measured, measured)
+})
+
+it('exports only bounded post-quit timing counts alongside accepted request counts', () => {
+  const raw = { modelRequestsAfterFinalCutoff: 0, modelTimingRecordsAfterFinalCutoff: 1,
+    modelTimingRecords: [{ prompt: 'private-prompt', startMs: 1 }] }
+  assert.deepEqual(projectPerformanceResult(raw), { modelRequestsAfterFinalCutoff: 0, modelTimingRecordsAfterFinalCutoff: 1 })
+  assert.deepEqual(projectPerformanceResult({ modelTimingRecordsAfterFinalCutoff: -1 }), { modelTimingRecordsAfterFinalCutoff: null })
+})
+
 it('projects the six no-model parse scenes and only their bounded inspection fields', () => {
   const scenarios = ['perf-parse-author-10', 'perf-parse-author-100', 'perf-parse-author-1000',
     'perf-parse-reference-10', 'perf-parse-reference-100', 'perf-parse-reference-1000']

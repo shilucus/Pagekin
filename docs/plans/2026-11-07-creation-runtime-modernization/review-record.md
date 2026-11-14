@@ -1346,3 +1346,44 @@ complete344-file build,exact14owned paths and full prior feature semantics.
 Root confirms an empty index, unchanged protected files, sample-only hooks and
 unspecified owned-path filters; scoped Git/postcommit checks follow. No full
 API/CLI, Electron/browser, model/quality, speedup or platform claim follows.
+
+## 2026-11-15 - Stage 91 Independent Comparison Review
+
+Sol and Agent4 independently reject the first scene's undersized fictional prose,
+mixed failure denominators, incomplete parameter hashes and lost partial rounds.
+Sol requires the live receipt shape, distinct actual model attempts and exact
+per-step output/source bindings; historicalArtifacts are not guaranteed and two
+steps share a run. Agent4 identifies false-zero partial counters and a delayed
+request received during quit before fake acceptance. All are repaired with new
+regressions, including actual scene-control-flow failures and real local HTTP
+delayed-close cutoff detection. Earlier failed reports remain visible.
+
+First Electron fails at fictional project creation against the unchanged Windows
+derived-storage path guard. Only scene parent names are shortened, and the real
+preflight regression retains the old-path rejection. Sol independently accepts
+this increment. Final focused report actually has11files242/242,0failed/pending/
+todo; fresh final lint/colors exits0. Earlier type/i18n/build exit0 use unchanged
+app sources, and Root rehashes all344built files after the driver-only repairs.
+
+Both reviewers independently read the actual second Electron raw/log and accept
+the bounded integrated source/runtime. All12books/36physical requests complete,
+with3settled attempts/6effects per book and equal corresponding input/parameter/
+draft/review/source hashes. Serial peaks1, parallel2; three pairs are not a p95
+or statistical/real-model speed qualification. Normal quit has0cleanup failures,
+0post-cutoff accepted/timing deltas and no observed external fetch/profile writes
+or residual processes. Sol and Root inspect actual1440x900light PNG/DOM/ARIA:
+it is the post-close bookshelf, not workflow UI or visual equality proof.
+
+SCHED002 gains exactly3partial records, with full prior feature JSON semantics
+preserved after removing them and all35statuses still14completed/21in_progress.
+Checklist36/36passes, not a functional test. No production policy/UI/schema/deps
+change, full domain-writer admission, real-model quality or target qualification
+is accepted. Entry SHA and current driver identities are explicitly distinct;
+final manifest/artifact audit and root scoped Git checks follow.
+
+Agent4's final independent artifact audit accepts75/75listed identities,
+10actual Vitest report summaries,2Electron summaries,exact18owned paths and
+the complete344-file build digest. Removing the3partial appends reproduces the
+entire entry feature JSON semantics. Sol's scene-versus-process elapsed wording
+finding is corrected without source/run changes. Root confirms empty index,
+sample-only hooks and no owned-path filters; scoped commit/postcommit follow.

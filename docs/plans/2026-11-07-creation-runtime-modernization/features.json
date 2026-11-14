@@ -1173,6 +1173,30 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Multi-book fair scheduling and unified resource admission fully qualified. 9 suites 158/158 core scheduler tests passed, 2 suites 54/54 performance pressure tests passed; single-signal transparent reference preserved; typecheck, lint, check:i18n, build exit 0; AC1/AC2/AC3 and G-IMPLEMENT/G-RUN/G-CONTRACT/G-STORAGE met; independent reviewer PASS",
           "limitations": "Desktop in-process memory scheduler and IPC boundaries qualified; real-model testing excluded per project constraints"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "2191c287c8c1593c392ce55de795f75b94541ed3 + stage-91-source-manifest.json working driver identities",
+          "artifactOrReceipt": "stage-91-evidence.md; .runtime/creation-runtime-modernization/stage-91/impact-path-retest.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; fictional local fixtures only",
+          "result": "Final11files242/242,0failed/pending/todo. Covers actual scene partial-failure accounting, production Windows fixture-path preflight, exact live receipt/attempt/output bindings, full parsed request parameter hashes, strict private-field projection and real delayed HTTP arrival across quit cutoff. Fresh final lint/colors and earlier unchanged-app typecheck/i18n/build exit0.",
+          "limitations": "Partial comparison-driver qualification only. Earlier registration/lint/path failures retained; overlapping runs not summed. No universal domain admission, production policy change, real provider or complete SCHED002 acceptance."
+        },
+        {
+          "type": "performance",
+          "sourceSha": "2191c287c8c1593c392ce55de795f75b94541ed3 + stage-91-source-manifest.json working driver and unchanged built identities",
+          "artifactOrReceipt": "stage-91-evidence.md#actual-isolated-retest-november15; .runtime/creation-runtime-modernization/stage-91/desktop-retest/workflow-batch-serial-parallel-v1-light.json",
+          "environment": "Actual Windows x64 isolated Electron registered workflow-batch:v2 IPC/main owner; three local serial/parallel pairs, two fictional books per round, fixed500ms provider delay",
+          "result": "12books complete with3settled attempts/6effects each,36guarded/accepted chat requests. Corresponding full messages/parameters/draft/review/source hashes match. Serial4610.6011/4417.8102/4424.2878ms versus parallel2558.2691/2478.3507/2492.9699ms, actual per-round peaks1/2. No429/request or cleanup failures in the successful run.",
+          "limitations": "Wall time excludes creation/configuration but includes view/start/poll/receipt work. Three local pairs are not workflow p95, statistical qualification, real provider throughput, literary quality or full domain-writer admission; SCHED002 remains incomplete."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "2191c287c8c1593c392ce55de795f75b94541ed3 + stage-91-source-manifest.json working driver identities",
+          "artifactOrReceipt": "stage-91-evidence.md; .runtime/creation-runtime-modernization/stage-91/desktop-retest/workflow-batch-serial-parallel-v1-light.json; matching PNG/DOM/ARIA",
+          "environment": "Windows x64; Electron44.9.3; isolated fictional profile/projects and guarded loopback fake; actual1440x900light post-close screenshot",
+          "result": "Actual registered comparator exits0 with12completed books/36requests, normal quit,0cleanup failures,0post-cutoff accepted/timing deltas and no observed external fetch/profile writes/ignored writes/residual processes. Original failed desktop report remains separate.",
+          "limitations": "Post-close bookshelf screenshot is not workflow UI interaction or visual equality. No real model, remote concurrency, target-package/platform qualification or full SCHED002 completion. Entry SHA alone is not current uncommitted driver identity."
         }
       ]
     },

@@ -9,6 +9,9 @@ const SAFE_CODES = new Set(['ERR_ASSERTION', 'ETIMEDOUT', 'ECONNRESET', 'ECONNRE
   'PERFORMANCE_DRAFT_READ_UNAVAILABLE', 'PERFORMANCE_BLUEPRINT_READ_UNAVAILABLE', 'PERFORMANCE_REQUEST_SUMMARY_UNAVAILABLE',
   'PERFORMANCE_EVENT_COVERAGE_MISSING', 'PERFORMANCE_REQUEST_CUTOFF_CHANGED', 'PERFORMANCE_FIXTURE_REQUEST_CUTOFF_CHANGED',
   'PERFORMANCE_FINAL_REQUEST_SUMMARY_FAILED', 'PERFORMANCE_PRESSURE_TIMEOUT', 'PERFORMANCE_PRESSURE_FINAL_REQUEST_EVIDENCE_FAILED',
+  'PERFORMANCE_COMPARISON_TIMEOUT', 'PERFORMANCE_COMPARISON_SETUP_FAILED', 'PERFORMANCE_COMPARISON_INPUT_MISMATCH',
+  'PERFORMANCE_COMPARISON_RECEIPT_INVALID', 'PERFORMANCE_COMPARISON_REQUEST_MISMATCH',
+  'PERFORMANCE_COMPARISON_CLEANUP_FAILED', 'PERFORMANCE_COMPARISON_FINAL_REQUEST_EVIDENCE_FAILED',
   'DRIVE_FINAL_OBSERVATION_TIMEOUT', 'DRIVE_EXTERNAL_REQUEST_LOG_UNAVAILABLE', 'PERFORMANCE_REQUESTS_DURING_QUIT', 'ISOLATION_CLEANUP_BOUNDARY',
   'GENERATION_PROVIDER_FAILED', 'NETWORK_ERROR', 'ROOT_BUDGET_EXHAUSTED', 'GENERATION_STORAGE_FAILED',
   'GENERATION_CONTEXT_LENGTH_EXCEEDED', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT',
@@ -19,7 +22,8 @@ const ERROR_CLASSES = new Set(['Error', 'TimeoutError', 'AssertionError', 'Aggre
 const SCENARIOS = new Set(['perf-import-10', 'perf-import-100', 'perf-import-1000', 'perf-long-stream', 'perf-slow-embedding', 'perf-rate-limit',
   'perf-parse-author-10', 'perf-parse-author-100', 'perf-parse-author-1000',
   'perf-parse-reference-10', 'perf-parse-reference-100', 'perf-parse-reference-1000',
-  'perf-parse-author-close-1000', 'perf-parse-reference-close-1000', 'perf-parse-reference-cancel-1000'])
+  'perf-parse-author-close-1000', 'perf-parse-reference-close-1000', 'perf-parse-reference-cancel-1000',
+  'workflow-batch-serial-parallel-v1'])
 const IMPORT_STAGES = ['parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'author-commit',
   'author-publish', 'author-postprocess', 'refresh', 'completed']
 const OPERATIONS = ['import-global-facts', 'import-blueprints', 'import-inference', 'import-inference:endpoint-card-recovery',
@@ -171,6 +175,19 @@ const fixture = value => fields(value, { kind: member(['local-openai-compatible-
   independentSkillDigest: member(['not_available_from_public_readback']), dispatchedParameters: array(parameter),
   dispatchedParametersCoverage: member(['unavailable', 'observed_http_requests', 'not_available_http429', 'not_applicable_embedding']),
 })
+const comparisonBook = value => fields(value, { slot: member(['A', 'B']), state: member(['waiting_review']),
+  ...counts(['attempts', 'effects']), draftContentHash: hash, reviewContentHash: hash, reviewSourceContentHash: hash,
+  requestMessagesHashes: array(hash), parameterHashes: array(hash) })
+const comparisonRound = value => fields(value, { wallMs: number, status: member(['not_started', 'running', 'completed', 'failed']),
+  ...counts(['startedBooks', 'completedBooks', 'peakInFlight', 'guardedFetchRequests', 'fakeProviderRequests']), books: array(comparisonBook) })
+const pairedComparison = value => fields(value, { schemaVersion: member([1]), samples: count,
+  booksPerRound: member([2]), responseDelayMs: member([500]),
+  plannedBooks: member([12]), ...counts(['startedBooks', 'completedBooks']),
+  source: member(['isolated-electron-registered-ipc-main-owner']),
+  sampling: member(['three-local-pairs-not-statistical-qualification']), sameInputHashes: boolean,
+  pairs: array(value => fields(value, { pair: member([1, 2, 3]), order: array(member(['serial', 'parallel'])),
+    status: member(['not_started', 'running', 'completed', 'failed']), ...counts(['startedBooks', 'completedBooks']),
+    serial: comparisonRound, parallel: comparisonRound })) })
 const measured = value => fields(value, {
   metadata: value => fields(value, { platform: member(['win32', 'darwin', 'linux']), arch: member(['x64', 'arm64']),
     cpu: privateString, ramBytes: count, driverNode: version,
@@ -195,7 +212,7 @@ const measured = value => fields(value, {
   failureDiagnostics: array(failureDiagnostic),
   drain: value => fields(value, { status: member(['not_needed', 'not_started', 'drained', 'unavailable']), cancellationRequested: boolean }),
   eventCoverage: value => fields(value, { importInspection: member(['observed', 'not_observed']), rendererSnapshots: member(['observed', 'not_observed']) }),
-  diagnostics, fixtureParameters, fixture,
+  diagnostics, fixtureParameters, fixture, pairedComparison,
   requestSummaryCutoff: member(['after_drain_and_probe_stop', 'after_drain_probe_stop', 'before_quit']),
   requestsAfterMeasurement: value => record(value) ? routeCounts(value) : count(value),
   requestEvidence: member(['local_observation_not_proof_of_remote_execution', 'local-guarded-fetch-observation-not-remote-execution']),
@@ -204,7 +221,8 @@ const measured = value => fields(value, {
     'physicalRequests', 'importedDocuments', 'importedChunks']), frozenInitialTaskSha256: hash }),
   notApplicable: array(member(['generation-snapshots', 'renderer-snapshot-queue', 'reasoning', 'first-visible',
     'generation-token-usage', 'successful-generation-token-usage', 'visible-artifact'])),
-  limitations: array(member(['fixed-fictional-provider-output-not-literary-quality', 'cache-uncontrolled', 'no-real-model', 'single-book-only'])),
+  limitations: array(member(['fixed-fictional-provider-output-not-literary-quality', 'cache-uncontrolled', 'no-real-model', 'single-book-only',
+    'three-local-pairs-not-statistical-qualification', 'not-real-model-speed-or-p95'])),
   concurrency: value => fields(value, { 1: member(['executed']), 2: member(['unsupported_not_executed']), 4: member(['unsupported_not_executed']) }),
   thresholds: value => fields(value, { target100Ms: member(['candidate_only']), target500Ms: member(['candidate_only']) }),
 })
@@ -220,7 +238,7 @@ export function projectPerformanceResult(result, out, options = {}) {
       'renderInteractiveMs', 'renderShelfMs', 'renderIdleMs'])),
     externalRequests: array(privateString),
     externalRequestsCoverage: member(['observed_before_quit', 'unavailable']), quit: value => fields(value, { forced: boolean }),
-    ...counts(['modelRequests', 'modelRequestsAfterFinalCutoff', 'removedModelConfigs']),
+    ...counts(['modelRequests', 'modelRequestsAfterFinalCutoff', 'modelTimingRecordsAfterFinalCutoff', 'removedModelConfigs']),
     modelRequestSummary: value => fields(value, { count,
       byPath: value => fields(value, Object.fromEntries(ROUTES.map(route => [route, value => fields(value,
         { count, failed: count, maxMs: number, totalMs: number })]))),
