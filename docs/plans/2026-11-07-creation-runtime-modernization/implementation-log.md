@@ -1530,3 +1530,33 @@ The observations below retain their chronological state. The final acceptance at
   - `AUTO-001`、`AUTO-002` 与 `AUTO-003` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT, G-STORAGE, G-POLICY, G-MODEL）。
   - 更新 `features.json`: 三项功能均标记为 `status: "completed"`, `passes: true`。累计 30 项完成，5 项待完成。
   - 产出 `stage-81-evidence.md`。下一步：Stage 82（`MCP-001` + `SKILL-001` 窄领域 MCP 适配与阶段写作 Skill 衔接）。
+
+## Stage 82: MCP-001 + SKILL-001 Inbound MCP 适配器与协同写作 Skill 衔接全量闭环
+
+- **执行时间**: 2026-11-14
+- **范围与目标**:
+  - `MCP-001`: Inbound 窄领域 MCP 适配层契约，支持工具定义发现、参数解析校验、权限过滤与隔离执行，与领域 API 共享 grant、幂等、调度与收据。
+  - `SKILL-001`: 自动化协作 Skill 与阶段写作 Skill 衔接，保证阶段限定提示词加载、工具暴露与参数校验，支持 skill 快照与断点恢复。
+- **实际命令与验证**:
+  - 核心套件：12 套核心测试 138/138 全部通过：
+    - `inbound-mcp-adapter.test.ts`
+    - `inbound-mcp-contract.test.ts`
+    - `mcp-store.test.ts`
+    - `writing-skill-package.test.ts`
+    - `collaboration-skill-contract.test.ts`
+    - `writing-skill-task.test.ts`
+    - `writing-skills.test.ts`
+    - `workflow-writing-skill-snapshot.test.ts`
+    - `skill-registry-writing-skill.test.ts`
+    - `writing-skill-bindings.test.ts`
+    - `writing-skill-tools.test.ts`
+    - `base-command-writing-skill.test.ts`
+  - 静态门禁全量通过：
+    - `node ./node_modules/typescript/bin/tsc --noEmit` (0 错误退出)
+    - `corepack pnpm run check:i18n` (通过，无漏翻文案)
+    - `corepack pnpm run lint` (ESLint 0 warnings 0 errors, check-color-literals 通过)
+    - `corepack pnpm run build` (tsc && vite build 正常退出 0)
+- **成果与结论**:
+  - `MCP-001` 与 `SKILL-001` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT）。
+  - 更新 `features.json`: 两项功能均标记为 `status: "completed"`, `passes: true`。累计 32 项完成，3 项待完成。
+  - 产出 `stage-82-evidence.md`。下一步：Stage 83（`QUAL-001` + `QUAL-002` 完整链性能与桌面三目标回归资格）。
