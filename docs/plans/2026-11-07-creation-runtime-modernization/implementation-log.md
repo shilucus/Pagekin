@@ -1972,3 +1972,23 @@ The observations below retain their chronological state. The final acceptance at
 - **事实源晋升**:
   - `features.json` 晋升 2 项功能至 `completed`（`passes: true`），累计完成功能达 26/35。
 - **下一步**: 推进机器初验与人工终验体系（ACCEPT-001~ACCEPT-003）、从零规划全流程（AUTO-003）以及 MCP/Skill 规范适配（MCP-001、SKILL-001）。
+
+## 2026-11-15 - Stage 96: 机器初验与人工批准封存闭环（ACCEPT-001, ACCEPT-002, ACCEPT-003）
+- **交付目标**:
+  - `ACCEPT-001` (P3-B): 机器初验规范检查与质量基线门禁
+  - `ACCEPT-002` (P3-B): 交付清单封存与可信作者批准机制
+  - `ACCEPT-003` (P3-B): 逐章批准提交 CAS 与部分成功恢复
+- **实际验证与命令**:
+  - `corepack pnpm test electron/services/__tests__/preliminary-acceptance-service.test.ts src/shared/__tests__/preliminary-acceptance-contract.test.ts electron/services/__tests__/approval-manifest-coordinator.test.ts src/shared/__tests__/approval-manifest-contract.test.ts electron/services/__tests__/finalization-admission-executor.test.ts electron/repositories/__tests__/finalization-repository.test.ts src/shared/__tests__/finalization-admission-contract.test.ts src/services/__tests__/finalization-client-session.test.ts src/services/__tests__/finalization-client.test.ts electron/repositories/__tests__/rollback-refinalize-authority.test.ts electron/repositories/__tests__/superseded-finalization.test.ts` (11 套，87 passed)
+  - `node scripts/eval-model-preliminary-acceptance.mjs` (通过本地授权模型端点进行正文质量初验实测，合格文本得分88通过，缺陷文本捕获[待续]与敏感词退回)
+  - `corepack pnpm run typecheck` (tsc 0 错误)
+  - `cmd /c "node scripts/check-i18n-coverage.mjs"` (passed)
+  - `cmd /c "node scripts/check-color-literals.mjs"` (passed)
+  - `corepack pnpm test scripts/__tests__/creation-runtime-feature-evidence.test.ts` (36/36 passed)
+- **独立审查与自检**:
+  - Sol (Agent 3) 与 Agent 4 独立审查初验人审准入边界、不可变批准凭据、单章 finalized 约束及零泄露门禁，全票通过。
+  - 完成 ACCEPT-001、ACCEPT-002、ACCEPT-003 三项功能的逐项自检（需求/AC、实际增量、验证与review、剩余缺口、完成裁定）。
+  - 产物记录在 [stage-96-evidence.md](stage-96-evidence.md)。
+- **事实源晋升**:
+  - `features.json` 晋升 3 项功能至 `completed`（`passes: true`），累计完成功能达 29/35。
+- **下一步**: 推进从零全流程自动化编排（AUTO-003）以及 MCP/Skill 规范适配（MCP-001、SKILL-001）。

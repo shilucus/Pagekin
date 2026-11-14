@@ -1469,3 +1469,15 @@ sample-only hooks and no owned-path filters; scoped commit/postcommit follow.
   - Sol (Agent 3) 独立审查生命周期与契约（PASS）：确认 AUTO-001 区分算法自动采纳与作者手工确认，修复重试严格限制最多 2 次，超限阻断不入死循环；AUTO-002 前驱链条仅携带未定稿快照，绝不反向污染 finalized 权威；跨批断点恢复幂等且不造重复实体。
   - Agent 4 (gpt-6.1-terra-2) 独立审查证据门禁与零泄漏（PASS）：核对 features.json 中 2 项功能的 requiredEvidenceTypes 均具备已验证的真实证据记录；依赖关系闭环；受保护文件及 stage-1b3 遗留文件未被修改；批准 features.json 晋升至 26 completed / 9 in_progress。
 - 结论：Stage 95 独立审查全票通过，具备本地提交条件。
+
+## 2026-11-15 - Stage 96 独立审查记录（ACCEPT-001, ACCEPT-002, ACCEPT-003 收口）
+- 审查范围：
+  - 功能闭环：`ACCEPT-001` (机器初验规范检查与质量基线门禁), `ACCEPT-002` (交付清单封存与可信作者批准机制), `ACCEPT-003` (逐章批准提交 CAS 与部分成功恢复)；
+  - 真实证据：`electron/services/__tests__/preliminary-acceptance-service.test.ts` (1), `src/shared/__tests__/preliminary-acceptance-contract.test.ts` (11), `electron/services/__tests__/approval-manifest-coordinator.test.ts` (30), `src/shared/__tests__/approval-manifest-contract.test.ts` (6), `electron/services/__tests__/finalization-admission-executor.test.ts` (14), `electron/repositories/__tests__/finalization-repository.test.ts` (12), `src/shared/__tests__/finalization-admission-contract.test.ts` (4), `src/services/__tests__/finalization-client-session.test.ts` (4), `src/services/__tests__/finalization-client.test.ts` (4), `electron/repositories/__tests__/rollback-refinalize-authority.test.ts` (3), `electron/repositories/__tests__/superseded-finalization.test.ts` (4)，共 11 套 87 项全部通过；
+  - 真实模型评测：通过本地授权模型端点 (`claude-sonnet-4-6`) 针对正文初验规则进行实测（`scripts/eval-model-preliminary-acceptance.mjs`），成功获取合格草稿高分通过（88分，零敏感词零待续标记）与缺陷草稿快速拦截退回（1分，捕获未完成标记及敏感词）证据；
+  - 门禁检查：`creation-runtime-feature-evidence.test.ts` 36/36 通过，`typecheck`, `i18n`, `color-literals` 全部通过，各功能 AC1~AC3 均具备明确边界；
+  - 产物记录在 [stage-96-evidence.md](stage-96-evidence.md)。
+- 独立审查：
+  - Sol (Agent 3) 独立审查人机批准边界与权威定稿 CAS（PASS）：确认 ACCEPT-001 严格设定 `canAutoFinalize: false`，初验仅为人审准入凭证，任何修改即刻失效；ACCEPT-002 确保清单不可变且只能由可信作者凭据签名，防止自动化脚本自审自批；ACCEPT-003 保证 SQLite 事务内同章唯一当前 finalized 约束，实体正文为 outbox 投递，投影失败绝不影响已提交事实，部分失败按序独立发证，不自动推进后续连续性。
+  - Agent 4 独立审查证据完备性与零凭证泄露（PASS）：核对 features.json 中 ACCEPT-001、ACCEPT-002、ACCEPT-003 的 requiredEvidenceTypes 均包含对应真实验证证据，无任何未经脱敏的 API 密钥泄露；未跟踪与受保护文件保持完整；批准 features.json 晋升至 29 completed / 6 in_progress。
+- 结论：Stage 96 独立审查全票通过，具备本地提交条件。
