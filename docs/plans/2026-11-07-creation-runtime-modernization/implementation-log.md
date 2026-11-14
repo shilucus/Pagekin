@@ -1500,3 +1500,18 @@ The observations below retain their chronological state. The final acceptance at
   - `API-001` 与 `CLI-001` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT, G-SECURITY）。
   - 更新 `features.json`: `API-001` 与 `CLI-001` 均标记为 `status: "completed"`, `passes: true`。累计 24 项完成，11 项待完成。
   - 产出 `stage-79-evidence.md`。下一步：Stage 80（`ACCEPT-001` ~ `ACCEPT-003` 机器初验、作者批准封存、逐章批准提交）。
+
+## 2026-11-14 - Stage 80: ACCEPT-001 ~ ACCEPT-003 机器初验、作者批准封存、逐章批准提交全量闭环
+
+- **范围**: `ACCEPT-001` (全阶段候选独立机器初验)、`ACCEPT-002` (精确manifest与可信作者批准封存)、`ACCEPT-003` (逐章批准定稿与权威事务提交)。
+- **执行命令与验证**:
+  - 运行 10 套初验服务、协调器与定稿仓库测试：`corepack pnpm test electron/services/__tests__/preliminary-acceptance-service.test.ts electron/services/__tests__/approval-manifest-coordinator.test.ts electron/services/__tests__/finalization-admission-executor.test.ts electron/repositories/__tests__/finalization-repository.test.ts src/shared/__tests__/preliminary-acceptance-contract.test.ts src/shared/__tests__/finalization-admission-contract.test.ts src/services/__tests__/finalization-client-session.test.ts src/services/__tests__/finalization-client.test.ts electron/repositories/__tests__/rollback-refinalize-authority.test.ts electron/repositories/__tests__/superseded-finalization.test.ts`，共计 72/72 测试全部通过。
+  - 覆盖 AC：
+    - `ACCEPT-001`: 独立只读初验、结构化检查项（设定、敏感词、schema、连续性）、失败阻断自动推荐并保留修复建议、结果快照不可变。
+    - `ACCEPT-002`: 精确交付 manifest 构建、作者批准凭证（限次/限 hash/nonce/有效期）、重放与篡改拒绝、撤销即时生效、目标封存并发防护。
+    - `ACCEPT-003`: 权威 FinalizationRepository 提交与 outbox 实体正文投影解耦、同章单一 finalized 约束与旧稿 superseded 原子置换、投影失败不回滚领域事实、部分失败恢复不推进后续连续性水位。
+  - 静态门禁全量通过：`node ./node_modules/typescript/bin/tsc --noEmit` (0 错误)、`corepack pnpm run lint` (0 错误)、`corepack pnpm run check:i18n` (0 遗漏)、`corepack pnpm run build` (tsc && vite build 正常退出 0)。
+- **成果与结论**:
+  - `ACCEPT-001`、`ACCEPT-002` 与 `ACCEPT-003` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT, G-STORAGE, G-MODEL, G-DESIGN, G-HUMAN）。
+  - 更新 `features.json`: 三项功能均标记为 `status: "completed"`, `passes: true`。累计 27 项完成，8 项待完成。
+  - 产出 `stage-80-evidence.md`。下一步：Stage 81（`AUTO-001` ~ `AUTO-003` 任务创作策略、跨批候选管理、从零规划到待终验）。
