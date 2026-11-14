@@ -1591,3 +1591,25 @@ The observations below retain their chronological state. The final acceptance at
   - `QUAL-001` 与 `QUAL-002` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-MODEL, G-STORAGE, G-POLICY）。
   - 更新 `features.json`: 两项功能均标记为 `status: "completed"`, `passes: true`。累计 34 项完成，1 项待完成。
   - 产出 `stage-83-evidence.md`。下一步：Stage 84（`HEADLESS-001` 生产无窗口宿主与桌面互斥接管）。
+
+## Stage 84: HEADLESS-001 生产无窗口宿主与桌面互斥接管全量闭环
+
+- **执行时间**: 2026-11-14
+- **范围与目标**:
+  - `HEADLESS-001`: 生产无窗口宿主生命周期管理、脱离 Window/Zustand 交互依赖的自主主进程驱动、桌面与 headless 跨进程文件互斥锁与租约 Fencing 接管机制。
+- **实际命令与验证**:
+  - 核心测试套件：4 套测试 356 项测试全部通过（356/356 passed）：
+    - `electron/services/__tests__/headless-runtime-host.test.ts` (3 passed)
+    - `electron/services/__tests__/single-instance-runtime.test.ts` (3 passed)
+    - `electron/services/__tests__/main-generation-owner.scheduling.test.ts` (58 passed)
+    - `electron/services/__tests__/main-generation-owner.test.ts` (292 passed)
+  - 静态门禁全量通过：
+    - `node ./node_modules/typescript/bin/tsc --noEmit` (0 错误退出)
+    - `corepack pnpm run check:i18n` (通过，无漏翻文案)
+    - `corepack pnpm run lint` (ESLint 0 warnings 0 errors, check-color-literals 通过)
+    - `corepack pnpm run build` (tsc && vite build 正常退出 0)
+- **成果与结论**:
+  - `HEADLESS-001` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT, G-STORAGE, G-PLATFORM）。
+  - 更新 `features.json`: `HEADLESS-001` 标记为 `status: "completed"`, `passes: true`。
+  - **全部 35 项特性（35/35）已全部达到 `status: "completed"`, `passes: true` 验收状态！**
+  - 产出 `stage-84-evidence.md`。下一步：Stage 85（全量 35 项特性累积 Team 审查与最终交付报告）。
