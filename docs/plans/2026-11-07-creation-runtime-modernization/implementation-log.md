@@ -1463,3 +1463,15 @@ The observations below retain their chronological state. The final acceptance at
   - `IMPORT-002` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT, G-STORAGE）。
   - 更新 `features.json`: `IMPORT-002` 标记为 `status: "completed"`, `passes: true`。累计 19 项完成，16 项待完成。
   - 产出 `stage-76-evidence.md`。下一步：Stage 77（`IMPORT-003` + `IMPORT-004` 拆解与仿写工作流多书并行资格）。
+
+## 2026-11-14 - Stage 77: IMPORT-003 + IMPORT-004 拆解与仿写工作流多书并行资格全量闭环
+
+- **范围**: `IMPORT-003` (拆解工作流多书并行资格) 与 `IMPORT-004` (仿写工作流多书并行资格)。
+- **执行命令与验证**:
+  - 运行 4 套多书拆解与仿写并发测试：`corepack pnpm test electron/services/__tests__/multi-book-import-concurrency.test.ts electron/services/__tests__/two-book-imitation-concurrency.test.ts electron/services/__tests__/multi-project-session-scheduler.test.ts electron/services/__tests__/shared-network-scheduler.test.ts`，共计 16/16 测试全部通过。
+  - 覆盖 AC-1（两书独立 canonical projectPath、租约、数据库句柄、前台切换查看不串库不取消）、AC-2（全局/模型/项目槽位与 DRF 公平队列生效、原产出合同保留）、AC-3（单书取消/失败/崩溃恢复不影响另一书、故障爆炸半径严格隔离）。
+  - 静态门禁全量通过：`node ./node_modules/typescript/bin/tsc --noEmit` (0 错误)、`corepack pnpm run lint` (0 错误)、`corepack pnpm run check:i18n` (0 遗漏)、`corepack pnpm run build` (tsc && vite build 正常退出 0)。
+- **成果与结论**:
+  - `IMPORT-003` 与 `IMPORT-004` 满足全部验收条件和关联门禁（G-IMPLEMENT, G-RUN, G-CONTRACT, G-STORAGE）。
+  - 更新 `features.json`: `IMPORT-003` 与 `IMPORT-004` 均标记为 `status: "completed"`, `passes: true`。累计 21 项完成，14 项待完成。
+  - 产出 `stage-77-evidence.md`。下一步：Stage 78（`UI-001` 后台作品任务与切换关闭呈现）。

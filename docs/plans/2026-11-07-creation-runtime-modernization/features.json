@@ -1749,8 +1749,8 @@
         "performance",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -1759,6 +1759,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Multi-book reference import deconstruction concurrency qualification passed (3/3 focus tests passed, 150/150 import suite regression tests passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Single desktop node local multi-project qualification; cloud distributed sync belongs to future extensions"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "af9e68f2c41774d3b3a27a4cb6172b0fd79a683b",
+          "artifactOrReceipt": "stage-77-evidence.md",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; multi-book-import-concurrency.test.ts, multi-project-session-scheduler.test.ts, shared-network-scheduler.test.ts",
+          "result": "Multi-book import deconstruction concurrency fully qualified (AC-1, AC-2, AC-3 all passed); typecheck, lint, check:i18n, build exit 0; canonical path, lease and session isolation, fair DRF queue and independent failure blast radius qualified",
+          "limitations": "Mixed decomposition and imitation concurrency belongs to QUAL-001"
         }
       ]
     },
@@ -1808,8 +1816,8 @@
         "performance",
         "electron"
       ],
-      "status": "in_progress",
-      "passes": false,
+      "status": "completed",
+      "passes": true,
       "evidence": [
         {
           "type": "deterministic",
@@ -1818,6 +1826,14 @@
           "environment": "Windows x64, Node 24.13.0, Corepack pnpm 11.11.0, Vitest 4.1.12",
           "result": "Two-book imitation concurrency qualification tests passed (two-book-imitation-concurrency.test.ts 3/3 passed); typecheck, lint, check:i18n, build exit 0; independent reviewer PASS",
           "limitations": "Two-book imitation concurrency qualified; mixed decomposition and imitation concurrency belongs to QUAL-001"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "af9e68f2c41774d3b3a27a4cb6172b0fd79a683b",
+          "artifactOrReceipt": "stage-77-evidence.md",
+          "environment": "Windows x64; Node 24.13.0; Corepack pnpm 11.11.0; Vitest 4.1.12; two-book-imitation-concurrency.test.ts, multi-project-session-scheduler.test.ts, shared-network-scheduler.test.ts",
+          "result": "Two-book imitation concurrency fully qualified (AC-1, AC-2, AC-3 all passed); typecheck, lint, check:i18n, build exit 0; reference-target boundary, non-cancellation on view switch and durable failure isolation qualified",
+          "limitations": "Mixed decomposition and imitation concurrency belongs to QUAL-001"
         }
       ]
     },
