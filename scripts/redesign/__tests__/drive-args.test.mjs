@@ -284,6 +284,20 @@ it('generation-only real model mode is restricted to the feedback adoption scena
   assert.throws(() => parseArgs(['--scenario', 'real-feedback-adopt', '--real-model', '--max-real-requests', '0']), /必须是正整数/)
 })
 
+it('allows only the exact multiround feedback scene with an explicit two-request budget', () => {
+  const name = 'real-feedback-multiround'
+  assert.equal(parseArgs(['--scenario', name, '--real-model', '--max-real-requests', '2']).maxRealRequests, 2)
+  assert.equal(parseArgs(['--scenario', 'real-feedback-adopt', '--real-model']).maxRealRequests, 1)
+  assert.equal(JSON.stringify(BASELINE_SESSIONS).includes(name), false)
+  assert.throws(() => parseArgs(['--scenario', name]), /要带 --real-model/)
+  for (const budget of [undefined, '1', '3']) {
+    assert.throws(() => parseArgs(['--scenario', name, '--real-model',
+      ...(budget === undefined ? [] : ['--max-real-requests', budget])]), /real-feedback-multiround.*--max-real-requests 2/)
+  }
+  assert.throws(() => parseArgs(['--scenario', `${name}-other`, '--real-model', '--max-real-requests', '2']), /未知或缺少场景/)
+  assert.throws(() => parseArgs(['--scenario', 'settings', '--real-model', '--max-real-requests', '2']), /--real-model 只用于/)
+})
+
 it('没构建的应用根直接报错，不去启动 Electron', () => {
   const root = tempParent()
   assert.throws(() => assertBuilt(root), /dist-electron[\\/]main\.js 不存在/)

@@ -1,6 +1,6 @@
 // 旧 real-* 场景需要不同的模型能力；当前 --real-model 仅支持本机 generation-only feedback scene。
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -287,6 +287,119 @@ async function batchRecovery(page) {
 }
 
 export const REAL_SCENARIOS = {
+  /** 同一底稿生成两个父子候选，只由作者采用第二个；重开捕获新底稿后只读核对原持久历史。 */
+  'real-feedback-multiround': { real: true, shell: 'stage', setup: context => seedBook(context), run: async context => {
+    const { page, shoot } = context
+    assert.equal(context.maxRealRequests, 2, '两轮场景只允许明确的两个物理请求预算')
+    const before = await read(context, 'db:project-core-get')
+    await stage.stageButton(page, '架构').click()
+    const premise = page.locator('.arch-section[data-section="premise"]')
+    const openFeedback = () => premise.getByRole('button', { name: '意见修订', exact: true }).click()
+    await openFeedback()
+    const dialog = page.getByRole('dialog', { name: '意见修订：故事前提' })
+    const input = dialog.getByRole('textbox', { name: '例如：节奏加快，增加反转，语言风格更具压迫感…', exact: true })
+    const feedback = [
+      '保留林岚、旧港与雾钟，把父亲留下的地图线索写得更悬疑。',
+      '在第一轮候选基础上，让地图线索与雾钟的时间偏差形成更清楚的因果，保留林岚和旧港。',
+    ]
+    const hash = text => createHash('sha256').update(text).digest('hex')
+    const rounds = [], candidates = []
+    let baseId, originalBase, previousCandidate
+    for (const [index, note] of feedback.entries()) {
+      if (index === 1) {
+        await dialog.getByRole('button', { name: '基于此候选继续提意见 (开启新一轮)', exact: true }).click()
+        await dialog.getByText('基于选定候选追加修改意见：', { exact: true }).waitFor({ state: 'visible' })
+      }
+      await input.fill(note)
+      await dialog.getByRole('button', { name: '生成候选', exact: true }).click()
+      const tab = dialog.getByRole('tab', { name: `第 ${index + 1} 轮 (C${index + 1})`, exact: true })
+      await tab.waitFor({ state: 'visible', timeout: MODEL_WAIT })
+      assert.equal(await tab.getAttribute('data-active'), 'true', '新一轮候选被真实对话框选中')
+      const bases = await invokeFeedback(context, 'planning-feedback:v1:list-bases', { target: 'premise' })
+      assert.equal(bases.length, 1, '两轮生成仍属于同一底稿')
+      if (!baseId) baseId = bases[0].baseId
+      assert.equal(bases[0].baseId, baseId)
+      const history = await invokeFeedback(context, 'planning-feedback:v1:read-history', { baseId })
+      if (!originalBase) originalBase = history.base
+      assert.deepEqual(history.base, originalBase)
+      assert.equal(history.base.target, 'premise')
+      assert.equal(history.base.value, before.premise)
+      assert.equal(history.base.valueHash, hash(before.premise))
+      assert.equal(history.candidates.length, index + 1)
+      assert.equal(history.adoptions.length, 0, '两轮生成均不代替作者采用')
+      const { candidate, state } = history.candidates[index]
+      assert.equal(state, 'ready')
+      assert.equal(candidate.baseId, baseId)
+      assert.equal(candidate.projectId, history.base.projectId)
+      assert.equal(candidate.parentCandidateId, previousCandidate?.candidateId ?? null)
+      assert.equal(candidate.generationParentHash, previousCandidate?.textHash ?? history.base.valueHash)
+      assert.equal(candidate.textHash, hash(candidate.text))
+      assert.equal(candidate.feedback, note)
+      assert.equal(candidate.origin.kind, 'generated')
+      for (const field of ['runId', 'attemptId', 'artifactId']) {
+        assert.equal(typeof candidate.origin[field], 'string')
+        assert.ok(candidate.origin[field])
+        if (previousCandidate) assert.notEqual(candidate.origin[field], previousCandidate.origin[field])
+      }
+      assert.equal((await read(context, 'db:project-core-get')).premise, before.premise, '明确采用前正式故事前提保持原值')
+      rounds.push({ round: index + 1, candidateId: candidate.candidateId, parentCandidateId: candidate.parentCandidateId,
+        generationParentHash: candidate.generationParentHash, textHash: candidate.textHash, origin: candidate.origin })
+      candidates.push(candidate)
+      previousCandidate = candidate
+      await shoot(`real-feedback-multiround-candidate-${index + 1}`)
+    }
+    await dialog.getByRole('button', { name: '采用此候选', exact: true }).click()
+    await dialog.waitFor({ state: 'hidden', timeout: 30_000 })
+    const after = await read(context, 'db:project-core-get')
+    const adoptedHistory = await invokeFeedback(context, 'planning-feedback:v1:read-history', { baseId })
+    assert.equal(adoptedHistory.candidates.length, 2)
+    assert.deepEqual(adoptedHistory.candidates.map(item => item.candidate), candidates, '采用不改写任一轮的候选快照')
+    assert.equal(adoptedHistory.candidates[0].state, 'conflict')
+    assert.equal(adoptedHistory.candidates[1].state, 'adopted')
+    assert.equal(adoptedHistory.adoptions.length, 1, '只明确采用第二轮候选一次')
+    const adopted = adoptedHistory.adoptions[0]
+    assert.equal(adopted.candidateId, previousCandidate.candidateId)
+    assert.equal(adopted.baseId, baseId)
+    assert.equal(adopted.decisionSource, 'author-action')
+    assert.equal(adopted.decision, 'full')
+    assert.equal(adopted.beforeValue, before.premise)
+    assert.equal(adopted.beforeHash, originalBase.valueHash)
+    assert.equal(adopted.text, previousCandidate.text)
+    assert.equal(adopted.textHash, previousCandidate.textHash)
+    assert.equal(adopted.sourceRevision, originalBase.sourceRevision)
+    assert.equal(adopted.committedRevision, adopted.sourceRevision + 1)
+    assert.equal(adoptedHistory.base.closedByAdoptionId, adopted.adoptionId)
+    assert.equal(after.premise, adopted.text)
+    await shoot('real-feedback-multiround-adopted')
+
+    // The existing UI captures a new base on reopen; it does not expose closed-base history tabs.
+    await openFeedback()
+    await input.fill('') // Actionability waits for the existing capture to enable the empty feedback input.
+    assert.equal(await dialog.getByRole('tab').count(), 0)
+    const reopenedBases = await invokeFeedback(context, 'planning-feedback:v1:list-bases', { target: 'premise' })
+    assert.equal(reopenedBases.length, 2)
+    const reopenedBase = reopenedBases.find(base => base.baseId !== baseId)
+    assert.ok(reopenedBase)
+    const reopenedHistory = await invokeFeedback(context, 'planning-feedback:v1:read-history', { baseId: reopenedBase.baseId })
+    assert.equal(reopenedHistory.base.value, adopted.text)
+    assert.equal(reopenedHistory.base.valueHash, adopted.textHash)
+    assert.equal(reopenedHistory.base.sourceRevision, adopted.committedRevision)
+    assert.deepEqual(reopenedHistory.candidates, [])
+    assert.deepEqual(reopenedHistory.adoptions, [])
+    assert.deepEqual(await invokeFeedback(context, 'planning-feedback:v1:read-history', { baseId }), adoptedHistory)
+    assert.equal((await read(context, 'db:project-core-get')).premise, adopted.text)
+    await shoot('real-feedback-multiround-reopened')
+    await dialog.getByRole('button', { name: '放弃 / 关闭', exact: true }).click()
+    await dialog.waitFor({ state: 'hidden', timeout: 30_000 })
+    const requests = await context.app.evaluate(() => globalThis.__driveModelRequests)
+    assert.equal(requests.length, 2, '两轮总共只 dispatch 两次 generation，重开不 dispatch、不重试')
+    assert.ok(requests.every(request => request.path === '/v1/chat/completions' && request.status === 200))
+    return { baseId, rounds, adoptionId: adopted.adoptionId, beforeHash: adopted.beforeHash, textHash: adopted.textHash,
+      sourceRevision: adopted.sourceRevision, committedRevision: adopted.committedRevision,
+      reopenedBaseId: reopenedBase.baseId, reopenCapturedNewBase: true, oldBaseHistoryVisibleInUi: false,
+      requestCount: requests.length, requestPaths: requests.map(request => request.path) }
+  } },
+
   /** 只调用一次 generation：作者在架构的故事前提入口生成候选、明确采用，并核验正式设定与持久收据。 */
   'real-feedback-adopt': { real: true, shell: 'stage', setup: context => seedBook(context), run: async context => {
     const { page, shoot } = context

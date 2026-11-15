@@ -2641,6 +2641,30 @@
           "environment": "Windows x64; fresh Electron44.9.3 source build; exact authorized loopback Gemini model; max1 physical request; isolated fictional eight-chapter project; Root/Agent4 raw and three-PNG review",
           "result": "Actual scenario exit0: one real chat/completions200 request, one candidate and one explicit author-action adoption. Official premise equals adopted candidate; original beforeValue and persisted receipt hashes/identities are checked. Quit resolved290ms/unforced/no kill. No observed external fetches before quit, profile writes or residuals; isolated config removed1, key scan6files0hits/unreadable/removeFailures. Earlier pre-dispatch failure0requests remains and its selector/BUSY causes close in this run.",
           "limitations": "Single same-session round only, not reopen/multi-round persistence or literary non-regression.5679ms is time to response headers, not complete workflow latency. Seeded architecture4/4, blueprints8 and roster1 are not generated outputs. Full UI002 design/state coverage, quality/performance/platform gates remain open; feature stays in_progress/false."
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "2a00b8a37df51acd97c5e34fc2d1939948f27632 + stage-106-source-manifest.json frozen tools and earlier execution build",
+          "artifactOrReceipt": "stage-106-evidence.md; review-record.md; ../../adr/0041-planning-feedback-candidate-diff-adoption-ui.md",
+          "environment": "Terra independently reviews four verification-tool identities; Agent4 independently reviews actual JSON, console and five light desktop PNGs; no product UI or policy change",
+          "result": "Accepted bounded same-base two-round feedback scene: C1 remains unadopted, explicit iteration binds C2 to its exact parent/hash, only C2 is author-adopted once, and persisted old history survives a new-base dialog capture. Existing single-round defaults, exact model endpoint guard and unknown-no-resend remain.",
+          "limitations": "Not a full design_review or UI002 completion. Dirty-buffer initiation, partial/conflict/manual/failure and per-target matched-view designs remain open; old-base history is read through IPC, not visible in the reopened UI. Later project-open/blueprint fixes are excluded from the earlier execution version."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "2a00b8a37df51acd97c5e34fc2d1939948f27632 + stage-106-source-manifest.json",
+          "artifactOrReceipt": "stage-106-evidence.md#actual-verification; .runtime/creation-runtime-modernization/resume-2026-11-15/stage105-106-tools-final.json",
+          "environment": "Root actual five-file Vitest pure-tool run; Windows x64 Node24.13.0 Corepack pnpm11.11.0; separate implementer RED/GREEN retained",
+          "result": "134/134,0failed/pending,exit0 includes args36, feedback10, unchanged guard20, imitation4 and background64. Tests exercise actual scene.run and refusal of wrong parent/hash, premature official writes, lost history, third request and continuation after first-round unknown. Implementer two-file37/44 RED becomes44/44 then46/46.",
+          "limitations": "Overlapping tool tests are not five Electron/model runs or quality evidence. They do not supply missing UI states, platform or feature completion; the separate imitation tool tests do not qualify IMPORT002."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "09675d1a859686e9882672bb3a6c6516e536f83b + frozen Stage104 source/build and Stage106 tool identities",
+          "artifactOrReceipt": "stage-106-evidence.md; .runtime/creation-runtime-modernization/resume-2026-11-15/stage106-real-feedback-multiround/real-feedback-multiround-light.json; real-feedback-multiround-candidate-1-light.png; real-feedback-multiround-candidate-2-light.png; real-feedback-multiround-reopened-light.png",
+          "environment": "Root actual isolated fictional project, Electron44.9.3 source build, exact authorized Gemini loopback model, max2 physical requests; Root/Agent4 actual raw and all five1440x900 light PNGs",
+          "result": "Actual exit0, exactly two chat/completions200 requests. Same base yields C1 then C2 with exact parentCandidateId/generationParentHash and distinct run/attempt/artifact origins. Official premise remains unchanged until sole C2 author-action adoption, revision3to4. Reopened dialog captures a new empty base at C2 value; old two-candidate/one-adoption history is deep-equal via IPC. Quit219ms/unforced/no kill; key scan8files0hits/unreadable/removeFailures and one isolated model config removed.",
+          "limitations": "Same-process clean-buffer single-field path, not cross-process/project reopen, all-target UI or old-history UI.10105ms total/max5160ms is response-header timing, not workflow performance or literary non-regression. Empty external/writes/residual observations have recorded bounded coverage. UI002 stays in_progress/false and15/35 remains; no later product fix or platform qualification inferred."
         }
       ]
     },

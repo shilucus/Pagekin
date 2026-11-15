@@ -359,3 +359,28 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
   feature, new policy, SCHED/headless prerequisite, quality or platform claim.
   Checklist stays15/35; Stage102's actual local commit is09675d1, with postcommit
   139 reviewed identities matched and index/protected files preserved then.
+
+## Stage106 Genuine Same-Base Two-Round Feedback
+
+- [Stage106](stage-106-evidence.md) and its [manifest](stage-106-source-manifest.json)
+  bind the four tool changes and the separately frozen actual execution build.
+  Earlier Stage104 typecheck/lint/colors/i18n/build exit0 are source-bound,
+  not presented as qualification for later project-open/blueprint changes.
+  Implementer RED37/44 closes to46/46; Root final five tools134/134 includes
+  unchanged guard20 and overlapping imitation/background tools, not five runs.
+- Actual isolated real-model drive exits0 with exactly two POST200 requests.
+  Same base, unadopted C1, explicit iteration to C2, exact parent/hash, distinct
+  run/attempt/artifact receipts, sole author-action adoption and official
+  revision3to4 are checked through the real author entry. Reopening captures
+  a new empty base; old two-candidate/one-adoption history is read unchanged
+  through IPC. This does not claim old-history UI or cross-process recovery.
+- Root/Agent4 review actual raw/console and all five light desktop PNGs;219ms
+  unforced/no-kill quit, key scan8files0hits/unreadable/removeFailures and one
+  removed isolated config align. Header timing total10105ms/max5160ms is not
+  end-to-end performance. Recorded empty external/writes/residual coverage
+  and existing CSP warning stay explicit; no literary quality/platform claim.
+- Terra final-tool review and Agent4 actual-evidence/text review accept this
+  bounded slice. Root partial self-check retains UI002 false and15/35 because
+  full target/state/viewport design, dirty-buffer and old-history discovery
+  remain open. No new visible layout/control, author authority or product
+  persistence contract is introduced; metadata labels do not complete it.

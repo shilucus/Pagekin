@@ -1,0 +1,290 @@
+{
+  "schemaVersion": 1,
+  "stage": 106,
+  "sourceSha": "09675d1a859686e9882672bb3a6c6516e536f83b",
+  "parentCommit": "2a00b8a37df51acd97c5e34fc2d1939948f27632",
+  "productionSourcesChanged": false,
+  "verificationToolsChanged": true,
+  "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; Electron44.9.3 source build; genuine exact loopback Gemini model, max2 requests",
+  "scope": "R3/UI002 partial same-base real two-round feedback/adoption/persisted-history evidence only; no feature promotion or product UI/schema/authority change.",
+  "sourceFiles": [
+    {
+      "path": "scripts/redesign/drive.mjs",
+      "sha256": "F8DB4C558768549D46D3BB6DB4495A0AF2DC2682C448A3BC86F445C83A219F6F"
+    },
+    {
+      "path": "scripts/redesign/real-scenarios.mjs",
+      "sha256": "37BE7A138672F65CF0717B3E030F76D0AAB761013B8DB7648337C5B5A9BDE2DE"
+    },
+    {
+      "path": "scripts/redesign/__tests__/drive-args.test.mjs",
+      "sha256": "6EA631B94DF30562AEE889B60B768374A1EC75F6ADCFCCD583E2D40504095CA9"
+    },
+    {
+      "path": "scripts/redesign/__tests__/real-feedback-scene.test.mjs",
+      "sha256": "BC9E44BE5C9DEF95745581C9E4341C5CF46FF3FC8EC52E1992746BCBA3D505B1"
+    }
+  ],
+  "unchangedExecutionDependencies": [
+    {
+      "path": "scripts/redesign/real-model.mjs",
+      "sha256": "79D353AE031E59A9DAB333A3417EA3F42B56AA1566509F4AE67D719C94CF7949"
+    },
+    {
+      "path": "scripts/redesign/__tests__/real-model.test.mjs",
+      "sha256": "F65A8FA8E17B4D850E0D41E86CABB4CD5D31640B1450CF5BBBBBB0DC53CDFCDA"
+    },
+    {
+      "path": "src/components/stage/feedback/PlanningFeedbackDialog.tsx",
+      "sha256": "2539A0AC27F93A6A20626C80E799FFAFFC2A0A3B4F987579C90867D6F2DAFC8C"
+    },
+    {
+      "path": "src/components/stage/architecture/StageArchitecture.tsx",
+      "sha256": "0D0284EB51E53471A7B6EEA21667DA8B84BA33A56D13BDEEA081FFB5FA59EE5B"
+    },
+    {
+      "path": "src/components/stage/setup/StageSetup.tsx",
+      "sha256": "6DEAF64B32E2381D50C30CC069097D5604914322E30D101113F99C3E49E74842"
+    },
+    {
+      "path": "src/services/planning-feedback-client.ts",
+      "sha256": "63BD57768FBEAB19B5D82ECF070C14A7E9CCAFB77E2065DEDC0EAFF798103CCB"
+    },
+    {
+      "path": "src/shared/planning-feedback.ts",
+      "sha256": "66C200E97929909DE68E5850CE98581B8F4A3B159CC5683409A371DFC27832CF"
+    },
+    {
+      "path": "src/shared/planning-feedback-ipc.ts",
+      "sha256": "D060469D3064B08FA08353018C85B01C6804439D9A5870D3026C1F0396732B84"
+    },
+    {
+      "path": "electron/services/planning-feedback-service.ts",
+      "sha256": "2A8BDA03DC07169CDD0837C739C75B397E0AFCD11CA5B4893C5B1523BA32FBCB"
+    },
+    {
+      "path": "electron/services/planning-feedback-generation.ts",
+      "sha256": "40AB182D16119875C71798D62171515C2961ACFE970911DF8114C081974211DD"
+    },
+    {
+      "path": "electron/services/runtime-feedback-authority.ts",
+      "sha256": "5F2014322F17222F75F5115351EAEF74B33C26B1A80D8B0323CBE02E5C58804D"
+    },
+    {
+      "path": "electron/repositories/planning-feedback-repository.ts",
+      "sha256": "77CB1AF0F681648AFEA15D17F4406FD392972EC90A52EA0DE99E263CA9CB6BF1"
+    },
+    {
+      "path": "docs/adr/0041-planning-feedback-candidate-diff-adoption-ui.md",
+      "sha256": "D538447858D1CADAE027D3F7225145FFE396FBFFDA4211A96C9F8E6455A70CB2"
+    },
+    {
+      "path": "scripts/__tests__/creation-runtime-feature-evidence.test.ts",
+      "sha256": "0CA582E88BD8A2468892D0EB5D86324F42DEED400C029DDB725815B7F0057F5A"
+    }
+  ],
+  "earlierExecutionManifests": [
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-102-source-manifest.json",
+      "sha256": "7FA464F40DC07C45EEF7E7A625B0A5A311C174BBC813AC6AF087CF52CFDCDBE4"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-104-source-manifest.json",
+      "sha256": "A1E04269C318177DE789E65922C1F2C9908FFB7DE2B7BEA5087D9892F273CEA9"
+    }
+  ],
+  "buildEntries": [
+    {
+      "path": "dist/index.html",
+      "sha256": "ED9B1C5960C6D23B814D314870AFC43F4C24B432D27AF9A1284251F01F25B458"
+    },
+    {
+      "path": "dist-electron/main.js",
+      "sha256": "924D229C5609C7743566586A196D5A96F66F26418C7C027049E5A7766C340539"
+    },
+    {
+      "path": "dist-electron/preload.mjs",
+      "sha256": "B4F954B48DA2075181BDF4E14B926B0702750844CA4E69A382F4975E6B0EE580"
+    }
+  ],
+  "protectedFiles": [
+    {
+      "path": "docs/repository-analysis-2026-11-07.md",
+      "sha256": "BB6866223C596C690E4D2E35C38FAA9EBB05E45084776EE1B285083BAD89A74B"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-evidence.md",
+      "sha256": "5AA85559B9A71022D378CFA7B50EB55E1539BEABD77E1766050D819FA336F1F9"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-source-manifest.json",
+      "sha256": "7AE7D4318C58DC872664BB89BD455A3995A3C02E5C2DE4E2C8FE7D3D9AD48130"
+    }
+  ],
+  "separateConcurrentPathsExcludedFromCommit": [
+    "electron/controllers/project-controller.ts",
+    "electron/controllers/__tests__/project-controller-open-atomicity.test.ts",
+    "electron/controllers/generation-controller.ts",
+    "electron/controllers/__tests__/generation-controller.test.ts",
+    "docs/adr/0029-project-runtime-resource-routing.md",
+    "docs/adr/0031-runtime-close-and-maintenance.md",
+    "scripts/redesign/reference-imitation-scenario.mjs",
+    "scripts/redesign/__tests__/reference-imitation-scenario.test.mjs",
+    "scripts/redesign/f537-scenarios.mjs"
+  ],
+  "rawReports": [
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-feedback-multiround-red.json",
+      "sha256": "1582E7F66A8F2AE3C43C9599BA1D421D2A22E6C7DEE31999455D18B780395AB3"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-feedback-multiround-red.log",
+      "sha256": "40751F304DA3C5853B3C5E12BCD69AA54E0B84F79717E2B0F0471D78334C646D"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-feedback-multiround-first.json",
+      "sha256": "96DB37AF32BA6A818C3D4E4F4CD365A6F14C22334094E79FF6092F75051FD827"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-feedback-multiround-first.log",
+      "sha256": "33D19F2D7BBD99562B62F4ABD27E8431E5E9265C2D2F81D3040905866FFAD836"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-feedback-multiround-final.json",
+      "sha256": "2B7B7F84D2491F0695E260165843EF3AEFDCED8CDB7BB89E361E03BE7787DC80"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-feedback-multiround-final.log",
+      "sha256": "423CE2AE5B7B17D7B855190B3430729890E08661593188F0E5FE88C37EB831CA"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-106-tools-final.json",
+      "sha256": "A31A292842A0B29B7D92F8F0D022D22EE5ED6981B3584DB5F95A916527021CAE"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-106-tools-final.log",
+      "sha256": "084F2EC72265AD128EEAC14A20DA087D38AF86C1EC8C33616556FC6D67B9C6D7"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage106-real-feedback-multiround-drive.log",
+      "sha256": "EB47905BC577DCF4B6095F4AA7E794DC48AD83418316BA74AD7042E67B5D13F2"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-typecheck-retest.log",
+      "sha256": "041905C4A1E3C7487EE251F0EE247E581388CD280F269DC6BC632D41F1423377"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-lint-retest.log",
+      "sha256": "F1C58721D752BBA80070A28A1B39ADB706FC3141AE9787223AEC78E911006B08"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-i18n-retest.log",
+      "sha256": "A93D702F5AFE69F813BBA3D5D7DD6660C7238F4D8EC516D6532B979BABC29D69"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-build-retest.log",
+      "sha256": "151DF1DFAAE01B00366E84A5FA57AA2221EC693E8DD67E0EE93BB702569E5C91"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage102-real-feedback-retest/real-feedback-adopt-light.json",
+      "sha256": "84E927BC8A466B5022FCD93734A43532FCB360459CA797071F86D7802B709DAA"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage106-real-feedback-multiround/real-feedback-multiround-adopted-light.png",
+      "sha256": "367A546CDF90BFF5DE5ECD269181C5728551D1654CAECA10FD52470388BB5796"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage106-real-feedback-multiround/real-feedback-multiround-candidate-1-light.png",
+      "sha256": "ED3343CD707784EA4B87D23F28B168E16DE77D89A92DE4831071A13DE88A03C9"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage106-real-feedback-multiround/real-feedback-multiround-candidate-2-light.png",
+      "sha256": "48FC9100F9C1883541762F2E9ACDC2B60B2EC7A62879E3EAADE17421DE33D00E"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage106-real-feedback-multiround/real-feedback-multiround-light.aria.yml",
+      "sha256": "2B94C305DA18308FC956093FE56DA68BEAFBAB10B37A0942A86968C230BCB641"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage106-real-feedback-multiround/real-feedback-multiround-light.console.log",
+      "sha256": "576293FA16BF395DF6E2AD8ABD8B2EB145E462EBF171588297B6606821758469"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage106-real-feedback-multiround/real-feedback-multiround-light.dom.html",
+      "sha256": "F44B101B8DE84C2054FF82F997D6C0A0BFD87738C041DDABF09B6801CB751471"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage106-real-feedback-multiround/real-feedback-multiround-light.json",
+      "sha256": "7A91D48C3D9951C6B44FA21ECF2DD44F245BABC65E6E50E495025215CA431756"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage106-real-feedback-multiround/real-feedback-multiround-light.png",
+      "sha256": "367A546CDF90BFF5DE5ECD269181C5728551D1654CAECA10FD52470388BB5796"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage106-real-feedback-multiround/real-feedback-multiround-reopened-light.png",
+      "sha256": "47A9B74EBC53732DCDE672051EDB8B0D3DDC7BE5771AF49DD23FA7B5F34E3F63"
+    }
+  ],
+  "planRecords": [
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-106-evidence.md",
+      "sha256": "606605DF25ACB823200D6EC3BE616060D8671E423544E95AEECBA50A0090E7F7"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/features.json",
+      "sha256": "1A624E891837A59AF2F49C92182CF055498234DC304AA8926F0280F95C21A6FC"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/implementation-log.md",
+      "sha256": "5D9A1D066BC271407B671D8858C5182676FA808A92E7162D922D7E2E977F7065"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/evidence-map.md",
+      "sha256": "1236EC6E7BBDFE157EFD93495726CFD4CDF7236F862B02B252DC00204BFE37BA"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/review-record.md",
+      "sha256": "1B7A7C77804F89436495D881B250198B7453290D847845E1A9A4AD34CFA498F5"
+    }
+  ],
+  "metadataReports": [
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/checklist-stage106-final.json",
+      "sha256": "F2CD89175D26EAD36E6A0955BED0B4428953E503BA6A84228940334832074504"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/checklist-stage106-final.log",
+      "sha256": "AB73C16B20F598DB4D61F58B8A1FFDE74E684307BFC86FAE463DE5E8190C8C51"
+    }
+  ],
+  "validation": {
+    "toolFiles": 5,
+    "toolPassed": 134,
+    "toolFailed": 0,
+    "toolPending": 0,
+    "toolExitCode": 0,
+    "implementerFinalPassed": 46,
+    "actualRealDriveExitCode": 0,
+    "realPhysicalRequests": 2,
+    "actualAdoptions": 1,
+    "sameProcessReopen": true,
+    "oldBaseHistoryVisibleInUi": false,
+    "metadataPassed": 36,
+    "metadataExitCode": 0,
+    "completedFeatures": 15,
+    "remainingFeatures": 20,
+    "initialRootRequestBudget": 12,
+    "usedBudgetRequests": 4,
+    "remainingBudgetRequests": 8
+  },
+  "limitations": [
+    "Actual model execution used the separately bound earlier Stage104 build, before concurrent project-open/blueprint-recovery source changes. Current dirty production files are excluded, not asserted to match that execution.",
+    "Earlier execution manifests bind their historical source identities; their old plan/raw entries are not asserted to be current worktree identities.",
+    "Source identities cover the four tools and exact unchanged dependencies, not all production sources or feature acceptance.",
+    "Reopened dialog creates a new base in the same process. Old-base history is checked through read-only IPC, not old-history UI or fresh-process recovery.",
+    "Tool tests, actual model/desktop evidence, metadata, static checks and absent literary/performance/platform qualifications are separate. UI002 remains incomplete.",
+    "Budget4/12 is the Root execution ledger: earlier probe1 recorded in Stage101 log, Stage102 feedback1 and current2, not inferred from the current two-request JSON alone.",
+    "External-request/write/residual and key-scan observations have the limited recorded coverage; existing developer CSP warnings remain."
+  ]
+}

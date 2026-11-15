@@ -1720,3 +1720,34 @@ and final-version reruns before their own scoped commits.
   Actual metadata36/36,0failed/pending and same-name stdout log are read; Root
   appends their identities and changed record hashes for a narrow final recheck.
   The scoped local commit remains Root's next action, not a feature promotion.
+
+## 2026-11-15 Stage106 Actual Multi-Round Feedback Review
+
+- Terra independently reviews Agent5's four final tool files: exact scene
+  allowlist and explicit two-request/no-restart budget preserve single-round
+  defaults and unchanged endpoint/secret/unknown guard. Genuine tool RED37/44
+  becomes46/46; Root actual five-file134/134 includes unchanged guard20 and
+  separately named overlapping imitation/background tests,0failed/pending.
+- Agent4 independently reads actual JSON, console, scene persisted assertions
+  and all five1440x900 light PNGs. It accepts same-base C1-to-C2 parent/hash,
+  independent generation origins, unchanged official value before adoption,
+  sole C2 author-action receipt/revision3to4, and unchanged old history after
+  new-base capture. Reopened UI is empty, not a claimed old-history browser;
+  capture is a write while the old-history verification itself is read-only.
+- Actual two POST200 header timings total10105ms/max5160ms,219ms normal
+  unforced/no-kill quit, removed config1 and key scan8files0hits/unreadable/
+  removeFailures match raw. Console has only the existing CSP warning; bounded
+  empty external/writes/residual observations are not a network attestation.
+  Both Root and Agent4 distinguish seeded facts, actual generated candidates,
+  adopted official value and absent literary/performance/platform evidence.
+- Agent4 accepts Stage106 evidence text identity606605DF...0E7F7 with no
+  bounded blocker. Actual execution uses the earlier Stage104 frozen build;
+  later project-open/blueprint-recovery changes are expressly excluded. Root
+  partial self-check keeps UI002 in_progress/false and15/35; missing full
+  designs/dirty-buffer/history discovery are not filled by invented UI.
+  Final manifest/shared-record/metadata audit still precedes the scoped local
+  commit; no stage-number ordering or headless prerequisite is introduced.
+- Root actual record-only checklist36/36,0failed/pending,exit0 and structured
+  all35-feature comparison preserve every non-evidence field. The final narrow
+  audit must consume its actual JSON/log and the final manifest identities;
+  labels/metadata are not substituted for the reviewed model/desktop evidence.

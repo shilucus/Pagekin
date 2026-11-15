@@ -59,9 +59,9 @@ const IDLE_SAMPLES = 5
 const IDLE_SAMPLE_INTERVAL_MS = 1_000
 export const SHELF_BOOKS = 20
 const ALL_SCENARIOS = [...Object.keys(SCENARIOS), 'baseline-all', ...PREPARED_SESSIONS]
-const REAL_GENERATION_SCENARIO = 'real-feedback-adopt'
+const REAL_GENERATION_SCENARIOS = ['real-feedback-adopt', 'real-feedback-multiround']
 const USAGE = `用法: node scripts/redesign/drive.mjs --scenario <名称> [--theme light|dark] [--shell writer|stage] [--out <目录>] [--dump-dom] [--console] [--video] [--app-root <目录>] [--real-model] [--max-real-requests <次数>]
---real-model 目前只用于 ${REAL_GENERATION_SCENARIO}，密钥从环境变量 ${REAL_KEY_ENV} 读
+--real-model 目前只用于 ${REAL_GENERATION_SCENARIOS.join(', ')}，密钥从环境变量 ${REAL_KEY_ENV} 读
 --max-real-requests 真实模型物理请求上限（默认 1）
 场景: ${ALL_SCENARIOS.join(', ')}`
 
@@ -95,13 +95,14 @@ export function parseArgs(argv) {
   if (!ALL_SCENARIOS.includes(options.scenario)) throw new Error(`未知或缺少场景 ${options.scenario}\n${USAGE}`)
   if (!THEMES.includes(options.theme)) throw new Error(`--theme 只接受 ${THEMES.join('|')}`)
   if (options.shell !== null && !SHELLS.includes(options.shell)) throw new Error(`--shell 只接受 ${SHELLS.join('|')}`)
-  if (SCENARIOS[options.scenario]?.real && options.scenario !== REAL_GENERATION_SCENARIO) {
-    throw new Error(`真实模型模式当前只支持 ${REAL_GENERATION_SCENARIO}；${options.scenario} 需要其他模型能力，已禁用`)
+  if (SCENARIOS[options.scenario]?.real && !REAL_GENERATION_SCENARIOS.includes(options.scenario)) {
+    throw new Error(`真实模型模式当前只支持 ${REAL_GENERATION_SCENARIOS.join(', ')}；${options.scenario} 需要其他模型能力，已禁用`)
   }
-  if (options.scenario === REAL_GENERATION_SCENARIO && !options.realModel) throw new Error(`${options.scenario} 是真实模型场景，要带 --real-model`)
-  if (options.realModel && options.scenario !== REAL_GENERATION_SCENARIO) {
-    throw new Error(`--real-model 只用于 ${REAL_GENERATION_SCENARIO}，${options.scenario} 不是`)
+  if (REAL_GENERATION_SCENARIOS.includes(options.scenario) && !options.realModel) throw new Error(`${options.scenario} 是真实模型场景，要带 --real-model`)
+  if (options.realModel && !REAL_GENERATION_SCENARIOS.includes(options.scenario)) {
+    throw new Error(`--real-model 只用于 ${REAL_GENERATION_SCENARIOS.join(', ')}，${options.scenario} 不是`)
   }
+  if (options.scenario === 'real-feedback-multiround' && options.maxRealRequests !== 2) throw new Error('real-feedback-multiround 必须显式带 --max-real-requests 2')
   if (options.maxRealRequests !== 1 && !options.realModel) throw new Error('--max-real-requests 只用于 --real-model')
   return options
 }
@@ -689,7 +690,7 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
          * killed: true 时模拟进程被杀：Windows 用 taskkill /T /F 结束整棵进程树，其他平台只向主进程发 SIGKILL。不走正常退出，也就跳过「重启前应用没有正常退出」的断言。
          */
         restart: async ({ appRoot = currentAppRoot, beforeLaunch, killed = false } = {}) => {
-          if (realKey && names.includes(REAL_GENERATION_SCENARIO)) throw new Error(`${REAL_GENERATION_SCENARIO} 不允许应用重启，以维持单会话 generation 预算`)
+          if (realKey && names.some(name => REAL_GENERATION_SCENARIOS.includes(name))) throw new Error(`${REAL_GENERATION_SCENARIOS.join(', ')} 不允许应用重启，以维持单会话 generation 预算`)
           restartRequests.push(...await launched.app.evaluate(() => globalThis.__driveExternalRequests))
           modelLog.push(...await launched.app.evaluate(() => globalThis.__driveModelRequests))
           realRequestsUsed = await launched.app.evaluate(() => globalThis.__driveModelSink?.realRequestsDispatched ?? 0)

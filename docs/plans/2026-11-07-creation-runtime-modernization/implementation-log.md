@@ -2308,3 +2308,53 @@ The observations below retain their chronological state. The final acceptance at
   initial source/report/build/protected/record identities match. Metadata raw
   and affected record identities are appended for final narrow recheck; no
   unreviewed scope or unresolved client/scope correctness blocker remains.
+
+## 2026-11-15 - Stage106: Genuine Two-Round Feedback
+
+- Stage104 committed as `2a00b8a37df51acd97c5e34fc2d1939948f27632`.
+  Postcommit77 reviewed identities matched, the index remained empty, and all
+  three protected files stayed unchanged. Its preceding pending-commit text is
+  historical; API001/CLI001 remain partial. No remote action occurred.
+- [Stage106](stage-106-evidence.md) freezes four verification-tool paths only:
+  explicit two-request real-feedback-multiround, same-base C1-to-C2 iteration,
+  sole explicit C2 adoption, new-base reopen and persisted old-history checks.
+  No product UI, schema, candidate writer or authority changes. Concurrent
+  imitation/project-open/blueprint-recovery paths are excluded from this commit.
+- Implementer two-file actual RED37/44,exit1 becomes44/44 then46/46,exit0.
+  Root final five-file tools134/134,0failed/pending,exit0 are recorded in
+  R/stage105-106-tools-final.json/log. The exact commands and raw report names
+  are in Stage106; R is the existing resume-2026-11-15 runtime directory.
+  These overlapping pure-tool counts are not additional model or desktop runs.
+- Root actual drive `real-feedback-multiround --real-model
+  --max-real-requests 2` exits0, using the earlier Stage104 frozen build, not the
+  later product fixes. Actual two POST200 requests yield independent C1/C2
+  origins with exact parent/hash. Neither changes the official premise until
+  the sole C2 author-action receipt commits revision3to4. Dialog reopening
+  captures a new empty base; old two-candidate/one-adoption history remains
+  deep-equal via read-only IPC, not visible old-history UI or fresh-process
+  recovery. Actual command includes the separated option/value as in Stage106.
+- Root and Agent4 each inspect actual JSON, console and all five1440x900 light
+  PNGs. Normal219ms unforced/no-kill quit; only existing CSP warning remains.
+  Isolated config removed1 and key scan8files0hits/unreadable/removeFailures;
+  empty external/writes/residual observations have bounded recorded coverage.
+  Header timing total10105ms/max5160ms is not total workflow latency/speedup.
+  Secrets enter hidden secure stdin/memory only and are cleared; no real work
+  or config is read. Initial12-request budget has used4,8remain: earlier probe1,
+  Stage102 feedback1 and this2; no unknown resend or hidden third request.
+- Terra independently accepts the four final tool identities; Agent4 accepts
+  actual two-round/adoption/persisted-history evidence and the Stage106 text.
+  No unresolved correctness blocker is found within this bounded slice. Root
+  partial self-check maps original R3/UI002 only, preserves source/parent/
+  unknown/receipt/explicit-adopt boundaries and does not append unrelated AC.
+  Full target/state/viewport designs, dirty-buffer initiation and old-history
+  discovery remain UI002 gaps. It stays in_progress/false, checklist15/35.
+- Manifest, record-only metadata and final independent path/index audit precede
+  the exact-four-tool/six-record local commit. Its SHA and postcommit identities
+  are recorded in the next log update. Next functional delivery remains complete
+  imitation with actual target save/reopen after the separately reproduced
+  project-open and blueprint-recovery races; those failed reports are retained.
+- Actual record-only command:
+  `corepack pnpm test scripts/__tests__/creation-runtime-feature-evidence.test.ts --reporter=json --outputFile=.runtime/creation-runtime-modernization/resume-2026-11-15/checklist-stage106-final.json`.
+  Exit0,36/36,0failed/pending; matching stdout log retained. Structured parent
+  comparison confirms zero non-evidence field changes across all35 features.
+  This checks metadata only, not feature or model-quality acceptance.
