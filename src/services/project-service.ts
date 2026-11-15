@@ -14,7 +14,7 @@
 
 import { globalEventBus, type EventPayloadMap } from '../shared/event-bus'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
-import { useProjectStore } from '../stores/project-store'
+import { getPendingProjectOpenIdentitySettlements, useProjectStore } from '../stores/project-store'
 import { useCharacterStore } from '../stores/character-store'
 import { useDraftStore } from '../stores/draft-store'
 import { useEditorStore } from '../stores/editor-store'
@@ -34,8 +34,18 @@ import {
 /** 存放解绑函数，用于 dispose 时清理 */
 let disposers: Array<() => void> = []
 
-function runProjectEventTask(label: () => string, task: () => Promise<void>): void {
-  void task().catch((error) => {
+function runProjectEventTask(
+  label: () => string,
+  projectSession: ProjectSessionContext,
+  task: () => Promise<void>,
+): void {
+  void task().catch(async (error) => {
+    let pending = getPendingProjectOpenIdentitySettlements()
+    while (pending.length > 0) {
+      await Promise.all(pending)
+      pending = getPendingProjectOpenIdentitySettlements()
+    }
+    if (!isProjectSessionCurrent(projectSession)) return
     const message = error instanceof Error ? error.message : String(error)
     const locale = useLocaleStore.getState().locale
     const localizedLabel = label()
@@ -84,6 +94,7 @@ export function initProjectService(): void {
   disposers.push(
     globalEventBus.on('WORKFLOW_COMPLETE', (payload) => runProjectEventTask(
       () => text('工作流完成后的项目刷新失败', 'Could not refresh project data after workflow completion'),
+      payload.projectSession,
       async () => {
       console.log('[ProjectService] WORKFLOW_COMPLETE 事件触发:', payload.type)
       if (!isProjectSessionCurrent(payload.projectSession)) return
@@ -129,6 +140,7 @@ export function initProjectService(): void {
   disposers.push(
     globalEventBus.on('FINALIZE_COMPLETE', (payload) => runProjectEventTask(
       () => text('定稿后的项目刷新失败', 'Could not refresh project data after finalization'),
+      payload.projectSession,
       async () => {
       const project = useProjectStore.getState().currentProject
       if (!project || !sameProjectSessionContext(
@@ -162,6 +174,7 @@ export function initProjectService(): void {
   disposers.push(
     globalEventBus.on('ARCH_POSTPROCESS_UPDATED', (payload) => runProjectEventTask(
       () => text('架构后处理刷新失败', 'Could not refresh character cards after architecture post-processing'),
+      payload.projectSession,
       async () => {
       if (
         !isProjectSessionCurrent(payload.projectSession)
@@ -177,6 +190,7 @@ export function initProjectService(): void {
   disposers.push(
     globalEventBus.on('CHARACTER_EXTRACT_FAILED', (payload) => runProjectEventTask(
       () => text('角色卡失败状态刷新失败', 'Could not refresh character-card failure status'),
+      payload.projectSession,
       async () => {
       if (
         !isProjectSessionCurrent(payload.projectSession)
@@ -192,6 +206,7 @@ export function initProjectService(): void {
   disposers.push(
     globalEventBus.on('REFRESH_RESOURCE', (payload) => runProjectEventTask(
       () => text('项目资源刷新失败', 'Could not refresh project resources'),
+      payload.projectSession,
       async () => {
       const projectPath = payload.projectPath
       if (!isProjectSessionCurrent(payload.projectSession)) return

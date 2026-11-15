@@ -57,6 +57,24 @@ let projectRecoveryInFlight: Promise<void> | null = null
 let novelConfigPublicationRevision = 0
 let novelConfigPublicationSession: ProjectSessionContext | null = null
 const novelConfigWritesInFlight = new Map<ProjectSessionContext, Promise<void>>()
+const projectOpenIdentitySettlements = new Set<Promise<void>>()
+
+function beginProjectOpenIdentitySettlement(): () => void {
+  let resolve!: () => void
+  let settled = false
+  const promise = new Promise<void>((accept) => { resolve = accept })
+  projectOpenIdentitySettlements.add(promise)
+  return () => {
+    if (settled) return
+    settled = true
+    projectOpenIdentitySettlements.delete(promise)
+    resolve()
+  }
+}
+
+export function getPendingProjectOpenIdentitySettlements(): readonly Promise<void>[] {
+  return [...projectOpenIdentitySettlements]
+}
 
 export interface NovelConfigReadToken {
   readonly projectSession: ProjectSessionContext
@@ -674,6 +692,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     let rendererProject = get().currentProject
     let rendererProjectPath = rendererProject?.path ?? null
     let mainOpenWasAccepted = false
+    let settleOpenIdentity: (() => void) | null = null
     let preparedTransition: PreparedProjectTransition | null = null
     set({ loading: true })
     try {
@@ -721,6 +740,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       await waitForNovelConfigWrites(projectSessionContextFromProject(rendererProject))
       if (!isLatestRequest() || (rendererProject && (!preparedTransition
         || !isPreparedProjectTransitionCurrent(rendererProject, preparedTransition)))) return false
+      settleOpenIdentity = beginProjectOpenIdentitySettlement()
       const result = await ipc.invoke(retainViews ? PROJECT_RUNTIME_OPEN_BACKGROUND_VIEW_CHANNEL : 'project:open', target, requestToken, rendererProjectPath)
       if (!isLatestRequest() || result.stale || result.requestToken !== requestToken) {
         await reconcileStaleProjectResponse({
@@ -728,6 +748,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
           detachRenderer: () => set({ currentProject: null, fileTree: [] }),
           operation: 'open',
         })
+        settleOpenIdentity()
         return false
       }
       if ('backgroundViewsRetained' in result && typeof result.backgroundViewsRetained === 'boolean') {
@@ -765,6 +786,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
           ),
           shouldNotify: isLatestRequest,
         })
+        settleOpenIdentity()
         return false
       }
       if (
@@ -787,6 +809,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
           ),
           shouldNotify: isLatestRequest,
         })
+        settleOpenIdentity()
         return false
       }
       if (result.success && result.project) {
@@ -833,6 +856,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
             ? result.project!.novelConfig : restored.value },
           projectSessionEpoch: state.projectSessionEpoch + 1,
         }))
+        settleOpenIdentity()
         // 默认落点与提交同步落下：之后读文件树、最近项目期间作者的导航（回书房、开运行侧页、换侧栏）都在它之后，不会被改回。
         navigate({ kind: 'stage' })
         const partialLoadWarnings: string[] = []
@@ -892,6 +916,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         return true
       }
       if (!isLatestRequest()) return false
+      settleOpenIdentity()
       if (result.errorCode === 'PROJECT_LEGACY_IMPORT_REQUIRED' && result.legacyImportSource) {
         const approved = await confirm(
           projectText(
@@ -919,8 +944,12 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
           detachRenderer: () => set({ currentProject: null, fileTree: [] }),
           operation: 'open',
         })
-        if (detached) return false
+        if (detached) {
+          settleOpenIdentity?.()
+          return false
+        }
       }
+      settleOpenIdentity?.()
       if (!isLatestRequest()) return false
       console.error('[Project] IPC 通信异常:', e)
       if (!isLatestRequest()) return false
@@ -930,6 +959,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       )
       return false
     } finally {
+      settleOpenIdentity?.()
       if (isLatestRequest()) set({ loading: false })
     }
   },

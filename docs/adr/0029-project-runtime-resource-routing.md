@@ -12,7 +12,7 @@ Only host-issued opaque prepare tickets can commit or abort an open. A failed or
 
 Viewing an existing runtime reuses its DB and epoch but always issues a fresh UI lease. True close/reopen gets a new native identity and epoch. `project-runtime:v1:open-view` is the explicit retained-view entry. It uses the same main-owned recent reference or project-open directory grant as ordinary open, not a current UI lease; it introduces no execution grant. The preload admits only this literal in the new namespace. Successful admission marks that runtime retained in process memory until actual close; failed preparation or COMMIT does not mark it.
 
-The old `project:open` remains a single-book compatibility switch so the existing UI does not create an unusable multi-runtime legacy state. It requires zero runtimes, or exactly one current open, non-retained, idle runtime with no pending prepare or legacy/restore operation. Before target side effects it refuses busy, closing and explicit retained resources. Its opaque prepare ticket captures the previous runtime and holds a lifecycle barrier through COMMIT, fresh view/session publication and release of only that captured previous runtime. Same-canonical viewing rotates the lease without closing or refencing the runtime. No old renderer lease becomes a background grant. The active-view pointer exists only for classified compatibility entrypoints, never as a temporary task-routing mechanism.
+The old `project:open` remains a single-book compatibility switch so the existing UI does not create an unusable multi-runtime legacy state. It requires zero runtimes, or exactly one current open, non-retained, idle runtime with no pending prepare or legacy/restore operation. Before target side effects it refuses non-view busy, closing and explicit retained resources. Only the exact `PROJECT_RUNTIME_VIEW_OPERATION_BUSY` refusal may wait for already admitted physical current-view operations, before resolving or consuming the target grant. The last release synchronously rechecks the original view/session, latest open request and original compatibility admission, then validates the actual target and obtains its opaque prepare ticket without an intervening await. That ticket captures the previous runtime and holds a lifecycle barrier through COMMIT, fresh view/session publication and release of only that captured previous runtime. Same-canonical viewing rotates the lease without closing or refencing the runtime. No old renderer lease becomes a background grant. The active-view pointer exists only for classified compatibility entrypoints, never as a temporary task-routing mechanism.
 
 ## Routing And Compatibility
 
@@ -20,7 +20,20 @@ Project create/open and basic editing capture explicit runtime resources. Genera
 
 Every unadapted current-project entry is classified in the [Stage 3A matrix](../plans/2026-11-07-creation-runtime-modernization/stage-3a-runtime-compatibility.md). It either uses an explicit reviewed adapter or refuses coexistence before its first side effect. A legacy asynchronous operation admitted with one runtime holds an interlock until it settles; opening, activating or closing a runtime cannot change its global compatibility resources during that interval. Multi-runtime legacy admission fails closed. Unknown entries do not inherit permission from a shared prefix.
 
-Ordinary single-book switching must retain the complete existing author workflow, not just the first file-tree/role/draft reads. The retained IPC scenario separately proves isolation and refusal of unadapted entries; it does not stand in for the renderer open/load/save chain. Existing UI cancellation/wait protection stays in place. A retained or busy A is never silently released by the compatibility entry, even when it is the only remaining runtime.
+Ordinary single-book switching must retain the complete existing author workflow, not just the first file-tree/role/draft reads. The retained IPC scenario separately proves isolation and refusal of unadapted entries; it does not stand in for the renderer open/load/save chain. Existing UI cancellation/wait protection stays in place. A retained or busy A is never silently released by the compatibility entry, even when it is the only remaining runtime. The precise view-drain wait above changes no busy resource to idle: timeout, stale session, a superseding open or failed admission leaves the original protection and rollback rules intact. It does not wait for a background model or parent projection ACK, retry the IPC or authorize close.
+
+The renderer can briefly retain the previous identity after main commits a new
+view lease. A derived-refresh failure waits for pending open-identity
+transactions to settle before synchronously checking its original complete
+session and publishing its existing log/notice. Each actual open IPC owns a
+separate resolve-only settlement token, released after identity publication or
+the original failure/reconciliation cleanup, not after file-tree/Layer2 loading
+or an author-facing legacy-import decision. Overlapping or superseded opens
+cannot settle another token; a woken notifier rechecks later transactions before
+the same synchronous session check. A failed open that keeps the original
+session still reports the original refresh error. This is notification timing,
+not a new freshness authority, main authorization, retry, loading-based error
+suppression or permission to change editor buffers or finalization snapshots.
 
 Idle release rejects in-flight resource users before changing phase. After entering closing, synchronous owner flush/suspend and target KB close hooks run before native close and admission removal. Failures remain quarantined as closing and cannot be treated as a successful release or reopened under a second owner. General drain, maintenance coordination and grant revocation remain RUNTIME-002/003 work.
 
@@ -90,14 +103,18 @@ retained book can display its actual chapter facts. Their directly used
 also remain SELECT/validation projections under that same boundary.
 Revision/review mutations keep their original admission; a read adapter does
 not grant review or merge. Only the existing `generation:list-recovery`,
-`generation:list` and `planning-feedback:v1:capture` entries may similarly
+`generation:list`, `generation:find-blueprint-recovery` and
+`planning-feedback:v1:capture` entries may similarly
 wait for current-view physical operations before their synchronous legacy-owner
 initialization or handoff, with caller/session/runtime/native identity validation
 repeated at that boundary and after the wait. They still run the original owner
 admission, retirement and non-view busy checks; an already matching legacy owner
 keeps its original path. This is a bounded wait, not a retry or generic channel
 prefix rule. Initial interrupted recovery, exceptional budget-poison writes and
-feedback base capture are not reclassified as pure reads. Capture retains its
+feedback base capture are not reclassified as pure reads. Blueprint recovery
+still uses its original legacy owner and persisted run reader; initial owner
+recovery is not declared pure SELECT or allowed to borrow an active reference
+owner. Capture retains its
 original current-session authorization and native transaction; no base is written
 while waiting. A reference owner's existing current-view read branch never waits
 for its own background work or grants a new writer.

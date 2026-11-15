@@ -1254,9 +1254,17 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
+        {
+          "type": "contract_review",
+          "sourceSha": "b6c4e003161a4e9e4888abaf72c83e724f7cbda3 + stage-105-source-manifest.json identities",
+          "artifactOrReceipt": "stage-105-evidence.md; review-record.md; ADR0040/0076/0080",
+          "environment": "2026-11-16 independent current-contract/call-chain review by Agent4 and gpt-6.1-terra; no real works or credentials accessed",
+          "result": "Original three runtime AC retain their applicable migration, author entry, save and recovery evidence. Completion is withdrawn because the shared reference-global path can replace existing canonical premise/coreOutline/worldbuilding without a specific author adoption, conflicting with ADR0040 and the existing G-CONTRACT gate. Mechanical projection ACK is not fact approval. IMPORT001 is in_progress/false; checklist14/35 (40%).",
+          "limitations": "This is a concrete contract conflict, not a new imitation/style-consumption/SCHED/model/platform prerequisite and not a claim that real user data was damaged. Original evidence and historical verdicts remain preserved but their no-gap completion conclusion is superseded. Product adjudication and the corresponding shared fact-boundary implementation/review are still required; no fill-empty policy or approval UI is invented."
+        },
         {
           "type": "static",
           "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",
@@ -1629,6 +1637,30 @@
       "status": "in_progress",
       "passes": false,
       "evidence": [
+        {
+          "type": "contract_review",
+          "sourceSha": "b6c4e003161a4e9e4888abaf72c83e724f7cbda3 + stage-105-source-manifest.json final identities",
+          "artifactOrReceipt": "stage-105-evidence.md; review-record.md; ADR0029/0031/0040/0076/0080",
+          "environment": "2026-11-16 independent Sol product/source review, Terra tools review and Agent4 actual evidence review; Root integration",
+          "result": "Accepted the bounded production author save/reopen and stale-notification repairs: exact view-only drain, registered blueprint recovery, independent renderer open settlement and unchanged authority/receipt/buffer boundaries. The shared reference-global effect still conflicts with author-fact separation under ADR0040; IMPORT002 stays in_progress/false.",
+          "limitations": "This does not adopt a new global replacement/fill-empty/approval policy, complete all imitation AC or add a SCHED prerequisite. Product adjudication and fact-boundary implementation/review remain required; historical shared reports are not a second full-feature acceptance."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "b6c4e003161a4e9e4888abaf72c83e724f7cbda3 + stage-105-source-manifest.json final identities",
+          "artifactOrReceipt": "stage-105-evidence.md; .runtime/creation-runtime-modernization/resume-2026-11-15/stage105-open-identity-window-final.json; stage105-registered-fs-recovery-retest.json; stage105-tools-visible-integrated.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; isolated fictional SQLite, renderer IPC and fake HTTP",
+          "result": "Final source-bound reports: project-open115/115, registered generation148/148, renderer identity-window five-file109/109, tools167/167 and unchanged target-boundaries580/580. Final typecheck/lint/colors/i18n/source build exit0; independent source/tool review accepts the scoped changes.",
+          "limitations": "Reports overlap and are not summed. Original REDs, assertion/cleanup and lint failures remain; final tests do not retroactively diagnose earlier cancellation failures. Renderer tests are not main authorization evidence; fake style/prose separation is not literary quality."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "b6c4e003161a4e9e4888abaf72c83e724f7cbda3 + stage-105-source-manifest.json final identities",
+          "artifactOrReceipt": "stage-105-evidence.md; .runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final-reviewed/f537-reference-imitation-10-light.json; matching console/PNG/DOM/ARIA",
+          "environment": "Actual isolated Windows x64 Electron44.9.3; light1440x900; fictional reference10chapters; guarded loopback fake14; fresh reviewed source build",
+          "result": "Sixth drive exits0: stored distinct style consumed by target writer, chapter3/id5/v2 saved, original drafts unchanged, fresh-lease same-process receipt/body recovery and actual visible chapter3/body hash agree. Root/Agent4 personally inspect chapter3/v2/82characters. Obsolete renderer refresh error is absent; quit235ms resolved/unforced/no-kill.",
+          "limitations": "First five attempts retain their actual failures/limitations. Initial recovery probe still times out5004ms and main correctly rejects old leases. Bounded/truncated observer is not a physical claim counter; external-request coverage is observed_before_quit. Not cold-process/OS-kill, full imitation/fact-separation, real-model/literary-quality, visual equality or platform qualification."
+        },
         {
           "type": "static",
           "sourceSha": "b29764c5db6857b07a6c4d400a11a5e6ee59851c",

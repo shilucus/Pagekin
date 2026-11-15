@@ -1,0 +1,930 @@
+{
+  "schemaVersion": 1,
+  "stage": 105,
+  "sourceSha": "b6c4e003161a4e9e4888abaf72c83e724f7cbda3",
+  "parentCommit": "b6c4e003161a4e9e4888abaf72c83e724f7cbda3",
+  "productionSourcesChanged": true,
+  "verificationToolsChanged": true,
+  "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; Electron44.9.3; isolated fictional projects and fake HTTP only; zero real-model calls in this slice",
+  "scope": "Partial IMPORT002 production style consumption, target3 save/reopen/visible product and runtime/error repairs. IMPORT001 qualification correction under existing G-CONTRACT; both IMPORT flags remain false, 14/35 completed. Not full feature/model/platform qualification.",
+  "sourceFiles": [
+    {
+      "path": "electron/controllers/project-controller.ts",
+      "sha256": "5E54C6F61B63349E7BDA53878BE4D634285958CE6141CE4FCE2169B77035458F"
+    },
+    {
+      "path": "electron/controllers/__tests__/project-controller-open-atomicity.test.ts",
+      "sha256": "0A8F76A01076445D6A33F9D0541569F65F554D866EB86B1FA1FE97B5FD79D5DA"
+    },
+    {
+      "path": "electron/controllers/generation-controller.ts",
+      "sha256": "021FFF34012826CC6C52E105CB1CE7CADB35A0A9FBA5AB6183A6578C11418A27"
+    },
+    {
+      "path": "electron/controllers/__tests__/generation-controller.test.ts",
+      "sha256": "5A5C0706119F1929A17B4919E9F3A78BD51045D411B543B643692207DFDBCC15"
+    },
+    {
+      "path": "src/stores/project-store.ts",
+      "sha256": "18D8152139888BF1FD1DAA263F51A799DB524E7C5C74056F66DA88A3173E863F"
+    },
+    {
+      "path": "src/services/project-service.ts",
+      "sha256": "11EE2FD911162BD346C7B3BEC25F5F76D24FA8551E53C4AEC2DAB27B7C3A205B"
+    },
+    {
+      "path": "src/services/__tests__/project-service-refresh-context.test.ts",
+      "sha256": "477153C6FA85B0732A0C4A7F0048BF93A0E8C8755EEE2B39A36C28E09E6A7AB9"
+    },
+    {
+      "path": "docs/adr/0029-project-runtime-resource-routing.md",
+      "sha256": "F0BD1495137770A1CBF96D04567B7E0DF3742AB18BA14E29EA0B6A63F9A380D2"
+    },
+    {
+      "path": "docs/adr/0031-runtime-close-and-maintenance.md",
+      "sha256": "2F2EF95A599A33021FD34462134AA8DFFE1DD40C25480BEB1CE5CEBA16C4285E"
+    }
+  ],
+  "verificationTools": [
+    {
+      "path": "scripts/redesign/f537-scenarios.mjs",
+      "sha256": "EA47D3FCE840A99AA29FCE6BCEA88A14A9D0401CD8ECA68E1196DDCA1CF0BBBC"
+    },
+    {
+      "path": "scripts/redesign/fake-model.mjs",
+      "sha256": "EA26A1BDC04EFCB4016019328691D204058549DA182CF3B933D2FC03855CACC1"
+    },
+    {
+      "path": "scripts/redesign/__tests__/fake-model.test.mjs",
+      "sha256": "FD8CC53606C4F018EEBD3BF959D19802E2AEEE06C70E6602BCB6AFDE91C92BD4"
+    },
+    {
+      "path": "scripts/redesign/reference-imitation-scenario.mjs",
+      "sha256": "3F4AE75EE75103E28838CD1141CE4E3D752402180ED4AB76331E1BD471A16EFB"
+    },
+    {
+      "path": "scripts/redesign/__tests__/reference-imitation-scenario.test.mjs",
+      "sha256": "4C3A22C032613D45C59C864F4848F0CDD16A51292F1872FB7ED805069D3EE415"
+    }
+  ],
+  "unchangedExecutionTestDependencies": [
+    {
+      "path": "electron/controllers/__tests__/project-controller-context.test.ts",
+      "sha256": "EFD7FFDA610D38359B10ABE74FA6EC1830B4DC3044C0F63F35F86EA79520795C"
+    },
+    {
+      "path": "electron/services/__tests__/generation-run-service.test.ts",
+      "sha256": "3B22D56B3E2E5DA2C07DEE385EFF1DA97348FFDF230CAEB683112CF139664C07"
+    },
+    {
+      "path": "electron/services/__tests__/main-generation-owner.test.ts",
+      "sha256": "BF4F3C4D30449EFB0770C19ACC45F5BA40249F4139F72F752E999D3E69144DE9"
+    },
+    {
+      "path": "scripts/redesign/__tests__/drive-args.test.mjs",
+      "sha256": "6EA631B94DF30562AEE889B60B768374A1EC75F6ADCFCCD583E2D40504095CA9"
+    },
+    {
+      "path": "scripts/redesign/__tests__/real-feedback-scene.test.mjs",
+      "sha256": "BC9E44BE5C9DEF95745581C9E4341C5CF46FF3FC8EC52E1992746BCBA3D505B1"
+    },
+    {
+      "path": "scripts/redesign/__tests__/real-model.test.mjs",
+      "sha256": "F65A8FA8E17B4D850E0D41E86CABB4CD5D31640B1450CF5BBBBBB0DC53CDFCDA"
+    },
+    {
+      "path": "scripts/redesign/__tests__/reference-run-background-scenario.test.mjs",
+      "sha256": "B0B1A7B903F34E507DD9FCDAFC9367A3240878ABED0BB36523D726E6C342FA4E"
+    },
+    {
+      "path": "src/services/__tests__/prompt-style-imitation-contract.test.ts",
+      "sha256": "F5AA63718B615B8F408C0FDA67417A5267C01B23DB41B4896187B9D05EEEC27E"
+    },
+    {
+      "path": "src/services/workflows/__tests__/draft-recovery-workflow.test.ts",
+      "sha256": "21F39CF683A37EAC29E867F03B0752D32B6F495F60CC722BFF34F750E5254E46"
+    },
+    {
+      "path": "src/services/workflows/commands/__tests__/generate-draft.command.test.ts",
+      "sha256": "3F7D4E120A85DB949173E4A697DF31484A19E77D03C059D231E64046763D2016"
+    },
+    {
+      "path": "src/stores/__tests__/project-access-errors-locale.test.ts",
+      "sha256": "8DBFB4E0BA9C627A5EDAA15B1BB871DD329E65F7CF4CFEB454947BCC6F517235"
+    },
+    {
+      "path": "src/stores/__tests__/project-close-lifecycle.test.ts",
+      "sha256": "C6E9339B8431A086E864AC55E82AA8A403C9007F404D0EDE6CE7A1E49BDBE878"
+    },
+    {
+      "path": "src/stores/__tests__/project-refresh-context.test.ts",
+      "sha256": "809925B97D5B64E71F59EDD29DA051A7C3B05996816A4AE52EDAA130B6B96916"
+    },
+    {
+      "path": "src/stores/__tests__/project-transition-background.test.ts",
+      "sha256": "76E29C47D152438A088F005A8150085B21FF6E48E9BAD68374801A2107B0FFCF"
+    }
+  ],
+  "earlierManifests": [
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-102-source-manifest.json",
+      "sha256": "7FA464F40DC07C45EEF7E7A625B0A5A311C174BBC813AC6AF087CF52CFDCDBE4"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-106-source-manifest.json",
+      "sha256": "C1AE81DC9210614038AE462263C15A3C8C0F9B94A9AC0A36C2DA0C885BCA9A18"
+    }
+  ],
+  "historicalReuse": {
+    "baseline": "stage-102-source-manifest.json unchangedStage101Sources + additionalImportSources",
+    "total": 55,
+    "unchangedCount": 50,
+    "changedCount": 5,
+    "unchangedBaselinePaths": [
+      "electron/services/__tests__/external-file-grant-service.test.ts",
+      "electron/services/external-file-grant-service.ts",
+      "docs/adr/0049-background-project-tasks-and-transition-presentation.md",
+      "docs/adr/0080-main-owned-foreground-reference-whole-run.md",
+      "electron/__tests__/preload-bridge.test.ts",
+      "electron/controllers/__tests__/db-controller-project-context.test.ts",
+      "electron/controllers/__tests__/fs-controller-project-boundary.test.ts",
+      "electron/controllers/__tests__/reference-global-foreground.test.ts",
+      "electron/controllers/__tests__/reference-refresh-foreground.test.ts",
+      "electron/controllers/__tests__/reference-run-foreground.test.ts",
+      "electron/controllers/__tests__/retained-view-adapters.test.ts",
+      "electron/controllers/__tests__/runtime-feedback-controller.test.ts",
+      "electron/controllers/__tests__/workflow-batch-controller.test.ts",
+      "electron/controllers/__tests__/workflow-driver-controller.test.ts",
+      "electron/controllers/db-controller.ts",
+      "electron/controllers/fs-controller.ts",
+      "electron/controllers/reference-blueprint-foreground.ts",
+      "electron/controllers/reference-global-foreground.ts",
+      "electron/controllers/reference-refresh-foreground.ts",
+      "electron/controllers/reference-run-foreground.ts",
+      "electron/controllers/reference-style-foreground.ts",
+      "electron/preload.ts",
+      "electron/services/__tests__/project-runtime-compatibility.test.ts",
+      "electron/services/__tests__/project-runtime.test.ts",
+      "electron/services/project-runtime-compatibility.ts",
+      "electron/services/project-runtime.ts",
+      "scripts/redesign/__tests__/reference-run-background-scenario.test.mjs",
+      "scripts/redesign/reference-run-background-scenario.mjs",
+      "src/services/__tests__/ipc-client-project-session.test.ts",
+      "src/services/workflows/__tests__/import-workflow.test.ts",
+      "src/services/workflows/__tests__/reference-import-projection.test.ts",
+      "src/services/workflows/import-workflow.ts",
+      "src/services/workflows/reference-import-projection.ts",
+      "src/shared/__tests__/workflow-background-qualification.test.ts",
+      "src/shared/event-bus.ts",
+      "src/shared/ipc-channels.ts",
+      "src/shared/project-runtime-contract.ts",
+      "src/shared/workflow-background-qualification.ts",
+      "src/stores/__tests__/project-transition-background.test.ts",
+      "src/stores/__tests__/workflow-store-reference-view.test.ts",
+      "src/stores/workflow-store.ts",
+      "electron/controllers/window-controller.ts",
+      "electron/controllers/__tests__/window-controller.test.ts",
+      "electron/controllers/import-controller.ts",
+      "electron/controllers/__tests__/import-controller-persistence.test.ts",
+      "electron/controllers/__tests__/import-controller-secure-file.test.ts",
+      "electron/repositories/import-run-repository.ts",
+      "electron/repositories/__tests__/import-run-repository.test.ts",
+      "src/components/dialogs/ImportNovelDialog.tsx",
+      "src/components/dialogs/__tests__/import-novel-resume.browser.tsx"
+    ],
+    "changedDependencies": [
+      {
+        "path": "electron/controllers/__tests__/project-controller-open-atomicity.test.ts",
+        "historicalSha256": "248CD3C78A850ECB4978518378B47E87E4C1D6765A5BBE42BEB41C83E0A1D9CE",
+        "currentSha256": "0A8F76A01076445D6A33F9D0541569F65F554D866EB86B1FA1FE97B5FD79D5DA"
+      },
+      {
+        "path": "electron/controllers/project-controller.ts",
+        "historicalSha256": "AFA99270DBB935F40545A44615501BFC88B76A91F716746F27CB005B4F035AE3",
+        "currentSha256": "5E54C6F61B63349E7BDA53878BE4D634285958CE6141CE4FCE2169B77035458F"
+      },
+      {
+        "path": "src/services/__tests__/project-service-refresh-context.test.ts",
+        "historicalSha256": "8F4BE65CC2F99322F9BA1E63088C4B3A18AD8662DDC71A8F296C4A1C72234DCA",
+        "currentSha256": "477153C6FA85B0732A0C4A7F0048BF93A0E8C8755EEE2B39A36C28E09E6A7AB9"
+      },
+      {
+        "path": "src/stores/project-store.ts",
+        "historicalSha256": "F87BC948A120DC685CF47BE5E801BE96D05E1D3E8935269BFB9FE1BA8072792B",
+        "currentSha256": "18D8152139888BF1FD1DAA263F51A799DB524E7C5C74056F66DA88A3173E863F"
+      },
+      {
+        "path": "docs/adr/0031-runtime-close-and-maintenance.md",
+        "historicalSha256": "A3E916B748CD23386D0DE739EDBFB3C4DFAC19F966DACE3F7660A154BCF44F68",
+        "currentSha256": "2F2EF95A599A33021FD34462134AA8DFFE1DD40C25480BEB1CE5CEBA16C4285E"
+      }
+    ],
+    "otherChangedStage102Sources": [
+      {
+        "path": "docs/adr/0029-project-runtime-resource-routing.md",
+        "historicalSha256": "72D32D8E612DEC162986056CBCE3501FB1E25A21DB99DE3BAB94793AC43219E3",
+        "currentSha256": "F0BD1495137770A1CBF96D04567B7E0DF3742AB18BA14E29EA0B6A63F9A380D2"
+      },
+      {
+        "path": "electron/controllers/generation-controller.ts",
+        "historicalSha256": "B51ADF552CE9FCDF2FBE46457E04F2FC1BB4F736344B9EC243209E0D34B5C3F0",
+        "currentSha256": "021FFF34012826CC6C52E105CB1CE7CADB35A0A9FBA5AB6183A6578C11418A27"
+      },
+      {
+        "path": "electron/controllers/__tests__/generation-controller.test.ts",
+        "historicalSha256": "ECAFD278EF8276641CE8FDDC7506FF63C1AA3118C5690D61076EDBAAF967407C",
+        "currentSha256": "5A5C0706119F1929A17B4919E9F3A78BD51045D411B543B643692207DFDBCC15"
+      },
+      {
+        "path": "scripts/redesign/drive.mjs",
+        "historicalSha256": "ADBC3479F87937F6337E75F7D99553A4D9CE36AFB45C618FE238F11AE5772D90",
+        "currentSha256": "F8DB4C558768549D46D3BB6DB4495A0AF2DC2682C448A3BC86F445C83A219F6F"
+      },
+      {
+        "path": "scripts/redesign/real-scenarios.mjs",
+        "historicalSha256": "7132865B4E028862CADA28C79DF20B6A2DFF18B767C329648F83831483D3ECA0",
+        "currentSha256": "37BE7A138672F65CF0717B3E030F76D0AAB761013B8DB7648337C5B5A9BDE2DE"
+      },
+      {
+        "path": "scripts/redesign/__tests__/drive-args.test.mjs",
+        "historicalSha256": "56EFAE60273263307C1AEDA889EB841D7B5BBF143662B4C074098E0EC34E236C",
+        "currentSha256": "6EA631B94DF30562AEE889B60B768374A1EC75F6ADCFCCD583E2D40504095CA9"
+      },
+      {
+        "path": "scripts/redesign/__tests__/real-feedback-scene.test.mjs",
+        "historicalSha256": "9BBD2CD60955C0B72CF5BA5E96835BC01B4F1FA673B2F9DE440929538379D337",
+        "currentSha256": "BC9E44BE5C9DEF95745581C9E4341C5CF46FF3FC8EC52E1992746BCBA3D505B1"
+      }
+    ],
+    "limitations": "Unchanged hashes only preserve applicable evidence, not blanket current acceptance. Historical changed identities are retained rather than overwritten; subsequent focused reports and actual integration bind final bytes."
+  },
+  "buildEntries": [
+    {
+      "path": "dist/index.html",
+      "sha256": "818AEB099FE934F828F6DF6B310F82B92E101D5B4C11C20A9AC5617117D007A8"
+    },
+    {
+      "path": "dist-electron/main.js",
+      "sha256": "8A19979E2384501968EC9EEC242EEB10106E2997D31D2C6BDFAC923FD1BBDF46"
+    },
+    {
+      "path": "dist-electron/preload.mjs",
+      "sha256": "B4F954B48DA2075181BDF4E14B926B0702750844CA4E69A382F4975E6B0EE580"
+    }
+  ],
+  "buildTree": {
+    "fileCount": 349,
+    "sha256": "F692FCCD087E109A2F4FDF6E59A80E45AB1F6164EBCB828E3B5F66C95EBE710A",
+    "definition": "SHA256 of UTF8 PowerShell ConvertTo-Json -Compress -Depth 5 array of ordered path/sha256 objects, sorted by relative forward-slash path across dist and dist-electron, no BOM or trailing newline. Build outputs are ignored execution evidence, not installer qualification."
+  },
+  "focusedReports": [
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-project-open-view-red.json",
+        "sha256": "211548E3B5CAF91858F75B9266E405EA1CCA6767DD3C963006087B45B6ADBAFA"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-project-open-view-red.log",
+        "sha256": "66EF73E7F4DE0F444E04D7F2E4EAB8DFC1B6A0E811CBC20CFF36DBF4C008302D"
+      },
+      "jsonResult": {
+        "total": 31,
+        "passed": 28,
+        "failed": 3,
+        "pending": 0,
+        "success": false
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-project-open-view-green.json",
+        "sha256": "BBB0ECC315DF5AD3F182DE59E8C9122F3BFDD430D25AA4E4E742349FAC37E165"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-project-open-view-green.log",
+        "sha256": "63999C4631CB2B47B210A8250E1938C6A8A5794FFEDE6EDF9CACD23D23610801"
+      },
+      "jsonResult": {
+        "total": 115,
+        "passed": 115,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/import002-blueprint-recovery-root-green.json",
+        "sha256": "6E0FFF5E488B6BDC4190A2D3C4709D2C7DBB8F27257FD2605EC4342B4AE59216"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/import002-blueprint-recovery-root-green.log",
+        "sha256": "698FB801C5DFFD0BEE84C295A1082517398D4D70439E4F4E140AE39899854418"
+      },
+      "jsonResult": {
+        "total": 147,
+        "passed": 147,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-registered-fs-recovery-final.json",
+        "sha256": "FCF37AEBF6254B03DA3F18972909504733E1F531054A21F3A6DC6B2F4ABC4B5F"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-registered-fs-recovery-final.log",
+        "sha256": "B0C3C8CF4B793570801D6A583E7285146F0B3958AA090BE2A8FBDE7E80757B96"
+      },
+      "jsonResult": {
+        "total": 148,
+        "passed": 145,
+        "failed": 3,
+        "pending": 0,
+        "success": false
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-registered-fs-recovery-retest.json",
+        "sha256": "823462C3C020B298069227B9BC49C7C3D4D6268D6BD029F7031B22F67B0664D6"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-registered-fs-recovery-retest.log",
+        "sha256": "5CFBF7417128DBC056D68E9799D1DEECD78FF78A8ACBC44ED50E6ED68A547C9D"
+      },
+      "jsonResult": {
+        "total": 148,
+        "passed": 148,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-refresh-session-root-red.json",
+        "sha256": "AE1B4E3322DBB6B82403EF4D17D0EE375710DF1D58248C214A8B9386443D2FC2"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-refresh-session-root-red.log",
+        "sha256": "70C9261E0928A44D3AA8551C126B74735CDE7FADA015F5B8C6CE5F9E8A34F5A4"
+      },
+      "jsonResult": {
+        "total": 23,
+        "passed": 13,
+        "failed": 10,
+        "pending": 0,
+        "success": false
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-refresh-session-root-green.json",
+        "sha256": "415BAA74321F88830D7D9685FA20A15190F4CF68EF4428444F60812374929B4B"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-refresh-session-root-green.log",
+        "sha256": "2A04572AE548EBCDED65053C245E67D72847D50A5AF20561C31D2384C93858BA"
+      },
+      "jsonResult": {
+        "total": 35,
+        "passed": 35,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-imitation-ipc-observer-final.json",
+        "sha256": "C53105CDA1F3E0162054167B793CF2093B62DB9CD2F725AAE452DB5C599C0EA1"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-imitation-ipc-observer-final.log",
+        "sha256": "5836630D22DFC45BFD016A7D17B07B4C94087F730DA8D122A4C65C852170CFF5"
+      },
+      "jsonResult": {
+        "total": 12,
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-imitation-ipc-observer-retest.json",
+        "sha256": "4E13C46555D567083F2FACB4FE21DB0F1EA9988078434A8E07EE50431790B9A0"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-imitation-ipc-observer-retest.log",
+        "sha256": "0560BFD51FECB9B2C83B7779AA900F890CB7F3C7DBB8C366AEE6F5D7D1E43A74"
+      },
+      "jsonResult": {
+        "total": 13,
+        "passed": 13,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-imitation-project-loaded-red.json",
+        "sha256": "6EE43EC0B3CA20186185817B792E6C1D07785A321C7879C214740C7077D7940E"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-imitation-project-loaded-red.log",
+        "sha256": "357B714153391A7E1AB233A39EEA9DA8584EA462C5FE4EE739325B0B28D159AE"
+      },
+      "jsonResult": {
+        "total": 15,
+        "passed": 13,
+        "failed": 2,
+        "pending": 0,
+        "success": false
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-imitation-project-loaded-green.json",
+        "sha256": "1D8EDED7CA7AA7F74F586E4588683F50A9F4CA004B290D00C10A4B7315429EF5"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-imitation-project-loaded-green.log",
+        "sha256": "CA31660E7E4BEDDE46BD39AED97773DC89DB4548748979672ABB76B2E4A45801"
+      },
+      "jsonResult": {
+        "total": 15,
+        "passed": 15,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-tools-integrated-final.json",
+        "sha256": "BEFE926CF60AE3E620E8BA4B75EE9E107854276DD48C86B170760C2AA831C8CE"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-tools-integrated-final.log",
+        "sha256": "E342EE3865F91CC9B923A1BC507F0DE0319D0E372D0C7F40DE95ECD6B7308AE0"
+      },
+      "jsonResult": {
+        "total": 145,
+        "passed": 145,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-tools-integrated-retest.json",
+        "sha256": "4A87BF9E25C748CF90CAD3030E73F0A316EBF1D3425F5A86ECA09785A51075F8"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-tools-integrated-retest.log",
+        "sha256": "6C3E86EA45DDE420D703A917107FEC2C7235F24E95A49A8DFCE7F5E084AEE1E8"
+      },
+      "jsonResult": {
+        "total": 145,
+        "passed": 145,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-style-prose-visible-red.json",
+        "sha256": "63AF17CC59F8C2B7DB8A5313162D2822ECBD82FD625A7DF0021BFB30EB795F44"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-style-prose-visible-red.log",
+        "sha256": "029E29C11E1489368BC19CD76719B401B4E70BD82440F19A7F0A08BF4920037A"
+      },
+      "jsonResult": {
+        "total": 37,
+        "passed": 30,
+        "failed": 7,
+        "pending": 0,
+        "success": false
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-style-prose-visible-green.json",
+        "sha256": "8D9D3B8B8EE0BC753739C83054AE96B74F13BC96EBCA16954477A95C07AB994A"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-style-prose-visible-green.log",
+        "sha256": "C91ECFD77106CA1E5D4392A18C1686F86531D6B8C86317D2481395C5FF1276A0"
+      },
+      "jsonResult": {
+        "total": 37,
+        "passed": 37,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-tools-visible-integrated.json",
+        "sha256": "B79E456DF63621CF935792F64A158711663A01342EC365B686102E574A741E40"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-tools-visible-integrated.log",
+        "sha256": "2B6F342E4DD1E69616EA0096D2C4C495EF3F50FF8AB2369DD52C298EEF54D4FB"
+      },
+      "jsonResult": {
+        "total": 167,
+        "passed": 167,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-target-boundaries-final.json",
+        "sha256": "3DF9BAA33706D12138B3DE9A4A942F7EB9A17F3495BDC77FE0EEC73DCE097DEE"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-target-boundaries-final.log",
+        "sha256": "E929BD7E29129EA207C10365A8CB902F041DFD76E6C96E4628352C55E05E450E"
+      },
+      "jsonResult": {
+        "total": 580,
+        "passed": 580,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-open-identity-window-red.json",
+        "sha256": "9CD4110F85D32624BF8782D4F670D9493DFC061D08325DDFEDA32858261C57CE"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-open-identity-window-red.log",
+        "sha256": "B3FF68ED8A062FC98C2A749DB8C0D2DFFB180292ADA38574719DC89AAADA57F5"
+      },
+      "jsonResult": {
+        "total": 25,
+        "passed": 23,
+        "failed": 2,
+        "pending": 0,
+        "success": false
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-open-identity-window-clean-red.json",
+        "sha256": "636E6160D3C2BB0B69DD7D20AD282F76245B8B36A7E78D0EF1F498E8B1182EDC"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-open-identity-window-clean-red.log",
+        "sha256": "ACA2A94EE9D9E0FEF69C74659F2A5DAE040296361DCBB4FB2D35ED6FC414B857"
+      },
+      "jsonResult": {
+        "total": 25,
+        "passed": 23,
+        "failed": 2,
+        "pending": 0,
+        "success": false
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-open-identity-window-green.json",
+        "sha256": "13ADC6BC88C372F40AB4BEF9BD2311C49FB96D34E7A681896E63F7F536D05509"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-open-identity-window-green.log",
+        "sha256": "DB172E796720C490220D0C4BF35F704D9C40A5A57CF40B6B3651DE727377622A"
+      },
+      "jsonResult": {
+        "total": 109,
+        "passed": 109,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    },
+    {
+      "report": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-open-identity-window-final.json",
+        "sha256": "1D0BEDADCBD4451082BBCD6D883223169CF2CBB41C9F106AC3851DDE5565CB7B"
+      },
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-open-identity-window-final.log",
+        "sha256": "DA821646C9303E9117882983B091646FF5BBC691D337319D1659ED2D28CA40FC"
+      },
+      "jsonResult": {
+        "total": 109,
+        "passed": 109,
+        "failed": 0,
+        "pending": 0,
+        "success": true
+      }
+    }
+  ],
+  "qualityLogs": [
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-typecheck-integrated-final.log",
+      "sha256": "15DB9919458ADC3BF5D9EE7F43F7560DC69CFE21C88D86E548F37513249CD84E"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-i18n-integrated-final.log",
+      "sha256": "0FF0ABD7910F67AF6931A6EA4FF912F1000FB00C8A4ACEDE6CA22D0AD3C20BDD"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-lint-integrated-final.log",
+      "sha256": "E226B34F04F29348F01859DE58EBA3993D7E6CC804EB877269524DBF28705295"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-lint-integrated-retest.log",
+      "sha256": "461262B5E625FDCC404BC24B3975EC3E0A2615BD9DE4F00441CEF106F6D4AB0E"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-build-integrated-final.log",
+      "sha256": "E1C556BBA65AF8556383AB401794B137BFA5F28E1F1C283C9D6D4D673C475DC4"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-typecheck-open-identity-final.log",
+      "sha256": "F772F01E938DA6E5A72F3E091D3DD856E03B8298CBE3C43143975425455B9774"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-lint-open-identity-final.log",
+      "sha256": "5A12AC3771DE7FDE2461B40C68CC45BFB429FCBD453589F6B1DF01B2B869CDE2"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-i18n-open-identity-final.log",
+      "sha256": "0BAABE7C31302721C72109493043C5164B094331081CA603AFBB36196D907C70"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-build-open-identity-final.log",
+      "sha256": "91B37CF97121DA026EA9DCD4209617B538D41E37FA294E598BAA8EC11CD10D08"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-typecheck-open-identity-retest.log",
+      "sha256": "546B6B8797608FECA009A47C19C0C8910356365E413CCF9E7F7909FDF8ED11E6"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-lint-open-identity-retest.log",
+      "sha256": "837124AF9E0B6EAD330345AB9B237C1432348665EC12CB5D453975769F8A8870"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-i18n-open-identity-retest.log",
+      "sha256": "5350E04FC48B5BF3A00D12F0854330A7743BA37337931A8FBFE80ACB87B9D1B5"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-build-open-identity-retest.log",
+      "sha256": "D2509760D60FAFB9FAD86E156709A3EE10BC9E7B46642CECC718E053325CB3EC"
+    }
+  ],
+  "desktopAttempts": [
+    {
+      "outputDirectory": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation",
+      "commandExit": 1,
+      "disposition": "Initial tool wrong target5/completion; fake12; not a proven product failure.",
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-drive.log",
+        "sha256": "044776EA17A566F4C5D2ED984F483ADE68B37810C689747C249E052669D5C5F1"
+      },
+      "raw": [
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation/f537-reference-imitation-10-light.aria.yml",
+          "sha256": "E88A54D9EFE5665E65B25E4FA6984B6FFEA84AF52B1C534430E2534F8A8803FD"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation/f537-reference-imitation-10-light.console.log",
+          "sha256": "2CD3B547544DF847A937D057234D225FBEF8E7A64A3438442F62530A0CD563E7"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation/f537-reference-imitation-10-light.dom.html",
+          "sha256": "90421EC08963BC7F7AB876AE8A3AD5E1DD8103083B8AB5BDD32F19EEE136613C"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation/f537-reference-imitation-10-light.failure.png",
+          "sha256": "12A8D857E5C782E5E5A1A7DE5A68B4D971A2B6089142F8EEF943DB0731E1FC3A"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation/f537-reference-imitation-10-light.json",
+          "sha256": "3038429EC13B53B6A1DD35B067B0628CAC64F5AE001C8FBE92B356883A0520D7"
+        }
+      ]
+    },
+    {
+      "outputDirectory": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-retest",
+      "commandExit": 1,
+      "disposition": "Fake14; chapter3 saved; ordinary open view-operation busy.",
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-retest-drive.log",
+        "sha256": "83712FF0C077E69168E0C728B7056FDECC2546FE7616AA003DAA964EA7D1BB85"
+      },
+      "raw": [
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-retest/f537-reference-imitation-10-light.aria.yml",
+          "sha256": "AE8427CF9795EF3C9FAB0CFACB0FFE6780832F4DBF0F1BC4B4ECB02A6A994E0F"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-retest/f537-reference-imitation-10-light.console.log",
+          "sha256": "525FF8137B71C5ED61AB55756D88D50B0371CA3A70CCA45B07A54A3F6DBE0628"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-retest/f537-reference-imitation-10-light.dom.html",
+          "sha256": "B2B8FE60DF0A235C01D1663127CF6E61FE2AEBC066922BC0D94773EA063F6E42"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-retest/f537-reference-imitation-10-light.failure.png",
+          "sha256": "273E1C3DAB52D3EE7987A90F1756123E85B8F305C4174D6AD7437805A87773B7"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-retest/f537-reference-imitation-10-light.json",
+          "sha256": "6004C7C64157070EAC2D122F379FA05FA6C84DA214F659E3D7343F3D90C2F8CB"
+        }
+      ]
+    },
+    {
+      "outputDirectory": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final",
+      "commandExit": 1,
+      "disposition": "Fake14; save/open reached; early derived-load read-context busy.",
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final-drive.log",
+        "sha256": "30D8BE8F14F13105D8275C38D12FC589E3A3265B8B8777F23F0DAF7D32728A43"
+      },
+      "raw": [
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final/f537-reference-imitation-10-light.aria.yml",
+          "sha256": "8C122AD53C9AA187D9683F5F69A9E6EF3723776208F6E9A1ED5F50129B768338"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final/f537-reference-imitation-10-light.console.log",
+          "sha256": "CD0894534626FBECC1ED01E9B8976AEE718D1C6DD825B124CDAB582AD834D3B6"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final/f537-reference-imitation-10-light.dom.html",
+          "sha256": "9CE998D2EAC97BD9C453B512620A09DF249599FF62EC1FB19E59BA844D20F1CC"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final/f537-reference-imitation-10-light.failure.png",
+          "sha256": "90FB4E951896C3A349A5F5C5DC64250D4A869ADA442D4844F034DB8BA8C9CA88"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final/f537-reference-imitation-10-light.json",
+          "sha256": "0FAAB2591A757339968D7C7B8AAC93FFCAB76B1DB6AD171159C39919ADBFF91D"
+        }
+      ]
+    },
+    {
+      "outputDirectory": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-diagnostic",
+      "commandExit": 1,
+      "disposition": "Same older build and early read-context race; bounded observer not a physical claim counter.",
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-diagnostic-drive.log",
+        "sha256": "EF6298DDB82936395BDC61C79407DE9733761D0BF441DA81837E0DAB1838D1C9"
+      },
+      "raw": [
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-diagnostic/f537-reference-imitation-10-light.aria.yml",
+          "sha256": "8C122AD53C9AA187D9683F5F69A9E6EF3723776208F6E9A1ED5F50129B768338"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-diagnostic/f537-reference-imitation-10-light.console.log",
+          "sha256": "6F28A0B497458F484952F6C2E23FDEA818038E2FA3B0ACE087CECCC52BE38E3B"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-diagnostic/f537-reference-imitation-10-light.dom.html",
+          "sha256": "7B6ACAF3CCFDD3C6269BE2EA3DF5E703884DCE910135141471386D05A5385D4E"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-diagnostic/f537-reference-imitation-10-light.failure.png",
+          "sha256": "90FB4E951896C3A349A5F5C5DC64250D4A869ADA442D4844F034DB8BA8C9CA88"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-diagnostic/f537-reference-imitation-10-light.json",
+          "sha256": "FE92697B25DD7320E89EB1E12658D71DF83B6CE96359E7C4326CB582E32A4AD4"
+        }
+      ]
+    },
+    {
+      "outputDirectory": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-accepted",
+      "commandExit": 0,
+      "disposition": "Fifth fake14 partial save/reopen success; obsolete refresh error, identical old fake style/prose, final old chapter4 screenshot remain findings.",
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-accepted-drive.log",
+        "sha256": "267E4E80237CDDE38A63DBE6CB872DE3B0615E6B962046980B5BDD74203DDFDF"
+      },
+      "raw": [
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-accepted/f537-reference-imitation-10-light.aria.yml",
+          "sha256": "89915C27C6761415B7FA28329A2B1EE441FD5E2D5DD402BFD4F5F0B62D70DDF5"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-accepted/f537-reference-imitation-10-light.console.log",
+          "sha256": "39BFBABD43445F31B690410A158BF7973974FA262F9E3B1A6199BDDFCDB93746"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-accepted/f537-reference-imitation-10-light.dom.html",
+          "sha256": "024D20E9763ED9E2603A8145F80B2370934FE3542D9EE4D68AB9C1800E82BDDB"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-accepted/f537-reference-imitation-10-light.json",
+          "sha256": "C3B4C402950FD34BB40F8E1765502323D6F3A730D0086D42D1E23B8F2512E70D"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-accepted/f537-reference-imitation-10-light.png",
+          "sha256": "3AC506D107DDCE52D4D88E6FBE7FAD148557CEEAFB053E8EB66901E28D2A52E0"
+        }
+      ]
+    },
+    {
+      "outputDirectory": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final-reviewed",
+      "commandExit": 0,
+      "disposition": "Sixth fake14 final reviewed source/build; distinct style consumed, chapter3/id5/v2 saved/reopened/visible body hash agrees; bounded5004ms recovery refusal/main stale guards remain; no obsolete refresh error; quit235ms/unforced.",
+      "stdout": {
+        "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final-reviewed-drive.log",
+        "sha256": "F14F62D73338CF2BB9CD9BE78FB9D6E5449E7394A5665D369BA115231767E0D6"
+      },
+      "raw": [
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final-reviewed/f537-reference-imitation-10-light.aria.yml",
+          "sha256": "FBFFD6CA184B05853B0FAD8DFC2B29FF30BEA8BFC2818E0D2407869DA8253DA3"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final-reviewed/f537-reference-imitation-10-light.console.log",
+          "sha256": "A9695A5B4CB67E8A7BBE692253486297FF3AF8A3D45479F08FAC6484CE4223AE"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final-reviewed/f537-reference-imitation-10-light.dom.html",
+          "sha256": "C759A60D7876634820B9C9BEAE2B6F4E6AE3DBE3E38465536CBC1EFE770C6974"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final-reviewed/f537-reference-imitation-10-light.json",
+          "sha256": "42A46EA87D152748A4D0395FAD79EFB341E494685E9B7A2ECF33E7D44A7EAF33"
+        },
+        {
+          "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final-reviewed/f537-reference-imitation-10-light.png",
+          "sha256": "53514B2F4F662178345E22DDDB67B9BC6BCDA030D7EB2AB6209FAD4ACA03C2AB"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "report": {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/checklist-stage105-final.json",
+      "sha256": "45DB1C86EF7A5724859070C047C03FEF5DFA46814EB394757C428DCC332027DD"
+    },
+    "stdout": {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/checklist-stage105-final.log",
+      "sha256": "9C6E592E8CD645104ED8E9D099BC98832C40EB7A340DA8A26C26CA32991F319E"
+    },
+    "result": "36/36, zero failed/pending, exit0; record-only F2/schema/IDs/state/evidence-types/dependency check, not AC or runtime truth",
+    "structuredParentComparison": "Only non-evidence changes are IMPORT001 status completed->in_progress and passes true->false; all original AC/DAG/gates/schema remain."
+  },
+  "records": [
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/features.json",
+      "sha256": "DC85195348EE9610588D9F15FA97C9E72AA2A3F407364811FE3047425A49F4E2"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/implementation-log.md",
+      "sha256": "C43685C6E21DF8EB10D9965A7BF03FD0C561309CF5142826A93861DDAD5AD2C2"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/evidence-map.md",
+      "sha256": "2B6757E4B93AA25D7832A827494CEA87FC75842B00A5A8A24DD970B6B954506F"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/review-record.md",
+      "sha256": "FC3D48DB59690DA72A35780BF8CEFB0CD81F02E065861CA40533E90F66953A14"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-105-evidence.md",
+      "sha256": "FC1C04A61D517AEB0678A2A3AF5A8A77B12FD9121AC4FAB2237C160FF2FD8209"
+    }
+  ],
+  "protectedFiles": [
+    {
+      "path": "docs/repository-analysis-2026-11-07.md",
+      "sha256": "BB6866223C596C690E4D2E35C38FAA9EBB05E45084776EE1B285083BAD89A74B"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-evidence.md",
+      "sha256": "5AA85559B9A71022D378CFA7B50EB55E1539BEABD77E1766050D819FA336F1F9"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-source-manifest.json",
+      "sha256": "7AE7D4318C58DC872664BB89BD455A3995A3C02E5C2DE4E2C8FE7D3D9AD48130"
+    }
+  ],
+  "review": "Independent Sol final product/source/test/ADR acceptance; Terra tools acceptance; Agent4 sixth actual JSON/whole-console/PNG/ARIA acceptance; Root partial feature self-check. Initial recovery timeout and fact-adoption contract conflict remain explicit, not hidden by command exit0."
+}

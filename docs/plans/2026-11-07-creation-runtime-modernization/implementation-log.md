@@ -2358,3 +2358,225 @@ The observations below retain their chronological state. The final acceptance at
   Exit0,36/36,0failed/pending; matching stdout log retained. Structured parent
   comparison confirms zero non-evidence field changes across all35 features.
   This checks metadata only, not feature or model-quality acceptance.
+
+## 2026-11-16 - Stage105 Imitation Verification Checkpoint
+
+- Stage106 committed as `b6c4e003161a4e9e4888abaf72c83e724f7cbda3`.
+  Postcommit56 reviewed identities matched, index remained empty, protected3
+  stayed unchanged. Agent4 independently accepted the exact10path slice;
+  UI002 remains incomplete. Its earlier execution-build hashes are historical
+  identities, not invalidated or silently replaced by the next source build.
+- IMPORT002 original three AC and DRIVER001/002 dependencies stay unchanged.
+  Current target prompt/command/owner/recovery five-file580/580 and separately
+  source-bound reference evidence are applicable subsets, not qualification
+  for changed project/generation controllers. No SCHED002 or full-mode target
+  background requirement is added. No feature is promoted; checklist15/35.
+- First actual imitation fails at an illegal target5 and generic done locator;
+  repaired tool uses legal target3 and its exact completed run. Second actual
+  reaches style consumption, real target3 save/hash and old-version retention,
+  but ordinary project:open immediately refuses physical view reads. Both raw
+  directories stage105-reference-imitation and its -retest remain unchanged.
+- Terra's project-open narrow fix has Root actual RED28/31,exit1 then final
+  two-file115/115,0failed/pending,exit0 in stage105-project-open-view-{red,green}.
+  Final fixture corrects a never-reached stale-session setup; RED bytes differ
+  from final, not relabeled as the final version. Only exact view-operation
+  busy waits before target/grant effects, then synchronous original session/
+  latest-request/compatibility admission and target validation obtain ticket.
+  Non-view busy/closing/retained and stale/superseded rejection remain.
+- Root serial blueprint recovery RED139total138pass1fail then final147/147,
+  0failed/pending,exit0 are import002-blueprint-recovery-root-{red,green}.json/log.
+  Production adds only the recovery literal to initial/handoff owner drain.
+  Actual SQLite recovery fragment, new lease and no-summary-query-until-drain
+  are covered; active reference/non-view/close/timeout/stale/sender protections
+  pass. Implementer's earlier139 native RED ran outside Root's scheduling;
+  preserve it separately, not claim Root execution. Root serial replay closes
+  that scheduling evidence gap; no shared native environment was modified.
+- Sol independently accepts project-open/controller/recovery/ADR0029/0031
+  final identities and raw115/147. Root actual typecheck/lint/colors/i18n/build
+  exit0, in stage105-*-final.log. Existing build warnings remain; no packaging
+  or platform qualification. Final project source5E54C6F6/test0A8F76A0 and
+  generation source021FFF34/test4F311F11 bind the reports, not old138.
+- Third actual command:
+  `corepack pnpm run verify:drive -- --scenario f537-reference-imitation-10 --out .runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final --theme light --dump-dom --console`.
+  Exit1,14fake requests. Import/style/target3 save/hash/old-version assertions
+  pass and real project reopening returns a new session. generation:read-context
+  then fails PROJECT_RUNTIME_BUSY, mapped GENERATION_REQUEST_FAILED, so no
+  reopened receipt/body/hash or final measured result is claimed. Earlier
+  blueprint recovery hits the real5s VIEW_DRAIN_TIMEOUT. Stale old-session
+  draft/roster refresh also refuses; this is not mislabeled clean console.
+- Root/Agent4 read raw/console and failure PNG: actual page is old chapter4,
+  with target3 completion toast, not a screenshot of the newly generated3.
+  Quit resolves3178ms/unforced/no kill; external/writes/residual emptiness is
+  limited to observed-before-quit/profile coverage. Third JSON0FAAB259...FF91D,
+  consoleCD089453...34D3B6 and PNG90FB4E95...C9CA88 remain, including all errors.
+- Next: bounded diagnostic-only passthrough for actual FS/classified DB and
+  recovery channels, safe channel/opaque-session/timing/pending data, no
+  arguments/body/path/secret or wait/timeout/retry change. Independent read
+  finds no generation self-claim; actual slow view holder is not yet known.
+  Project store publishes/navigates before FS/layer2 initialization ends;
+  whether this explains the actual timeout requires observation, not inference
+  presented as fact. Tools owned by Agent5, review by Terra, execution by Root.
+  IMPORT002 remains in_progress/false until original full chain truly passes.
+- Current diagnostic observer first actual12/12,exit0 is preserved in
+  R/stage105-imitation-ipc-observer-final.json/log. Terra finds runtime-finally
+  primary/cleanup reporting fixed but the same install/rollback double-failure
+  gap remains; this report is not silently relabeled final after that repair.
+  Only channel/opaque session/timing and fixed safe cleanup classes are added;
+  no new argument, path, manuscript or secret logging is authorized.
+- Third-run old-session refresh notices now have an actual Root RED23total,
+  13pass10fail,exit1 followed by GREEN2files35/35,exit0 in
+  R/stage105-refresh-session-root-{red,green}.json/log. Source7E60E995 and
+  testF988CA09 freeze five existing event consumers' full-session catch check;
+  current-session failures still report and dirty buffers remain unchanged.
+  Sol independent final review and rebuilt actual integration are pending.
+  These are derived-refresh tests, not a new database finalization assertion.
+- Observer install/rollback same-root correction passes Root13/13,exit0 in
+  R/stage105-imitation-ipc-observer-retest.json/log; Terra final review accepts
+  tool27F93CB9/testBED718A3, fixed safe cleanup classes and original errors.
+  Fourth actual drive uses a fresh -diagnostic output and the unchanged third
+  build8A19979E/B4F954B4/ED9B1C59, not the new refresh-notice source. Exit1,
+  fake14; same save/hash boundary reached, reopening receipt not reached.
+  FS119 returns in3223ms, overlapping FS write150 returns in6321ms; find144
+  times out after5005ms without releasing either physical operation. New-lease
+  read-context222 enters79ms after FS207 starts and rejects in3ms. Raw JSON
+  FE92697B...A4AD4/console6F28A0B4...38E3B and old-chapter4 PNG90FB4E95
+  are retained. Quit3132ms/unforced; bounded observed-before-quit coverage.
+- Timing projections alone are pending calls, not direct claim counters.
+  Terra/Sol cross-check the actual synchronous FS wrapper/compatibility/host
+  acquire, awaited handler and finally-release chain; no extra instrumentation
+  or timeout increase is needed. Existing bounded refusal is not proof of a
+  lost recovery candidate. Silent initial blueprint discovery still requires
+  its existing dependency change/remount after refusal; no automatic retry is
+  claimed. Sol accepts the refresh-notice final sources and raw35/35.
+- The read-context scenario raced the existing open initialization. Its two
+  causal-ready regressions fail Root actual13/15,exit1 in
+  R/stage105-imitation-project-loaded-red.json/log, testF483DFD2. Repair reuses
+  the existing driver current-book console-ready anchor before receipt reading,
+  not a sleep, network retry or guarantee that unrelated FS work is drained.
+- Final causal-ready tools pass15/15,exit0 in
+  R/stage105-imitation-project-loaded-green.json/log, source3F7E92FB/testF483DFD2.
+  Terra accepts the exact current-book anchor and handled rejection ordering.
+  Root five-file tools then pass145/145,0failed/pending,exit0 in
+  R/stage105-tools-integrated-final.json/log. These overlap prior tool reports
+  and are not extra desktop or model executions.
+- A registered-FS recovery regression uses the real controller wrapper,
+  compatibility layer, runtime and SQLite, with only the deferred directory
+  implementation fictional. Root first148total145pass3fail,exit1 is retained in
+  R/stage105-registered-fs-recovery-final.json/log, test648E4DD9. Independent Sol
+  finds the internal-versus-public error-code assertion and missing predeadline
+  pending assertion; neither requires a production error-code change. The two
+  existing cancellation failures in that report remain unproven as to cause.
+  Test5A5C0706 fixes both assertions and restores the original FS handler map
+  in finally. Sol accepts this final test statically; Root full-file retest is
+  pending. Deferred FS timing is not actual Windows-helper latency evidence.
+- Independent Agent4/Terra AC1 audit identifies a concrete contract conflict,
+  not a literary-quality gate: ADR0040 says reference material must not become
+  canonical target author outline facts, while ADR0076 retains automatic global
+  reference replacement and ADR0080 says mechanical ACK cannot approve facts.
+  The current global effect can replace already saved premise/worldbuilding/
+  synopsis/coreOutline fields. The general import action does not specifically
+  approve those replacements. Preserving drafts/roles/dirty buffers and later
+  prompt priority does not prove that earlier fact adoption was authorized.
+  Root requests the narrowly scoped product adjudication, without inventing a
+  fill-empty policy, new approval UI/schema or skipped global stage. IMPORT002
+  remains incomplete even if the next target save/reopen run succeeds. Shared
+  IMPORT001 qualification is being checked against its own original AC and
+  applicable accepted contracts; no status has been silently rewritten.
+- The shared IMPORT001 audit subsequently confirms that the original runtime
+  AC evidence remains valid, but the same automatic reference-global writer
+  conflicts with applicable G-CONTRACT. Root restores only IMPORT001's
+  status/passes to in_progress/false and prepends the explicit contract-review
+  gap; prior execution evidence remains intact. This is a qualification
+  correction to14/35(40%), not a claim that the earlier implementation vanished
+  or that imitation/model/platform requirements were added to IMPORT001.
+- Actual registered-FS retest now exits0,148/148,0failed/pending:
+  `corepack pnpm test electron/controllers/__tests__/generation-controller.test.ts --maxWorkers=1 --reporter=json --outputFile=.runtime/creation-runtime-modernization/resume-2026-11-15/stage105-registered-fs-recovery-retest.json`.
+  Raw823462C3/test5A5C0706/source021FFF34 are independently accepted by Sol.
+  The earlier145/148 failure remains failed; its two cancellation failures are
+  not retroactively assigned a cause from the new passing report.
+- First integrated lint exits1 for no-unsafe-finally in the observer cleanup.
+  The narrow structural fix keeps the original failure and exact restoration
+  semantics; Terra accepts scene9A835BFC/testF483DFD2. Root tool retest exits0,
+  145/145 in R/stage105-tools-integrated-retest.json/log (raw4A87BF9E).
+  `corepack pnpm run typecheck`, `lint`, `check:i18n`, and `build` then exit0
+  in the corresponding stage105 integrated final/retest logs. Build warnings
+  remain; this is not packaging or platform qualification.
+- Fifth actual fake-only drive uses a unique -accepted directory and the
+  rebuilt renderer6278F2EB (main8A19979E/preloadB4F954B4). Exit0/fake14:
+  reference/style commit, author chapter3 request consuming stored style,
+  draft id5/version2, and same-process fresh-lease reopen agree on the actual
+  domain receipt/body hash. Agent4 and Root inspect JSON C3B4C402, console
+  39BFBABD and the final PNG. The PNG still shows old chapter4; style/prose
+  share a fake response, and console still reports an obsolete refresh error
+  while main has rotated lease but renderer has not published it. These are
+  explicit remaining findings, not a clean full-feature acceptance. The
+  existing bounded recovery timeout is retained, without forced release,
+  timeout extension or unknown replay. Quit240ms/unforced; external-request
+  coverage is observed-before-quit only.
+- A new tool TDD RED uses the two fake-model/reference-imitation tests with
+  --maxWorkers=1 and JSON output R/stage105-style-prose-visible-red.json/log:
+  exit1,37total30pass7failed0pending, raw63AF17CC. Four protocol/language
+  style classifiers and three saved/visible-body assertions fail as expected.
+  Agent5 owns the four tool files; Root alone runs checks. Luna owns a minimal
+  renderer identity-settlement notification repair, independently design-
+  reviewed by Sol; tests must exercise real open IPC/publication/failure rather
+  than manually replacing loading. No main authorization, author approval,
+  persistent schema, model call or visible control is added by these repairs.
+- Final four tools pass Root37/37 then integrated6files167/167,0failed/pending,
+  exit0. Raw R/stage105-style-prose-visible-green.json is8D9D3B8B and
+  R/stage105-tools-visible-integrated.json is B79E456D. Terra independently
+  accepts fakeEA26A1BD/scene3F4AE75E and testsFD8CC536/4C3A22C0. These are
+  tool evidence, not a sixth actual Electron run or feature completion.
+- First real-renderer-open test RED25total23pass2fail is retained in
+  R/stage105-open-identity-window-red.json/log, raw9CD4110F/test6EBEA651.
+  Sol confirms the success assertion fails after open completion; the pending
+  checks have not yet flushed the catch, and the failure console assertion
+  incorrectly counts the legitimate ProjectStore open-failure log. It cannot
+  be claimed as two isolated pending-window REDs. Tests-only cleanup adds a
+  finally that settles deferred IPC/open and filters the ProjectService error.
+- Root reruns the corrected testB13C2527 before any production change:
+  `corepack pnpm test src/services/__tests__/project-service-refresh-context.test.ts --maxWorkers=1 --reporter=json --outputFile=.runtime/creation-runtime-modernization/resume-2026-11-15/stage105-open-identity-window-clean-red.json`.
+  Exit1,25total23pass2fail0pending, raw636E6160. Both now fail while actual
+  renderer open IPC remains pending, after an event-loop flush gives the catch
+  time to run. The IPC response is fictional, not a main authorization test;
+  true main-to-renderer integration remains the later actual drive. Luna is
+  released to implement the independently reviewed identity-settlement repair
+  in store/service and add overlapping-open coverage. Production has not been
+  changed by the earlier failed test assertions.
+- Final renderer sources freeze store18D81521/service14A9BCD9/test477153C6;
+  Root five-file109/109,0failed/pending,exit0 is raw13ADC6BC. Lint then exits1
+  for no-constant-condition. Luna makes only the conditional-snapshot-loop
+  correction, service11EE2FD9. Root re-executes the same five files to
+  R/stage105-open-identity-window-final.json/log:109/109,0failed/pending,exit0,
+  raw1D0BEDAD. Sol accepts final source/test/ADR0029 independently; the wakeup-
+  then-new-token branch is static coverage, not a separate runtime assertion.
+- Final corepack pnpm run typecheck, lint, check:i18n and build each exit0;
+  R/stage105-{typecheck,lint,i18n,build}-open-identity-retest.log preserves
+  outputs. Existing build warnings are retained. Fresh index818AEB09,
+  main8A19979E and preloadB4F954B4 bind the final actual drive.
+- Sixth corepack pnpm run verify:drive -- --scenario f537-reference-imitation-10
+  --out .runtime/creation-runtime-modernization/resume-2026-11-15/stage105-reference-imitation-final-reviewed
+  --theme light --dump-dom --console exits0 with14fake/0real-model requests.
+  JSON42A46EA8/console A9695A5B/PNG53514B2F show stored style95fa7281 consumed,
+  distinct prose afd5c4de saved chapter3/id5/version2, fresh-lease receipt/body
+  recovery in15ms and exact visible chapter3/body hash. Root personally reads
+  breadcrumb/tab/left/page chapter3, draftv2/82characters; seeded1/4,12blueprints
+  and2/10finalized counters are not new finalization or visual equality proof.
+  Main stale refusals and5004ms bounded recovery timeout remain, but no obsolete
+  ProjectService refresh error occurs. Observer truncation214trace/218console,
+  final pending[] and observed-before-quit coverage stay explicit. Quit235ms is
+  resolved/unforced/no-kill with empty recorded writes/residual observations.
+- Current Stage102 reuse audit is50/55unchanged/5changed, now including the
+  project-store edit; Stage102 own source changes are listed separately in the
+  new manifest. Historical identities and first five actual outputs remain.
+  Full IMPORT001/002 remain in_progress/false at14/35 because the shared
+  author-fact contract conflict is not resolved by this scoped repair.
+- Agent4 independently accepts the sixth raw/console/PNG/ARIA bounded chain,
+  preserving timeout/CSP/stale/truncation/quit coverage and no full-feature
+  verdict. Root record-only checklist36/36,0failed/pending,exit0 in
+  R/checklist-stage105-final.json/log (raw45DB1C86) checks metadata, not AC truth.
+  Structured parent comparison finds only IMPORT001 status/passes change
+  outside evidence; all35AC/DAG/gates/schema stay intact. Original14completed
+  and21in_progress are not reclassified by test counts. Final exact20owned-path
+  source/records manifest and index/hooks audit precede the local commit;
+  the resulting SHA is recorded in the next continuation entry.

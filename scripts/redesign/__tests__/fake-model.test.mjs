@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { afterEach, it } from 'vitest'
-import { FAKE_MODEL, startFakeModel, streamingProse } from '../fake-model.mjs'
+import { FAKE_MODEL, FIXTURE_PROSE, startFakeModel, streamingProse } from '../fake-model.mjs'
 
 let fake
 afterEach(async () => { await fake?.close() })
@@ -26,6 +26,48 @@ function chatRequest(options = {}) {
     ...options,
   })
 }
+
+const STYLE_ROLES = {
+  zh: '你是一位严谨的小说风格分析师。把参考文本的可观察技法整理为少量、简短、可选的写作建议，只分析技法，不复述或仿制原文。',
+  en: 'You are a rigorous fiction-style analyst. Turn observable craft in a reference novel into a small set of concise, optional writing techniques without retelling its plot.',
+}
+async function requestRoleReply(protocol, system, user) {
+  const anthropic = protocol === 'anthropic'
+  const response = await fetch(`http://127.0.0.1:${fake.port}/v1/${anthropic ? 'messages' : 'chat/completions'}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json',
+      ...(anthropic ? { 'x-api-key': FAKE_MODEL.apiKey } : { Authorization: `Bearer ${FAKE_MODEL.apiKey}` }) },
+    body: JSON.stringify({ model: FAKE_MODEL.modelName, stream: true,
+      ...(anthropic ? { system, messages: [{ role: 'user', content: user }] }
+        : { messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }) }),
+  })
+  assert.equal(response.status, 200)
+  return (await response.text()).split('\n').filter(line => line.startsWith('data: {'))
+    .map(line => JSON.parse(line.slice(6))).map(event => anthropic ? event.delta?.text ?? ''
+      : (event.choices ?? []).map(choice => choice.delta.content ?? '').join('')).join('')
+}
+
+it.each([['openai', 'zh'], ['openai', 'en'], ['anthropic', 'zh'], ['anthropic', 'en']])(
+  'separates actual %s %s import-style requests from prose that quotes the same role and style', async (protocol, language) => {
+    fake = await startFakeModel([])
+    fake.replyImport()
+    const role = STYLE_ROLES[language]
+    const style = await requestRoleReply(protocol, `${role}\nImmutable fictional system contract.`, 'Fictional reference sample.')
+    assert.equal(fake.chats.at(-1).kind, 'import-style')
+    assert.ok(style.trim())
+    assert.notEqual(style, FIXTURE_PROSE)
+    const prose = await requestRoleReply(protocol, 'You are an experienced fiction author.', `${role}\nSaved writing style:\n${style}`)
+    assert.equal(fake.chats.at(-1).kind, 'prose')
+    assert.equal(prose, FIXTURE_PROSE)
+    const quotedRole = await requestRoleReply(protocol, `Fictional quotation, not an analysis task: ${role}`, style)
+    assert.equal(fake.chats.at(-1).kind, 'prose')
+    assert.equal(quotedRole, FIXTURE_PROSE)
+  })
+
+it('preserves the original default reply for an analysis role when import inference is not enabled', async () => {
+  fake = await startFakeModel([])
+  assert.equal(await requestRoleReply('openai', STYLE_ROLES.zh, 'Fictional reference sample.'), FIXTURE_PROSE)
+  assert.equal(fake.chats.at(-1).kind, 'prose')
+})
 
 async function waitFor(predicate) {
   const deadline = Date.now() + 3000

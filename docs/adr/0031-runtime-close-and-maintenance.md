@@ -34,6 +34,13 @@ existing close operation directly. Individual runtime close and other busy
 admission guards are unchanged. This extends native-window coordination only;
 it introduces no new visible control or execution authority.
 
+The ordinary compatibility-open view-drain boundary in ADR0029 reuses the same
+physical lifetime helper but is not a close intent or close authorization.
+It waits only before original target admission and obtains the original open
+ticket synchronously after fresh session/latest-request checks. Non-view busy,
+retained and closing resources still fail; it never waits for a background
+model or parent ACK and does not change the sealed native-close retry path.
+
 Already-confirmed global Agent effects also have an actual main-process lifetime. Application-operation leases cover the real awaited Skill inspection/installation and MCP handler work independently of a renderer or active view. They conservatively block native release and maintenance, but not ordinary work in an unrelated open book. Close-all waits for them even when no project is open. Synchronous Skill mutations check the same application seal; existing inspection/confirmation and filesystem validation remain mandatory.
 
 An MCP foreground timeout is not evidence that its tool stopped. A dispatched tool retains its exact process/request tracking after timeout or transport loss. Only a matching late protocol response or an observed local executor exit ends that local tracking; issuing `kill()` or persisting an Agent `unknown` state does not. This does not prove cancellation or reversal of an external effect. The version-1 MCP call result carries the existing `not_committed/committed/unknown` distinction through the Agent adapter without creating a new confirmation or retry permission. Shutdown does not automatically disconnect or kill tools to manufacture drain success.

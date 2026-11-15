@@ -1751,3 +1751,61 @@ and final-version reruns before their own scoped commits.
   all35-feature comparison preserve every non-evidence field. The final narrow
   audit must consume its actual JSON/log and the final manifest identities;
   labels/metadata are not substituted for the reviewed model/desktop evidence.
+
+## 2026-11-16 Stage105 Runtime And Imitation Review
+
+- Sol independently accepts Terra's ordinary-open exact-view-busy drain and
+  Luna's generation blueprint-recovery boundary. Fresh session/latest/native
+  identity and original non-view/retained/closing refusals remain. Root's
+  project-open RED31total28pass3fail closes in115/115. Registered-FS first
+  148total145pass3fail is retained; Sol's predeadline/public-error assertions
+  close with exact FS handler restoration and Root148/148. The two historical
+  cancellation failures are not retroactively diagnosed from the passing run.
+- Terra independently reviews observer primary-error/cleanup/install rollback
+  handling and the current-book ready anchor. Root's lint no-unsafe-finally
+  failure is retained; the narrow structural correction passes145/145 plus
+  lint. New fixture/display tests produce genuine RED37/30/7 then37/37 and
+  six-file167/167. Terra accepts final four tools: system-role-only classifier,
+  distinct style/prose, wrong-body rejection and actual reopened chapter3
+  title/body hash assertion, without new product UI or execution authority.
+- Root and Agent4 independently inspect the fifth actual JSON/console/PNG.
+  Actual style consumption, chapter3 id5/version2 save and fresh-lease receipt/
+  domain body agree. Same fake style/body and old chapter4 PNG limit that
+  evidence; a five-second recovery timeout and obsolete renderer refresh error
+  remain. Main's stale-session refusal is correct and must not be removed.
+  Prior35/35 refresh tests do not prove the main-to-renderer identity window.
+  Sol independently design-reviews a narrow notification settlement barrier;
+  implementation RED/GREEN, final source review and sixth actual are pending.
+- Agent4/Terra independently trace original IMPORT AC/F2 and current
+  ADR0040/0076/0080 against the shared global writer. Saved author outline/core
+  facts can be replaced without specific fact adoption; projection ACK is not
+  author approval. Root withdraws IMPORT001 completion under its existing
+  G-CONTRACT, retains its valid original runtime AC evidence, and records the
+  unresolved product adjudication. This is not a new imitation/model/platform
+  prerequisite. Both IMPORT flags remain false; current checklist14/35(40%)
+  supersedes historical15/35 without erasing the earlier reports.
+- This is still a partial slice checkpoint, not Stage105 commit acceptance.
+  Final source/raw manifest, current quality/build/desktop, independent final
+  records review, metadata and Root-only index/hooks/path checks must close
+  before the scoped local commit. No scope or gate is waived to force a PASS.
+- Final Sol source review accepts store18D81521/service11EE2FD9/test477153C6
+  and ADR0029 without an in-scope blocker. The conditional-loop lint repair
+  preserves the synchronous full-session check; independent tokens and early
+  legacy-confirmation settlement preserve lifecycle/buffers. Root's final
+  five-file109/109 raw1D0BEDAD and quality/build0 cover these final bytes.
+  Wakeup-then-new-token is static, not separately executed. Genuine clean
+  RED636E6160 and initial assertion/lint failures are preserved accurately.
+- Root's sixth actual exit0 binds JSON42A46EA8/console A9695A5B/PNG53514B2F
+  to fresh index818AEB09/main8A19979E/preloadB4F954B4. Distinct style/prose,
+  exact saved/reopened/visible chapter3/id5/v2 hash and original drafts agree.
+  The screenshot shows3/v2/82characters, not the previous old chapter4.
+  Original5004ms timeout and old-session main refusals remain; false current-
+  book ProjectService refresh failure is absent. This is bounded fake-provider
+  actual integration, not full-feature/model-quality/platform qualification.
+- Agent4 independently reads final JSON/whole console/PNG/ARIA and accepts
+  that bounded chain, including retained timeout/CSP and correct stale refusal;
+  no new in-scope correctness blocker is found. Root final record-only36/36
+  (raw45DB1C86) does not replace AC/source review. Structured parent comparison
+  confirms the only non-evidence changes are IMPORT001 status/passes. The
+  exact20owned-path manifest and index/hooks audit close scoped commit identity;
+  no full IMPORT qualification, platform claim or approval waiver is granted.

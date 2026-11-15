@@ -471,6 +471,59 @@ describe('registered project open native transaction boundary', () => {
     release()
   })
 
+  it('waits for an admitted view read before reopening the same book with a fresh lease', async () => {
+    const source = fixture(), a = currentView(source)
+    const release = projectRuntimeHost.acquireViewOperation(a.runtime)
+    let settled = false
+    const pending = open(source, 'ordinary-read-drain', false).then(result => { settled = true; return result })
+    try {
+      await new Promise<void>(resolve => setImmediate(() => setImmediate(resolve)))
+      expect(settled).toBe(false)
+      expectUnchangedView(a)
+      release()
+      await expect(pending).resolves.toMatchObject({ success: true, project: { id: source.projectId } })
+      expect(projectRuntimeHost.getActiveView()).toBe(a.runtime)
+      expect(a.runtime.databaseIdentity).toBe(a.identity)
+      expect(a.runtime.executionEpoch).toBe(a.epoch)
+      expect(projectAccess.captureCurrentSession()?.leaseId).not.toBe(a.session.leaseId)
+    } finally { release(); await pending }
+  })
+
+  it('does not reopen after the captured session changes while a view read drains', async () => {
+    const source = fixture(), a = currentView(source)
+    const release = projectRuntimeHost.acquireViewOperation(a.runtime)
+    let settled = false
+    const pending = open(source, 'ordinary-stale-drain', false).then(result => { settled = true; return result })
+    try {
+      await new Promise<void>(resolve => setImmediate(() => setImmediate(resolve)))
+      expect(settled).toBe(false)
+      projectAccess.invalidateCurrentSession()
+      release()
+      await expect(pending).resolves.toMatchObject({ success: false })
+      expect(projectAccess.captureCurrentSession()).toBeNull()
+      expect(projectRuntimeHost.getActiveView()).toBe(a.runtime)
+      expect(a.database.open).toBe(true)
+    } finally { release(); await pending }
+  })
+
+  it('does not admit an older ordinary open superseded while its view read drains', async () => {
+    const source = fixture(), a = currentView(source), b = fixture(), c = fixture()
+    const release = projectRuntimeHost.acquireViewOperation(a.runtime)
+    let settled = false
+    const older = open(b, 'ordinary-older-drain', false).then(result => { settled = true; return result })
+    let newer: Promise<unknown> | undefined
+    try {
+      await new Promise<void>(resolve => setImmediate(() => setImmediate(resolve)))
+      expect(settled).toBe(false)
+      newer = open(c, 'ordinary-newer-drain', false)
+      release()
+      await expect(older).resolves.toMatchObject({ success: false, stale: true })
+      await expect(newer).resolves.toMatchObject({ success: true, project: { id: c.projectId } })
+      expect(projectRuntimeHost.getActiveView()?.projectId).toBe(c.projectId)
+      expect(projectRuntimeHost.getOpenRuntimes().some(runtime => runtime.projectId === b.projectId)).toBe(false)
+    } finally { release(); await older; await newer }
+  })
+
   it('rejects an ordinary switch before admitting B when A is physically busy', async () => {
     const a = currentView(fixture()), b = fixture()
     seedTransferredTarget(b)

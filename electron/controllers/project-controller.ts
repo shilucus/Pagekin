@@ -558,42 +558,69 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       const superseded = new Error('PROJECT_OPEN_SUPERSEDED')
       try {
         if (rollbackBoundary.kind === 'untrusted') throw new Error('PROJECT_ROLLBACK_UNTRUSTED')
-        if (mode === 'compatibility') projectRuntimeHost.assertCompatibilityOpenAvailable()
-        const recent = typeof target === 'string'
-          ? loadRecentProjects().find(project => project.path === target) : undefined
-        const smokePath = process.env.AI_NOVEL_SMOKE_OPEN_PROJECT?.trim()
-        // Persisted recent entries are main-owned project references, not arbitrary path authority.
-        const projectPath = typeof target === 'string'
-          ? recent?.path ?? (smokePath && target === smokePath ? smokePath : null)
-          : mode === 'background' ? externalFileGrants.revalidateDirectoryPath({
-            grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
-          }) : externalFileGrants.resolveDirectoryPath({
-            grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
-          })
-        if (!projectPath) throw new Error('PROJECT_OPEN_GRANT_REQUIRED')
-        const probedProject = projectAccess.probeExistingProject(projectPath)
-        if (probedProject.kind === 'legacy' || probedProject.storageFormat === 'legacy') {
-          if (recent?.projectId && (probedProject.kind !== 'manifest' || recent.projectId !== probedProject.projectId)) {
+        let waitForView = false
+        if (mode === 'compatibility') {
+          try { projectRuntimeHost.assertCompatibilityOpenAvailable() } catch (error) {
+            if (!(error instanceof Error) || error.message !== 'PROJECT_RUNTIME_VIEW_OPERATION_BUSY') throw error
+            waitForView = true
+          }
+        }
+        const resolveTarget = () => {
+          const recent = typeof target === 'string'
+            ? loadRecentProjects().find(project => project.path === target) : undefined
+          const smokePath = process.env.AI_NOVEL_SMOKE_OPEN_PROJECT?.trim()
+          // Persisted recent entries are main-owned project references, not arbitrary path authority.
+          const projectPath = typeof target === 'string'
+            ? recent?.path ?? (smokePath && target === smokePath ? smokePath : null)
+            : mode === 'background' ? externalFileGrants.revalidateDirectoryPath({
+              grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
+            }) : externalFileGrants.resolveDirectoryPath({
+              grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
+            })
+          if (!projectPath) throw new Error('PROJECT_OPEN_GRANT_REQUIRED')
+          const probedProject = projectAccess.probeExistingProject(projectPath)
+          if (probedProject.kind === 'legacy' || probedProject.storageFormat === 'legacy') {
+            if (recent?.projectId && (probedProject.kind !== 'manifest' || recent.projectId !== probedProject.projectId)) {
+              throw new Error('PROJECT_OPEN_RECENT_IDENTITY_CHANGED')
+            }
+            if (fs.existsSync(path.join(probedProject.rootPath, '.ai-novel-migration'))) {
+              throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
+            }
+            const sqlite = probeProjectSqlite({ databasePath: path.join(probedProject.rootPath, '.vela', 'vela.db') })
+            if (sqlite.schemaVersion !== 0) throw new Error('LEGACY_IMPORT_UNSUPPORTED_SOURCE')
+            if (mode === 'background' && typeof target !== 'string') externalFileGrants.resolveDirectoryPath({
+              grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
+            })
+            legacyImportSource = issueDirectoryGrant(event, probedProject.rootPath, 'legacy-import')
+            throw new Error('PROJECT_LEGACY_IMPORT_REQUIRED')
+          }
+          const trustedProject = projectAccess.adoptLegacyProject(probedProject)
+          const resolvedProjectPath = trustedProject.rootPath
+          if (recent?.projectId && recent.projectId !== trustedProject.projectId) {
             throw new Error('PROJECT_OPEN_RECENT_IDENTITY_CHANGED')
           }
-          if (fs.existsSync(path.join(probedProject.rootPath, '.ai-novel-migration'))) {
-            throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
-          }
-          const sqlite = probeProjectSqlite({ databasePath: path.join(probedProject.rootPath, '.vela', 'vela.db') })
-          if (sqlite.schemaVersion !== 0) throw new Error('LEGACY_IMPORT_UNSUPPORTED_SOURCE')
-          if (mode === 'background' && typeof target !== 'string') externalFileGrants.resolveDirectoryPath({
-            grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
+          return { trustedProject, resolvedProjectPath, projectPath }
+        }
+        const capturedSession = mode === 'background' || waitForView ? projectAccess.captureCurrentSession() : null
+        let resolved: ReturnType<typeof resolveTarget>
+        if (waitForView) {
+          const capturedRuntime = projectRuntimeHost.getActiveView()
+          const admitted = await projectRuntimeHost.runAfterViewOperationsDrained(capturedRuntime, () => {
+            if (!isLatestRequest()) throw superseded
+            if (capturedSession) projectAccess.assertViewContext({ projectId: capturedSession.projectId,
+              leaseId: capturedSession.leaseId, projectPath: capturedSession.rootPath })
+            else if (projectAccess.captureCurrentSession()) throw new Error('PROJECT_SESSION_STALE')
+            projectRuntimeHost.assertCompatibilityOpenAvailable()
+            const targetProject = resolveTarget()
+            return { ...targetProject, ticket: projectRuntimeHost.prepareCompatibilityOpen(targetProject.trustedProject) }
           })
-          legacyImportSource = issueDirectoryGrant(event, probedProject.rootPath, 'legacy-import')
-          throw new Error('PROJECT_LEGACY_IMPORT_REQUIRED')
+          resolved = admitted
+          prepared = admitted.ticket
+        } else {
+          resolved = resolveTarget()
         }
-        const trustedProject = projectAccess.adoptLegacyProject(probedProject)
-        const resolvedProjectPath = trustedProject.rootPath
-        if (recent?.projectId && recent.projectId !== trustedProject.projectId) {
-          throw new Error('PROJECT_OPEN_RECENT_IDENTITY_CHANGED')
-        }
-        const capturedSession = mode === 'background' ? projectAccess.captureCurrentSession() : null
-        prepared = mode === 'background' ? await projectRuntimeHost.prepareBackgroundViewOpenAfterDrain(trustedProject, () => {
+        const { trustedProject, resolvedProjectPath, projectPath } = resolved
+        if (!prepared) prepared = mode === 'background' ? await projectRuntimeHost.prepareBackgroundViewOpenAfterDrain(trustedProject, () => {
           if (!isLatestRequest()) throw superseded
           if (capturedSession) projectAccess.assertViewContext({ projectId: capturedSession.projectId,
             leaseId: capturedSession.leaseId, projectPath: capturedSession.rootPath })

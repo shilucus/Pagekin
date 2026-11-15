@@ -23,6 +23,7 @@ vi.mock('../../services/app-data-locator', () => ({ getGlobalDataRoot: () => moc
 vi.mock('../kb-controller', () => ({ getEmbeddingConfig: () => null }))
 import { generationIpcErrorCode, registerGenerationController } from '../generation-controller'
 import { registerDatabaseController } from '../db-controller'
+import { registerFSController } from '../fs-controller'
 import { ProjectCoreRepository } from '../../repositories/project-core-repository'
 import { PlanningFeedbackService } from '../../services/planning-feedback-service'
 import { createMainGenerationOwner } from '../../services/main-generation-owner'
@@ -52,6 +53,7 @@ import { restorePortableProject } from '../../services/project-restore-service'
 import { readPortableRuntimeFreeze } from '../../services/portable-runtime-freeze'
 import * as performanceDiagnostics from '../../services/performance-diagnostics'
 import { BlueprintRepository, type BlueprintData } from '../../repositories/blueprint-repository'
+import type { WindowsSafeFileSystem } from '../../security/windows-safe-file-system'
 
 const model: ModelProfile = { id: 'fixture', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
   baseUrl: 'https://api.openai.com/v1', apiKey: 'synthetic-only', maxTokens: 1024, temperature: 0.7, purposes: ['generation'] }
@@ -98,8 +100,129 @@ function stream(content = '中文候选', reasoning?: string) {
   vi.stubGlobal('fetch', fetch)
   return fetch
 }
+describe('blueprint recovery IPC physical view admission', () => {
+  it('waits for current view operations before resolving persisted blueprint recovery', async () => {
+    const recoveryDraft = '{"blueprints":[{"chapterNumber":1,"title":"未完成'
+    const fetch = vi.fn(async () => ({ ok: true, body: new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: recoveryDraft }, finish_reason: 'length' }] })}\n\ndata: [DONE]\n\n`))
+      controller.close()
+    } }) }))
+    vi.stubGlobal('fetch', fetch)
+    const run = await invoke('generation:begin', { operation: 'chapter-blueprint-directory', uiActionNonce: 'persist-blueprint-recovery',
+      modelId: model.id, selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3],
+      promptKeys: ['chapter_blueprint_chunk'], skillStages: ['planning'], output: 'structured-data', authorInputs: [
+        { id: 'planning:target-units', text: '700' }, { id: 'directory:pacing-guidance', text: '先核实证据。' },
+        { id: 'directory:author-config', text: '{"totalChapters":3}' },
+        { id: 'directory:requested-range', text: '{"mode":"full","startChapter":1,"endChapter":3}' },
+      ] })
+    await invoke('generation:execute', { handle: run.handle, invocationNonce: 'incomplete-blueprint',
+      task: { purpose: 'chapter-blueprint-directory', output: 'structured-data', messages: [{ role: 'user', content: '虚构蓝图候选' }] } })
+    const seeded = await invoke('generation:find-blueprint-recovery')
+    expect(seeded).toMatchObject({ handle: run.handle, blueprintRecovery: { draft: recoveryDraft, writeState: 'ready' } })
+
+    const runtime = projectRuntimeHost.getActiveView()!
+    session = { ...session, leaseId: projectAccess.beginSession(openedProject).leaseId }
+    const summaryQuery = vi.spyOn(runtime.database, 'prepare')
+    let releaseView: (() => void) | undefined = projectRuntimeHost.acquireViewOperation(runtime)
+    let state: 'pending' | 'resolved' | 'rejected' = 'pending'
+    const result = invoke('generation:find-blueprint-recovery').then(value => { state = 'resolved'; return value }, error => {
+      state = 'rejected'; throw error
+    })
+    void result.catch(() => {})
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(state).toBe('pending')
+      expect(summaryQuery.mock.calls.some(([sql]) => String(sql).includes('SELECT run_id,root_action_id,status'))).toBe(false)
+      releaseView(); releaseView = undefined
+      const recovered = await result
+      expect(recovered).toMatchObject({ handle: run.handle, blueprintRecovery: { draft: recoveryDraft, writeState: 'ready' } })
+      const context = await invoke('generation:read-context', { handle: run.handle })
+      expect(context.blueprintRecovery).toMatchObject({ draft: recoveryDraft, writeState: 'ready' })
+      expect(summaryQuery.mock.calls.some(([sql]) => String(sql).includes('SELECT run_id,root_action_id,status'))).toBe(true)
+      expect(fetch).toHaveBeenCalledTimes(1)
+    } finally { releaseView?.() }
+  })
+
+  it('keeps a registered filesystem view claim until the operation settles across recovery timeout', async () => {
+    const recoveryDraft = '{"blueprints":[{"chapterNumber":1,"title":"未完成'
+    const fetch = vi.fn(async () => ({ ok: true, body: new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: recoveryDraft }, finish_reason: 'length' }] })}\n\ndata: [DONE]\n\n`))
+      controller.close()
+    } }) }))
+    vi.stubGlobal('fetch', fetch)
+    const run = await invoke('generation:begin', { operation: 'chapter-blueprint-directory', uiActionNonce: 'filesystem-view-recovery',
+      modelId: model.id, selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3],
+      promptKeys: ['chapter_blueprint_chunk'], skillStages: ['planning'], output: 'structured-data', authorInputs: [
+        { id: 'planning:target-units', text: '700' }, { id: 'directory:pacing-guidance', text: '先核实证据。' },
+        { id: 'directory:author-config', text: '{"totalChapters":3}' },
+        { id: 'directory:requested-range', text: '{"mode":"full","startChapter":1,"endChapter":3}' },
+      ] })
+    await invoke('generation:execute', { handle: run.handle, invocationNonce: 'filesystem-view-candidate',
+      task: { purpose: 'chapter-blueprint-directory', output: 'structured-data', messages: [{ role: 'user', content: '虚构蓝图候选' }] } })
+    const originalRecovery = await invoke('generation:find-blueprint-recovery')
+    expect(originalRecovery).toMatchObject({ handle: run.handle, blueprintRecovery: { draft: recoveryDraft, writeState: 'ready' } })
+
+    const runtime = projectRuntimeHost.getActiveView()!
+    const originalSession = { ...session }
+    const attemptSnapshot = runtime.database.prepare('SELECT * FROM generation_attempts ORDER BY rowid').all()
+    const artifactSnapshot = runtime.database.prepare('SELECT * FROM generation_artifacts ORDER BY rowid').all()
+    session = { ...session, leaseId: projectAccess.beginSession(openedProject).leaseId }
+
+    let startDirectory!: () => void
+    const directoryStarted = new Promise<void>(resolve => { startDirectory = resolve })
+    let releaseDirectory!: (entries: { name: string; isDirectory: boolean }[]) => void
+    const directoryResult = new Promise<{ name: string; isDirectory: boolean }[]>(resolve => { releaseDirectory = resolve })
+    const fileSystem = { listDirectory: vi.fn(() => { startDirectory(); return directoryResult }) } as unknown as WindowsSafeFileSystem
+    const originalFsHandlers = new Map([...mocks.handlers].filter(([channel]) => channel.startsWith('fs:')))
+    registerFSController(fileSystem)
+    const fsHandler = mocks.handlers.get('fs:list-dir')!
+    let fsState: 'pending' | 'resolved' | 'rejected' = 'pending'
+    const fsOperation = fsHandler({ sender }, openedProject.rootPath, openedProject.rootPath, { ...session }).then(value => {
+      fsState = 'resolved'; return value
+    }, error => { fsState = 'rejected'; throw error })
+    void fsOperation.catch(() => {})
+
+    vi.useFakeTimers()
+    let recoveryState: 'pending' | 'resolved' | 'rejected' = 'pending'
+    const recovery = invoke('generation:find-blueprint-recovery').then(value => { recoveryState = 'resolved'; return value }, error => {
+      recoveryState = 'rejected'; throw error
+    })
+    void recovery.catch(() => {})
+    try {
+      await directoryStarted
+      expect(fsState).toBe('pending')
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(recoveryState).toBe('pending')
+      expect(fsState).toBe('pending')
+      expect(() => projectRuntimeHost.assertTaskAvailable(runtime)).toThrow('PROJECT_RUNTIME_BUSY')
+      await vi.advanceTimersByTimeAsync(2)
+      await expect(recovery).rejects.toThrow('GENERATION_REQUEST_FAILED')
+      expect(recoveryState).toBe('rejected')
+      expect(fsState).toBe('pending')
+      await expect(invoke('generation:read-context', { handle: run.handle })).rejects.toThrow('GENERATION_REQUEST_FAILED')
+
+      vi.useRealTimers()
+      releaseDirectory([])
+      await expect(fsOperation).resolves.toEqual([])
+      const recovered = await invoke('generation:find-blueprint-recovery')
+      expect(recovered).toMatchObject({ handle: run.handle, blueprintRecovery: { draft: recoveryDraft, writeState: 'ready' } })
+      const context = await invoke('generation:read-context', { handle: run.handle })
+      expect(context.blueprintRecovery).toMatchObject({ draft: recoveryDraft, writeState: 'ready' })
+      await expect(fsHandler({ sender }, openedProject.rootPath, openedProject.rootPath, originalSession)).rejects.toThrow()
+      expect(runtime.database.prepare('SELECT * FROM generation_attempts ORDER BY rowid').all()).toEqual(attemptSnapshot)
+      expect(runtime.database.prepare('SELECT * FROM generation_artifacts ORDER BY rowid').all()).toEqual(artifactSnapshot)
+      expect(fetch).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+      releaseDirectory([])
+      await fsOperation.catch(() => undefined)
+      for (const channel of [...mocks.handlers.keys()]) if (channel.startsWith('fs:')) mocks.handlers.delete(channel)
+      for (const [channel, handler] of originalFsHandlers) mocks.handlers.set(channel, handler)
+    }
+  })
+})
 describe('planning feedback v1 registered IPC', () => {
-  describe.each(['generation:list', 'planning-feedback:v1:capture'] as const)('%s initial owner admission', channel => {
+  describe.each(['generation:list', 'generation:find-blueprint-recovery', 'planning-feedback:v1:capture'] as const)('%s initial owner admission', channel => {
     const call = (subject = sender) => mocks.handlers.get(channel)!({ sender: subject },
       ...(channel === 'planning-feedback:v1:capture' ? [{ target: 'coreOutline' }] : []), { ...session })
     it.each(['drained', 'stale-session', 'sender-destroyed', 'nonview-work', 'new-work', 'timeout'] as const)(
@@ -135,7 +258,8 @@ describe('planning feedback v1 registered IPC', () => {
               if (scenario === 'drained') {
                 const value = await result
                 if (channel === 'planning-feedback:v1:capture') expect(value).toMatchObject({ target: 'coreOutline', projectId: session.projectId })
-                else expect(value).toEqual([])
+                else if (channel === 'generation:list') expect(value).toEqual([])
+                else expect(value).toBeNull()
               } else await expect(result).rejects.toThrow()
             }
           }

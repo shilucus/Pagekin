@@ -14,6 +14,11 @@ export const FIXTURE_ENDPOINT_MODELS = Object.freeze(['gpt-5.5-mini', 'gpt-4.1',
   'gateway/very-long-model-identifier-for-layout-checks-2026-10-24-preview', ...Array.from({ length: 12 }, (_, index) => `gateway/model-${String(index + 1).padStart(2, '0')}`)])
 
 export const FIXTURE_PROSE = '林岚沿着旧港的石阶往下走，潮水刚退，青石上还留着一层薄薄的盐霜。她把父亲留下的地图摊在膝头，对照远处灯塔的位置，一格一格数过去。守塔人站在塔下朝她招手，说昨夜的钟声比往常早了一刻。'
+export const FIXTURE_IMPORT_STYLE = '可选地使用短句与贴近人物的限知视角，以行动承接线索，保持对白克制，不复用参考作品的情节或措辞。'
+const IMPORT_STYLE_ROLES = new Set([
+  '你是一位严谨的小说风格分析师。把参考文本的可观察技法整理为少量、简短、可选的写作建议，只分析技法，不复述或仿制原文。',
+  'You are a rigorous fiction-style analyst. Turn observable craft in a reference novel into a small set of concise, optional writing techniques without retelling its plot.',
+])
 const FIXTURE_REVISED = `${FIXTURE_PROSE}林岚把这句话记进日志，又核对了一遍潮位表。`
 const REVIEW = JSON.stringify({ summary: '时间线需要核对。', items: [
   { category: '连续性', severity: 'warning', description: '核对钟声提前一刻与潮位的关系。', quote: '昨夜的钟声比往常早了一刻' },
@@ -94,7 +99,9 @@ function importReply(prompt) {
   return null
 }
 
-function responseFor(prompt, { extraction, plotTree, review, characterState, importInference }) {
+function responseFor(prompt, { extraction, plotTree, review, characterState, importInference, systemRole }) {
+  if (importInference && typeof systemRole === 'string' && IMPORT_STYLE_ROLES.has(systemRole.split('\n', 1)[0]))
+    return { kind: 'import-style', content: FIXTURE_IMPORT_STYLE }
   const imported = importInference ? importReply(prompt) : null
   if (imported) return imported
   if (prompt.includes('不可变小说配置 JSON 合同') || prompt.includes('Immutable novel-configuration JSON contract')) {
@@ -236,7 +243,8 @@ export async function startFakeModel(diagnostics) {
       const body = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
       if (!await waitForChat(response)) return
       const prompt = [body.system ?? '', ...(body.messages ?? []).map(message => message.content)].join('\n')
-      const { kind, content } = responseFor(prompt, { extraction, plotTree, review, characterState, importInference })
+      const { kind, content } = responseFor(prompt, { extraction, plotTree, review, characterState, importInference,
+        systemRole: body.system })
       chats.push({ kind, model: body.model, messages: body.messages, requestParametersHash: requestParametersHash(body), protocol: 'anthropic',
         anthropicVersion: request.headers['anthropic-version'] ?? null, system: body.system ?? null, maxTokens: body.max_tokens, stream: body.stream === true })
       record(kind, `anthropic ${prompt.slice(0, 100).replace(/\s+/g, ' ')}`)
@@ -285,7 +293,8 @@ export async function startFakeModel(diagnostics) {
       return
     }
     const prompt = (body.messages ?? []).map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n')
-    const reply = responseFor(prompt, { extraction, plotTree, review, characterState, importInference })
+    const reply = responseFor(prompt, { extraction, plotTree, review, characterState, importInference,
+      systemRole: (body.messages ?? []).find(message => message.role === 'system')?.content })
     const { kind } = reply
     const content = kind === 'character-state' && brokenCharacterState ? '角色状态暂时无法整理。' : reply.content
     chats.push({ kind, model: body.model, messages: body.messages, requestParametersHash: requestParametersHash(body),

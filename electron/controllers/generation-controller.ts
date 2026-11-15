@@ -779,7 +779,7 @@ export function registerGenerationController(options: {
         let owner: Owner
         if (referenceRead) owner = referenceEntry.owner
         else if (needsOwner && (channel === 'generation:list-recovery' || channel === 'generation:list'
-          || channel === 'planning-feedback:v1:capture')) {
+          || channel === 'generation:find-blueprint-recovery' || channel === 'planning-feedback:v1:capture')) {
           const capturedSession = Object.freeze({ ...session })
           const database = viewRuntime.database, identity = viewRuntime.databaseIdentity
           const root = viewRuntime.canonicalRoot, epoch = viewRuntime.executionEpoch, sender = event.sender

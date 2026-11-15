@@ -384,3 +384,47 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
   full target/state/viewport design, dirty-buffer and old-history discovery
   remain open. No new visible layout/control, author authority or product
   persistence contract is introduced; metadata labels do not complete it.
+
+## Stage105 Imitation Author Chain And Qualification Correction
+
+- [Stage105](stage-105-evidence.md) records production reference/style consumption,
+  target chapter3 domain saving and fresh-lease same-process receipt recovery.
+  The fifth fake-only actual command exits0, but its old-session refresh error,
+  shared fake style/body and old chapter4 screenshot remain explicit findings.
+  The first four actual failures are retained and not relabeled by exit0.
+- Product-open RED31/28/3 becomes115/115; registered-FS recovery first148/145/3
+  becomes148/148. Sol independently accepts the exact product source/tests and
+  raw boundaries. Existing five-second drain retains physical claims after
+  refusal and unknown history is never resent. Target writer580/580 is separate
+  source-bound evidence, not permission for reference-global fact adoption.
+- Tool classifier/display RED37/30/7 becomes37/37, then six-file167/167, with
+  Terra's independent four-file review. Actual system-role classification,
+  distinct style/prose and explicit reopened chapter3 visible-body assertions
+  repair the evidence tools, not literary quality. Final identity-window
+  repair/source build/actual integration and the manifest remain pending at
+  this checkpoint; old35/35 refresh tests do not cover that observed window.
+- Current Agent4/Terra contract audit supersedes only Stage102's no-gap
+  IMPORT001 completion verdict. Original runtime AC evidence remains, but the
+  shared reference-global replacement can overwrite canonical author facts
+  against ADR0040; ADR0076's automatic effect and ADR0080's mechanical ACK do
+  not resolve the conflict. Root records a local product adjudication gap,
+  without inventing fill-empty, approval UI or a skipped stage. IMPORT001/002
+  stay in_progress/false and checklist is14/35(40%). Historical15/35 reports
+  remain historical; no new imitation/model/SCHED/platform AC is imposed on
+  IMPORT001. This local blocker does not become a prerequisite for independent
+  eligible work.
+- Final identity-window sources store18D81521/service11EE2FD9/test477153C6
+  pass five-file109/109, raw1D0BEDAD, with Sol's independent source/test/ADR0029
+  acceptance. Corrected real-open pending RED636E6160 and both lint failures
+  remain separate. Final typecheck/lint/i18n/source build exit0; sixth actual
+  fake-only drive JSON42A46EA8/console A9695A5B/PNG53514B2F uses index818AEB09.
+  Distinct stored style is consumed, chapter3/id5/v2 save/reopen/visible-body
+  hashes agree; screenshot chapter3/v2/82characters is personally checked.
+  Bounded5004ms recovery refusal and main stale guards remain; obsolete refresh
+  notice is absent. Quit235ms/unforced, observed-before-quit/truncated-observer
+  bounds remain. No literary quality, platform or full-feature claim follows.
+- Agent4 independently accepts the sixth raw/console/PNG/ARIA within those
+  limits. Final metadata36/36 raw45DB1C86 is record-only; a separate structured
+  parent comparison confirms only IMPORT001 status/passes changed outside
+  evidence. The manifest binds current sources/build/raw/records and identifies
+  historical changed dependencies; no historic PASS is adopted wholesale.
