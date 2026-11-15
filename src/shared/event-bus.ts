@@ -41,7 +41,7 @@ export interface EventPayloadMap {
     type: string
     /** 启动工作流时冻结的项目路径（只作显示/定位，不是身份）。 */
     projectPath: string
-    /** 启动工作流时冻结的完整项目会话。 */
+    /** Frozen execution session, or the verified current-view session for a retained reference completion projection. */
     projectSession: ProjectSessionContext
     /** 唯一工作流运行身份，用于排除同项目内的其他并发任务。 */
     runId: string

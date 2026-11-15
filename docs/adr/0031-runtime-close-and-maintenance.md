@@ -16,6 +16,24 @@ True close synchronously seals new work before calling synchronous owner quiesce
 
 The host waits at most 5 seconds by default. This is a local responsiveness bound, not evidence of remote cancellation. Timeout, flush failure or unresolved transport retains the fence and captured resources. An explicit close retry may finish convergence; it cannot resume or resend an unknown attempt. Application close seals every runtime and new host opens before waiting, and only approves native window/app exit after all captured runtimes close. Existing renderer unsaved-buffer decisions remain in force and a failed close does not discard buffers.
 
+An already approved native-window close may encounter physical current-view
+operations before the host can seal. Only the exact
+`PROJECT_RUNTIME_VIEW_OPERATION_BUSY` refusal enters the existing bounded
+captured-view drain; other failures retain the original close/retry path.
+The last physical release synchronously rechecks the same window, pending
+close intent, current view and project session before invoking the original
+close-all admission. That synchronous invocation seals all runtimes before
+new work can enter; its actual close Promise is awaited outside the drain
+callback. This wait is not model, parent-run or projection-ACK convergence,
+does not auto-approve renderer decisions, and cannot release a live operation.
+View/session changes and drain timeout leave the window open and retryable.
+An already sealed close retry calls close-all directly, never the ordinary
+work-admission drain helper. A quit received while merely waiting records the
+latest shutdown intent; a quit after actual close admission upgrades the
+existing close operation directly. Individual runtime close and other busy
+admission guards are unchanged. This extends native-window coordination only;
+it introduces no new visible control or execution authority.
+
 Already-confirmed global Agent effects also have an actual main-process lifetime. Application-operation leases cover the real awaited Skill inspection/installation and MCP handler work independently of a renderer or active view. They conservatively block native release and maintenance, but not ordinary work in an unrelated open book. Close-all waits for them even when no project is open. Synchronous Skill mutations check the same application seal; existing inspection/confirmation and filesystem validation remain mandatory.
 
 An MCP foreground timeout is not evidence that its tool stopped. A dispatched tool retains its exact process/request tracking after timeout or transport loss. Only a matching late protocol response or an observed local executor exit ends that local tracking; issuing `kill()` or persisting an Agent `unknown` state does not. This does not prove cancellation or reversal of an external effect. The version-1 MCP call result carries the existing `not_committed/committed/unknown` distinction through the Agent adapter without creating a new confirmation or retry permission. Shutdown does not automatically disconnect or kill tools to manufacture drain success.

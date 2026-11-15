@@ -4,6 +4,7 @@ export interface WorkflowBackgroundCandidate {
   type: string
   projectSession?: ProjectSessionContext | null
   backgroundQualified?: boolean
+  backgroundExecution?: 'reference-run'
 }
 
 /**
@@ -15,8 +16,10 @@ export function isWorkflowBackgroundQualified(run: WorkflowBackgroundCandidate):
   if (!run.projectSession || !run.projectSession.projectId || !run.projectSession.leaseId || !run.projectSession.projectPath) {
     return false
   }
-  // These renderer workflows still depend on the active project session.
-  if (run.type === 'novel_import' || run.type === 'batch_generate') return false
+  // Only the whole reference path publishes this marker after main admits it.
+  // Author-manuscript imports and unmigrated renderer batches remain protected.
+  if (run.type === 'novel_import') return run.backgroundExecution === 'reference-run' && run.backgroundQualified === true
+  if (run.type === 'batch_generate') return false
   if (run.backgroundQualified === true) return true
   return false
 }

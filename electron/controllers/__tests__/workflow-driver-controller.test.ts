@@ -36,11 +36,15 @@ class Sender extends EventEmitter {
 let root: string, session: ProjectSessionContext, sender: Sender, runtime: ProjectRuntime
 let project: ReturnType<typeof projectAccess.createProject>
 const prose = 'Fictional prose: she put the letter on the desk and walked to the harbor.'
+let retirementGuard: (runtime: ProjectRuntime) => boolean
 
-beforeAll(() => registerGenerationController({
-  modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel: () => model }),
-  loadModel: () => model, applyProxyConfig: () => {},
-}))
+beforeAll(() => {
+  const register = vi.spyOn(projectRuntimeHost, 'registerRetirementGuard')
+  registerGenerationController({ modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel: () => model }),
+    loadModel: () => model, applyProxyConfig: () => {} })
+  retirementGuard = register.mock.calls[0]![0]
+  register.mockRestore()
+})
 beforeEach(() => {
   const base = path.resolve('.runtime/.cache/wdi')
   fs.mkdirSync(base, { recursive: true })
@@ -87,7 +91,7 @@ async function prepared(): Promise<StartWorkflowDriverRequest> {
     } }
   return { operationKey: randomUUID(), selection, recipe: { schemaVersion: 1, writingLanguage: 'en-US', outlineTask, baseDraftTask } }
 }
-function stream(options: { hold?: boolean; finishReason?: 'stop' | 'unknown' } = {}) {
+function stream(options: { hold?: boolean; finishReason?: 'stop' | 'unknown'; includeUsage?: boolean } = {}) {
   let release!: () => void, entered!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
   const started = new Promise<void>(resolve => { entered = resolve })
@@ -97,7 +101,9 @@ function stream(options: { hold?: boolean; finishReason?: 'stop' | 'unknown' } =
     if (ordinal === 0) { entered(); if (options.hold) await gate }
     const content = ordinal === 0 ? 'Fictional outline: deliver the letter.' : prose
     return { ok: true, body: new ReadableStream({ start(controller) {
-      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: options.finishReason ?? 'stop' }] })}\n\ndata: [DONE]\n\n`))
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: options.finishReason ?? 'stop' }] })}\n\n`
+        + (options.includeUsage ? 'data: {"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":12,"total_tokens":62}}\n\n' : '')
+        + 'data: [DONE]\n\n'))
       controller.close()
     } }) }
   })
@@ -114,6 +120,24 @@ async function terminal(reference: WorkflowDriverReference): Promise<WorkflowDri
 }
 
 describe('workflow driver registered main IPC and actual native effects', () => {
+  it('keeps a live driver without writing and allows its completed receipt after legacy handoff', async () => {
+    const transport = stream({ hold: true, includeUsage: true })
+    try {
+      const issued = await call('workflow-driver:v1:start', await prepared(), sender, session)
+      await transport.started
+      const before = runtime.database.prepare('SELECT total_changes()').pluck().get()
+      expect(retirementGuard(runtime)).toBe(false)
+      expect(runtime.database.prepare('SELECT total_changes()').pluck().get()).toBe(before)
+      transport.release()
+      expect((await terminal(issued.reference!)).task.state).toBe('waiting_review')
+      expect(runtime.database.prepare("SELECT json_extract(attempt_json,'$.status') FROM generation_attempts").pluck().all()).toEqual(['settled', 'settled'])
+      await vi.waitFor(() => expect(retirementGuard(runtime)).toBe(true))
+      const list = mocks.handlers.get('generation:list')!
+      await list({ sender }, { ...session })
+      expect(retirementGuard(runtime)).toBe(true)
+      expect((await call('workflow-driver:v1:read-receipt', { reference: issued.reference! })).task.state).toBe('waiting_review')
+    } finally { transport.release() }
+  })
   it.each(['paused', 'blocked', 'waiting_review'] as const)('reads restored %s history without issuing a copied execution capability', async state => {
     const request = await prepared(), transport = stream({ hold: state === 'paused', finishReason: state === 'blocked' ? 'unknown' : 'stop' })
     const issued = await call('workflow-driver:v1:start', request, sender, session)

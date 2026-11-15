@@ -9,6 +9,7 @@ import * as stage from './pages/stage.mjs'
 import { EMPTY_BOOK, inferenceReply, manuscript, openAuthorImport, seedEmptyBook } from './import-infer-scenarios.mjs'
 import { seedStageSample } from './scenarios.mjs'
 import { STAGE_SAMPLE } from './stage-sample.mjs'
+import { referenceBackgroundScenario } from './reference-run-background-scenario.mjs'
 
 const Database = createRequire(import.meta.url)('better-sqlite3')
 
@@ -180,6 +181,7 @@ async function stopAuthorInference(context) {
 }
 
 export const F537_SCENARIOS = {
+  'f537-reference-background-10': referenceBackgroundScenario({ seedStageSample, startImport, referenceNovel, readDb }),
   'f537-reference-whole-10': { model: true, shell: 'stage', setup: seedStageSample, run: async context => {
     const { app, page, roots, fake } = context
     const draftSnapshot = db => db.prepare(`SELECT d.*, c.body AS content_body FROM drafts_all d

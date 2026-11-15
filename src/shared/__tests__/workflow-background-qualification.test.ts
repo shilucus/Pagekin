@@ -20,6 +20,18 @@ describe('isWorkflowBackgroundQualified (UI-001 / ADR-0049)', () => {
     expect(isWorkflowBackgroundQualified({ type: 'novel_import', projectSession: session, backgroundQualified: true })).toBe(false)
   })
 
+  it('accepts only the admitted whole-reference variant, not a variant marker alone', () => {
+    const session = { projectId: 'p1', leaseId: 'lease-123', projectPath: 'C:\\p1' }
+    expect(isWorkflowBackgroundQualified({ type: 'novel_import', projectSession: session,
+      backgroundExecution: 'reference-run' })).toBe(false)
+    expect(isWorkflowBackgroundQualified({ type: 'novel_import', projectSession: session,
+      backgroundExecution: 'reference-run', backgroundQualified: true })).toBe(true)
+    expect(isWorkflowBackgroundQualified({ type: 'novel_import', projectSession: null,
+      backgroundExecution: 'reference-run', backgroundQualified: true })).toBe(false)
+    expect(isWorkflowBackgroundQualified({ type: 'batch_generate', projectSession: session,
+      backgroundExecution: 'reference-run', backgroundQualified: true })).toBe(false)
+  })
+
   it('keeps batch generation protected even when explicitly marked as qualified', () => {
     const session = { projectId: 'p1', leaseId: 'lease-123', projectPath: 'C:\\p1' }
     expect(isWorkflowBackgroundQualified({ type: 'batch_generate', projectSession: session })).toBe(false)

@@ -3,6 +3,82 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ExternalFileGrantService } from '../external-file-grant-service'
+// @ts-expect-error Existing JavaScript cleanup helper has no declaration.
+import { removeTemporaryTree } from '../../../test/helpers/remove-temporary-tree.mjs'
+
+describe('non-consuming directory admission before a drained view open', () => {
+  const base = path.resolve('.runtime/.cache/creation-runtime-modernization/directory-grant-revalidation')
+  const roots: string[] = []
+  const fixture = () => {
+    fs.mkdirSync(base, { recursive: true })
+    const root = fs.mkdtempSync(path.join(base, 'fictional-'))
+    roots.push(root)
+    return root
+  }
+  afterEach(() => {
+    const normal = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value
+    for (const root of roots.splice(0)) {
+      if (path.dirname(root) !== base || !path.basename(root).startsWith('fictional-')
+        || [base, root].some(directory => fs.lstatSync(directory).isSymbolicLink()
+          || normal(fs.realpathSync.native(directory)) !== normal(directory))) throw new Error('FICTIONAL_GRANT_CLEANUP_BOUNDARY')
+      removeTemporaryTree(root, base)
+    }
+  })
+
+  it('revalidates sender, operation, scope, expiry and revocation without consuming the default single use', () => {
+    const root = fixture()
+    let now = 1_000
+    const grants = new ExternalFileGrantService({ now: () => now })
+    const issue = () => grants.issueDirectory({ webContentsId: 17, directoryPath: root, operations: ['project-open'], ttlMs: 500 })
+    const request = { ...issue(), webContentsId: 17, operation: 'project-open' as const }
+    expect(() => grants.revalidateDirectoryPath({ ...request, webContentsId: 18 })).toThrow('EXTERNAL_FILE_GRANT_WRONG_WINDOW')
+    expect(() => grants.revalidateDirectoryPath({ ...request, operation: 'write' })).toThrow('EXTERNAL_FILE_GRANT_OPERATION_DENIED')
+    for (let i = 0; i < 2; i++) expect(grants.revalidateDirectoryPath(request)).toBe(fs.realpathSync.native(root))
+    expect(grants.activeCount()).toBe(1)
+    expect(grants.resolveDirectoryPath(request)).toBe(fs.realpathSync.native(root))
+    expect(grants.activeCount()).toBe(0)
+    expect(() => grants.revalidateDirectoryPath(request)).toThrow('EXTERNAL_FILE_GRANT_NOT_FOUND')
+    const expired = { ...issue(), webContentsId: 17, operation: 'project-open' as const }
+    now += 500
+    expect(() => grants.revalidateDirectoryPath(expired)).toThrow('EXTERNAL_FILE_GRANT_EXPIRED')
+    const revoked = { ...issue(), webContentsId: 17, operation: 'project-open' as const }
+    grants.revoke(revoked.grantId)
+    expect(() => grants.revalidateDirectoryPath(revoked)).toThrow('EXTERNAL_FILE_GRANT_NOT_FOUND')
+    const file = path.join(root, 'fictional.txt')
+    fs.writeFileSync(file, 'fictional')
+    const fileGrant = grants.issueFile({ webContentsId: 17, filePath: file, operations: ['project-open'], ttlMs: 500 })
+    expect(() => grants.revalidateDirectoryPath({ ...fileGrant, webContentsId: 17, operation: 'project-open' }))
+      .toThrow('EXTERNAL_FILE_GRANT_SCOPE_MISMATCH')
+    expect(grants.activeCount()).toBe(1)
+  })
+
+  it('refuses a changed native directory identity without consuming its grant', () => {
+    const root = fixture(), selected = path.join(root, 'selected'), moved = path.join(root, 'selected-original')
+    fs.mkdirSync(selected)
+    const grants = new ExternalFileGrantService({ now: () => 1_000 })
+    const grant = grants.issueDirectory({ webContentsId: 17, directoryPath: selected, operations: ['project-open'], ttlMs: 500 })
+    expect(fs.realpathSync.native(selected)).toBe(selected)
+    expect(path.dirname(selected)).toBe(root)
+    expect(path.dirname(moved)).toBe(root)
+    fs.renameSync(selected, moved)
+    fs.mkdirSync(selected)
+    const request = { ...grant, webContentsId: 17, operation: 'project-open' as const }
+    expect(() => grants.revalidateDirectoryPath(request)).toThrow('EXTERNAL_FILE_GRANT_TARGET_CHANGED')
+    expect(() => grants.resolveDirectoryPath(request)).toThrow('EXTERNAL_FILE_GRANT_TARGET_CHANGED')
+    expect(grants.activeCount()).toBe(1)
+  })
+
+  it('does not turn revalidation of an exhausted multi-use record into executable permission', () => {
+    const root = fixture(), grants = new ExternalFileGrantService({ now: () => 1_000 })
+    const grant = grants.issueDirectory({ webContentsId: 17, directoryPath: root,
+      operations: ['project-open'], ttlMs: 500, maxUses: 2 })
+    const request = { ...grant, webContentsId: 17, operation: 'project-open' as const }
+    grants.resolveDirectoryPath(request)
+    grants.resolveDirectoryPath(request)
+    expect(grants.revalidateDirectoryPath(request)).toBe(fs.realpathSync.native(root))
+    expect(() => grants.resolveDirectoryPath(request)).toThrow('EXTERNAL_FILE_GRANT_EXHAUSTED')
+  })
+})
 
 describe('ExternalFileGrantService', () => {
   it('binds a selected project directory to its sender, operation, root, expiry and one use', () => {

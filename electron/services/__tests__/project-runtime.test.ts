@@ -36,6 +36,13 @@ function open(value: ProjectRuntimeHost, project: TrustedProject): ProjectRuntim
   return value.commitOpen(value.prepareOpen(project))
 }
 
+function backgroundView(value: ProjectRuntimeHost, project: TrustedProject): ProjectRuntime {
+  const ticket = value.prepareBackgroundViewOpen(project)
+  value.commitViewOpen(ticket, () => undefined)
+  value.finishBackgroundViewOpen(ticket)
+  return ticket.runtime
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
   for (const dispose of disposers.splice(0)) dispose()
@@ -54,6 +61,270 @@ afterEach(() => {
 })
 
 describe('explicit native project runtime host', () => {
+  it('rejects the original async assertion before its first segment through the managed open wrapper', async () => {
+    const value = host(), a = open(value, fixture()), target = fixture()
+    value.activateView(a)
+    const release = value.acquireViewOperation(a), called = vi.fn()
+    const pending = value.prepareBackgroundViewOpenAfterDrain(target, async () => { called() })
+    const rejected = expect(pending).rejects.toThrow('PROJECT_RUNTIME_VIEW_PREFLIGHT_MUST_BE_SYNCHRONOUS')
+    try {
+      expect(release).not.toThrow()
+      await rejected
+      expect(called).not.toHaveBeenCalled()
+      expect(value.getOpenRuntimes()).toEqual([a])
+      expect(value.getActiveView()).toBe(a)
+      value.acquireViewOperation(a)()
+      value.assertCompatibilityOpenAvailable()
+    } finally { release() }
+  })
+
+  it.each(['throw', 'async'] as const)('rejects a %s drain callback without poisoning completed physical work or retaining a ticket', async mode => {
+    const value = host(), a = open(value, fixture())
+    value.activateView(a)
+    const release = value.acquireViewOperation(a)
+    let finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    const physical = gate.then(() => 'physical result').finally(release)
+    const called = vi.fn()
+    const callback = mode === 'async' ? async () => { called(); return 'must not be admitted' }
+      : () => { called(); throw new Error('FICTIONAL_DRAIN_CALLBACK_FAILURE') }
+    const pending = value.runAfterViewOperationsDrained(a, callback)
+    const rejected = expect(pending).rejects.toThrow(mode === 'async'
+      ? 'PROJECT_RUNTIME_VIEW_PREFLIGHT_MUST_BE_SYNCHRONOUS' : 'FICTIONAL_DRAIN_CALLBACK_FAILURE')
+    try {
+      finish()
+      await expect(physical).resolves.toBe('physical result')
+      await rejected
+      if (mode === 'async') expect(called).not.toHaveBeenCalled()
+      else expect(called).toHaveBeenCalledOnce()
+      expect(value.getOpenRuntimes()).toEqual([a])
+      expect(value.getActiveView()).toBe(a)
+      value.acquireViewOperation(a)()
+      value.assertCompatibilityOpenAvailable()
+    } finally { finish(); release() }
+  })
+
+  it('prepares a managed view only after every captured physical view operation settles', async () => {
+    const value = host(), a = open(value, fixture()), target = fixture()
+    value.activateView(a)
+    const first = value.acquireViewOperation(a), second = value.acquireViewOperation(a)
+    const validate = vi.fn()
+    const pending = value.prepareBackgroundViewOpenAfterDrain(target, validate)
+    expect(value.getOpenRuntimes()).toEqual([a])
+    first()
+    expect(validate).not.toHaveBeenCalled()
+    expect(() => value.activateView(null)).toThrow('PROJECT_RUNTIME_VIEW_OPERATION_BUSY')
+    second()
+    // The last release prepares the ticket before another physical view operation can enter.
+    expect(() => value.acquireViewOperation(a)).toThrow('PROJECT_RUNTIME_BUSY')
+    const ticket = await pending
+    expect(validate).toHaveBeenCalledOnce()
+    expect(value.getActiveView()).toBe(a)
+    value.commitViewOpen(ticket, () => undefined)
+    value.finishBackgroundViewOpen(ticket)
+    expect(value.getActiveView()).toBe(ticket.runtime)
+  })
+
+  it('seals close-all synchronously on the last captured view release before new work can enter', async () => {
+    const value = host(), a = open(value, fixture()), b = open(value, fixture()), target = fixture()
+    value.activateView(b)
+    const releaseBackground = value.acquireWork(a)
+    const first = value.acquireViewOperation(b), second = value.acquireViewOperation(b)
+    const visited: ProjectRuntime[] = []
+    disposers.push(value.onCloseRequested(runtime => {
+      visited.push(runtime)
+      expect(() => value.acquireWork(a)).toThrow('PROJECT_RUNTIME_HOST_CLOSING')
+      expect(() => value.prepareOpen(target)).toThrow('PROJECT_RUNTIME_HOST_CLOSING')
+    }))
+    let closing!: Promise<void>
+    const pending = value.runAfterViewOperationsDrained(b, () => {
+      closing = value.requestCloseAll({ shutdown: false })
+    })
+    try {
+      first()
+      expect(visited).toEqual([])
+      expect(a.database.open).toBe(true)
+      expect(b.database.open).toBe(true)
+      expect(second).not.toThrow()
+      // No await separates the last physical release from these competing admissions.
+      expect(() => value.acquireWork(a)).toThrow('PROJECT_RUNTIME_HOST_CLOSING')
+      expect(() => value.acquireWork(b)).toThrow('PROJECT_RUNTIME_HOST_CLOSING')
+      expect(() => value.acquireViewOperation(b)).toThrow('PROJECT_RUNTIME_HOST_CLOSING')
+      expect(() => value.prepareOpen(target)).toThrow('PROJECT_RUNTIME_HOST_CLOSING')
+      expect(visited).toEqual([a, b])
+      expect(a.database.open).toBe(true)
+      expect(b.database.open).toBe(false)
+      expect(value.requestCloseAll({ shutdown: true })).toBe(closing)
+      expect(value.requestCloseAll({ shutdown: false })).toBe(closing)
+      await pending
+      expect(a.database.open).toBe(true)
+      expect(visited).toEqual([a, b])
+      releaseBackground()
+      await closing
+      expect(a.database.open).toBe(false)
+      value.finishWindowClose()
+      expect(() => value.prepareOpen(target)).toThrow('PROJECT_RUNTIME_HOST_CLOSING')
+    } finally { first(); second(); releaseBackground(); if (closing) await closing }
+  })
+
+  it('times out a managed view drain without releasing physical work or closing its native handle', async () => {
+    const value = host(), a = open(value, fixture()), target = fixture()
+    value.activateView(a)
+    const release = value.acquireViewOperation(a)
+    vi.useFakeTimers()
+    try {
+      const pending = value.prepareBackgroundViewOpenAfterDrain(target, () => undefined)
+      const rejected = expect(pending).rejects.toThrow('PROJECT_RUNTIME_VIEW_DRAIN_TIMEOUT')
+      await vi.advanceTimersByTimeAsync(5_000)
+      await rejected
+      expect(value.getOpenRuntimes()).toEqual([a])
+      expect(a.database.open).toBe(true)
+      expect(() => value.activateView(null)).toThrow('PROJECT_RUNTIME_VIEW_OPERATION_BUSY')
+      release()
+      value.acquireViewOperation(a)()
+      expect(value.getOpenRuntimes()).toEqual([a])
+    } finally { release(); vi.useRealTimers() }
+  })
+
+  it.each(['source', 'target'] as const)('rechecks %s identity after the physical view drain without opening the target', async changedSide => {
+    const value = host(), source = fixture(), a = open(value, source), target = fixture()
+    value.activateView(a)
+    const release = value.acquireViewOperation(a)
+    const pending = value.prepareBackgroundViewOpenAfterDrain(target, () => undefined)
+    const manifest = path.join(changedSide === 'source' ? source.rootPath : target.rootPath, '.ai-novel', 'project.json')
+    const original = fs.readFileSync(manifest, 'utf8'), changed = JSON.parse(original)
+    try {
+      changed.projectId = randomUUID()
+      fs.writeFileSync(manifest, JSON.stringify(changed))
+      release()
+      await expect(pending).rejects.toThrow(changedSide === 'source' ? 'PROJECT_MANIFEST_CHANGED' : 'PROJECT_RUNTIME_IDENTITY_MISMATCH')
+    } finally { fs.writeFileSync(manifest, original); release() }
+    expect(value.getOpenRuntimes()).toEqual([a])
+    expect(value.getActiveView()).toBe(a)
+    value.acquireViewOperation(a)()
+  })
+
+  it('releases only idle managed views after COMMIT and restores ordinary single-view compatibility after A settles', () => {
+    const value = host(), a = open(value, fixture())
+    value.activateView(a)
+    const identity = a.databaseIdentity, epoch = a.executionEpoch
+    const release = value.acquireWork(a)
+    try {
+      const b = backgroundView(value, fixture())
+      const c = backgroundView(value, fixture())
+      expect(b.database.open).toBe(false)
+      expect(value.getOpenRuntimes()).toEqual([a, c])
+      expect(a.databaseIdentity).toBe(identity)
+      expect(a.executionEpoch).toBe(epoch)
+      expect(value.hasBackgroundViewsRetained()).toBe(true)
+      expect(() => value.acquireLegacyOperation('unmigrated')).toThrow('PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE')
+      release()
+      const d = backgroundView(value, fixture())
+      expect(a.database.open || c.database.open).toBe(false)
+      expect(value.getOpenRuntimes()).toEqual([d])
+      expect(value.hasBackgroundViewsRetained()).toBe(false)
+      value.acquireLegacyOperation('ordinary-read')()
+      const next = value.prepareCompatibilityOpen(fixture())
+      value.commitViewOpen(next, () => undefined)
+      expect(d.database.open).toBe(false)
+      expect(value.getOpenRuntimes()).toEqual([next.runtime])
+    } finally { release() }
+  })
+
+  it('keeps claim/unknown owners until a pure retirement guard confirms they are actually idle', () => {
+    const value = host(), a = open(value, fixture())
+    value.activateView(a)
+    let liveClaim = true
+    const guard = vi.fn((runtime: ProjectRuntime) => runtime !== a || !liveClaim)
+    disposers.push(value.registerRetirementGuard(guard))
+    const b = backgroundView(value, fixture())
+    const c = backgroundView(value, fixture())
+    expect(value.getOpenRuntimes()).toEqual([a, c])
+    expect(b.database.open).toBe(false)
+    expect(a.database.open).toBe(true)
+    liveClaim = false
+    const d = backgroundView(value, fixture())
+    expect(value.getOpenRuntimes()).toEqual([d])
+    expect(a.database.open).toBe(false)
+    expect(guard).toHaveBeenCalledWith(a)
+  })
+
+  it('reports raw explicit retained resources as requiring the background adapter without enrolling them in cleanup', () => {
+    const value = host(), project = fixture()
+    const a = value.commitViewOpen(value.prepareRetainedOpen(project), runtime => runtime)
+    expect(value.hasBackgroundViewsRetained()).toBe(true)
+    const b = backgroundView(value, fixture())
+    const c = backgroundView(value, fixture())
+    expect(a.database.open).toBe(true)
+    expect(b.database.open).toBe(false)
+    expect(value.getOpenRuntimes()).toEqual([a, c])
+    expect(value.hasBackgroundViewsRetained()).toBe(true)
+    expect(() => value.prepareCompatibilityOpen(fixture())).toThrow('PROJECT_RUNTIME_COMPATIBILITY_UNAVAILABLE')
+  })
+
+  it('does not enroll or release A when the background target transaction fails', () => {
+    const value = host(), a = open(value, fixture())
+    value.activateView(a)
+    const epoch = a.executionEpoch, identity = a.databaseIdentity
+    const ticket = value.prepareBackgroundViewOpen(fixture())
+    expect(() => value.commitViewOpen(ticket, () => { throw new Error('fictional target rollback') })).toThrow('fictional target rollback')
+    value.abortOpen(ticket)
+    expect(value.getOpenRuntimes()).toEqual([a])
+    expect(value.getActiveView()).toBe(a)
+    expect(a.databaseIdentity).toBe(identity)
+    expect(a.executionEpoch).toBe(epoch)
+    expect(value.hasBackgroundViewsRetained()).toBe(false)
+    value.assertCompatibilityOpenAvailable()
+  })
+
+  it('preserves the committed managed winner and quarantines a real idle-close failure', () => {
+    const value = host(), a = open(value, fixture())
+    value.activateView(a)
+    disposers.push(value.onBeforeRelease(runtime => { if (runtime === a) throw new Error('fictional idle close failure') }))
+    const ticket = value.prepareBackgroundViewOpen(fixture())
+    value.commitViewOpen(ticket, () => undefined)
+    expect(() => value.finishBackgroundViewOpen(ticket)).toThrow(ProjectRuntimePreviousCloseError)
+    expect(value.getActiveView()).toBe(ticket.runtime)
+    expect(ticket.runtime.database.open).toBe(true)
+    expect(a.phase).toBe('closing')
+    expect(value.hasBackgroundViewsRetained()).toBe(true)
+    expect(() => value.prepareCompatibilityOpen(fixture())).toThrow('PROJECT_RUNTIME_COMPATIBILITY_UNAVAILABLE')
+  })
+
+  it('propagates a retirement diagnostic instead of interpreting a damaged owner as idle', () => {
+    const value = host(), a = open(value, fixture())
+    value.activateView(a)
+    disposers.push(value.registerRetirementGuard(runtime => {
+      if (runtime === a) throw new Error('fictional owner cleanup debt')
+      return true
+    }))
+    const ticket = value.prepareBackgroundViewOpen(fixture())
+    value.commitViewOpen(ticket, () => undefined)
+    expect(() => value.finishBackgroundViewOpen(ticket)).toThrow(ProjectRuntimePreviousCloseError)
+    expect(a.phase).toBe('open')
+    expect(a.database.open).toBe(true)
+    expect(value.getActiveView()).toBe(ticket.runtime)
+    expect(value.hasBackgroundViewsRetained()).toBe(true)
+  })
+
+  it('reclaims settled inactive managed A after current B closes and a new view successfully commits', async () => {
+    const value = host(), a = open(value, fixture())
+    value.activateView(a)
+    const release = value.acquireWork(a)
+    try {
+      const b = backgroundView(value, fixture())
+      await value.requestClose(b)
+      expect(value.getActiveView()).toBeNull()
+      expect(value.hasBackgroundViewsRetained()).toBe(true)
+      release()
+      const c = backgroundView(value, fixture())
+      expect(a.database.open).toBe(false)
+      expect(value.getOpenRuntimes()).toEqual([c])
+      expect(value.hasBackgroundViewsRetained()).toBe(false)
+      value.acquireLegacyOperation('ordinary-read')()
+    } finally { release() }
+  })
+
   it('opens the first compatibility view and closes only idle A after B and its fresh session publish', () => {
     hosts.add(projectRuntimeHost)
     const a = fixture(), b = fixture(), access = new ProjectAccessService({ homePath: path.dirname(a.rootPath) })

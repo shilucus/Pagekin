@@ -264,3 +264,38 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
 - SCHED002 gains only partial evidence; all35 feature statuses remain14completed/
   21in_progress. Three local pairs with fixed500ms response delay do not qualify
   statistical speedup, workflow p95, real models, full domain admission or targets.
+
+## Stage101 Admitted Reference View Evidence
+
+- [Stage101](stage-101-evidence.md) maps the actual whole-reference author entry
+  to retained main execution and separate actual-A projection/read/ACK, not a
+  second execution or a blanket legacy-background exemption. ADR0029/0049/0080
+  preserve source/sender/native/epoch, stage/slot/effect, original-parent and
+  author-buffer boundaries. Existing RunSheet presentation is reused only
+  within its confirmed design scope. No SCHED002 prerequisite is added.
+- Earlier main668/668 is not final for subsequent recovery/drain/reader edits.
+  Applicable final recovery149/149, runtime/open78/78, DB65/65, unchanged
+  retirement103/103, separate renderer120/120 and view/transport120/120,
+  browser100/100 and pure scene64/64 have individual raw/version boundaries.
+  Reports overlap. Real REDs and all nine actual desktop attempts remain.
+- Actual seventh desktop product assertions do not prove normal exit: forced
+  quit remains unaccepted despite command exit0. Console originally ended
+  before quit and cannot establish its close cause. Final quit-tool55/55 and
+  Root six-file141/141 are independently reviewed tool evidence. The eighth
+  command exits1 with forced timeout; post-quit console directly shows window
+  VIEW_OPERATION_BUSY, without proving the exact claim owner. Product
+  assertions and all three PNGs are independently reviewed. The exact-busy-only
+  close repair then retains seal-aware RED17/1 -> GREEN18/18 and real-host51/51;
+  Sol accepts the final source and ADR0029/0031. Fresh quality/source build exit0.
+  Ninth actual author scene exits0 with full assertions,12fake requests and
+  resolved2787ms/unforced/no-kill quit. Root/Agent4 accept raw/three PNGs and
+  preserved stale-session refusal; empty external/writes/residual observations
+  remain limited to recorded coverage. No broad feature qualification follows.
+  [Manifest](stage-101-source-manifest.json) binds the final source, separate
+  tools, build entries and individually versioned reports; it is not a package
+  or platform attestation.
+- IMPORT001/UI001 receive bounded partial evidence only. Idle TTL cleanup,
+  fresh-native registered recovery and complete UI close/recovery states remain
+  open;14historical completion markers are not recertified. Exact loopback
+  real-model authorization and a protocol probe do not confer production,
+  literary quality, full imitation, performance or target-platform qualification.

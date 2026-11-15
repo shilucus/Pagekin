@@ -50,6 +50,7 @@ interface Flight {
   operationSettled: boolean
   cleanup(): void
   finished: boolean
+  assertCurrent(): void
 }
 
 function retainSecondaryFailure(primary: unknown, secondary: unknown): void {
@@ -85,7 +86,7 @@ export class ReferenceRunForeground {
     let releaseIssuance: (() => void) | undefined
     let cancellationDebt = false
     try {
-      releaseWork = projectRuntimeHost.acquireLegacyOperation('reference-run:v1:execute')
+      releaseWork = projectRuntimeHost.acquireWork(runtime)
       // A completed run may only retry the retained original grant, or validate completed history without an issuance.
       if (authority.hasIssuance(frozen.reference.grantId)) {
         releaseIssuance = authority.beginRun(sender, frozen.reference, frozen.execution, parent.token)
@@ -107,7 +108,7 @@ export class ReferenceRunForeground {
         parent.release()
         releaseWork?.()
         flight.finished = true
-      }, finished: false }
+      }, finished: false, assertCurrent: () => {} }
     this.flights.set(runtime.database, flight)
     const stop = () => {
       flight.stop.abort()
@@ -139,6 +140,7 @@ export class ReferenceRunForeground {
         if (run.cancelRequested) throw new Error('IMPORT_RUN_CANCELLED')
       }
     }
+    flight.assertCurrent = assertCurrent
     let sequence = 0
     type Projection = { kind: 'stage-started'; stage: ReferenceRunStage; run: ImportRunSnapshot }
       | { kind: 'stage-skipped'; stage: ReferenceRunStage; run: ImportRunSnapshot; token: string }
@@ -215,9 +217,11 @@ export class ReferenceRunForeground {
     request: ReferenceRunProjectionAck): Promise<ReferenceRunProjectionAckResult> {
     const flight = this.flights.get(runtime.database), gate = flight?.gate
     if (!flight || flight.finished || !gate || flight.sender !== sender || sender.isDestroyed()
-      || !sameSession(flight.session, session) || !sameReference(flight.request.reference, request.reference)
+      || flight.session.projectId !== session.projectId || flight.session.projectPath !== session.projectPath
+      || !sameReference(flight.request.reference, request.reference)
       || !sameExecution(flight.request.execution, request.execution) || gate.stage !== request.stage || gate.token !== request.token
       || gate.decision && gate.decision !== request.decision) throw new Error('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+    flight.assertCurrent()
     if (gate.decision) return gate.result.promise
     gate.decision = request.decision
     if (request.decision === 'settled') gate.ready.resolve()

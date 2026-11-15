@@ -22,8 +22,9 @@ import { ModelExecutionLeaseRegistry } from '../../services/model-execution-leas
 import { MainGenerationScheduler } from '../../services/generation-scheduler'
 import { projectAccess } from '../../services/project-access'
 import { projectRuntimeHost } from '../../services/project-runtime'
+import { assertImportStageUnmanagedMutationAllowed } from '../../services/import-stage-flight'
 import * as vectorStore from '../../vector-store'
-import { openCanonicalProjectFixture } from '../../../test/helpers/canonical-project-fixture'
+import { openCanonicalProjectFixture, prepareCanonicalStorageFixture } from '../../../test/helpers/canonical-project-fixture'
 // @ts-expect-error Existing JavaScript cleanup helper has no declaration.
 import { removeTemporaryTree } from '../../../test/helpers/remove-temporary-tree.mjs'
 
@@ -70,6 +71,8 @@ class Sender extends EventEmitter {
   ackErrors: unknown[] = []
   holdMainStage: ReferenceRunStage | null = null
   heldMainStage: ReferenceRunProgress | null = null
+  holdChild: 'global' | 'style-opened' | 'style-commit' | 'blueprints' | 'refresh' | null = null
+  heldChild: { channel: string; payload: Record<string, unknown> } | null = null
   isDestroyed() { return this.destroyed }
   destroy() { if (!this.destroyed) { this.destroyed = true; this.emit('destroyed') } }
   send(channel: string, payload: unknown) {
@@ -94,20 +97,20 @@ class Sender extends EventEmitter {
     }
     if (channel === 'import-generation:v1:global-progress') {
       if (!isReferenceGlobalProgress(payload)) throw new Error('INVALID_REFERENCE_GLOBAL_PROGRESS')
-      if (payload.kind === 'opened') this.scheduleAck('import-generation:v1:global-ack', {
+      if (payload.kind === 'opened') this.childAck('global', 'import-generation:v1:global-ack', {
         runId: payload.runId, execution: payload.execution, token: payload.token, decision: 'accept' }, { ...session })
       return
     }
     if (channel === 'import-generation:v1:style-progress') {
       if (!isReferenceStyleProgress(payload)) throw new Error('INVALID_REFERENCE_STYLE_PROGRESS')
-      if (payload.kind === 'opened' || payload.kind === 'commit-ready') this.scheduleAck('import-generation:v1:style-ack', {
+      if (payload.kind === 'opened' || payload.kind === 'commit-ready') this.childAck(payload.kind === 'opened' ? 'style-opened' : 'style-commit', 'import-generation:v1:style-ack', {
         runId: payload.runId, execution: payload.execution, token: payload.token,
         phase: payload.kind === 'opened' ? 'opened' : 'commit', decision: 'accept' }, { ...session })
       return
     }
     if (channel === 'import-generation:v1:blueprints-progress') {
       if (!isReferenceBlueprintProgress(payload)) throw new Error('INVALID_REFERENCE_BLUEPRINT_PROGRESS')
-      if (payload.kind === 'opened') this.scheduleAck('import-generation:v1:blueprints-ack', {
+      if (payload.kind === 'opened') this.childAck('blueprints', 'import-generation:v1:blueprints-ack', {
         runId: payload.runId, execution: payload.execution, batchId: payload.batchId, token: payload.token, decision: 'accept' }, { ...session })
       return
     }
@@ -116,9 +119,13 @@ class Sender extends EventEmitter {
     }
     if (channel === 'reference-knowledge:v1:refresh-progress') {
       if (!isReferenceRefreshProgress(payload)) throw new Error('INVALID_REFERENCE_REFRESH_PROGRESS')
-      if (payload.kind === 'refresh') this.scheduleAck('reference-knowledge:v1:refresh-ack', {
+      if (payload.kind === 'refresh') this.childAck('refresh', 'reference-knowledge:v1:refresh-ack', {
         reference: payload.reference, execution: payload.execution, token: payload.token, decision: 'completed' }, { ...session })
     }
+  }
+  private childAck(kind: NonNullable<Sender['holdChild']>, channel: string, payload: Record<string, unknown>, context: ProjectSessionContext) {
+    if (this.holdChild === kind) { this.heldChild = { channel, payload }; return }
+    this.scheduleAck(channel, payload, context)
   }
   private scheduleAck(channel: string, payload: unknown, context: ProjectSessionContext) {
     const task = Promise.resolve().then(() => dispatch(channel, payload, context)).then(result => {
@@ -314,6 +321,136 @@ function acknowledgeMain(event: Extract<ReferenceRunProgress, { kind: 'stage-com
 async function settleAcks() { await Promise.all(sender.acknowledgements) }
 
 describe('registered whole reference-run foreground on isolated native storage', () => {
+  it.each(['global', 'style-opened', 'style-commit', 'blueprints', 'refresh'] as const)(
+    'requires the reattached A view and exact authority for the %s child gate', async kind => {
+      const a = projectRuntimeHost.getActiveView()!, original = { ...session }
+      const projectB = projectAccess.createProject(parent, 'Fictional second project')
+      prepareCanonicalStorageFixture(projectB.rootPath, Buffer.alloc(32, 48))
+      const candidate = projectAccess.probeExistingProject(projectB.rootPath)
+      if (candidate.kind !== 'manifest') throw new Error('FIXTURE_PROJECT_NOT_CANONICAL')
+      const issued = await prepare()
+      installProvider()
+      sender.holdChild = kind
+      const flight = execute(runRequest(issued))
+      let b: ReturnType<typeof projectRuntimeHost.getActiveView> = null
+      try {
+        await vi.waitFor(() => expect(sender.heldChild).not.toBeNull(), { timeout: 30_000 })
+        const held = sender.heldChild!
+        const opened = projectAccess.commitViewSession(projectRuntimeHost.prepareRetainedOpen(candidate), runtime => runtime)
+        b = opened.value
+        session = { projectId: opened.session.projectId, leaseId: opened.session.leaseId, projectPath: opened.session.rootPath }
+        const before = b.database.prepare('SELECT COUNT(*) AS count FROM import_runs').get()
+        await expect(dispatch(held.channel, held.payload, session)).rejects.toThrow()
+        const attached = projectAccess.beginViewSession(a)
+        session = { projectId: attached.projectId, leaseId: attached.leaseId, projectPath: attached.rootPath }
+        expect(session.leaseId).not.toBe(original.leaseId)
+        await expect(mocks.handlers.get(held.channel)!({ sender: new Sender() }, held.payload, session)).rejects.toThrow()
+        await expect(dispatch(held.channel, { ...held.payload, token: randomUUID() }, session)).rejects.toThrow()
+        const execution = held.payload.execution as { owner: string; epoch: number }
+        await expect(dispatch(held.channel, { ...held.payload, execution: { ...execution, epoch: execution.epoch + 1 } }, session)).rejects.toThrow()
+        sender.holdChild = null
+        await expect(dispatch(held.channel, held.payload, session)).resolves.toMatchObject({ version: 1 })
+        await expect(flight).resolves.toMatchObject({ success: true, run: { status: 'completed' } })
+        await settleAcks()
+        expect(sender.ackErrors).toEqual([])
+        expect(b.database.prepare('SELECT COUNT(*) AS count FROM import_runs').get()).toEqual(before)
+      } finally {
+        if (a.phase === 'open' && projectRuntimeHost.getActiveView() !== a) {
+          const attached = projectAccess.beginViewSession(a)
+          session = { projectId: attached.projectId, leaseId: attached.leaseId, projectPath: attached.rootPath }
+        }
+        if (b) await projectRuntimeHost.requestClose(b)
+      }
+    }, 120_000)
+
+  it.each(['revoke', 'destroy', 'close'] as const)(
+    'drains the offscreen refresh gate after %s without a projection ACK', async action => {
+      const a = projectRuntimeHost.getActiveView()!
+      const projectB = projectAccess.createProject(parent, 'Fictional second project')
+      prepareCanonicalStorageFixture(projectB.rootPath, Buffer.alloc(32, 48))
+      const candidate = projectAccess.probeExistingProject(projectB.rootPath)
+      if (candidate.kind !== 'manifest') throw new Error('FIXTURE_PROJECT_NOT_CANONICAL')
+      const issued = await prepare()
+      installProvider()
+      sender.holdChild = 'refresh'
+      const flight = execute(runRequest(issued))
+      let b: ReturnType<typeof projectRuntimeHost.getActiveView> = null
+      try {
+        await vi.waitFor(() => expect(sender.heldChild).not.toBeNull(), { timeout: 30_000 })
+        const opened = projectAccess.commitViewSession(projectRuntimeHost.prepareRetainedOpen(candidate), runtime => runtime)
+        b = opened.value
+        session = { projectId: opened.session.projectId, leaseId: opened.session.leaseId, projectPath: opened.session.rootPath }
+        let close: Promise<void> | undefined
+        if (action === 'revoke') await expect(dispatch('reference-knowledge:v1:revoke', issued.reference)).resolves.toMatchObject({ state: 'revoked' })
+        else if (action === 'destroy') sender.destroy()
+        else close = projectRuntimeHost.requestClose(a)
+        expect(await flight).toMatchObject({ success: false })
+        if (close) await close
+        if (a.database.open) {
+          expect(a.database.prepare('SELECT status FROM import_runs WHERE id=?').get(RUN)).toMatchObject({ status: 'cancelled' })
+        }
+        expect(b.database.prepare('SELECT COUNT(*) AS count FROM import_runs').get()).toMatchObject({ count: 0 })
+      } finally {
+        if (a.phase === 'open' && projectRuntimeHost.getActiveView() !== a) {
+          const attached = projectAccess.beginViewSession(a)
+          session = { projectId: attached.projectId, leaseId: attached.leaseId, projectPath: attached.rootPath }
+        }
+        if (b) await projectRuntimeHost.requestClose(b)
+      }
+    }, 120_000)
+
+  it('keeps an admitted request in A while viewing B and requires the real A view to acknowledge', async () => {
+    const originalSession = { ...session }
+    const a = projectRuntimeHost.getActiveView()!
+    const projectB = projectAccess.createProject(parent, 'Fictional second project')
+    prepareCanonicalStorageFixture(projectB.rootPath, Buffer.alloc(32, 48))
+    const bProject = projectAccess.probeExistingProject(projectB.rootPath)
+    if (bProject.kind !== 'manifest') throw new Error('FIXTURE_PROJECT_NOT_CANONICAL')
+    const issued = await prepare()
+    const provider = installProvider()
+    let release!: () => void
+    const blocked = new Promise<void>(resolve => { release = resolve })
+    let dispatched = false
+    vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      if (!String(input).includes('/embeddings') && !dispatched) { dispatched = true; await blocked }
+      return provider(input, init)
+    }))
+    sender.holdMainStage = 'global'
+    const flight = execute(runRequest(issued))
+    let b: ReturnType<typeof projectRuntimeHost.getActiveView> = null
+    try {
+      await vi.waitFor(() => expect(dispatched).toBe(true), { timeout: 30_000 })
+      const opened = projectAccess.commitViewSession(projectRuntimeHost.prepareRetainedOpen(bProject), runtime => runtime)
+      b = opened.value
+      session = { projectId: opened.session.projectId, leaseId: opened.session.leaseId, projectPath: opened.session.rootPath }
+      const before = b.database.prepare('SELECT COUNT(*) AS count FROM import_runs').get()
+      release()
+      const gate = await waitForStageCompleted('global')
+      await expect(acknowledgeMain(gate)).rejects.toThrow()
+      expect(b.database.prepare('SELECT COUNT(*) AS count FROM import_runs').get()).toEqual(before)
+      const attached = projectAccess.beginViewSession(a)
+      session = { projectId: attached.projectId, leaseId: attached.leaseId, projectPath: attached.rootPath }
+      expect(session.leaseId).not.toBe(originalSession.leaseId)
+      const payload = { reference: gate.reference, execution: gate.execution, stage: gate.completion.stage,
+        token: gate.token, decision: 'settled' }
+      await expect(mocks.handlers.get('reference-run:v1:projection-ack')!({ sender: new Sender() }, payload, session)).rejects.toThrow()
+      await expect(dispatch('reference-run:v1:projection-ack', { ...payload, token: randomUUID() }, session)).rejects.toThrow()
+      await expect(dispatch('reference-run:v1:projection-ack', { ...payload, execution: { ...payload.execution, epoch: payload.execution.epoch + 1 } }, session)).rejects.toThrow()
+      sender.holdMainStage = null
+      await expect(dispatch('reference-run:v1:projection-ack', payload, session)).resolves.toEqual({ version: 1 })
+      await expect(flight).resolves.toMatchObject({ success: true, run: { status: 'completed' } })
+      await settleAcks()
+      expect(sender.ackErrors).toEqual([])
+      expect(b.database.prepare('SELECT COUNT(*) AS count FROM import_runs').get()).toEqual(before)
+    } finally {
+      release()
+      if (a.phase === 'open' && projectRuntimeHost.getActiveView() !== a) {
+        const attached = projectAccess.beginViewSession(a)
+        session = { projectId: attached.projectId, leaseId: attached.leaseId, projectPath: attached.rootPath }
+      }
+      if (b) await projectRuntimeHost.requestClose(b)
+    }
+  }, 60_000)
   it.each(['grant', 'revision', 'owner', 'epoch', 'sender', 'expired-lease'] as const)(
     'rejects an invalid %s before admitting or recovering a generation owner', async invalid => {
       const issued = await prepare()
@@ -363,6 +500,34 @@ describe('registered whole reference-run foreground on isolated native storage',
       ? [event.payload as { kind?: string; modelId?: string }] : []).filter(event => event.kind === 'opened')
     expect(opened.map(event => event.modelId)).toEqual([MODEL_ID, MODEL_ID, MODEL_ID])
     expect(fetch.mock.calls.filter(([url]) => !String(url).includes('/embeddings'))).toHaveLength(3)
+    expect(sender.ackErrors).toEqual([])
+  }, 120_000)
+
+  it('reads recovery during a real whole-run projection wait without disturbing its claims or receipts', async () => {
+    const fetch = installProvider(), issued = await prepare(), runtime = projectRuntimeHost.getActiveView()!
+    sender.holdMainStage = 'knowledge'
+    const flight = execute(runRequest(issued))
+    const gate = await waitForStageCompleted('knowledge')
+    const receipts = () => database.prepare('SELECT * FROM import_run_knowledge_receipts WHERE run_id=?').all(RUN)
+    const ledger = () => database.prepare('SELECT * FROM import_effect_ledger WHERE run_id=? ORDER BY stage,batch_id').all(RUN)
+    const beforeReceipts = receipts(), beforeLedger = ledger(), beforeCalls = fetch.mock.calls.length
+    expect(beforeReceipts).toEqual([expect.objectContaining({ state: 'committed' })])
+    expect(() => assertImportStageUnmanagedMutationAllowed(database, RUN)).toThrow('GENERATION_OWNER_BUSY')
+    expect(() => projectRuntimeHost.assertTaskAvailable(runtime)).toThrow('PROJECT_RUNTIME_BUSY')
+    await expect(dispatch('generation:list-recovery', { ...session })).resolves.toMatchObject({ partial: false })
+    expect(receipts()).toEqual(beforeReceipts)
+    expect(ledger()).toEqual(beforeLedger)
+    expect(fetch).toHaveBeenCalledTimes(beforeCalls)
+    expect(() => assertImportStageUnmanagedMutationAllowed(database, RUN)).toThrow('GENERATION_OWNER_BUSY')
+    expect(() => projectRuntimeHost.assertTaskAvailable(runtime)).toThrow('PROJECT_RUNTIME_BUSY')
+    sender.holdMainStage = null
+    await acknowledgeMain(gate)
+    expect(await flight).toMatchObject({ success: true, run: { status: 'completed', stage: 'completed' } })
+    await settleAcks()
+    expect(receipts()).toEqual(beforeReceipts)
+    expect(ImportRunRepository.getEffectReceipt(RUN, 'global', 'done')?.state).toBe('committed')
+    expect(ImportRunRepository.getEffectReceipt(RUN, 'style', 'done')?.state).toBe('committed')
+    expect(database.prepare('SELECT state FROM reference_import_grants WHERE grant_id=?').pluck().get(issued.reference.grantId)).toBe('completed')
     expect(sender.ackErrors).toEqual([])
   }, 120_000)
 

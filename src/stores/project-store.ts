@@ -19,6 +19,8 @@ import { countUnsavedEditorItemsForProject } from './editor-unsaved'
 import { useLayoutStore } from './layout-store'
 import { useLocaleStore } from './locale-store'
 import { requireIpcSuccess } from '../services/ipc-result'
+import { PROJECT_RUNTIME_OPEN_BACKGROUND_VIEW_CHANNEL } from '../shared/project-runtime-contract'
+import { isWorkflowBackgroundQualified } from '../shared/workflow-background-qualification'
 import {
   projectPathKey,
   isProjectSessionContext,
@@ -54,7 +56,7 @@ let closeProjectInFlight: Promise<boolean> | null = null
 let projectRecoveryInFlight: Promise<void> | null = null
 let novelConfigPublicationRevision = 0
 let novelConfigPublicationSession: ProjectSessionContext | null = null
-const novelConfigWritesInFlight = new Set<ProjectSessionContext>()
+const novelConfigWritesInFlight = new Map<ProjectSessionContext, Promise<void>>()
 
 export interface NovelConfigReadToken {
   readonly projectSession: ProjectSessionContext
@@ -64,7 +66,7 @@ export interface NovelConfigReadToken {
 // A late formal read must not move the saved baseline across a newer write,
 // including an identical-value save whose draft ledger remains empty.
 function hasNovelConfigWrite(session: ProjectSessionContext): boolean {
-  return [...novelConfigWritesInFlight].some(writer => sameProjectSessionContext(writer, session))
+  return [...novelConfigWritesInFlight.keys()].some(writer => sameProjectSessionContext(writer, session))
 }
 
 function advanceNovelConfigPublication(session: ProjectSessionContext): void {
@@ -74,11 +76,23 @@ function advanceNovelConfigPublication(session: ProjectSessionContext): void {
 
 function beginNovelConfigWrite(session: ProjectSessionContext): () => void {
   const writer = { ...session }
+  let resolve!: () => void
+  const settled = new Promise<void>(accept => { resolve = accept })
   advanceNovelConfigPublication(session)
-  novelConfigWritesInFlight.add(writer)
+  novelConfigWritesInFlight.set(writer, settled)
   return () => {
+    if (!novelConfigWritesInFlight.has(writer)) return
     novelConfigWritesInFlight.delete(writer)
     if (sameProjectSessionContext(writer, novelConfigPublicationSession)) novelConfigPublicationRevision++
+    resolve()
+  }
+}
+
+async function waitForNovelConfigWrites(session: ProjectSessionContext | null): Promise<void> {
+  if (!session) return
+  while (hasNovelConfigWrite(session)) {
+    await Promise.all([...novelConfigWritesInFlight].filter(([writer]) => sameProjectSessionContext(writer, session))
+      .map(([, settled]) => settled))
   }
 }
 
@@ -167,7 +181,6 @@ async function confirmAndCancelProjectWorkflows(
   shouldContinue: () => boolean = () => true,
 ): Promise<boolean> {
   const { useWorkflowStore } = await import('./workflow-store')
-  const { isWorkflowBackgroundQualified } = await import('../shared/workflow-background-qualification')
   const projectRuns = useWorkflowStore.getState().activeRuns.filter(run => (
     sameProjectPathKey(run.projectPath, projectPath)
   ))
@@ -230,6 +243,10 @@ function isPreparedProjectTransitionCurrent(
 }
 
 async function prepareProjectTransition(project: ProjectData): Promise<PreparedProjectTransition | null> {
+  // A style ACK may already be committing. Publish its saved baseline before
+  // capturing the transition; never wait for a model or an offscreen view here.
+  await waitForNovelConfigWrites(projectSessionContextFromProject(project))
+  if (!sameRendererProject(project, useProjectStore.getState().currentProject)) return null
   const editor = useEditorStore.getState()
   for (const content of Object.values(editor.draftLedgers)) {
     if (!content) continue
@@ -461,6 +478,8 @@ interface ProjectState {
   recentProjectsLoaded: boolean
   /** 是否正在加载 */
   loading: boolean
+  /** Process-local view policy, not execution authority or persisted state. */
+  retainedViews: boolean
   legacyImportNotice: string
   legacyImportBusy: boolean
   /** 每次成功打开项目都递增；同一路径重开也属于新的渲染进程项目会话。 */
@@ -519,6 +538,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   recentProjects: [],
   recentProjectsLoaded: false,
   loading: false,
+  retainedViews: false,
   legacyImportNotice: '',
   legacyImportBusy: false,
   projectSessionEpoch: 0,
@@ -694,7 +714,14 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
           || !isPreparedProjectTransitionCurrent(rendererProject, preparedTransition)
         ) return false
       }
-      const result = await ipc.invoke('project:open', target, requestToken, rendererProjectPath)
+      const { useWorkflowStore } = await import('./workflow-store')
+      const retainViews = get().retainedViews || useWorkflowStore.getState().activeRuns.some(run => (
+        run.backgroundExecution === 'reference-run' && isWorkflowBackgroundQualified(run)
+      ))
+      await waitForNovelConfigWrites(projectSessionContextFromProject(rendererProject))
+      if (!isLatestRequest() || (rendererProject && (!preparedTransition
+        || !isPreparedProjectTransitionCurrent(rendererProject, preparedTransition)))) return false
+      const result = await ipc.invoke(retainViews ? PROJECT_RUNTIME_OPEN_BACKGROUND_VIEW_CHANNEL : 'project:open', target, requestToken, rendererProjectPath)
       if (!isLatestRequest() || result.stale || result.requestToken !== requestToken) {
         await reconcileStaleProjectResponse({
           getRendererProjectPath: () => get().currentProject?.path ?? null,
@@ -702,6 +729,9 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
           operation: 'open',
         })
         return false
+      }
+      if ('backgroundViewsRetained' in result && typeof result.backgroundViewsRetained === 'boolean') {
+        set({ retainedViews: result.backgroundViewsRetained })
       }
       const activeProjectMismatch = Boolean(
         result.success
@@ -1007,7 +1037,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
 
   commitGeneratedNovelConfig: async (generated, expectedConfig, expectedProjectSession, generationRunHandle, persistEffect) => {
     const project = get().currentProject
-    if (!project || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(project))
+    if (!project || get().loading || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(project))
       || JSON.stringify(project.novelConfig) !== JSON.stringify(expectedConfig)) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
     const finishWrite = beginNovelConfigWrite(expectedProjectSession)
     try {

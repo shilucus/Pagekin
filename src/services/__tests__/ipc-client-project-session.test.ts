@@ -4,7 +4,7 @@ import {
   setActiveProjectSessionContext,
 } from '../../shared/project-session-context'
 import { ipc } from '../ipc-client'
-import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../shared/project-runtime-contract'
+import { PROJECT_RUNTIME_OPEN_BACKGROUND_VIEW_CHANNEL, PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../shared/project-runtime-contract'
 import type { AllInvokeChannels, ProjectSessionContext } from '../../shared/ipc-channels'
 import type { PlanningFeedbackBlueprintChannel } from '../../shared/planning-feedback-ipc'
 
@@ -208,16 +208,16 @@ describe('project-scoped IPC session transport', () => {
     await expect(ipc.invoke('db:import-run-list-representative-chapters', 'fixture-run', frozen.projectPath)).rejects.toThrow()
     expect(invoke).toHaveBeenCalledTimes(1)
   })
-  it('retained-view admission uses its target grant and never borrows an active project lease', async () => {
+  it.each([PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, PROJECT_RUNTIME_OPEN_BACKGROUND_VIEW_CHANNEL])('%s admission uses its target grant and never borrows an active project lease', async channel => {
     const target = { grantId: 'fictional-open-grant', displayName: 'Fictional project' }
     invoke.mockResolvedValue({ success: true })
-    await ipc.invoke(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-request', null)
-    expect(invoke).toHaveBeenLastCalledWith(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-request', null)
+    await ipc.invoke(channel, target, 'fictional-request', null)
+    expect(invoke).toHaveBeenLastCalledWith(channel, target, 'fictional-request', null)
     setActiveProjectSessionContext(null)
-    await ipc.invoke(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-next-request', null)
-    expect(invoke).toHaveBeenLastCalledWith(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-next-request', null)
+    await ipc.invoke(channel, target, 'fictional-next-request', null)
+    expect(invoke).toHaveBeenLastCalledWith(channel, target, 'fictional-next-request', null)
     await expect(ipc.invokeWithProjectSession({ projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' },
-      PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, target, 'fictional-forged-request', null)).rejects.toThrow('通道不属于项目会话范围')
+      channel, target, 'fictional-forged-request', null)).rejects.toThrow('通道不属于项目会话范围')
     expect(invoke).toHaveBeenCalledTimes(2)
   })
 

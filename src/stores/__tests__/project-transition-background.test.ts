@@ -117,9 +117,9 @@ describe('Project Transition and Background Qualification (UI-001 / ADR-0049)', 
     vi.clearAllMocks()
     useEditorStore.setState({ tabs: [], draftLedgers: {} })
     useWorkflowStore.setState({ activeRuns: [], history: [] })
-    useProjectStore.setState({ currentProject: project('A'), loading: false })
+    useProjectStore.setState({ currentProject: project('A'), loading: false, retainedViews: false })
     mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
-      if (channel === 'project:open') {
+      if (channel === 'project:open' || channel === 'project-runtime:v1:open-background-view') {
         return {
           success: true,
           project: project('B'),
@@ -127,6 +127,7 @@ describe('Project Transition and Background Qualification (UI-001 / ADR-0049)', 
           activeProjectPath: project('B').path,
           databaseRestored: true,
           dbReady: true,
+          ...(channel === 'project-runtime:v1:open-background-view' ? { backgroundViewsRetained: true } : {}),
         }
       }
       return null
@@ -147,6 +148,68 @@ describe('Project Transition and Background Qualification (UI-001 / ADR-0049)', 
     // The background task for Project A remains running in activeRuns!
     const activeRuns = useWorkflowStore.getState().activeRuns
     expect(activeRuns.some(r => r.id === 'run-a1')).toBe(true)
+  })
+
+  it('uses the managed background-view entry in both directions while an admitted reference remains active', async () => {
+    const runA = { ...makeRun('reference-A', 'A', 'novel_import', true), backgroundExecution: 'reference-run' as const }
+    useWorkflowStore.setState({ activeRuns: [runA] })
+    expect(await useProjectStore.getState().openProject(project('B').path)).toBe(true)
+    expect(mocks.confirm).not.toHaveBeenCalled()
+    expect(useProjectStore.getState().retainedViews).toBe(true)
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'project-runtime:v1:open-background-view') return { success: true, backgroundViewsRetained: true,
+        project: { ...project('A'), sessionLease: 'lease-A-new' }, requestToken: args[1],
+        activeProjectPath: project('A').path, databaseRestored: true, dbReady: true }
+      return null
+    })
+    expect(await useProjectStore.getState().openProject(project('A').path)).toBe(true)
+    expect(mocks.invoke.mock.calls.filter(([channel]) => channel === 'project-runtime:v1:open-background-view')).toHaveLength(2)
+    expect(useWorkflowStore.getState().activeRuns[0]).toEqual(runA)
+    expect(useProjectStore.getState().currentProject?.sessionLease).toBe('lease-A-new')
+  })
+
+  it('returns to ordinary opening only after main confirms that managed background resources are released', async () => {
+    useProjectStore.setState({ retainedViews: true })
+    const fallback = mocks.invoke.getMockImplementation()!
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      const result = await fallback(channel, ...args)
+      return channel === 'project-runtime:v1:open-background-view' ? { ...result, backgroundViewsRetained: false } : result
+    })
+    expect(await useProjectStore.getState().openProject(project('B').path)).toBe(true)
+    expect(useProjectStore.getState().retainedViews).toBe(false)
+    expect(await useProjectStore.getState().openProject(project('B').path)).toBe(true)
+    expect(mocks.invoke.mock.calls.filter(([channel]) => channel === 'project-runtime:v1:open-background-view')).toHaveLength(1)
+    expect(mocks.invoke.mock.calls.filter(([channel]) => channel === 'project:open')).toHaveLength(1)
+  })
+
+  it('waits for an already committing style publication before preparing the project transition', async () => {
+    let release!: () => void
+    const persisted = new Promise<void>(resolve => { release = resolve })
+    const current = useProjectStore.getState().currentProject!
+    const session = { projectId: current.id, projectPath: current.path, leaseId: current.sessionLease! }
+    const saving = useProjectStore.getState().commitGeneratedNovelConfig({ writingStyle: 'saved style' },
+      structuredClone(current.novelConfig), session,
+      { projectId: 'A', epoch: 'lease-A', rootActionId: 'root', runId: 'generation' }, async () => { await persisted })
+    const opening = useProjectStore.getState().openProject(project('B').path)
+    await Promise.resolve()
+    expect(mocks.invoke.mock.calls.some(([channel]) => channel === 'project:open')).toBe(false)
+    expect(useProjectStore.getState().currentProject?.id).toBe('A')
+    release()
+    expect(await saving).toBe(true)
+    expect(await opening).toBe(true)
+    expect(useProjectStore.getState().currentProject?.id).toBe('B')
+  })
+
+  it('does not begin a generated publication after a project transition has sealed the view', async () => {
+    const current = useProjectStore.getState().currentProject!
+    const persist = vi.fn(async () => {})
+    useProjectStore.setState({ loading: true })
+    await expect(useProjectStore.getState().commitGeneratedNovelConfig({ writingStyle: 'late style' },
+      structuredClone(current.novelConfig), { projectId: 'A', projectPath: current.path, leaseId: 'lease-A' },
+      { projectId: 'A', epoch: 'lease-A', rootActionId: 'root', runId: 'generation' }, persist))
+      .rejects.toThrow('GENERATION_AUTHOR_DRAFT_CHANGED')
+    expect(persist).not.toHaveBeenCalled()
+    expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBeUndefined()
   })
 
   it('AC-1: intercepts switching view with confirmation when unmigrated task exists', async () => {

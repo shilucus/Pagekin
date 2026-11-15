@@ -79,6 +79,8 @@ import {
 import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 import type { ReferenceStyleAckRequest } from '../../../shared/reference-style-contract'
 import { globalEventBus } from '../../../shared/event-bus'
+import { projectSessionContextFromProject } from '../../../shared/project-session-context'
+import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import { useProjectStore } from '../../../stores/project-store'
 import { useCharacterStore } from '../../../stores/character-store'
 import { useDraftStore } from '../../../stores/draft-store'
@@ -176,6 +178,8 @@ const callbacks: StepCallbacks = { log: vi.fn(), setProgress: vi.fn(), appendTex
 function context(): WorkflowContext {
   return {
     runId: 'import-run-1', projectPath: session.projectPath, projectSession: session,
+    projectionSession: session,
+    waitForProjectView: async () => session,
     writingLanguage: 'zh-CN', uiLocale: 'zh-CN', data: {}, cancelled: false,
   }
 }
@@ -191,13 +195,14 @@ beforeEach(() => {
       id: 'test-project', sessionLease: 'lease-test-project', name: '测试项目', path: session.projectPath,
       novelConfig: {} as never, characterStates: '', createdAt: '', updatedAt: '',
     },
+    loading: false,
   })
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
   ipcMocks.invoke.mockReset()
-  useProjectStore.setState({ currentProject: null })
+  useProjectStore.setState({ currentProject: null, loading: false })
   useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
 })
 
@@ -361,6 +366,200 @@ describe('whole reference run projection', () => {
     expect(listeners.size).toBe(0)
   })
 
+  it('waits for A reattachment before projecting a skipped reference stage and uses its new lease', async () => {
+    const batchId = '1-1-aaaaaaaa'
+    const snapshot = run({ stage: 'knowledge', completedBatches: { blueprints: [batchId] } })
+    const completed = run({ stage: 'completed', status: 'completed' })
+    const authority = { owner: executionOwner, epoch: 1 }
+    const reference = { projectId: session.projectId, runId: snapshot.id,
+      grantId: '00000000-0000-4000-8000-000000000002', revision: 1 }
+    const token = '00000000-0000-4000-8000-000000000003'
+    const listeners = new Map<string, (event: unknown) => void>()
+    ipcMocks.on.mockImplementation((channel, listener) => { listeners.set(channel, listener); return () => { listeners.delete(channel) } })
+    const a2 = { ...session, leaseId: 'lease-test-project-return' }
+    const project = (view: typeof session, config: Record<string, unknown>) => ({
+      id: view.projectId, path: view.projectPath, sessionLease: view.leaseId, name: view.projectId,
+      novelConfig: config, characterStates: '', createdAt: '', updatedAt: '',
+    })
+    const bConfig = { genre: 'B unsaved config' }
+    useProjectStore.setState({ currentProject: project(session, { writingStyle: 'A author buffer' }) as never })
+    let releaseReturn!: () => void
+    let notifyWaiting!: () => void
+    const waiting = new Promise<void>(resolve => { notifyWaiting = resolve })
+    const receipt: ImportRunEffectReceipt = {
+      schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION, runId: snapshot.id, effectNamespace: snapshot.effectNamespace,
+      effectKey: 'global-facts', stage: 'global', batchId: 'done', kind: 'project-global-facts', payloadHash: 'a'.repeat(64),
+      state: 'committed', payload: {}, effectReceipt: {}, createdAt: 'now', updatedAt: 'now',
+    }
+    const blueprintReceipt: ImportRunEffectReceipt = {
+      schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION, runId: snapshot.id, effectNamespace: snapshot.effectNamespace,
+      effectKey: `blueprints:${batchId}`, stage: 'blueprints', batchId, kind: 'chapter-blueprint-range', payloadHash: 'b'.repeat(64),
+      state: 'committed', payload: {}, effectReceipt: { operationId: 'op', snapshot: [{}], characterSyncOperation: { operationId: 'sync' } },
+      createdAt: 'now', updatedAt: 'now',
+    }
+    const stageWaiters = new Map<string, () => void>()
+    let sequence = 0
+    ipcMocks.invoke.mockImplementation(async (_viewSession, channel: string, ...args: unknown[]) => {
+      if (channel === 'reference-run:v1:projection-ack') {
+        const ack = args[0] as { stage: string }
+        if (ack.stage === 'knowledge') useProjectStore.setState({ currentProject: project(
+          { projectId: 'project-b', projectPath: 'C:\\project-b', leaseId: 'lease-b' }, bConfig,
+        ) as never })
+        stageWaiters.get(ack.stage)?.()
+        return { version: 1 }
+      }
+      if (channel === 'db:import-run-effect-receipt-get') return args[1] === 'global' ? receipt : blueprintReceipt
+      if (channel === 'db:project-core-get') return { genre: 'A saved genre', writingStyle: 'A saved style' }
+      if (channel === 'reference-run:v1:execute') {
+        const request = args[0] as { reference: typeof reference; execution: typeof authority }
+        const base = { reference: request.reference, execution: request.execution, leaseId: session.leaseId }
+        for (const stage of ['knowledge', 'global', 'style', 'blueprints', 'refresh'] as const) {
+          const acked = new Promise<void>(resolve => { stageWaiters.set(stage, resolve) })
+          listeners.get('reference-run:v1:progress')!({ ...base, sequence: ++sequence, kind: 'stage-skipped', stage,
+            run: run({ stage, completedBatches: { blueprints: [batchId] } }), token })
+          await acked
+        }
+        return { success: true, version: 1, run: completed, execution: null, replayed: false }
+      }
+      throw new Error(`Unexpected channel ${channel}`)
+    })
+    const workflow = createActualWorkflow({ projectPath: session.projectPath, projectSession: session, run: snapshot,
+      executionOwner, referenceKnowledge: { reference, execution: { ...authority, expiresAt: Number.MAX_SAFE_INTEGER } } })
+    expect(workflow.backgroundExecution).toBe('reference-run')
+    const ctx = context()
+    ctx.waitForProjectView = async signal => {
+      const current = projectSessionContextFromProject(useProjectStore.getState().currentProject)
+      if (current?.projectId === session.projectId && !useProjectStore.getState().loading) {
+        ctx.projectionSession = current
+        return current
+      }
+      notifyWaiting()
+      return new Promise((resolve, reject) => {
+        const abort = () => reject(new Error('WORKFLOW_CANCELLED'))
+        signal?.addEventListener('abort', abort, { once: true })
+        releaseReturn = () => {
+          signal?.removeEventListener('abort', abort)
+          ctx.projectionSession = a2
+          resolve(a2)
+        }
+      })
+    }
+    await workflow.steps[0]!.executor({} as never, ctx, callbacks)
+    const global = workflow.steps[1]!.executor({} as never, ctx, callbacks)
+    try {
+      await waiting
+      expect(useProjectStore.getState().currentProject?.id).toBe('project-b')
+      expect(ipcMocks.actual.mock.calls.some(([, channel, ...args]) => channel === 'db:project-core-get' && args[0] === session.projectPath)).toBe(false)
+      expect(ipcMocks.actual.mock.calls.some(([, channel, ...args]) => channel === 'reference-run:v1:projection-ack' && (args[0] as { stage: string }).stage === 'global')).toBe(false)
+    } finally {
+      useProjectStore.setState({ currentProject: project(a2, { writingStyle: 'A saved style' }) as never })
+      useProjectStore.getState().updateNovelConfig({ writingStyle: 'A author buffer after return' }, a2)
+      releaseReturn()
+      await global
+      for (const step of workflow.steps.slice(2)) await step.executor({} as never, ctx, callbacks)
+    }
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ genre: 'A saved genre', writingStyle: 'A author buffer after return' })
+    expect(ctx.projectionSession).toEqual(a2)
+    expect(bConfig).toEqual({ genre: 'B unsaved config' })
+    expect(ipcMocks.actual.mock.calls.filter(([, channel]) => channel === 'reference-run:v1:projection-ack')
+      .some(([view]) => (view as ProjectSessionContext).leaseId === a2.leaseId)).toBe(true)
+    expect(listeners.size).toBe(0)
+  })
+
+  it('publishes the returned A lease before the first projection wait and uses it for workflow completion', async () => {
+    const batchId = '1-1-aaaaaaaa'
+    const snapshot = run({ completedBatches: { blueprints: [batchId] } })
+    const completedRun = run({ stage: 'completed', status: 'completed', completedBatches: { blueprints: [batchId] } })
+    const authority = { owner: executionOwner, epoch: 1 }
+    const reference = { projectId: session.projectId, runId: snapshot.id,
+      grantId: '00000000-0000-4000-8000-000000000002', revision: 1 }
+    const token = '00000000-0000-4000-8000-000000000003'
+    const listeners = new Map<string, (event: unknown) => void>()
+    ipcMocks.on.mockImplementation((channel, listener) => {
+      listeners.set(channel, listener)
+      return () => { listeners.delete(channel) }
+    })
+    const a2 = { ...session, leaseId: 'lease-test-project-returned' }
+    const project = (view: typeof session) => ({ id: view.projectId, path: view.projectPath,
+      sessionLease: view.leaseId, name: view.projectId, novelConfig: {} as never,
+      characterStates: '', createdAt: '', updatedAt: '' })
+    const globalReceipt: ImportRunEffectReceipt = { schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+      runId: snapshot.id, effectNamespace: snapshot.effectNamespace, effectKey: 'global-facts', stage: 'global',
+      batchId: 'done', kind: 'project-global-facts', payloadHash: 'a'.repeat(64), state: 'committed', payload: {},
+      effectReceipt: {}, createdAt: 'now', updatedAt: 'now' }
+    const blueprintReceipt: ImportRunEffectReceipt = { schemaVersion: IMPORT_RUN_EFFECT_RECEIPT_SCHEMA_VERSION,
+      runId: snapshot.id, effectNamespace: snapshot.effectNamespace, effectKey: `blueprints:${batchId}`,
+      stage: 'blueprints', batchId, kind: 'chapter-blueprint-range', payloadHash: 'b'.repeat(64), state: 'committed',
+      payload: {}, effectReceipt: { operationId: 'op', snapshot: [{}], characterSyncOperation: { operationId: 'sync' } },
+      createdAt: 'now', updatedAt: 'now' }
+    const ackWaiters = new Map<string, () => void>()
+    let sequence = 0
+    ipcMocks.invoke.mockImplementation(async (_viewSession, channel: string, ...args: unknown[]) => {
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'reference-run:v1:projection-ack') {
+        ackWaiters.get((args[0] as { stage: string }).stage)?.()
+        return { version: 1 }
+      }
+      if (channel === 'db:import-run-start-resume') {
+        return { success: true, start: { run: snapshot, execution: { ...authority, expiresAt: Number.MAX_SAFE_INTEGER } } }
+      }
+      if (channel === 'db:import-run-get') return snapshot
+      if (channel === 'db:import-run-renew-execution') {
+        return { success: true, execution: { ...authority, expiresAt: Number.MAX_SAFE_INTEGER } }
+      }
+      if (channel === 'db:import-run-effect-receipt-get') {
+        return args[1] === 'global' ? globalReceipt : blueprintReceipt
+      }
+      if (channel === 'db:project-core-get') return { genre: 'A saved genre', writingStyle: 'A saved style' }
+      if (channel !== 'reference-run:v1:execute') throw new Error(`Unexpected channel ${channel}`)
+
+      useProjectStore.setState({ currentProject: project({ ...session, projectId: 'project-b', projectPath: 'C:\\project-b', leaseId: 'lease-b' }) as never })
+      useProjectStore.setState({ currentProject: project(a2) as never, loading: true })
+      useProjectStore.setState({ loading: false })
+      const base = { reference, execution: authority, leaseId: session.leaseId }
+      const emit = (event: object) => listeners.get('reference-run:v1:progress')!({ ...base, sequence: ++sequence, ...event })
+      const knowledgeAck = new Promise<void>(resolve => { ackWaiters.set('knowledge', resolve) })
+      emit({ kind: 'stage-started', stage: 'knowledge', run: snapshot })
+      emit({ kind: 'stage-completed', token, completion: { stage: 'knowledge', result: {
+        run: run({ stage: 'global' }), execution: { ...authority, expiresAt: Number.MAX_SAFE_INTEGER }, replayed: false,
+      } } })
+      await knowledgeAck
+      for (const stage of ['knowledge', 'global', 'style', 'blueprints'] as const) {
+        if (stage === 'knowledge') continue
+        const acked = new Promise<void>(resolve => { ackWaiters.set(stage, resolve) })
+        emit({ kind: 'stage-skipped', stage, run: run({ stage, completedBatches: { blueprints: [batchId] } }), token })
+        await acked
+      }
+      const refreshAck = new Promise<void>(resolve => { ackWaiters.set('refresh', resolve) })
+      emit({ kind: 'stage-started', stage: 'refresh', run: run({ stage: 'refresh', completedBatches: { blueprints: [batchId] } }) })
+      emit({ kind: 'stage-completed', token, completion: { stage: 'refresh', result: {
+        version: 1, run: completedRun, execution: null, replayed: true,
+      } } })
+      await refreshAck
+      return { success: true, version: 1, run: completedRun, execution: null }
+    })
+    useWorkflowStore.setState({ activeRuns: [], history: [], globalLogs: [], waitingRuns: {} })
+    vi.stubGlobal('window', { aiNovelAPI: {
+      invoke: vi.fn(async (channel: string) => channel === 'skills:list-user' ? [] : false),
+      on: vi.fn(() => () => {}), once: vi.fn(),
+    } })
+    const completed = vi.fn()
+    const unsubscribe = globalEventBus.on('WORKFLOW_COMPLETE', completed)
+    try {
+      await useWorkflowStore.getState().startWorkflow(createActualWorkflow({ projectPath: session.projectPath,
+        projectSession: session, run: snapshot, executionOwner,
+        referenceKnowledge: { reference, execution: { ...authority, expiresAt: Number.MAX_SAFE_INTEGER } } }))
+    } finally {
+      unsubscribe()
+      vi.unstubAllGlobals()
+    }
+    expect(ipcMocks.actual.mock.calls.filter(([, channel]) => channel === 'reference-run:v1:projection-ack').map(([view]) => view))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ leaseId: a2.leaseId })]))
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ projectSession: a2, runId: snapshot.id }))
+    expect(useWorkflowStore.getState().history[0]?.status).toBe('completed')
+    expect(listeners.size).toBe(0)
+  })
+
   it.each(['ack-failure', 'cancelled'] as const)('does not advance knowledge after %s', async outcome => {
     const snapshot = run()
     const execution = { owner: executionOwner, epoch: 1, expiresAt: Number.MAX_SAFE_INTEGER }
@@ -467,6 +666,7 @@ describe('whole reference run projection', () => {
     releaseCore()
     await global
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ genre: 'canonical genre' }), session, 'unsaved-edits')
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ genre: 'canonical genre', writingStyle: 'author draft' })
     await workflow.steps[2].executor({} as never, ctx, callbacks)
     expect(persist).toHaveBeenCalledOnce()
     expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe('author draft')
@@ -678,7 +878,6 @@ describe('createImportWorkflow', () => {
           const sequence = index * 6
           emit({ ...identity, sequence: sequence + 1, kind: 'opened', batchId: batches[index], token: `token-${index}`, handle: handles[index], modelId: 'chosen' })
           await waits[index]
-          if (index === 1) useProjectStore.setState({ currentProject: { ...useProjectStore.getState().currentProject!, id: 'other-project', sessionLease: 'other-lease' } })
           emit({ ...identity, sequence: sequence + 2, kind: 'range-committed', batchId: batches[index] })
           emit({ ...identity, sequence: sequence + 3, kind: 'range-synced', batchId: batches[index] })
           emit({ ...identity, sequence: sequence + 4, kind: 'log', value: { key: 'complete', count: 1 } })
@@ -703,15 +902,14 @@ describe('createImportWorkflow', () => {
     expect(ctx.data.blueprintCommitReceipt).toEqual(receipts[1]!.effectReceipt)
     expect(ctx.data.blueprintCharacterSyncReceipt).toMatchObject({ operationId: 'sync-1' })
     expect(local.setProgress.mock.calls.map(call => call[0])).toEqual([100, 50, 100, 99])
-    expect(local.log).toHaveBeenCalledTimes(3)
+    expect(local.log).toHaveBeenCalledTimes(2)
     expect(local.log).toHaveBeenCalledWith('蓝图推演完成：1 章已一次提交')
-    expect(local.log).toHaveBeenCalledWith('当前正在查看其他作品，蓝图事实已安全保存至目标作品库')
     expect(local.appendText.mock.calls.map(call => call[0]).filter(Boolean)).toEqual(['raw-generation-0', 'raw-generation-1'])
     expect(refresh).toHaveBeenCalledTimes(2)
     expect(refresh).toHaveBeenCalledWith('REFRESH_RESOURCE', { resources: ['fileTree', 'blueprints'], projectPath: session.projectPath, projectSession: session })
     expect(order).toEqual([
       'commit', 'sync', 'complete', 'progress:100', 'refresh', 'progress:50',
-      'commit', 'sync', 'complete', 'progress:100', 'other-project', 'refresh', 'progress:99',
+      'commit', 'sync', 'complete', 'progress:100', 'refresh', 'progress:99',
     ])
     expect(ipcMocks.actual.mock.calls.some(call => ['db:import-run-fail', 'db:import-run-advance-stage', 'db:blueprint-character-sync-complete'].includes(call[1]))).toBe(false)
     expect([...listeners.keys()]).toEqual(['import-generation:v1:blueprints-progress'])

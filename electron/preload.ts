@@ -1,6 +1,6 @@
 import { ipcRenderer, contextBridge, webFrame } from 'electron'
 import type { AiNovelAPI } from '../src/shared/desktop-api'
-import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../src/shared/project-runtime-contract'
+import { PROJECT_RUNTIME_OPEN_BACKGROUND_VIEW_CHANNEL, PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../src/shared/project-runtime-contract'
 import { isRuntimeFeedbackChannel } from '../src/shared/runtime-feedback-contract'
 import { isWorkflowDriverChannel } from '../src/shared/workflow-driver-contract'
 import { isWorkflowBatchChannel } from '../src/shared/workflow-batch-contract'
@@ -17,7 +17,8 @@ contextBridge.exposeInMainWorld('aiNovelAPI', {
   // ===== 双向请求/响应（invoke/handle） =====
   /** 调用主进程并等待结果 */
   invoke: (channel: string, ...args: unknown[]) => {
-    if (channel.startsWith('project-runtime:') && channel !== PROJECT_RUNTIME_OPEN_VIEW_CHANNEL) {
+    if (channel.startsWith('project-runtime:') && channel !== PROJECT_RUNTIME_OPEN_VIEW_CHANNEL
+      && channel !== PROJECT_RUNTIME_OPEN_BACKGROUND_VIEW_CHANNEL) {
       return Promise.reject(new Error('PROJECT_RUNTIME_CHANNEL_NOT_ALLOWED'))
     }
     if (channel.startsWith('runtime-feedback:') && !isRuntimeFeedbackChannel(channel)) {

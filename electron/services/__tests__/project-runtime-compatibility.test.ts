@@ -8,7 +8,7 @@ import type { TrustedProject } from '../project-access'
 import { deactivateProjectData } from '../project-data-locator'
 import { ProjectRuntimeHost, projectRuntimeHost } from '../project-runtime'
 import { projectAccess } from '../project-access'
-import { acquireProjectBackupOperation, assertRestoreTargetOutsideRuntimes, withProjectRestoreOperation } from '../project-runtime-compatibility'
+import { acquireProjectBackupOperation, assertRestoreTargetOutsideRuntimes, withProjectRestoreOperation, withProjectViewOperation } from '../project-runtime-compatibility'
 
 const containers: string[] = []
 const isolatedHosts: ProjectRuntimeHost[] = []
@@ -49,6 +49,38 @@ afterEach(() => {
 })
 
 describe('canonical restore target/runtime exclusion', () => {
+  it.each(['success', 'throw'] as const)('holds the captured current view over a physical wait and releases after %s', async mode => {
+    const a = fixture(), b = fixture(), first = open(a.project), second = open(b.project)
+    projectAccess.beginViewSession(first)
+    const lease = projectAccess.beginViewSession(second)
+    const session = { projectId: lease.projectId, leaseId: lease.leaseId, projectPath: lease.rootPath }
+    const releaseBackground = projectRuntimeHost.acquireWork(first)
+    let finish!: () => void
+    const physical = new Promise<void>(resolve => { finish = resolve })
+    try {
+      expect(() => projectRuntimeHost.acquireViewOperation(first)).toThrow('PROJECT_RUNTIME_VIEW_MISMATCH')
+      expect(() => projectRuntimeHost.acquireLegacyOperation('unmigrated')).toThrow('PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE')
+      const operation = withProjectViewOperation(session, async () => {
+        await physical
+        if (mode === 'throw') throw new Error('fictional view failure')
+        return 'captured B'
+      })
+      try {
+        expect(() => projectRuntimeHost.activateView(first)).toThrow('PROJECT_RUNTIME_VIEW_OPERATION_BUSY')
+        expect(() => projectRuntimeHost.prepareRetainedOpen(a.project)).toThrow('PROJECT_RUNTIME_VIEW_OPERATION_BUSY')
+        expect(() => projectRuntimeHost.acquireRestoreOperation()).toThrow('PROJECT_RUNTIME_VIEW_OPERATION_BUSY')
+        await expect(projectRuntimeHost.requestClose(first)).rejects.toThrow('PROJECT_RUNTIME_VIEW_OPERATION_BUSY')
+        await expect(projectRuntimeHost.requestClose(second)).rejects.toThrow('PROJECT_RUNTIME_VIEW_OPERATION_BUSY')
+        expect(projectRuntimeHost.getActiveView()).toBe(second)
+        expect(first.database.open && second.database.open).toBe(true)
+      } finally { finish() }
+      if (mode === 'throw') await expect(operation).rejects.toThrow('fictional view failure')
+      else await expect(operation).resolves.toBe('captured B')
+      projectAccess.beginViewSession(first)
+      await expect(withProjectViewOperation(session, () => 'must not execute')).rejects.toThrow('PROJECT_SESSION_STALE')
+    } finally { finish?.(); releaseBackground() }
+  })
+
   it('keeps a closed delete target reserved against restore overlap while B remains available', () => {
     const a = fixture(), b = fixture(), first = open(a.project), second = open(b.project)
     projectRuntimeHost.activateView(first)

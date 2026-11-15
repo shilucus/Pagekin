@@ -30,7 +30,8 @@ Pagekin 在早期的单当前项目架构中，切换作品（`openProject`）�
 定义独立判定逻辑 `isWorkflowBackgroundQualified(run)`：
 - 必须具备合法的非空 `projectSession`（包含 `projectId`, `leaseId`, `projectPath`）；
 - 工作流必须实际迁入多书隔离与独立上下文；类型名和非空 session 本身不是资格证明；
-- 当前作者 `novel_import` 与 `batch_generate` 仍依赖当前视图/会话，必须在通用 `backgroundQualified: true` 判断之前拒绝后台资格；内部持久 driver 的验收不能自动升级这些 renderer 入口；
+- `novel_import` 仅在 [ADR-0080 的 retained-view 合同](0080-main-owned-foreground-reference-whole-run.md#retained-view-extension-2026-11-15) 下、whole reference 生产入口携带 `backgroundExecution: 'reference-run'` 且主进程实际准入后的首个有效 stage-started 事件将 `backgroundQualified` 标为 true 时，才获得切换查看资格。该 renderer 标记不是主进程执行授权，不改写原 execution session，也不允许离屏越过作者缓冲/投影门闩；
+- 原稿导入、未准入的 reference 和 `batch_generate` 仍在通用 `backgroundQualified: true` 判断之前拒绝后台资格；内部持久 driver 的验收不能自动升级这些 renderer 入口；
 - 其他入口的显式资格标记仅表达该判定合同，不证明生产入口已传播标记或实际完成后台迁移；
 - 其余未迁移的工作流严格视为未合格（unqualified），继续执行原有的切书取消与等待保护。
 

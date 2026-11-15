@@ -16,6 +16,7 @@ vi.mock('../kb-controller', () => ({ getEmbeddingConfig: () => null }))
 import { registerGenerationController } from '../generation-controller'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb } from '../../database'
 import { ModelExecutionLeaseRegistry } from '../../services/model-execution-lease'
+import { RuntimeFeedbackAuthority } from '../../services/runtime-feedback-authority'
 import * as mainOwner from '../../services/main-generation-owner'
 import { projectAccess } from '../../services/project-access'
 import { projectRuntimeHost, type ProjectRuntime } from '../../services/project-runtime'
@@ -35,10 +36,14 @@ let root: string, session: ProjectSessionContext, sender: Sender
 let project: ReturnType<typeof projectAccess.createProject>
 let otherRuntime: ProjectRuntime | null
 let references: RuntimeFeedbackReference[]
+let retirementGuard: (runtime: ProjectRuntime) => boolean
 
 beforeAll(() => {
+  const register = vi.spyOn(projectRuntimeHost, 'registerRetirementGuard')
   registerGenerationController({ modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel: () => model }),
     loadModel: () => model, applyProxyConfig: () => {} })
+  retirementGuard = register.mock.calls[0]![0]
+  register.mockRestore()
 })
 
 beforeEach(() => {
@@ -85,9 +90,11 @@ async function prepare(operationId = randomUUID()) {
   return { ...result, reference: result.reference, request }
 }
 
-function stream(content = 'Fictional candidate') {
+function stream(content = 'Fictional candidate', includeUsage = false) {
   const fetch = vi.fn(async () => ({ ok: true, body: new ReadableStream({ start(controller) {
-    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`))
+    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\n`
+      + (includeUsage ? 'data: {"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":12,"total_tokens":62}}\n\n' : '')
+      + 'data: [DONE]\n\n'))
     controller.close()
   } }) }))
   vi.stubGlobal('fetch', fetch)
@@ -95,6 +102,41 @@ function stream(content = 'Fictional candidate') {
 }
 
 describe('runtime feedback registered IPC', () => {
+  it('keeps an unstarted grant and propagates unexpected guard failures without changing storage', async () => {
+    const runtime = projectRuntimeHost.getActiveView()!
+    const prepared = await prepare()
+    const before = runtime.database.prepare('SELECT * FROM runtime_feedback_grants').all()
+    expect(retirementGuard(runtime)).toBe(false)
+    expect(runtime.database.prepare('SELECT * FROM runtime_feedback_grants').all()).toEqual(before)
+    expect(runtime.database.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
+    expect((await call('runtime-feedback:v1:revoke', prepared.reference)).grant.state).toBe('revoked')
+    const failure = vi.spyOn(runtime.database, 'prepare').mockImplementation(() => { throw new Error('FICTIONAL_GUARD_FAILURE') })
+    expect(() => retirementGuard(runtime)).toThrow('FICTIONAL_GUARD_FAILURE')
+    failure.mockRestore()
+  })
+  it('allows a completed receipt but retains a durable unknown attempt', async () => {
+    stream(undefined, true)
+    const runtime = projectRuntimeHost.getActiveView()!, prepared = await prepare()
+    const receipt = await call('runtime-feedback:v1:execute', prepared.reference)
+    expect(receipt.grant.state).toBe('completed')
+    expect(runtime.database.prepare("SELECT json_extract(attempt_json,'$.status') FROM generation_attempts").pluck().all()).toEqual(['settled'])
+    expect(retirementGuard(runtime)).toBe(true)
+    const before = runtime.database.prepare('SELECT attempt_id,attempt_json FROM generation_attempts').get() as { attempt_id: string; attempt_json: string }
+    runtime.database.prepare("UPDATE generation_attempts SET attempt_json=json_set(attempt_json,'$.status','unknown') WHERE attempt_id=?").run(before.attempt_id)
+    const unknown = runtime.database.prepare('SELECT attempt_json FROM generation_attempts WHERE attempt_id=?').get(before.attempt_id)
+    expect(retirementGuard(runtime)).toBe(false)
+    expect(runtime.database.prepare('SELECT attempt_json FROM generation_attempts WHERE attempt_id=?').get(before.attempt_id)).toEqual(unknown)
+    runtime.database.prepare('UPDATE generation_attempts SET attempt_json=? WHERE attempt_id=?').run(before.attempt_json, before.attempt_id)
+  })
+  it('retains an actual completed receipt with unknown usage after the owner becomes idle', async () => {
+    stream()
+    const runtime = projectRuntimeHost.getActiveView()!, prepared = await prepare()
+    expect((await call('runtime-feedback:v1:execute', prepared.reference)).grant.state).toBe('completed')
+    expect(runtime.database.prepare("SELECT json_extract(attempt_json,'$.status') FROM generation_attempts").pluck().all()).toEqual(['unknown'])
+    const ownerCheck = vi.spyOn(RuntimeFeedbackAuthority.prototype, 'assertRetirable')
+    expect(retirementGuard(runtime)).toBe(false)
+    expect(ownerCheck).toHaveReturned()
+  })
   it('rejects empty, sparse, oversized and duplicate batches before fencing any grant', async () => {
     const prepared = await prepare()
     const handler = mocks.handlers.get('runtime-feedback:v1:revoke-many')!
@@ -220,7 +262,7 @@ describe('runtime feedback registered IPC', () => {
   })
 
   it('keeps a terminal receipt readable to its sender after a legacy owner handoff without new effects', async () => {
-    const fetch = stream(), prepared = await prepare()
+    const fetch = stream(undefined, true), prepared = await prepare()
     const completed = await call('runtime-feedback:v1:execute', prepared.reference)
     expect(completed.grant.state).toBe('completed')
     expect(completed.candidate?.text).toBe('Fictional candidate')
@@ -231,6 +273,7 @@ describe('runtime feedback registered IPC', () => {
     if (!handler) throw new Error('IPC_HANDLER_MISSING:generation:list')
     const legacy = await handler({ sender }, { ...session }) as { handle: { runId: string } }[]
     expect(legacy.some(item => item.handle.runId === completed.grant.runId)).toBe(false)
+    expect(retirementGuard(projectRuntimeHost.getActiveView()!)).toBe(true)
     const id = { projectId: prepared.reference.projectId, grantId: prepared.reference.grantId }
     expect(await call('runtime-feedback:v1:read-receipt', id)).toEqual(completed)
     expect(await call('runtime-feedback:v1:execute', prepared.reference)).toEqual(completed)

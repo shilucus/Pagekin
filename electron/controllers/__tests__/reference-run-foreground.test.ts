@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({ execute: vi.fn<(options: ExecuteReferenceImpor
 vi.mock('electron', () => ({ app: { getLocale: () => 'en-US' } }))
 vi.mock('../../services/reference-import-main-coordinator', () => ({ executeReferenceImportMainRun: mocks.execute }))
 vi.mock('../../repositories/import-run-repository', () => ({ ImportRunRepository: { get: mocks.get } }))
-vi.mock('../../services/project-runtime', () => ({ projectRuntimeHost: { acquireLegacyOperation: () => mocks.releaseWork } }))
+vi.mock('../../services/project-runtime', () => ({ projectRuntimeHost: { acquireWork: () => mocks.releaseWork } }))
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -90,6 +90,24 @@ afterEach(async () => {
 })
 
 describe('whole reference foreground ownership and projection barrier', () => {
+  it('accepts the original parent projection at a reattached view without accepting another subject or token', async () => {
+    mocks.execute.mockImplementation(async options => {
+      await options.hooks.stageCompleted({ stage: 'knowledge', result: { run,
+        execution: { ...request.execution, expiresAt: Date.now() + 60_000 } } })
+      return result()
+    })
+    const flight = start(), event = await completion()
+    const attached = { ...session, leaseId: 'fictional-reattached-view' }
+    const payload = { reference: request.reference, execution: request.execution,
+      stage: event.completion.stage, token: event.token, decision: 'settled' as const }
+    expect(() => foreground.acknowledge(runtime, new Sender() as unknown as WebContents, attached, payload))
+      .toThrow('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+    expect(() => foreground.acknowledge(runtime, sender as unknown as WebContents, attached,
+      { ...payload, token: 'wrong-token' })).toThrow('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+    expect(mocks.releaseWork).not.toHaveBeenCalled()
+    await expect(foreground.acknowledge(runtime, sender as unknown as WebContents, attached, payload)).resolves.toEqual({ version: 1 })
+    await flight
+  })
   it('joins only identical immutable input and holds the parent through the actual operation', async () => {
     const physical = deferred<ReferenceRefreshSuccess>()
     releasePhysical = () => physical.resolve(result())

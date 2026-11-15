@@ -6,10 +6,12 @@ import type Sqlite from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
 import { createProjectDatabase } from '../../database'
+import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { ProjectCoreRepository } from '../../repositories/project-core-repository'
 import { projectAccess, type TrustedProject } from '../../services/project-access'
 import { projectRuntimeHost, type PreparedRuntimeOpen, type ProjectRuntime } from '../../services/project-runtime'
 import { deactivateProjectData } from '../../services/project-data-locator'
+import { externalFileGrants } from '../../services/external-file-grant-service'
 import { createPortableTransferAuthority, mapPortableTransferAuthority,
   serializePortableTransferAuthority } from '../../services/portable-transfer-authority'
 import { readPortableCurrentAuthority } from '../../services/portable-current-authority'
@@ -36,7 +38,7 @@ vi.mock('../../utils/config-utils', () => ({
 }))
 vi.mock('../../utils/remembered-dialog', () => ({ showOpenDialogInLastDirectory: vi.fn() }))
 vi.mock('../../services/external-file-grant-service', () => ({
-  externalFileGrants: { resolveDirectoryPath: vi.fn(), issueDirectory: vi.fn(), revokeWebContents: vi.fn() },
+  externalFileGrants: { resolveDirectoryPath: vi.fn(), revalidateDirectoryPath: vi.fn(), issueDirectory: vi.fn(), revokeWebContents: vi.fn() },
 }))
 vi.mock('../../services/project-peek', () => ({
   projectPeekService: { issueCapability: vi.fn(), revokeCapability: vi.fn() },
@@ -120,8 +122,9 @@ function snapshot(project: TrustedProject) {
   }))
 }
 
-function open(project: TrustedProject, token: string, retained = true) {
-  const channel = retained ? 'project-runtime:v1:open-view' : 'project:open'
+function open(project: TrustedProject, token: string, retained: boolean | 'background' = true) {
+  const channel = retained === 'background' ? 'project-runtime:v1:open-background-view'
+    : retained ? 'project-runtime:v1:open-view' : 'project:open'
   const handler = mocks.handlers.get(channel)
   if (!handler) throw new Error(`Missing ${channel} handler`)
   return handler({ sender: { id: 17 } }, project.rootPath, token)
@@ -170,6 +173,165 @@ afterEach(() => {
 })
 
 describe('registered project open native transaction boundary', () => {
+  it('consumes the original single-use background dialog grant once before issuing a legacy handoff', async () => {
+    const a = currentView(fixture()), container = fixture(), legacyRoot = path.join(container.rootPath, 'legacy-source')
+    fs.mkdirSync(path.join(legacyRoot, '.vela'), { recursive: true })
+    const database = new Database(path.join(legacyRoot, '.vela', 'vela.db'))
+    try { initializeLegacyBaselineSchema(database) } finally { database.close() }
+    const actual = await vi.importActual<typeof import('../../services/external-file-grant-service')>('../../services/external-file-grant-service')
+    const grants = new actual.ExternalFileGrantService({ now: () => 1_000 })
+    const grant = grants.issueDirectory({ webContentsId: 17, directoryPath: legacyRoot,
+      operations: ['project-open'], ttlMs: 500 })
+    vi.spyOn(externalFileGrants, 'resolveDirectoryPath').mockImplementation(request => grants.resolveDirectoryPath(request))
+    vi.mocked(externalFileGrants.resolveDirectoryPath).mockClear()
+    vi.spyOn(externalFileGrants, 'revalidateDirectoryPath').mockImplementation(request => grants.revalidateDirectoryPath(request))
+    const issue = vi.spyOn(externalFileGrants, 'issueDirectory').mockImplementation(request => grants.issueDirectory(request))
+    issue.mockClear()
+    const event = { sender: { id: 17, once: vi.fn() } }, target = { grantId: grant.grantId, displayName: 'Fictional legacy' }
+    const handler = mocks.handlers.get('project-runtime:v1:open-background-view')!
+    const result = await handler(event, target, 'legacy-handoff-first')
+    expect(result).toMatchObject({ success: false, errorCode: 'PROJECT_LEGACY_IMPORT_REQUIRED',
+      legacyImportSource: { grantId: expect.any(String) } })
+    expect(issue).toHaveBeenCalledOnce()
+    expect(externalFileGrants.resolveDirectoryPath).toHaveBeenCalledOnce()
+    expect(grants.activeCount()).toBe(1)
+    await expect(handler(event, target, 'legacy-handoff-replay')).resolves.toMatchObject({ success: false,
+      error: expect.stringContaining('EXTERNAL_FILE_GRANT_NOT_FOUND') })
+    expect(issue).toHaveBeenCalledOnce()
+    expect(grants.activeCount()).toBe(1)
+    expectUnchangedView(a)
+    expect(projectRuntimeHost.getOpenRuntimes()).toEqual([a.runtime])
+  })
+
+  it.each(['success', 'revoked', 'expired'] as const)('uses a default single-use dialog grant only at the drained open boundary (%s)', async disposition => {
+    const source = fixture(), a = currentView(source), target = fixture()
+    const actual = await vi.importActual<typeof import('../../services/external-file-grant-service')>('../../services/external-file-grant-service')
+    let now = 1_000
+    const grants = new actual.ExternalFileGrantService({ now: () => now })
+    const grant = grants.issueDirectory({ webContentsId: 17, directoryPath: target.rootPath,
+      operations: ['project-open'], ttlMs: 500 })
+    vi.spyOn(externalFileGrants, 'resolveDirectoryPath').mockImplementation(request => grants.resolveDirectoryPath(request))
+    vi.mocked(externalFileGrants.resolveDirectoryPath).mockClear()
+    vi.spyOn(externalFileGrants, 'revalidateDirectoryPath').mockImplementation(request => grants.revalidateDirectoryPath(request))
+    const prepare = projectRuntimeHost.prepareBackgroundViewOpenAfterDrain.bind(projectRuntimeHost)
+    let entered!: () => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    vi.spyOn(projectRuntimeHost, 'prepareBackgroundViewOpenAfterDrain').mockImplementation((...args) => {
+      const pending = prepare(...args)
+      entered()
+      return pending
+    })
+    const release = projectRuntimeHost.acquireViewOperation(a.runtime)
+    const pending = mocks.handlers.get('project-runtime:v1:open-background-view')!({ sender: { id: 17 } },
+      { grantId: grant.grantId, displayName: 'Fictional selected project' }, `dialog-${disposition}`)
+    try {
+      await waiting
+      expect(grants.activeCount()).toBe(1)
+      expect(externalFileGrants.resolveDirectoryPath).not.toHaveBeenCalled()
+      expectUnchangedView(a)
+      if (disposition === 'revoked') grants.revoke(grant.grantId)
+      if (disposition === 'expired') now += 500
+      release()
+      const result = await pending
+      if (disposition === 'success') {
+        expect(result).toMatchObject({ success: true, project: { id: target.projectId } })
+        expect(externalFileGrants.resolveDirectoryPath).toHaveBeenCalledOnce()
+        expect(grants.activeCount()).toBe(0)
+        expect(() => grants.resolveDirectoryPath({ grantId: grant.grantId, webContentsId: 17, operation: 'project-open' }))
+          .toThrow('EXTERNAL_FILE_GRANT_NOT_FOUND')
+      } else {
+        expect(result).toMatchObject({ success: false, error: expect.stringContaining(disposition === 'revoked'
+          ? 'EXTERNAL_FILE_GRANT_NOT_FOUND' : 'EXTERNAL_FILE_GRANT_EXPIRED') })
+        expectUnchangedView(a)
+        expect(projectRuntimeHost.getOpenRuntimes()).toEqual([a.runtime])
+        projectRuntimeHost.acquireViewOperation(a.runtime)()
+      }
+    } finally { release(); await pending }
+  })
+
+  it('waits for physical B view work before returning to retained A without cancelling A', async () => {
+    const source = fixture(), a = currentView(source), b = fixture()
+    const releaseA = projectRuntimeHost.acquireWork(a.runtime)
+    let releaseB = () => {}
+    try {
+      await expect(open(b, 'drain-open-B', 'background')).resolves.toMatchObject({ success: true })
+      const runtimeB = projectRuntimeHost.getActiveView()!
+      const sessionB = projectAccess.captureCurrentSession()
+      releaseB = projectRuntimeHost.acquireViewOperation(runtimeB)
+      const prepare = projectRuntimeHost.prepareBackgroundViewOpenAfterDrain.bind(projectRuntimeHost)
+      let entered!: () => void
+      const waiting = new Promise<void>(resolve => { entered = resolve })
+      vi.spyOn(projectRuntimeHost, 'prepareBackgroundViewOpenAfterDrain').mockImplementation((...args) => {
+        const pending = prepare(...args)
+        entered()
+        return pending
+      })
+      const returning = open(source, 'drain-return-A', 'background')
+      await waiting
+      expect(projectRuntimeHost.getActiveView()).toBe(runtimeB)
+      expect(projectAccess.captureCurrentSession()).toEqual(sessionB)
+      expect(a.database.open && runtimeB.database.open).toBe(true)
+      releaseB()
+      await expect(returning).resolves.toMatchObject({ success: true, project: { id: source.projectId } })
+      expect(projectRuntimeHost.getActiveView()).toBe(a.runtime)
+      expect(projectAccess.captureCurrentSession()?.leaseId).not.toBe(a.session.leaseId)
+      expect(a.runtime.executionEpoch).toBe(a.epoch)
+      expect(a.runtime.databaseIdentity).toBe(a.identity)
+      expect(runtimeB.database.open).toBe(false)
+    } finally { releaseB(); releaseA() }
+  })
+
+  it('does not grant a superseded managed open a ticket after the physical view drain', async () => {
+    const source = fixture(), a = currentView(source), b = fixture(), c = fixture()
+    const release = projectRuntimeHost.acquireViewOperation(a.runtime)
+    const prepare = projectRuntimeHost.prepareBackgroundViewOpenAfterDrain.bind(projectRuntimeHost)
+    let entered!: () => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    vi.spyOn(projectRuntimeHost, 'prepareBackgroundViewOpenAfterDrain').mockImplementation((...args) => {
+      const pending = prepare(...args)
+      entered()
+      return pending
+    })
+    const older = open(b, 'superseded-drain-B', 'background')
+    try {
+      await waiting
+      const newer = open(c, 'winning-drain-C', 'background')
+      release()
+      await expect(older).resolves.toMatchObject({ success: false, stale: true })
+      await expect(newer).resolves.toMatchObject({ success: true })
+      expect(projectRuntimeHost.getOpenRuntimes().some(runtime => runtime.projectId === b.projectId)).toBe(false)
+      expect(projectRuntimeHost.getActiveView()?.projectId).toBe(c.projectId)
+    } finally { release() }
+  })
+
+  it('reports exact managed retention, prunes idle B after C commits, and restores ordinary open after A settles', async () => {
+    const a = currentView(fixture()), b = fixture(), c = fixture(), d = fixture(), e = fixture()
+    const release = projectRuntimeHost.acquireWork(a.runtime)
+    try {
+      await expect(open(b, 'managed-B', 'background')).resolves.toMatchObject({ success: true, backgroundViewsRetained: true })
+      const runtimeB = projectRuntimeHost.getActiveView()!
+      await expect(open(c, 'managed-C', 'background')).resolves.toMatchObject({ success: true, backgroundViewsRetained: true })
+      const runtimeC = projectRuntimeHost.getActiveView()!
+      expect(runtimeB.database.open).toBe(false)
+      expect(projectRuntimeHost.getOpenRuntimes()).toEqual([a.runtime, runtimeC])
+      const currentLease = projectAccess.captureCurrentSession()
+      await expect(mocks.handlers.get('project-runtime:v1:open-background-view')!({ sender: { id: 17 } }, 'not-a-recent-project', 'invalid-target'))
+        .resolves.toMatchObject({ success: false, backgroundViewsRetained: true })
+      expect(projectRuntimeHost.getActiveView()).toBe(runtimeC)
+      expect(projectAccess.captureCurrentSession()).toEqual(currentLease)
+      expect(a.database.open).toBe(true)
+      release()
+      await expect(open(d, 'settled-A-managed-D', 'background')).resolves.toMatchObject({ success: true, backgroundViewsRetained: false })
+      const runtimeD = projectRuntimeHost.getActiveView()!
+      expect(a.database.open || runtimeC.database.open).toBe(false)
+      expect(projectRuntimeHost.getOpenRuntimes()).toEqual([runtimeD])
+      projectRuntimeHost.acquireLegacyOperation('ordinary-author-read')()
+      await expect(open(e, 'ordinary-E', false)).resolves.toMatchObject({ success: true })
+      expect(runtimeD.database.open).toBe(false)
+      expect(projectRuntimeHost.getOpenRuntimes()).toEqual([projectRuntimeHost.getActiveView()])
+    } finally { release() }
+  })
+
   it.each(['success', 'failure'] as const)('keeps deleted A reserved through directory %s without replacing retained B', async mode => {
     const source = fixture(), a = currentView(source), target = fixture()
     const b = projectRuntimeHost.commitOpen(projectRuntimeHost.prepareOpen(target))
@@ -207,7 +369,7 @@ describe('registered project open native transaction boundary', () => {
     expect(fs.existsSync(source.rootPath)).toBe(mode === 'failure')
   })
 
-  it.each([false, true])('rolls back real continuity adoption and core initialization if recent registration fails (retained=%s)', async retained => {
+  it.each([false, true, 'background'] as const)('rolls back real continuity adoption and core initialization if recent registration fails (retained=%s)', async retained => {
     const a = currentView(fixture()), b = fixture()
     seedTransferredTarget(b)
     const before = snapshot(b)
@@ -218,7 +380,7 @@ describe('registered project open native transaction boundary', () => {
     expectUnchangedView(a)
   })
 
-  it.each([false, true])('does not start business writes when the final lease identity preflight fails (retained=%s)', async retained => {
+  it.each([false, true, 'background'] as const)('does not start business writes when the final lease identity preflight fails (retained=%s)', async retained => {
     const a = currentView(fixture()), b = fixture()
     seedTransferredTarget(b)
     const before = snapshot(b), probe = projectAccess.probeExistingProject.bind(projectAccess)
@@ -234,7 +396,7 @@ describe('registered project open native transaction boundary', () => {
     expectUnchangedView(a)
   })
 
-  it.each([false, true])('rolls back adoption, repair, initialization and the first fence on a real SQLite COMMIT failure (retained=%s)', async retained => {
+  it.each([false, true, 'background'] as const)('rolls back adoption, repair, initialization and the first fence on a real SQLite COMMIT failure (retained=%s)', async retained => {
     const a = currentView(fixture()), b = fixture()
     seedTransferredTarget(b)
     const before = snapshot(b), commit = projectRuntimeHost.commitViewOpen.bind(projectRuntimeHost)
@@ -254,7 +416,7 @@ describe('registered project open native transaction boundary', () => {
     expectUnchangedView(a)
   })
 
-  it.each([false, true])('rolls back an in-flight superseded B before the queued C publishes, without resurrecting A (retained=%s)', async retained => {
+  it.each([false, true, 'background'] as const)('rolls back an in-flight superseded B before the queued C publishes, without resurrecting A (retained=%s)', async retained => {
     const a = currentView(fixture()), b = fixture(), c = fixture()
     seedTransferredTarget(b)
     const before = snapshot(b), get = ProjectCoreRepository.get.bind(ProjectCoreRepository)
@@ -269,7 +431,7 @@ describe('registered project open native transaction boundary', () => {
     await expect(next).resolves.toMatchObject({ success: true, project: { id: c.projectId } })
     expect(projectRuntimeHost.getActiveView()?.projectId).toBe(c.projectId)
     expect(projectAccess.captureCurrentSession()?.projectId).toBe(c.projectId)
-    expect(a.database.open).toBe(retained)
+    expect(a.database.open).toBe(retained === true)
   })
 
   it('commits actual source-proven adoption, duplicate repair, initialization and fencing before publishing B', async () => {
@@ -332,6 +494,9 @@ describe('registered project open native transaction boundary', () => {
     expect(projectRuntimeHost.getActiveView()).toBe(a.runtime)
     expect(projectAccess.captureCurrentSession()).toEqual(retainedLease)
     expect(a.database.open).toBe(true)
+    await expect(open(b, 'managed-keeps-raw-retained-A', 'background'))
+      .resolves.toMatchObject({ success: true, backgroundViewsRetained: true })
+    expect(a.database.open).toBe(true)
   })
 
   it('rotates only the lease when an ordinary open addresses the same canonical A through an alias', async () => {
@@ -346,15 +511,16 @@ describe('registered project open native transaction boundary', () => {
     expect(projectAccess.captureCurrentSession()?.leaseId).not.toBe(a.session.leaseId)
   })
 
-  it('reports committed B accurately if releasing A fails after native COMMIT, without reopening A', async () => {
+  it.each([false, 'background'] as const)('reports committed B accurately if releasing A fails after native COMMIT, without reopening A (mode=%s)', async mode => {
     const a = currentView(fixture()), b = fixture()
     const abort = vi.spyOn(projectRuntimeHost, 'abortOpen')
     const dispose = projectRuntimeHost.onBeforeRelease(runtime => {
       if (runtime === a.runtime) throw new Error('FICTION_A_CLOSE_FAILURE')
     })
     try {
-      await expect(open(b, 'A-close-partially-fails', false)).resolves.toMatchObject({
+      await expect(open(b, 'A-close-partially-fails', mode)).resolves.toMatchObject({
         success: false, databaseRestored: false, dbReady: true, activeProjectPath: b.rootPath,
+        ...(mode === 'background' ? { backgroundViewsRetained: true } : {}),
         error: expect.stringContaining('PROJECT_RUNTIME_PREVIOUS_CLOSE_FAILED'),
       })
       expect(projectRuntimeHost.getActiveView()?.projectId).toBe(b.projectId)

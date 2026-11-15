@@ -66,14 +66,16 @@ import { assertImportStageUnmanagedMutationAllowed, assertImportBlueprintSyncUnm
 type Owner = ReturnType<typeof createMainGenerationOwner>
 type OwnerChannels = PlanningFeedbackChannels & LegacyRosterGenerationChannels & GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
 type LegacyOwnerEntry = { mode: 'legacy'; owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }
+type ReferenceOwnerEntry = { mode: 'reference'; owner: Owner; session: ProjectSessionContext; sender: WebContents }
 type RuntimeOwnerEntry = { mode: 'runtime-feedback'; authority: RuntimeFeedbackAuthority; runtime: ProjectRuntime }
 type DriverOwnerEntry = { mode: 'workflow-driver'; authority: WorkflowDriverAuthority; runtime: ProjectRuntime }
 type BatchOwnerEntry = { mode: 'workflow-batch'; authority: WorkflowBatchAuthority; runtime: ProjectRuntime }
-type OwnerEntry = LegacyOwnerEntry | RuntimeOwnerEntry | DriverOwnerEntry | BatchOwnerEntry
+type OwnerEntry = LegacyOwnerEntry | ReferenceOwnerEntry | RuntimeOwnerEntry | DriverOwnerEntry | BatchOwnerEntry
 const owners = new Map<Database.Database, OwnerEntry>()
 const receiptAuthorities = new Map<Database.Database, Set<RuntimeFeedbackAuthority>>()
 const driverReceiptAuthorities = new Map<Database.Database, Set<WorkflowDriverAuthority>>()
 const batchReceiptAuthorities = new Map<Database.Database, Set<WorkflowBatchAuthority>>()
+const retiredReceiptAuthorities = new WeakSet<RuntimeFeedbackAuthority | WorkflowDriverAuthority | WorkflowBatchAuthority>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 const ownerRuntimes = new WeakMap<Owner, ProjectRuntime>()
 // Match the existing runtime's bounded local close-wait scale, not a provider
@@ -201,7 +203,7 @@ export function registerGenerationController(options: {
   const referenceStyles = new ReferenceStyleForeground()
   const referenceGlobals = new ReferenceGlobalForeground()
   const referenceBlueprints = new ReferenceBlueprintForeground()
-  const hasPhysical = (entry: OwnerEntry | undefined) => entry?.mode === 'legacy'
+  const hasPhysical = (entry: OwnerEntry | undefined) => entry?.mode === 'legacy' || entry?.mode === 'reference'
     ? entry.owner.hasPhysicalInFlight() : entry?.authority.hasPhysicalInFlight() ?? false
   projectRuntimeHost.registerBusyPredicate(runtime => (activeHandlers.get(runtime) ?? 0) > 0 || hasPhysical(owners.get(runtime.database)))
   projectRuntimeHost.onCloseRequested(runtime => {
@@ -213,7 +215,7 @@ export function registerGenerationController(options: {
     const failures: unknown[] = []
     const entry = owners.get(runtime.database)
     try {
-      if (entry?.mode === 'legacy') entry.owner.requestProjectClose()
+      if (entry?.mode === 'legacy' || entry?.mode === 'reference') entry.owner.requestProjectClose()
       else entry?.authority.requestProjectClose()
     } catch (error) { failures.push(error) }
     for (const authority of receiptAuthorities.get(runtime.database) ?? []) {
@@ -236,7 +238,7 @@ export function registerGenerationController(options: {
     referenceBlueprints.release(database)
     const entry = owners.get(database)
     if (entry) {
-      if (entry.mode === 'legacy') entry.owner.suspendForProjectClose()
+      if (entry.mode === 'legacy' || entry.mode === 'reference') entry.owner.suspendForProjectClose()
       else entry.authority.suspendForProjectClose()
       owners.delete(database)
     }
@@ -266,16 +268,47 @@ export function registerGenerationController(options: {
   }
   const assertRetirable = (runtime: ProjectRuntime, entry: OwnerEntry) => {
     if ((activeHandlers.get(runtime) ?? 0) > 0) throw new Error('GENERATION_OWNER_BUSY')
-    if (entry.mode === 'legacy') entry.owner.assertRetirable()
+    if (entry.mode === 'legacy' || entry.mode === 'reference') entry.owner.assertRetirable()
     else if (entry.mode === 'runtime-feedback') entry.authority.prepareRetirement()
     else entry.authority.assertRetirable()
   }
   const retire = (runtime: ProjectRuntime, entry: OwnerEntry) => {
     assertRetirable(runtime, entry)
-    if (entry.mode === 'legacy') entry.owner.retireIdle()
-    else entry.authority.retireIdle()
+    if (entry.mode === 'legacy' || entry.mode === 'reference') entry.owner.retireIdle()
+    else {
+      entry.authority.retireIdle()
+      retiredReceiptAuthorities.add(entry.authority)
+    }
     owners.delete(runtime.database)
   }
+  projectRuntimeHost.registerRetirementGuard(runtime => {
+    if ((activeHandlers.get(runtime) ?? 0) > 0) return false
+    const entry = owners.get(runtime.database)
+    const checks = new Set<{ assertRetirable(): void }>()
+    if (entry) checks.add(entry.mode === 'legacy' || entry.mode === 'reference' ? entry.owner : entry.authority)
+    for (const authority of receiptAuthorities.get(runtime.database) ?? []) if (!retiredReceiptAuthorities.has(authority)) checks.add(authority)
+    for (const authority of driverReceiptAuthorities.get(runtime.database) ?? []) if (!retiredReceiptAuthorities.has(authority)) checks.add(authority)
+    for (const authority of batchReceiptAuthorities.get(runtime.database) ?? []) if (!retiredReceiptAuthorities.has(authority)) checks.add(authority)
+    for (const check of checks) {
+      try { check.assertRetirable() }
+      catch (error) {
+        if (error instanceof Error && ['GENERATION_OWNER_BUSY', 'GENERATION_UNSAVED_TAIL_PRESENT',
+          'RUNTIME_FEEDBACK_OWNER_BUSY', 'WORKFLOW_DRIVER_OWNER_BUSY', 'WORKFLOW_BATCH_OWNER_BUSY',
+          'PROJECT_RUNTIME_BUSY'].includes(error.message)) return false
+        throw error
+      }
+    }
+    const database = runtime.database
+    if (database.prepare(`SELECT 1 FROM generation_runs r JOIN generation_roots root ON root.root_action_id=r.root_action_id
+      WHERE r.status='running' AND json_extract(root.action_json,'$.status')='active'
+      AND NOT EXISTS (SELECT 1 FROM workflow_batch_tasks b WHERE b.batch_run_id=r.run_id AND b.state='waiting_review')
+      AND NOT EXISTS (SELECT 1 FROM generation_attempts a WHERE a.run_id=r.run_id) LIMIT 1`).get()) return false
+    if (database.prepare(`SELECT 1 FROM generation_attempts WHERE json_extract(attempt_json,'$.status')
+      IN ('reserved','dispatch-marked','unknown') LIMIT 1`).get()) return false
+    if (database.prepare("SELECT 1 FROM import_query_plans WHERE state='recovery_unknown' LIMIT 1").get()) return false
+    if (database.prepare("SELECT 1 FROM import_query_topics WHERE state IN ('unknown','dispatch_marked') LIMIT 1").get()) return false
+    return true
+  })
   const makeOwner = (runtime: ProjectRuntime, epoch: string, assertCurrent: () => void,
     extra: Partial<Pick<MainGenerationOwnerDependencies, 'mode' | 'runtimeFeedback' | 'workflowDriver' | 'assertNoRuntimeClaims' | 'recoverInterrupted'>> = {},
     delivery?: Pick<MainGenerationOwnerDependencies, 'onSnapshot' | 'onReasoning'>) => {
@@ -388,6 +421,36 @@ export function registerGenerationController(options: {
     if (entry.mode !== 'legacy') throw new Error('GENERATION_OWNER_REQUIRED')
     entry.subscribers.add(event.sender)
     return entry.owner
+  }
+  const prepareReferenceOwner = (runtime: ProjectRuntime, session: ProjectSessionContext, event: IpcMainInvokeEvent): Owner => {
+    if (projectAccess.assertViewContext(session) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+    const entry = owners.get(runtime.database)
+    if (entry?.mode === 'reference' && entry.sender === event.sender
+      && entry.session.projectId === session.projectId && entry.session.leaseId === session.leaseId) return entry.owner
+    projectRuntimeHost.assertTaskAvailable(runtime)
+    if (entry) assertRetirable(runtime, entry)
+    const captured = Object.freeze({ ...session }), assertResources = capturedResources(runtime)
+    const owner = makeOwner(runtime, captured.leaseId, () => {
+      assertResources()
+      projectRuntimeHost.assertOpen(runtime)
+    }, { recoverInterrupted: !entry, assertNoRuntimeClaims: () => {
+      projectRuntimeHost.assertTaskAvailable(runtime)
+      if ((activeHandlers.get(runtime) ?? 0) > 1 || hasPhysical(owners.get(runtime.database))
+        || [...receiptAuthorities.get(runtime.database) ?? []].some(authority => authority.hasPhysicalInFlight())
+        || [...driverReceiptAuthorities.get(runtime.database) ?? [], ...batchReceiptAuthorities.get(runtime.database) ?? []]
+          .some(authority => authority.hasIssuance() || authority.hasPhysicalInFlight())) throw new Error('GENERATION_OWNER_BUSY')
+    } }, {
+      onSnapshot: snapshot => { if (!event.sender.isDestroyed()) event.sender.send('generation:snapshot', snapshot) },
+      onReasoning: reasoning => { if (!event.sender.isDestroyed()) event.sender.send('generation:reasoning', reasoning) },
+    })
+    if (entry) {
+      try { retire(runtime, entry) }
+      catch (error) { owner.retireIdle(); throw error }
+    }
+    ownerSessions.set(owner, captured)
+    ownerRuntimes.set(owner, runtime)
+    owners.set(runtime.database, { mode: 'reference', owner, session: captured, sender: event.sender })
+    return owner
   }
   const withRuntimeHandler = async <T>(runtime: ProjectRuntime, operation: () => T | Promise<T>): Promise<T> => {
     activeHandlers.set(runtime, (activeHandlers.get(runtime) ?? 0) + 1)
@@ -707,7 +770,28 @@ export function registerGenerationController(options: {
         }
         if (channel.startsWith('planning-feedback:')) assertPlanningFeedbackRequest(channel as PlanningFeedbackChannel, raw[0])
         if (channel === 'import-generation:v1:query-materials') assertImportQueryMaterialsRequest(raw[0])
-        const owner = authorizedOwner(session, event)
+        const viewRuntime = projectAccess.assertViewContext(session)
+        const referenceEntry = owners.get(viewRuntime.database)
+        const referenceRead = (channel === 'generation:read' || channel === 'generation:list-recovery')
+          && referenceEntry?.mode === 'reference' && referenceEntry.sender === event.sender
+        const needsOwner = !referenceEntry || referenceEntry.mode !== 'legacy'
+          || referenceEntry.session.projectId !== session.projectId || referenceEntry.session.leaseId !== session.leaseId
+        let owner: Owner
+        if (referenceRead) owner = referenceEntry.owner
+        else if (channel === 'generation:list-recovery' && needsOwner) {
+          const capturedSession = Object.freeze({ ...session })
+          const database = viewRuntime.database, identity = viewRuntime.databaseIdentity
+          const root = viewRuntime.canonicalRoot, epoch = viewRuntime.executionEpoch, sender = event.sender
+          owner = await projectRuntimeHost.runAfterViewOperationsDrained(viewRuntime, () => {
+            if (sender.isDestroyed() || event.sender !== sender || projectAccess.assertViewContext(capturedSession) !== viewRuntime
+              || viewRuntime.database !== database || viewRuntime.databaseIdentity !== identity
+              || viewRuntime.canonicalRoot !== root || viewRuntime.executionEpoch !== epoch) throw new Error('GENERATION_DATABASE_CHANGED')
+            return authorizedOwner(capturedSession, event)
+          })
+          if (sender.isDestroyed() || event.sender !== sender || projectAccess.assertViewContext(capturedSession) !== viewRuntime
+            || viewRuntime.database !== database || viewRuntime.databaseIdentity !== identity
+            || viewRuntime.canonicalRoot !== root || viewRuntime.executionEpoch !== epoch) throw new Error('GENERATION_DATABASE_CHANGED')
+        } else owner = authorizedOwner(session, event)
         const runtime = ownerRuntimes.get(owner)!
         assertUnmanagedImportGeneration(channel, raw, runtime.database)
         activeHandlers.set(runtime, (activeHandlers.get(runtime) ?? 0) + 1)
@@ -761,13 +845,13 @@ export function registerGenerationController(options: {
         if (raw.length !== 2 || !isProjectSessionContext(session)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
         if (channel === 'import-generation:v1:blueprints') assertReferenceBlueprintRequest(raw[0])
         else assertReferenceBlueprintAckRequest(raw[0])
+        const viewRuntime = projectAccess.assertViewContext(session)
+        if (channel === 'import-generation:v1:blueprints-ack') {
+          return await withRuntimeHandler(viewRuntime, () => referenceBlueprints.acknowledge(viewRuntime, event.sender, session, raw[0] as import('../../src/shared/reference-blueprint-contract').ReferenceBlueprintAckRequest))
+        }
         const owner = authorizedOwner(session, event)
         const runtime = ownerRuntimes.get(owner)!
         return await withRuntimeHandler(runtime, async () => {
-          if (channel === 'import-generation:v1:blueprints-ack') {
-            assertReferenceBlueprintAckRequest(raw[0])
-            return referenceBlueprints.acknowledge(runtime, event.sender, session, raw[0])
-          }
           assertReferenceBlueprintRequest(raw[0])
           try {
             const result = await referenceBlueprints.execute(runtime, owner, event.sender, session, raw[0], () => {
@@ -795,13 +879,13 @@ export function registerGenerationController(options: {
         if (raw.length !== 2 || !isProjectSessionContext(session)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
         if (channel === 'import-generation:v1:global') assertReferenceGlobalRequest(raw[0])
         else assertReferenceGlobalAckRequest(raw[0])
+        const viewRuntime = projectAccess.assertViewContext(session)
+        if (channel === 'import-generation:v1:global-ack') {
+          return await withRuntimeHandler(viewRuntime, () => referenceGlobals.acknowledge(viewRuntime, event.sender, session, raw[0] as import('../../src/shared/reference-global-contract').ReferenceGlobalAckRequest))
+        }
         const owner = authorizedOwner(session, event)
         const runtime = ownerRuntimes.get(owner)!
         return await withRuntimeHandler(runtime, async () => {
-          if (channel === 'import-generation:v1:global-ack') {
-            assertReferenceGlobalAckRequest(raw[0])
-            return referenceGlobals.acknowledge(runtime, event.sender, session, raw[0])
-          }
           assertReferenceGlobalRequest(raw[0])
           try {
             const result = await referenceGlobals.execute(runtime, owner, event.sender, session, raw[0], () => {
@@ -829,13 +913,13 @@ export function registerGenerationController(options: {
         if (raw.length !== 2 || !isProjectSessionContext(session)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
         if (channel === 'import-generation:v1:style') assertReferenceStyleRequest(raw[0])
         else assertReferenceStyleAckRequest(raw[0])
+        const viewRuntime = projectAccess.assertViewContext(session)
+        if (channel === 'import-generation:v1:style-ack') {
+          return await withRuntimeHandler(viewRuntime, () => referenceStyles.acknowledge(viewRuntime, event.sender, session, raw[0] as import('../../src/shared/reference-style-contract').ReferenceStyleAckRequest))
+        }
         const owner = authorizedOwner(session, event)
         const runtime = ownerRuntimes.get(owner)!
         return await withRuntimeHandler(runtime, async () => {
-          if (channel === 'import-generation:v1:style-ack') {
-            assertReferenceStyleAckRequest(raw[0])
-            return referenceStyles.acknowledge(runtime, event.sender, session, raw[0])
-          }
           assertReferenceStyleRequest(raw[0])
           try {
             const result = await referenceStyles.execute(runtime, owner, event.sender, session, raw[0], () => {
@@ -1019,31 +1103,31 @@ export function registerGenerationController(options: {
   // Trusted composition reuses the same authorized owner and child foreground ACKs, never internal IPC calls.
   return {
     prepareReferenceRun(runtime: ProjectRuntime, event: IpcMainInvokeEvent, session: ProjectSessionContext): void {
-      const owner = authorizedOwner(session, event)
+      const owner = prepareReferenceOwner(runtime, session, event)
       if (ownerRuntimes.get(owner) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
     },
     referenceGlobal(runtime: ProjectRuntime, event: IpcMainInvokeEvent, session: ProjectSessionContext,
       request: ReferenceGlobalRequest, parentToken: ImportRunParentFlightToken, assertCurrent: () => void) {
       assertReferenceGlobalRequest(request)
-      const owner = authorizedOwner(session, event)
-      if (ownerRuntimes.get(owner) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
-      return withRuntimeHandler(runtime, () => referenceGlobals.execute(runtime, owner, event.sender, session,
+      const owner = owners.get(runtime.database)
+      if (owner?.mode !== 'reference' || owner.sender !== event.sender) throw new Error('GENERATION_OWNER_REQUIRED')
+      return withRuntimeHandler(runtime, () => referenceGlobals.execute(runtime, owner.owner, event.sender, session,
         request, assertCurrent, parentToken))
     },
     referenceStyle(runtime: ProjectRuntime, event: IpcMainInvokeEvent, session: ProjectSessionContext,
       request: ReferenceStyleRequest, parentToken: ImportRunParentFlightToken, assertCurrent: () => void) {
       assertReferenceStyleRequest(request)
-      const owner = authorizedOwner(session, event)
-      if (ownerRuntimes.get(owner) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
-      return withRuntimeHandler(runtime, () => referenceStyles.execute(runtime, owner, event.sender, session,
+      const owner = owners.get(runtime.database)
+      if (owner?.mode !== 'reference' || owner.sender !== event.sender) throw new Error('GENERATION_OWNER_REQUIRED')
+      return withRuntimeHandler(runtime, () => referenceStyles.execute(runtime, owner.owner, event.sender, session,
         request, assertCurrent, parentToken))
     },
     referenceBlueprints(runtime: ProjectRuntime, event: IpcMainInvokeEvent, session: ProjectSessionContext,
       request: ReferenceBlueprintRequest, parentToken: ImportRunParentFlightToken, assertCurrent: () => void) {
       assertReferenceBlueprintRequest(request)
-      const owner = authorizedOwner(session, event)
-      if (ownerRuntimes.get(owner) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
-      return withRuntimeHandler(runtime, () => referenceBlueprints.execute(runtime, owner, event.sender, session,
+      const owner = owners.get(runtime.database)
+      if (owner?.mode !== 'reference' || owner.sender !== event.sender) throw new Error('GENERATION_OWNER_REQUIRED')
+      return withRuntimeHandler(runtime, () => referenceBlueprints.execute(runtime, owner.owner, event.sender, session,
         request, assertCurrent, parentToken))
     },
   }

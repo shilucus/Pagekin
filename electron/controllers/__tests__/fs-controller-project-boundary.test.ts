@@ -8,7 +8,7 @@ import type { SecureFileCapability, WindowsSafeFileSystem } from '../../security
 type IpcHandler = (...args: unknown[]) => Promise<unknown>
 
 vi.mock('../../services/project-runtime-compatibility', () => ({
-  withLegacyProjectOperation: async (_channel: string, operation: () => unknown) => operation(),
+  withProjectViewOperation: async (_context: unknown, operation: () => unknown) => operation(),
 }))
 
 const mocks = vi.hoisted(() => ({

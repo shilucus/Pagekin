@@ -33,6 +33,13 @@ export async function withLegacyProjectOperation<T>(channel: string, operation: 
   try { return await operation() } finally { release() }
 }
 
+/** Only reviewed current-view handlers may coexist with unrelated retained runtimes. */
+export async function withProjectViewOperation<T>(context: ProjectSessionContext | undefined, operation: () => T | Promise<T>): Promise<T> {
+  const runtime = projectAccess.assertViewContext(context)
+  const release = projectRuntimeHost.acquireViewOperation(runtime)
+  try { return await operation() } finally { release() }
+}
+
 /** Restoring a new copy is authorized by its external target grant, not a UI lease. */
 export async function withProjectRestoreOperation<T>(operation: () => T | Promise<T>): Promise<T> {
   const release = projectRuntimeHost.acquireRestoreOperation()

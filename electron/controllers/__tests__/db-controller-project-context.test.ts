@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   releaseWork: vi.fn(),
   acquireLegacyOperation: vi.fn(),
   releaseLegacyOperation: vi.fn(),
+  acquireViewOperation: vi.fn(),
+  releaseViewOperation: vi.fn(),
   captureCurrentSession: vi.fn(),
   projectCoreGet: vi.fn(),
   projectCoreUpdate: vi.fn(),
@@ -115,6 +117,7 @@ vi.mock('../../services/project-runtime', () => ({ projectRuntimeHost: {
   requestClose: mocks.requestClose,
   acquireWork: mocks.acquireWork,
   acquireLegacyOperation: mocks.acquireLegacyOperation,
+  acquireViewOperation: mocks.acquireViewOperation,
 } }))
 
 vi.mock('../../services/project-data-locator', () => ({ getProjectDataRoot: mocks.getProjectDataRoot }))
@@ -325,6 +328,7 @@ beforeEach(() => {
     if (mocks.runtimeBusy) throw new Error('PROJECT_RUNTIME_BUSY')
   })
   mocks.acquireWork.mockReset().mockImplementation(() => () => mocks.releaseWork())
+  mocks.acquireViewOperation.mockReset().mockImplementation(() => () => mocks.releaseViewOperation())
   mocks.getProjectDb.mockReset()
   mocks.getProjectDataRoot.mockReturnValue('C:/projects/A/.ai-novel')
   mocks.readPortableCurrentAuthority.mockReturnValue(null)
@@ -425,16 +429,29 @@ describe('database controller project context guard', () => {
 
   it('denies every unclassified legacy family before repository or import-locale lookup while runtimes coexist', async () => {
     mocks.runtimeCount = 2
-    await expect(handler('db:draft-get-full')({}, 1, 'C:/projects/A'))
-      .rejects.toThrow('PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE')
+    await expect(handler('db:draft-update-content')({}, 1, 'not admitted', 12, 'C:/projects/A'))
+      .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE' })
     await expect(handler('db:project-clear-generated-data')({}, {}, 'C:/projects/A'))
       .resolves.toMatchObject({ success: false, error: 'Error: PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE' })
-    await expect(handler('db:import-run-get')({}, 'fiction-run', 'C:/projects/A'))
+    await expect(handler('db:import-run-list-resumable')({}, 'C:/projects/A'))
       .rejects.toThrow('PROJECT_RUNTIME_LEGACY_OPERATION_UNAVAILABLE')
     expect(mocks.draftGetFull).not.toHaveBeenCalled()
     expect(mocks.projectClearGeneratedData).not.toHaveBeenCalled()
     expect(mocks.importRunGet).not.toHaveBeenCalled()
     expect(mocks.releaseLegacyOperation).not.toHaveBeenCalled()
+  })
+
+  it('holds a classified view read through its actual returned promise without widening legacy admission', async () => {
+    mocks.runtimeCount = 2
+    let finish!: (value: unknown) => void
+    mocks.importRunGetEffectReceipt.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    const pending = handler('db:import-run-effect-receipt-get')({}, 'fictional-run', 'global', 'fictional-batch', 'C:/projects/A')
+    expect(mocks.acquireViewOperation).toHaveBeenCalledOnce()
+    expect(mocks.acquireLegacyOperation).not.toHaveBeenCalled()
+    expect(mocks.releaseViewOperation).not.toHaveBeenCalled()
+    finish({ id: 1, content: 'captured A' })
+    await expect(pending).resolves.toMatchObject({ id: 1, content: 'captured A' })
+    expect(mocks.releaseViewOperation).toHaveBeenCalledOnce()
   })
 
   it('holds the legacy admission through the returned promise and releases it on success or failure', async () => {

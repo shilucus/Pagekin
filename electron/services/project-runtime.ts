@@ -136,6 +136,7 @@ interface RuntimeEntry {
   phase: ProjectRuntime['phase']
   readonly tickets: Set<PreparedRuntimeOpen>
   retained: boolean
+  backgroundManaged: boolean
   workOperations: number
   closeRequested: boolean
   closeOperation?: Promise<void>
@@ -153,6 +154,7 @@ export class ProjectRuntimeHost {
   private readonly entries = new Map<string, RuntimeEntry>()
   private readonly tickets = new WeakMap<PreparedRuntimeOpen, RuntimeEntry>()
   private readonly busyPredicates = new Set<(runtime: ProjectRuntime) => boolean>()
+  private readonly retirementGuards = new Set<(runtime: ProjectRuntime) => boolean>()
   private readonly releaseListeners = new Set<(runtime: ProjectRuntime) => void>()
   private readonly closeListeners = new Set<(runtime: ProjectRuntime) => void>()
   private readonly applicationCloseListeners = new Set<() => void>()
@@ -164,11 +166,15 @@ export class ProjectRuntimeHost {
   private closeAllOperation?: Promise<void>
   private activeView: ProjectRuntime | null = null
   private legacyOperations = 0
+  private viewOperations = 0
+  private readonly viewDrainListeners = new Set<() => void>()
   private applicationOperations = 0
   private restoreOperation = false
   private viewCommitInProgress = false
   private compatibilityOpen: { previous: ProjectRuntime | null; ticket: PreparedRuntimeOpen | null } | null = null
   private readonly retainedTickets = new WeakSet<PreparedRuntimeOpen>()
+  private readonly backgroundViewTickets = new WeakSet<PreparedRuntimeOpen>()
+  private readonly backgroundCleanupTickets = new WeakSet<PreparedRuntimeOpen>()
 
   prepareOpen(project: TrustedProject): PreparedRuntimeOpen {
     this.assertLifecycleAllowed()
@@ -180,6 +186,78 @@ export class ProjectRuntimeHost {
     const ticket = this.prepareOpen(project)
     this.retainedTickets.add(ticket)
     return ticket
+  }
+
+  /** Production background views retain only live captured work, never raw explicit-retain policy. */
+  prepareBackgroundViewOpen(project: TrustedProject): PreparedRuntimeOpen {
+    const ticket = this.prepareOpen(project)
+    this.backgroundViewTickets.add(ticket)
+    return ticket
+  }
+
+  /** Wait for physical editor work, then reserve the original open ticket without an admission gap. */
+  prepareBackgroundViewOpenAfterDrain(project: TrustedProject, assertCurrent: () => void): Promise<PreparedRuntimeOpen> {
+    return this.runAfterViewOperationsDrained(this.activeView, () => {
+      if (Object.prototype.toString.call(assertCurrent) === '[object AsyncFunction]') throw new Error('PROJECT_RUNTIME_VIEW_PREFLIGHT_MUST_BE_SYNCHRONOUS')
+      synchronousResult(assertCurrent(), 'PROJECT_RUNTIME_VIEW_PREFLIGHT_MUST_BE_SYNCHRONOUS')
+      return this.prepareBackgroundViewOpen(project)
+    })
+  }
+
+  /** Only a captured-view admission uses this wait; background work is not drained or cancelled. */
+  runAfterViewOperationsDrained<T>(runtime: ProjectRuntime | null, operation: () => T): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const prepare = () => {
+        this.viewDrainListeners.delete(prepare)
+        if (timeout !== undefined) clearTimeout(timeout)
+        try {
+          if (this.activeView !== runtime) throw new Error('PROJECT_RUNTIME_VIEW_MISMATCH')
+          if (runtime) this.assertWorkAvailable(runtime)
+          if (Object.prototype.toString.call(operation) === '[object AsyncFunction]') throw new Error('PROJECT_RUNTIME_VIEW_PREFLIGHT_MUST_BE_SYNCHRONOUS')
+          const value = operation()
+          synchronousResult(value, 'PROJECT_RUNTIME_VIEW_PREFLIGHT_MUST_BE_SYNCHRONOUS')
+          resolve(value)
+        } catch (error) { reject(error) }
+      }
+      // Same bounded UI wait as close; timeout never releases work or cancels its owner.
+      const timeout = this.viewOperations === 0 ? undefined : setTimeout(() => {
+        this.viewDrainListeners.delete(prepare)
+        reject(new Error('PROJECT_RUNTIME_VIEW_DRAIN_TIMEOUT'))
+      }, DEFAULT_CLOSE_TIMEOUT_MS)
+      if (this.viewOperations === 0) { prepare(); return }
+      this.viewDrainListeners.add(prepare)
+    })
+  }
+
+  hasBackgroundViewsRetained(): boolean {
+    // Routing metadata includes raw retention, but never enrolls it in managed cleanup or grants execution.
+    return [...this.entries.values()].some(entry => entry.retained || entry.runtime !== this.activeView)
+  }
+
+  /** Called synchronously after this exact managed view COMMIT, never during target preparation. */
+  finishBackgroundViewOpen(ticket: PreparedRuntimeOpen): void {
+    this.assertLifecycleAllowed()
+    if (!this.backgroundCleanupTickets.has(ticket) || this.activeView !== ticket.runtime) {
+      throw new Error('PROJECT_RUNTIME_BACKGROUND_CLEANUP_INVALID')
+    }
+    this.assertOpen(ticket.runtime)
+    try {
+      if ([...this.entries.values()].some(entry => entry.tickets.size > 0)) throw new Error('PROJECT_RUNTIME_BUSY')
+      for (const entry of [...this.entries.values()]) {
+        if (!entry.backgroundManaged || entry.retained || entry.runtime === this.activeView
+          || entry.phase !== 'open' || entry.closeRequested) continue
+        if ([...this.maintenance.values()].some(value => containsRoot(value.root, entry.runtime.canonicalRoot)
+          || containsRoot(entry.runtime.canonicalRoot, value.root)) || this.entryBusy(entry)) continue
+        try {
+          this.assertEntry(entry, false)
+          getProjectDataRoot(entry.runtime.canonicalRoot)
+          if ([...this.retirementGuards].some(guard => !guard(entry.runtime))) continue
+          // Guards are pure and synchronous; native release hooks cannot reenter another view commit.
+          this.viewCommitInProgress = true
+          try { this.releaseEntry(entry) } finally { this.viewCommitInProgress = false }
+        } catch (error) { throw new ProjectRuntimePreviousCloseError(entry.runtime, ticket.runtime, error) }
+      }
+    } finally { this.backgroundCleanupTickets.delete(ticket) }
   }
 
   assertCompatibilityOpenAvailable(): void {
@@ -220,7 +298,7 @@ export class ProjectRuntimeHost {
       const runtime: ProjectRuntime = Object.freeze({ ...opened, canonicalRoot: opened.projectPath, executionEpoch: randomUUID(),
         get phase() { return state.phase } })
       entry = { opened, runtime, get phase() { return state.phase }, set phase(value) { state.phase = value },
-        tickets: new Set(), retained: false, workOperations: 0, closeRequested: false, releaseInProgress: false }
+        tickets: new Set(), retained: false, backgroundManaged: false, workOperations: 0, closeRequested: false, releaseInProgress: false }
       this.entries.set(key, entry)
     }
     const ticket = Object.freeze({ runtime: entry.runtime, reused })
@@ -255,6 +333,8 @@ export class ProjectRuntimeHost {
     const entry = this.requireTicket(ticket)
     const compatibility = this.compatibilityOpen
     const previous = compatibility?.previous ?? null
+    const backgroundView = this.backgroundViewTickets.has(ticket)
+    const previousView = this.activeView
     if (previous) {
       const previousEntry = this.requireRuntime(previous)
       this.assertEntry(previousEntry, false)
@@ -282,6 +362,12 @@ export class ProjectRuntimeHost {
       this.consumeTicket(ticket, entry)
       this.activeView = entry.runtime
       publishSession?.()
+      if (backgroundView) {
+        if (!entry.retained) entry.backgroundManaged = true
+        const previousEntry = previousView ? this.requireRuntime(previousView) : undefined
+        if (previousEntry && !previousEntry.retained) previousEntry.backgroundManaged = true
+        this.backgroundCleanupTickets.add(ticket)
+      }
       if (previous && previous !== entry.runtime) {
         try { this.releaseEntry(this.requireRuntime(previous)) }
         catch (error) { throw new ProjectRuntimePreviousCloseError(previous, entry.runtime, error) }
@@ -544,6 +630,7 @@ export class ProjectRuntimeHost {
 
   private assertCloseAvailable(entry: RuntimeEntry): void {
     if (this.viewCommitInProgress) throw new Error('PROJECT_RUNTIME_VIEW_COMMIT_BUSY')
+    if (this.viewOperations > 0) throw new Error('PROJECT_RUNTIME_VIEW_OPERATION_BUSY')
     if (this.compatibilityOpen) throw new Error('PROJECT_RUNTIME_COMPATIBILITY_OPEN_BUSY')
     if (this.restoreOperation) throw new Error('PROJECT_RUNTIME_RESTORE_BUSY')
     this.assertUnreserved(entry.runtime.canonicalRoot)
@@ -582,6 +669,12 @@ export class ProjectRuntimeHost {
     return () => { this.busyPredicates.delete(predicate) }
   }
 
+  /** Pure owner/receipt claim check for managed idle-view retirement; errors remain diagnostic failures. */
+  registerRetirementGuard(guard: (runtime: ProjectRuntime) => boolean): () => void {
+    this.retirementGuards.add(guard)
+    return () => { this.retirementGuards.delete(guard) }
+  }
+
   onBeforeRelease(listener: (runtime: ProjectRuntime) => void): () => void {
     this.releaseListeners.add(listener)
     return () => { this.releaseListeners.delete(listener) }
@@ -601,6 +694,23 @@ export class ProjectRuntimeHost {
     return () => { if (!released) { released = true; releaseWork(); this.legacyOperations-- } }
   }
 
+  /** Classified current-view adapters keep global compatibility resources fixed until physical completion. */
+  acquireViewOperation(runtime: ProjectRuntime): () => void {
+    this.assertWorkAvailable(runtime)
+    if (this.activeView !== runtime) throw new Error('PROJECT_RUNTIME_VIEW_MISMATCH')
+    if ([...this.entries.values()].some(entry => entry.tickets.size > 0)) throw new Error('PROJECT_RUNTIME_BUSY')
+    const releaseWork = this.acquireWork(runtime)
+    this.viewOperations++
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      releaseWork()
+      this.viewOperations--
+      if (this.viewOperations === 0) for (const listener of [...this.viewDrainListeners]) listener()
+    }
+  }
+
   /** Isolated-copy restore has no current-project requirement or execution grant. */
   acquireRestoreOperation(): () => void {
     this.assertLifecycleAllowed()
@@ -615,6 +725,7 @@ export class ProjectRuntimeHost {
     if (this.closeAllRequested) throw new Error('PROJECT_RUNTIME_HOST_CLOSING')
     if (this.viewCommitInProgress) throw new Error('PROJECT_RUNTIME_VIEW_COMMIT_BUSY')
     if (this.legacyOperations > 0) throw new Error('PROJECT_RUNTIME_LEGACY_OPERATION_BUSY')
+    if (this.viewOperations > 0) throw new Error('PROJECT_RUNTIME_VIEW_OPERATION_BUSY')
     if (this.restoreOperation) throw new Error('PROJECT_RUNTIME_RESTORE_BUSY')
     if (this.compatibilityOpen && (!ticket || this.compatibilityOpen.ticket !== ticket)) {
       throw new Error('PROJECT_RUNTIME_COMPATIBILITY_OPEN_BUSY')
@@ -626,7 +737,7 @@ export class ProjectRuntimeHost {
   }
 
   private entryBusy(entry: RuntimeEntry, allowedTicket?: PreparedRuntimeOpen): boolean {
-    return this.applicationOperations > 0 || entry.workOperations > 0 || [...entry.tickets].some(ticket => ticket !== allowedTicket)
+    return this.viewOperations > 0 || this.applicationOperations > 0 || entry.workOperations > 0 || [...entry.tickets].some(ticket => ticket !== allowedTicket)
       || [...this.busyPredicates].some(predicate => predicate(entry.runtime))
   }
 
@@ -666,6 +777,7 @@ export class ProjectRuntimeHost {
     entry.tickets.delete(ticket)
     this.tickets.delete(ticket)
     this.retainedTickets.delete(ticket)
+    this.backgroundViewTickets.delete(ticket)
   }
 }
 

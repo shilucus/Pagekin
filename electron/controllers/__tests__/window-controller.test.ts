@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   appExits: 0,
   requestCloseAll: vi.fn(),
   finishWindowClose: vi.fn(),
+  getActiveView: vi.fn(),
+  runAfterViewOperationsDrained: vi.fn(),
+  captureCurrentSession: vi.fn(),
+  assertCurrentSession: vi.fn(),
 }))
 
 vi.mock('electron', () => ({
@@ -40,6 +44,10 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../../services/project-runtime', () => ({ projectRuntimeHost: {
   requestCloseAll: mocks.requestCloseAll, finishWindowClose: mocks.finishWindowClose,
+  getActiveView: mocks.getActiveView, runAfterViewOperationsDrained: mocks.runAfterViewOperationsDrained,
+} }))
+vi.mock('../../services/project-access', () => ({ projectAccess: {
+  captureCurrentSession: mocks.captureCurrentSession, assertCurrentSession: mocks.assertCurrentSession,
 } }))
 
 import { app } from 'electron'
@@ -94,6 +102,12 @@ describe('native window close guard', () => {
     mocks.appExits = 0
     vi.clearAllMocks()
     mocks.requestCloseAll.mockReset().mockResolvedValue(undefined)
+    mocks.getActiveView.mockReset().mockReturnValue(null)
+    mocks.captureCurrentSession.mockReset().mockReturnValue(null)
+    mocks.assertCurrentSession.mockReset()
+    mocks.runAfterViewOperationsDrained.mockReset().mockImplementation((_runtime, operation: () => void) => {
+      try { operation(); return Promise.resolve() } catch (error) { return Promise.reject(error) }
+    })
     registerWindowController()
   })
 
@@ -220,6 +234,28 @@ describe('native window close guard', () => {
     expect(win.destroyed).toBe(true)
   })
 
+  it('retries a failed close after the host has already sealed the runtime', async () => {
+    let sealed = false
+    mocks.runAfterViewOperationsDrained.mockImplementation((_runtime, operation: () => void) => {
+      if (sealed) return Promise.reject(new Error('PROJECT_RUNTIME_HOST_CLOSING'))
+      operation()
+      return Promise.resolve()
+    })
+    mocks.requestCloseAll.mockImplementation(() => {
+      if (sealed) return Promise.resolve()
+      sealed = true
+      return Promise.reject(new Error('PROJECT_RUNTIME_CLOSE_TIMEOUT'))
+    })
+    const win = new FakeWindow()
+    installWindowCloseGuard(win as never)
+    win.close()
+    const id = requestId(win)
+    await expect(handler('window:resolve-close')({ sender: { owner: win } }, id, 'proceed')).resolves.toEqual({ success: false })
+    await expect(handler('window:resolve-close')({ sender: { owner: win } }, id, 'proceed')).resolves.toEqual({ success: true })
+    expect(win.destroyed).toBe(true)
+    expect(mocks.requestCloseAll).toHaveBeenCalledTimes(2)
+  })
+
   it.each(['before-close', 'pending-handshake'])('bypasses only the lost renderer after crash at %s, retaining main convergence and retry', async moment => {
     const win = new FakeWindow()
     installWindowCloseGuard(win as never)
@@ -261,6 +297,81 @@ describe('native window close guard', () => {
     await pending
     expect(win.destroyed).toBe(true)
     expect(mocks.finishWindowClose).not.toHaveBeenCalled()
+  })
+
+  it('waits for admitted view work before closing and upgrades a waiting close to shutdown', async () => {
+    let release!: () => void
+    mocks.requestCloseAll.mockRejectedValueOnce(new Error('PROJECT_RUNTIME_VIEW_OPERATION_BUSY'))
+    mocks.runAfterViewOperationsDrained.mockImplementation((_runtime, operation: () => void) => new Promise<void>((resolve, reject) => {
+      release = () => { try { operation(); resolve() } catch (error) { reject(error) } }
+    }))
+    const win = new FakeWindow()
+    installWindowCloseGuard(win as never)
+    win.close()
+    const pending = handler('window:resolve-close')({ sender: { owner: win } }, requestId(win), 'proceed')
+    await Promise.resolve()
+    expect(mocks.requestCloseAll).toHaveBeenCalledTimes(1)
+    app.quit()
+    expect(mocks.requestCloseAll).toHaveBeenCalledTimes(1)
+    expect(win.destroyed).toBe(false)
+    release()
+    await expect(pending).resolves.toEqual({ success: true })
+    expect(mocks.requestCloseAll).toHaveBeenCalled()
+    expect(mocks.requestCloseAll.mock.calls.slice(1).every(([options]) => options.shutdown === true)).toBe(true)
+    expect(win.destroyed).toBe(true)
+  })
+
+  it.each(['view', 'lease', 'timeout'])('keeps the close retryable when the waiting %s becomes invalid', async reason => {
+    const view = { projectId: 'a' }
+    const session = { projectId: 'a', leaseId: 'old' }
+    mocks.getActiveView.mockReturnValue(view)
+    mocks.captureCurrentSession.mockReturnValue(session)
+    mocks.requestCloseAll.mockRejectedValueOnce(new Error('PROJECT_RUNTIME_VIEW_OPERATION_BUSY'))
+    let release!: () => void
+    mocks.runAfterViewOperationsDrained.mockImplementation((captured, operation: () => void) => new Promise<void>((resolve, reject) => {
+      release = () => {
+        try {
+          if (reason === 'timeout') throw new Error('PROJECT_RUNTIME_VIEW_DRAIN_TIMEOUT')
+          if (mocks.getActiveView() !== captured) throw new Error('PROJECT_RUNTIME_VIEW_MISMATCH')
+          operation()
+          resolve()
+        } catch (error) { reject(error) }
+      }
+    }))
+    const win = new FakeWindow()
+    installWindowCloseGuard(win as never)
+    win.close()
+    const id = requestId(win)
+    const pending = handler('window:resolve-close')({ sender: { owner: win } }, id, 'proceed')
+    await Promise.resolve()
+    if (reason === 'view') mocks.getActiveView.mockReturnValue({ projectId: 'b' })
+    if (reason === 'lease') mocks.assertCurrentSession.mockImplementationOnce(() => { throw new Error('PROJECT_SESSION_STALE') })
+    release()
+    await expect(pending).resolves.toEqual({ success: false })
+    expect(mocks.requestCloseAll).toHaveBeenCalledTimes(1)
+    expect(win.destroyed).toBe(false)
+    mocks.runAfterViewOperationsDrained.mockImplementation((_runtime, operation: () => void) => { operation(); return Promise.resolve() })
+    await expect(handler('window:resolve-close')({ sender: { owner: win } }, id, 'proceed')).resolves.toEqual({ success: true })
+    expect(win.destroyed).toBe(true)
+  })
+
+  it.each(['pre-render', 'renderer-gone'])('waits for admitted view work on %s close', async kind => {
+    let release!: () => void
+    mocks.requestCloseAll.mockRejectedValueOnce(new Error('PROJECT_RUNTIME_VIEW_OPERATION_BUSY'))
+    mocks.runAfterViewOperationsDrained.mockImplementation((_runtime, operation: () => void) => new Promise<void>(resolve => {
+      release = () => { operation(); resolve() }
+    }))
+    const win = new FakeWindow()
+    if (kind === 'pre-render') win.webContents.isLoadingMainFrame.mockReturnValue(true)
+    installWindowCloseGuard(win as never)
+    if (kind === 'renderer-gone') win.webListeners.get('render-process-gone')!()
+    win.close()
+    await Promise.resolve()
+    expect(mocks.requestCloseAll).toHaveBeenCalledTimes(1)
+    expect(win.destroyed).toBe(false)
+    release()
+    await vi.waitFor(() => expect(win.destroyed).toBe(true))
+    expect(mocks.requestCloseAll).toHaveBeenCalledTimes(2)
   })
 
   it('drains runtimes before accepting quit with no renderer window and retries failure', async () => {

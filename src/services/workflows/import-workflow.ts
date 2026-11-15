@@ -10,7 +10,7 @@ import {
 import type { ImportGlobalFactsReceipt } from '../../shared/import-global-facts'
 import type { BlueprintRangeCommitReceipt } from '../../../electron/repositories/blueprint-repository'
 import type { FinalizedDraftImportReceipt } from '../../shared/finalized-draft-import'
-import { sameProjectSessionContext, projectSessionContextFromProject } from '../../shared/project-session-context'
+import { sameProjectPathKey, sameProjectSessionContext, projectSessionContextFromProject } from '../../shared/project-session-context'
 import { ipc } from '../ipc-client'
 import { useProjectStore } from '../../stores/project-store'
 import { workflowResourceKey, type StepCallbacks, type WorkflowContext, type WorkflowDefinition, type WorkflowStep } from '../../stores/workflow-store'
@@ -59,7 +59,8 @@ interface ReferenceStageResults {
 interface ReferenceStageBridge {
   on: typeof ipc.on
   wait<S extends keyof ReferenceStageResults>(stage: S): Promise<ReferenceStageResults[S]>
-  openedStyle(sequence: number): { config?: NovelConfig; error?: unknown } | undefined
+  waitForProjectView(): Promise<ProjectSessionContext>
+  openedStyle(sequence: number): Promise<{ config?: NovelConfig; error?: unknown } | undefined>
 }
 
 export interface ImportWorkflowParams {
@@ -150,8 +151,37 @@ function currentNovelConfigSummary(writingLanguage: WritingLanguage): string {
   )
 }
 
-async function projectReferenceGlobal(run: ImportRunSnapshot, context: WorkflowContext, callbacks: StepCallbacks) {
-  const { projectSession: session, projectPath } = context
+async function waitForReferenceProjectView(context: WorkflowContext, signal?: AbortSignal): Promise<ProjectSessionContext> {
+  const session = context.projectSession
+  if (!context.waitForProjectView) throw new Error('PROJECT_VIEW_SESSION_REQUIRED')
+  const viewSession = await context.waitForProjectView(signal)
+  if (viewSession.projectId !== session.projectId || !sameProjectPathKey(viewSession.projectPath, session.projectPath)
+    || !viewSession.leaseId) throw new Error('PROJECT_VIEW_SESSION_INVALID')
+  return viewSession
+}
+
+function currentReferenceProjectionSession(context: WorkflowContext, fallback: ProjectSessionContext): ProjectSessionContext {
+  return context.projectionSession ?? fallback
+}
+
+function createReferenceGenerationTransport(
+  context: WorkflowContext,
+  fallback: ProjectSessionContext,
+  waitForView: () => Promise<ProjectSessionContext>,
+) {
+  const transport = createMainGenerationTransport(() => currentReferenceProjectionSession(context, fallback))
+  return Object.assign(transport, {
+    async read(handle: MainGenerationRunHandle) {
+      const viewSession = await waitForView()
+      const view = await ipc.invokeWithProjectSession(viewSession, 'generation:read', { ...handle })
+      if (!view || !sameGenerationHandle(view.handle, handle)) throw new Error('GENERATION_RESPONSE_IDENTITY_MISMATCH')
+      return view
+    },
+  })
+}
+
+async function projectReferenceGlobal(run: ImportRunSnapshot, context: WorkflowContext, callbacks: StepCallbacks, session: ProjectSessionContext) {
+  const { projectPath } = context
   const receipt = await ipc.invokeWithProjectSession(session, 'db:import-run-effect-receipt-get', run.id, 'global', 'done', projectPath)
   if (!receipt || receipt.state !== 'committed' || receipt.stage !== 'global' || receipt.batchId !== 'done'
     || receipt.kind !== 'project-global-facts' || !receipt.effectReceipt) throw new Error('GENERATION_REQUEST_FAILED')
@@ -173,8 +203,8 @@ async function projectReferenceGlobal(run: ImportRunSnapshot, context: WorkflowC
   return receipt
 }
 
-async function projectReferenceStyle(run: ImportRunSnapshot, context: WorkflowContext, callbacks: StepCallbacks) {
-  const { projectSession: session, projectPath } = context
+async function projectReferenceStyle(run: ImportRunSnapshot, context: WorkflowContext, callbacks: StepCallbacks, session: ProjectSessionContext) {
+  const { projectPath } = context
   const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
   if (!core) throw new Error(textForLocale(run.locale, '无法读取已保存的导入配置。', 'Could not read committed project configuration.'))
   const current = useProjectStore.getState().currentProject
@@ -184,12 +214,12 @@ async function projectReferenceStyle(run: ImportRunSnapshot, context: WorkflowCo
   } else callbacks.log(textForLocale(run.locale, '导入结果已持久化入库；前台正浏览其他作品，跳过前台界面同步。', 'Import effect persisted to storage; foreground is viewing another project, skipping UI sync.'))
 }
 
-async function validateSkippedBlueprints(run: ImportRunSnapshot, context: WorkflowContext) {
+async function validateSkippedBlueprints(run: ImportRunSnapshot, context: WorkflowContext, session: ProjectSessionContext) {
   const batches = run.completedBatches.blueprints ?? []
   if (!batches.length) throw new Error('GENERATION_REQUEST_FAILED')
   for (const batchId of batches) {
     if (!isReferenceBlueprintBatchId(batchId)) throw new Error('GENERATION_REQUEST_FAILED')
-    const receipt = await ipc.invokeWithProjectSession(context.projectSession, 'db:import-run-effect-receipt-get',
+    const receipt = await ipc.invokeWithProjectSession(session, 'db:import-run-effect-receipt-get',
       run.id, 'blueprints', batchId, context.projectPath)
     if (!receipt || receipt.state !== 'committed' || receipt.stage !== 'blueprints' || receipt.batchId !== batchId
       || receipt.kind !== 'chapter-blueprint-range' || !receipt.effectReceipt) throw new Error('GENERATION_REQUEST_FAILED')
@@ -263,15 +293,16 @@ function productionDependencies(
 ): ImportRunOrchestratorDependencies {
   const session = context.projectSession
   const projectPath = context.projectPath
+  const waitForProjectionView = () => bridge ? bridge.waitForProjectView() : Promise.resolve(session)
   // 主进程没给原因时的兜底说明进运行卡片的步骤详情，按导入运行的语言写（工作流的 uiLocale 就是 run.locale）。
   const required = <T,>(result: { success: boolean; error?: string } & T, zhCNText: string, enUSText: string): T => {
     if (!result.success) throw new Error(result.error || textForLocale(context.uiLocale, zhCNText, enUSText))
     return result
   }
-  const refresh = async (run: ImportRunSnapshot) => {
+  const refresh = async (run: ImportRunSnapshot, viewSession: ProjectSessionContext = session) => {
     callbacks.log(textForLocale(run.locale, '正在刷新项目数据...', 'Refreshing project data...'))
     await refreshImportDerivedFileTreeBestEffort(
-      () => useProjectStore.getState().refreshFileTree(projectPath, undefined, session),
+      () => useProjectStore.getState().refreshFileTree(projectPath, undefined, viewSession),
       callbacks,
       (zhCNText, enUSText) => textForLocale(run.locale, zhCNText, enUSText),
     )
@@ -279,8 +310,8 @@ function productionDependencies(
       import('../../stores/character-store'),
       import('../../stores/draft-store'),
     ])
-    await useCharacterStore.getState().loadCharacters(projectPath, session)
-    await useDraftStore.getState().loadAllDrafts(projectPath, session)
+    await useCharacterStore.getState().loadCharacters(projectPath, viewSession)
+    await useDraftStore.getState().loadAllDrafts(projectPath, viewSession)
   }
   return {
     getRun: runId => ipc.invokeWithProjectSession(session, 'db:import-run-get', runId, projectPath),
@@ -319,14 +350,16 @@ function productionDependencies(
             if (context.cancelled || context.cancelRequested) decision = 'cancelled'
             else {
               try {
-                await refresh(run)
+                const viewSession = await waitForProjectionView()
+                await refresh(run, viewSession)
                 if (context.cancelled || context.cancelRequested) decision = 'cancelled'
               } catch (error) {
                 projectionError ??= error
                 decision = 'failed'
               }
             }
-            const ack = await ipc.invokeWithProjectSession(session, 'reference-knowledge:v1:refresh-ack', {
+            const viewSession = await waitForProjectionView()
+            const ack = await ipc.invokeWithProjectSession(viewSession, 'reference-knowledge:v1:refresh-ack', {
               reference, execution, token: event.token, decision,
             })
             if (!ack || ack.version !== 1) throw new Error('GENERATION_REQUEST_FAILED')
@@ -363,7 +396,7 @@ function productionDependencies(
           || lease.owner !== owner || lease.epoch !== referenceKnowledge.execution.epoch) throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
         const execution = { owner: lease.owner, epoch: lease.epoch }
         const modelId = context.generationModelId?.trim() || routeModelId('import-global-facts') || null
-        const transport = createMainGenerationTransport(() => session)
+        const transport = referenceKnowledge ? createReferenceGenerationTransport(context, session, waitForProjectionView) : createMainGenerationTransport(() => session)
         const displayed = new Map<string, string>()
         let runtime: Awaited<ReturnType<typeof createMainOwnedGenerationRuntime>> | undefined
         let unsubscribeReasoning: (() => void) | undefined
@@ -380,7 +413,8 @@ function productionDependencies(
           if (!result.success) throw new Error(result.error || 'IMPORT_RUN_CANCEL_REQUEST_FAILED')
         }
         const projectCommitted = async () => {
-          projectedReceipt = await projectReferenceGlobal(run, context, callbacks)
+          const viewSession = await waitForProjectionView()
+          projectedReceipt = await projectReferenceGlobal(run, context, callbacks, viewSession)
         }
         const unsubscribeProject = useProjectStore.subscribe(state => {
           if (!sameProjectSessionContext(session, projectSessionContextFromProject(state.currentProject))) clearReasoning()
@@ -397,19 +431,23 @@ function productionDependencies(
             if (event.kind === 'candidate') { context.data.importGlobalInferenceCandidate = event.content; return }
             if (event.kind === 'committed') { await projectCommitted(); return }
             let acknowledged = false
-            const ack = (decision: 'accept' | 'cancelled' | 'projection-failed') => ipc.invokeWithProjectSession(
-              session, 'import-generation:v1:global-ack', { runId: run.id, execution, token: event.token, decision },
-            )
+            const ack = async (decision: 'accept' | 'cancelled' | 'projection-failed') => {
+              const viewSession = await waitForProjectionView()
+              return ipc.invokeWithProjectSession(viewSession, 'import-generation:v1:global-ack', {
+                runId: run.id, execution, token: event.token, decision,
+              })
+            }
             try {
               if (handle) throw new Error('GENERATION_REQUEST_FAILED')
               handle = Object.freeze({ ...event.handle })
+              await waitForProjectionView()
               context.mainGenerationRunHandle = handle
               context.mainGenerationRootHandle = handle
               context.generationModelId = event.modelId
               pinWorkflowModel(context, event.modelId)
               unsubscribeReasoning = transport.subscribeReasoning?.(handle, reasoning => {
                 if (!active || context.cancelled || !reasoning.attemptId || !reasoning.text
-                  || !sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
+                  || !sameProjectSessionContext(currentReferenceProjectionSession(context, session), projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
                 useWorkflowReasoningStore.getState().append(context.runId, reasoning.attemptId, reasoning.text)
               })
               runtime = await createMainOwnedGenerationRuntime({ runHandle: handle, onSnapshot: snapshot => {
@@ -465,7 +503,10 @@ function productionDependencies(
           if (result.execution === null) delete context.data.importRunExecution
           else context.data.importRunExecution = result.execution
           if (projectionError) throw projectionError
-          if (runtime) await runtime.read()
+          if (runtime) {
+            await waitForProjectionView()
+            await runtime.read()
+          }
           if (!projectedReceipt) await projectCommitted()
           if (JSON.stringify(projectedReceipt) !== JSON.stringify(result.receipt)) throw new Error('GENERATION_REQUEST_FAILED')
         } finally {
@@ -484,7 +525,7 @@ function productionDependencies(
           || lease.owner !== owner || lease.epoch !== referenceKnowledge.execution.epoch) throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
         const execution = { owner: lease.owner, epoch: lease.epoch }
         const modelId = context.generationModelId?.trim() || routeModelId('import-blueprints') || null
-        const transport = createMainGenerationTransport(() => session)
+        const transport = referenceKnowledge ? createReferenceGenerationTransport(context, session, waitForProjectionView) : createMainGenerationTransport(() => session)
         const displayed = new Map<string, string>()
         const openedBatches = new Set<string>()
         let runtime: Awaited<ReturnType<typeof createMainOwnedGenerationRuntime>> | undefined
@@ -501,8 +542,8 @@ function productionDependencies(
           const result = await ipc.invokeWithProjectSession(session, 'db:import-run-request-cancel', run.id, lease, projectPath)
           if (!result.success) throw new Error(result.error || 'IMPORT_RUN_CANCEL_REQUEST_FAILED')
         }
-        const readReceipt = async (batchId: string) => {
-          const receipt = await ipc.invokeWithProjectSession(session, 'db:import-run-effect-receipt-get', run.id, 'blueprints', batchId, projectPath)
+        const readReceipt = async (batchId: string, viewSession: ProjectSessionContext) => {
+          const receipt = await ipc.invokeWithProjectSession(viewSession, 'db:import-run-effect-receipt-get', run.id, 'blueprints', batchId, projectPath)
           if (!receipt || receipt.state !== 'committed' || receipt.stage !== 'blueprints' || receipt.batchId !== batchId
             || receipt.kind !== 'chapter-blueprint-range' || !receipt.effectReceipt) throw new Error('GENERATION_REQUEST_FAILED')
           assertImportRunEffectReceiptMetadata(receipt, run)
@@ -510,9 +551,9 @@ function productionDependencies(
           if (!committed.characterSyncOperation?.operationId || !Array.isArray(committed.snapshot)) throw new Error('GENERATION_REQUEST_FAILED')
           return { receipt, committed }
         }
-        const projectSynced = async (batchId: string) => {
-          const { committed } = await readReceipt(batchId)
-          const operation = await ipc.invokeWithProjectSession(session, 'db:blueprint-character-sync-get', committed.characterSyncOperation.operationId, projectPath)
+        const projectSynced = async (batchId: string, viewSession: ProjectSessionContext) => {
+          const { committed } = await readReceipt(batchId, viewSession)
+          const operation = await ipc.invokeWithProjectSession(viewSession, 'db:blueprint-character-sync-get', committed.characterSyncOperation.operationId, projectPath)
           if (!operation || operation.status !== 'completed' || !operation.completionReceipt
             || operation.operationId !== committed.characterSyncOperation.operationId
             || operation.completionReceipt.blueprintCommitOperationId !== committed.operationId) throw new Error('GENERATION_REQUEST_FAILED')
@@ -520,14 +561,13 @@ function productionDependencies(
           syncedRangeAwaitingCompletion = true
           syncedRangeCompleted = false
         }
-        const refreshSyncedRange = () => {
+        const refreshSyncedRange = async () => {
+          const viewSession = await waitForProjectionView()
           syncedRangeAwaitingCompletion = false
           syncedRangeCompleted = false
           const current = useProjectStore.getState().currentProject
-          if (!current || !sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
-            callbacks.log(textForLocale(run.locale, '当前正在查看其他作品，蓝图事实已安全保存至目标作品库', 'Viewing another project; blueprint facts saved safely to the target project database.'))
-          }
-          globalEventBus.emit('REFRESH_RESOURCE', { resources: ['fileTree', 'blueprints'], projectPath, projectSession: session })
+          if (!current || !sameProjectSessionContext(viewSession, projectSessionContextFromProject(current))) throw new Error('PROJECT_VIEW_SESSION_INVALID')
+          globalEventBus.emit('REFRESH_RESOURCE', { resources: ['fileTree', 'blueprints'], projectPath, projectSession: viewSession })
         }
         const unsubscribeProject = useProjectStore.subscribe(state => {
           if (!sameProjectSessionContext(session, projectSessionContextFromProject(state.currentProject))) useWorkflowReasoningStore.getState().clear(context.runId)
@@ -545,19 +585,31 @@ function productionDependencies(
             }
             if (event.kind === 'progress') {
               callbacks.setProgress(event.progress)
-              if (event.progress === 100 && syncedRangeCompleted) refreshSyncedRange()
+              if (event.progress === 100 && syncedRangeCompleted) await refreshSyncedRange()
               return
             }
             if (event.kind === 'prompt-budget') { callbacks.setPromptBudgetReport?.(event.report); return }
-            if (event.kind === 'range-committed') { context.data.blueprintCommitReceipt = (await readReceipt(event.batchId)).committed; return }
-            if (event.kind === 'range-synced') { await projectSynced(event.batchId); return }
+            if (event.kind === 'range-committed') {
+              const viewSession = await waitForProjectionView()
+              context.data.blueprintCommitReceipt = (await readReceipt(event.batchId, viewSession)).committed
+              return
+            }
+            if (event.kind === 'range-synced') {
+              const viewSession = await waitForProjectionView()
+              await projectSynced(event.batchId, viewSession)
+              return
+            }
             if (event.kind !== 'opened') return
             let acknowledged = false
-            const ack = (decision: 'accept' | 'cancelled' | 'projection-failed') => ipc.invokeWithProjectSession(
-              session, 'import-generation:v1:blueprints-ack', { runId: run.id, execution, batchId: event.batchId, token: event.token, decision },
-            )
+            const ack = async (decision: 'accept' | 'cancelled' | 'projection-failed') => {
+              const viewSession = await waitForProjectionView()
+              return ipc.invokeWithProjectSession(viewSession, 'import-generation:v1:blueprints-ack', {
+                runId: run.id, execution, batchId: event.batchId, token: event.token, decision,
+              })
+            }
             try {
               if (projectionError || openedBatches.has(event.batchId)) throw new Error('GENERATION_REQUEST_FAILED')
+              await waitForProjectionView()
               if (runtime) { await runtime.read(); await runtime.close(); runtime = undefined }
               unsubscribeReasoning?.(); unsubscribeReasoning = undefined
               useWorkflowReasoningStore.getState().clear(context.runId)
@@ -569,7 +621,7 @@ function productionDependencies(
               pinWorkflowModel(context, event.modelId)
               unsubscribeReasoning = transport.subscribeReasoning?.(handle, reasoning => {
                 if (!active || context.cancelled || !reasoning.attemptId || !reasoning.text
-                  || !sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
+                  || !sameProjectSessionContext(currentReferenceProjectionSession(context, session), projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
                 useWorkflowReasoningStore.getState().append(context.runId, reasoning.attemptId, reasoning.text)
               })
               runtime = await createMainOwnedGenerationRuntime({ runHandle: handle, onSnapshot: snapshot => {
@@ -599,7 +651,8 @@ function productionDependencies(
             if (typeof result.error !== 'string' || typeof result.errorCode !== 'string' || !result.errorCode) throw new Error('GENERATION_REQUEST_FAILED')
             if (Object.hasOwn(result, 'postCommitSyncBatchId')) {
               if (result.errorCode !== 'GENERATION_REQUEST_FAILED' || !isReferenceBlueprintBatchId(result.postCommitSyncBatchId)) throw new Error('GENERATION_REQUEST_FAILED')
-              const { committed } = await readReceipt(result.postCommitSyncBatchId)
+              const viewSession = await waitForProjectionView()
+              const { committed } = await readReceipt(result.postCommitSyncBatchId, viewSession)
               context.data.blueprintCommitReceipt = committed
               const { ImportBlueprintPostCommitSyncError } = await import('./commands/import-novel.command')
               throw new ImportBlueprintPostCommitSyncError(committed, (zh, en) => textForLocale(run.locale, zh, en))
@@ -623,12 +676,13 @@ function productionDependencies(
               || typeof result.handle.rootActionId !== 'string' || !result.handle.rootActionId.trim()
               || typeof result.handle.runId !== 'string' || !result.handle.runId.trim()))
             || (!result.replayed && !handle)) throw new Error('GENERATION_REQUEST_FAILED')
-          const canonical = await readReceipt(result.receipt.batchId)
+          const viewSession = await waitForProjectionView()
+          const canonical = await readReceipt(result.receipt.batchId, viewSession)
           if (JSON.stringify(canonical.receipt) !== JSON.stringify(result.receipt)) throw new Error('GENERATION_REQUEST_FAILED')
           if (result.execution === null) delete context.data.importRunExecution
           else context.data.importRunExecution = result.execution
           if (projectionError) throw projectionError
-          if (runtime) await runtime.read()
+          if (runtime) { await waitForProjectionView(); await runtime.read() }
         } finally {
           active = false
           unsubscribe()
@@ -645,7 +699,7 @@ function productionDependencies(
           || lease.owner !== owner || lease.epoch !== referenceKnowledge.execution.epoch) throw new Error('GENERATION_IMPORT_EXECUTION_STALE')
         const execution = { owner: lease.owner, epoch: lease.epoch }
         const modelId = context.generationModelId?.trim() || routeModelId('analyze-writing-style') || null
-        const transport = createMainGenerationTransport(() => session)
+        const transport = referenceKnowledge ? createReferenceGenerationTransport(context, session, waitForProjectionView) : createMainGenerationTransport(() => session)
         const displayed = new Map<string, string>()
         const projection: { runtime?: Awaited<ReturnType<typeof createMainOwnedGenerationRuntime>> } = {}
         let unsubscribeReasoning: (() => void) | undefined
@@ -662,8 +716,10 @@ function productionDependencies(
           if (!result.success) throw new Error(result.error || 'IMPORT_RUN_CANCEL_REQUEST_FAILED')
         }
         context.requestMainGenerationCancellation = requestCancel
-        const ack = async (token: string, phase: ReferenceStyleAckRequest['phase'], decision: ReferenceStyleAckRequest['decision']) =>
-          ipc.invokeWithProjectSession(session, 'import-generation:v1:style-ack', { runId: run.id, execution, token, phase, decision })
+        const ack = async (token: string, phase: ReferenceStyleAckRequest['phase'], decision: ReferenceStyleAckRequest['decision']) => {
+          const viewSession = await waitForProjectionView()
+          return ipc.invokeWithProjectSession(viewSession, 'import-generation:v1:style-ack', { runId: run.id, execution, token, phase, decision })
+        }
         const unsubscribeProject = useProjectStore.subscribe(state => {
           if (!sameProjectSessionContext(session, projectSessionContextFromProject(state.currentProject))) clearReasoning()
         })
@@ -672,22 +728,7 @@ function productionDependencies(
             || event.leaseId !== session.leaseId || event.runId !== run.id || event.execution.owner !== execution.owner
             || event.execution.epoch !== execution.epoch || event.sequence <= sequence) return
           sequence = event.sequence
-          let openedConfig: NovelConfig | undefined
-          let openedError: unknown
-          if (event.kind === 'opened') {
-            try {
-              if (bridge) {
-                const captured = bridge.openedStyle(event.sequence)
-                if (!captured) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
-                openedConfig = captured.config
-                openedError = captured.error
-              } else {
-                const project = useProjectStore.getState().currentProject
-                if (!project || !sameProjectSessionContext(session, projectSessionContextFromProject(project))) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
-                openedConfig = structuredClone(project.novelConfig)
-              }
-            } catch (error) { openedError = error }
-          }
+          const openedSnapshot = event.kind === 'opened' && bridge ? bridge.openedStyle(event.sequence) : undefined
           queue = queue.then(async () => {
             if (event.kind === 'log') { callbacks.log(styleLog(run.locale, event.log, 'count' in event ? event.count : undefined)); return }
             if (event.kind === 'progress') { callbacks.setProgress(event.progress); return }
@@ -697,15 +738,26 @@ function productionDependencies(
               try {
                 if (handle) throw new Error('GENERATION_REQUEST_FAILED')
                 handle = Object.freeze({ ...event.handle })
-                if (openedError) throw openedError
-                expected = openedConfig
+                const viewSession = await waitForProjectionView()
+                if (bridge) {
+                  const captured = await openedSnapshot
+                  if (!captured) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
+                  if (captured.error) throw captured.error
+                  expected = captured.config
+                } else {
+                  const project = useProjectStore.getState().currentProject
+                  if (!project || !sameProjectSessionContext(viewSession, projectSessionContextFromProject(project))) {
+                    throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
+                  }
+                  expected = structuredClone(project.novelConfig)
+                }
                 context.mainGenerationRunHandle = handle
                 context.mainGenerationRootHandle = handle
                 context.generationModelId = event.modelId
                 pinWorkflowModel(context, event.modelId)
                 unsubscribeReasoning = transport.subscribeReasoning?.(handle, reasoning => {
                   if (!active || context.cancelled || !reasoning.attemptId || !reasoning.text
-                    || !sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
+                    || !sameProjectSessionContext(currentReferenceProjectionSession(context, session), projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
                   useWorkflowReasoningStore.getState().append(context.runId, reasoning.attemptId, reasoning.text)
                 })
                 projection.runtime = await createMainOwnedGenerationRuntime({ runHandle: handle, onSnapshot: snapshot => {
@@ -732,8 +784,9 @@ function productionDependencies(
             try {
               if (!handle || !expected || !sameGenerationHandle(handle, event.handle)) throw new Error('GENERATION_REQUEST_FAILED')
               if (context.cancelled || context.cancelRequested) { await ack(event.token, 'commit', 'cancelled'); return }
+              const viewSession = await waitForProjectionView()
               const saved = await useProjectStore.getState().commitGeneratedNovelConfig(
-                { writingStyle: event.writingStyle }, expected, session, handle, async () => {
+                { writingStyle: event.writingStyle }, expected, viewSession, handle, async () => {
                   acknowledged = true
                   const result = await ack(event.token, 'commit', 'accept')
                   if (result.version !== 1 || typeof result.savedWritingStyle !== 'string' || !result.savedWritingStyle.trim()) throw new Error('GENERATION_REQUEST_FAILED')
@@ -780,12 +833,13 @@ function productionDependencies(
           if (result.execution === null) delete context.data.importRunExecution
           else context.data.importRunExecution = result.execution
           if (projectionError) throw projectionError
-          if (projection.runtime) await projection.runtime.read()
+          if (projection.runtime) { await waitForProjectionView(); await projection.runtime.read() }
           if (result.replayed) {
-            await projectReferenceStyle(run, context, callbacks)
+            const viewSession = await waitForProjectionView()
+            await projectReferenceStyle(run, context, callbacks, viewSession)
           }
           const current = useProjectStore.getState().currentProject
-          if (current && sameProjectSessionContext(session, projectSessionContextFromProject(current))) {
+          if (current && sameProjectSessionContext(currentReferenceProjectionSession(context, session), projectSessionContextFromProject(current))) {
             context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
           }
         } finally {
@@ -1255,7 +1309,7 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
           reference: referenceKnowledge.reference,
           execution: { owner: referenceKnowledge.execution.owner, epoch: referenceKnowledge.execution.epoch },
           modelId: context.generationModelId?.trim() || routeModelId('import-global-facts') || null,
-        }, params.run.rootRunId)
+        }, params.run.rootRunId, signal => waitForReferenceProjectView(context, signal), context.markReferenceRunAdmitted)
         referenceProjection.start()
       }
       const projection = referenceProjection
@@ -1265,40 +1319,47 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
         const entry = await projection.entry(stage)
         if (entry.kind === 'skipped') {
           state.skipToken = entry.token
-          if (stage === 'global') await projectReferenceGlobal(entry.run, context, callbacks)
-          else if (stage === 'style') await projectReferenceStyle(entry.run, context, callbacks)
-          else if (stage === 'blueprints') await validateSkippedBlueprints(entry.run, context)
+          const viewSession = await projection.waitForProjectView()
+          if (stage === 'global') await projectReferenceGlobal(entry.run, context, callbacks, viewSession)
+          else if (stage === 'style') await projectReferenceStyle(entry.run, context, callbacks, viewSession)
+          else if (stage === 'blueprints') await validateSkippedBlueprints(entry.run, context, viewSession)
           state.ackIssued = true
-          await projection.acknowledge(stage, entry.token, context.cancelled || context.cancelRequested ? 'cancelled' : 'settled')
-        } else {
-          const bridge: ReferenceStageBridge = {
-            on: projection.on,
-            openedStyle: sequence => projection.openedStyle(sequence),
-            wait: async <S extends keyof ReferenceStageResults>(requested: S): Promise<ReferenceStageResults[S]> => {
-              try { state.completion = await projection.completion(requested) }
-              catch (error) {
-                if (error instanceof ReferenceRunFailure) return error.response as ReferenceStageResults[S]
-                throw error
-              }
-              const result = state.completion.completion.result
-              return { success: true, ...result } as ReferenceStageResults[S]
-            },
+          await projection.acknowledge(await projection.waitForProjectView(), stage, entry.token,
+            context.cancelled || context.cancelRequested ? 'cancelled' : 'settled')
+          } else {
+            const bridge: ReferenceStageBridge = {
+              on: projection.on,
+              waitForProjectView: () => projection.waitForProjectView(),
+              openedStyle: sequence => projection.openedStyle(sequence),
+              wait: async <S extends keyof ReferenceStageResults>(requested: S): Promise<ReferenceStageResults[S]> => {
+                try { state.completion = await projection.completion(requested) }
+                catch (error) {
+                  if (error instanceof ReferenceRunFailure) return error.response as ReferenceStageResults[S]
+                  throw error
+                }
+                const result = state.completion.completion.result
+                return { success: true, ...result } as ReferenceStageResults[S]
+              },
+            }
+            const dependencies = productionDependencies(context, callbacks, referenceKnowledge, bridge)
+            if (stage === 'knowledge') await dependencies.executeReferenceKnowledge!(entry.run, params.executionOwner)
+            else if (stage === 'global') await dependencies.executeReferenceGlobal!(entry.run, params.executionOwner)
+            else if (stage === 'style') await dependencies.executeReferenceStyle!(entry.run, params.executionOwner)
+            else if (stage === 'blueprints') await dependencies.executeReferenceBlueprints!(entry.run, params.executionOwner)
+            else await dependencies.executeReferenceRefresh!(entry.run, params.executionOwner)
+            if (!state.completion) throw new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
+            state.ackIssued = true
+            await projection.acknowledge(await projection.waitForProjectView(), stage, state.completion.token,
+              context.cancelled || context.cancelRequested ? 'cancelled' : 'settled')
           }
-          const dependencies = productionDependencies(context, callbacks, referenceKnowledge, bridge)
-          if (stage === 'knowledge') await dependencies.executeReferenceKnowledge!(entry.run, params.executionOwner)
-          else if (stage === 'global') await dependencies.executeReferenceGlobal!(entry.run, params.executionOwner)
-          else if (stage === 'style') await dependencies.executeReferenceStyle!(entry.run, params.executionOwner)
-          else if (stage === 'blueprints') await dependencies.executeReferenceBlueprints!(entry.run, params.executionOwner)
-          else await dependencies.executeReferenceRefresh!(entry.run, params.executionOwner)
-          if (!state.completion) throw new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
-          state.ackIssued = true
-          await projection.acknowledge(stage, state.completion.token, context.cancelled || context.cancelRequested ? 'cancelled' : 'settled')
-        }
         if (stage === 'refresh') await projection.finish()
       } catch (error) {
         const token = state.completion?.token ?? state.skipToken
         if (token && !state.ackIssued) {
-          try { await projection.acknowledge(stage, token, context.cancelled || context.cancelRequested ? 'cancelled' : 'projection-failed') }
+          try {
+            await projection.acknowledge(await projection.waitForProjectView(), stage, token,
+              context.cancelled || context.cancelRequested ? 'cancelled' : 'projection-failed')
+          }
           catch { /* Preserve the original projection failure. */ }
         }
         if (context.cancellationRequest) await context.cancellationRequest.catch(() => undefined)
@@ -1407,6 +1468,7 @@ export function createImportWorkflow(params: ImportWorkflowParams): WorkflowDefi
   return {
     runId: params.run.id,
     type: 'novel_import',
+    ...(params.run.purpose === 'reference' ? { backgroundExecution: 'reference-run' as const } : {}),
     title: textForLocale(
       params.run.locale,
       `小说拆解与仿写（${count} 章）`,

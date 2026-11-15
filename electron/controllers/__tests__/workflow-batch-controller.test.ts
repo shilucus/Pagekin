@@ -52,9 +52,15 @@ const report = JSON.stringify({ summary: 'Fictional machine review', items: [{ c
   severity: 'pass', description: 'Compared the supplied fictional source with its frozen plan.' }], goalReviews: [] })
 const outputs = ['Fictional outline: deliver the sealed letter.', prose[0]!,
   'Fictional outline: measure the observatory lens.', prose[1]!, report, report]
+let retirementGuard: (runtime: ProjectRuntime) => boolean
 
-beforeAll(() => registerGenerationController({ modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel: () => model }),
-  loadModel: () => model, applyProxyConfig: () => {} }))
+beforeAll(() => {
+  const register = vi.spyOn(projectRuntimeHost, 'registerRetirementGuard')
+  registerGenerationController({ modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel: () => model }),
+    loadModel: () => model, applyProxyConfig: () => {} })
+  retirementGuard = register.mock.calls[0]![0]
+  register.mockRestore()
+})
 beforeEach(() => {
   const base = path.resolve('.runtime/.cache/wbi')
   fs.mkdirSync(base, { recursive: true }); root = fs.mkdtempSync(path.join(base, 'f-'))
@@ -125,6 +131,24 @@ function counts() {
 }
 
 describe('planned batch registered main IPC and real native effects', () => {
+  it('keeps a live batch without writing and allows its completed receipt after legacy handoff', async () => {
+    const transport = stream({ hold: true, includeUsage: true })
+    try {
+      const issued = await call('workflow-batch:v2:start', request(), sender, session)
+      await transport.started
+      const before = runtime.database.prepare('SELECT total_changes()').pluck().get()
+      expect(retirementGuard(runtime)).toBe(false)
+      expect(runtime.database.prepare('SELECT total_changes()').pluck().get()).toBe(before)
+      transport.release()
+      expect((await terminal(issued.reference!)).task.state).toBe('waiting_review')
+      expect(runtime.database.prepare("SELECT DISTINCT json_extract(attempt_json,'$.status') FROM generation_attempts").pluck().all()).toEqual(['settled'])
+      await vi.waitFor(() => expect(retirementGuard(runtime)).toBe(true))
+      const list = mocks.handlers.get('generation:list')!
+      await list({ sender }, { ...session })
+      expect(retirementGuard(runtime)).toBe(true)
+      expect((await call('workflow-batch:v2:read-receipt', { reference: issued.reference! })).task.state).toBe('waiting_review')
+    } finally { transport.release() }
+  })
   it('continues a batch review through explicit author confirmation, revision, merge and recheck', async () => {
     const quote = 'holding a sealed letter', replacement = 'holding an opened letter'
     const revised = prose[0]!.replace(quote, replacement)

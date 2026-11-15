@@ -390,6 +390,10 @@ export interface ProjectChannels {
     }
   }
   'project-runtime:v1:open-view': ProjectChannels['project:open']
+  'project-runtime:v1:open-background-view': {
+    args: ProjectChannels['project:open']['args']
+    return: ProjectChannels['project:open']['return'] & { backgroundViewsRetained: boolean }
+  }
   'project:save': {
     args: [projectId: string, data: Partial<ProjectData>, expectedProjectPath: string]
     return: { success: boolean; error?: string }

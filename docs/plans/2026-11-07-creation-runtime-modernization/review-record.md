@@ -1582,3 +1582,67 @@ and final-version reruns before their own scoped commits.
   path/hook/hash and record checks. No feature completed/passes promotion is
   accepted. Full import/background/imitation, UI design states, production API,
   real model and target platform gaps remain explicit in Stage100.
+
+## 2026-11-15 Stage101 Bounded Integration Review
+
+- Sol independently reviews original-sender reference-owner recovery reads
+  and the final149/149 recovery pair. Agent4 independently reviews the renderer
+  fast-return projection-session fix, ordered original execution/new actual-A
+  ACK boundary, captured adapters and safe inactive managed-view retirement.
+  Unknown/missing usage still prevents retirement; its synthetic usage fixture
+  is corrected without weakening the production guard.
+- Agent4's real wrapper finding requires checking the original synchronous
+  preflight callback before invoking it. The single-use directory grant is
+  revalidated without consumption, consumed exactly once at final admission,
+  including the legacy-import handoff branch. Actual REDs and final78/78
+  runtime/open plus overlapping101/101 are read independently; no TTL renewal,
+  raw-open bypass or generic asynchronous callback is authorized.
+- Actual desktop returns expose legacy recovery/history/detail-reader refusals.
+  Agent4 verifies the six exact additional SELECT/validation readers, current
+  session/root/native/expected-path checks and unchanged writer refusals. Cycle
+  verification/recheck is traced through reachable repositories without writes.
+  Registered dual-native65/65 checks B/new-A isolation and both databases'
+  total_changes. Null-cycle fixture evidence does not qualify nonempty cycles.
+- Sol's scene uses real library/open/save/return actions, one original execute,
+  a held actual A model attempt, ordered settled ACK prefix and actual return
+  lease. Passthrough IPC observation preserves return/error identity and calls;
+  pending observations are not host-claim proof. Agent4 accepts final scene64/64
+  and exact hashes as pure-tool evidence, not Electron acceptance.
+- The seventh actual desktop has product assertions but forced quit. Root and
+  Agent4 inspect its three PNGs/raw and refuse normal-exit acceptance despite
+  command exit0. Luna's first quit repair passes73/73, but Terra independently
+  finds missing rejected/timeout and warm-up/restart result handling; that
+  report is superseded for final tool acceptance. Terra reviews the later
+  55-case RED5 -> GREEN55/55 repair; Root reruns six actual tool files141/141.
+  Normal outcome is resolved/unforced/no kill; preparation/restart consumers
+  are statically reviewed and helper tests do not directly run those closures.
+- Eighth actual desktop exits1 with forced timeout. Root/Agent4 read JSON,
+  post-quit console and all three PNGs. Product assertions and reader repairs
+  pass within their scope, but close is directly refused with
+  PROJECT_RUNTIME_VIEW_OPERATION_BUSY. Which exact physical operation held
+  the claim is not proven. Terra's first close repair passes17 mock cases;
+  Root, Sol and Agent5 reject unconditional drain admission because a real
+  sealed timeout retry then fails HOST_CLOSING. Terra's seal-aware RED is
+  17passed/1failed, then final18/18. Sol independently accepts exact busy-only
+  coordination, original direct sealed retry/upgrade and current session/intent
+  checks. Agent5's actual dual-native host file51/51 proves the synchronous
+  last-release seal without pretending to prove the whole window adapter.
+- Ninth actual desktop exits0 after fresh quality checks/source build. Root
+  and Agent4 independently inspect JSON, post-quit console and three PNGs.
+  One execute/five ACKs, actual held A request while B, renewed actual-A view,
+  saved B text,10knowledge/four stage receipts/10blueprints/four unchanged old
+  rows and12fake requests agree. Quit resolved2787ms, unforced and kill not-needed.
+  Stale recovery refusal remains; legacy/detail/close failures and pageerrors
+  are absent. Existing CSP/build warnings and observed-before-quit coverage
+  remain explicit. This bounded scene is accepted; final record/index audit
+  still precedes any commit, with no feature promotion.
+- Partial IMPORT001/UI001 review does not promote either feature. Idle expired
+  issuance and genuine fresh-native registered recovery remain IMPORT001 gaps;
+  complete UI close/recovery states remain UI001 gaps. No real-model quality,
+  full imitation, multi-task concurrency or platform qualification follows.
+- Final Agent4 record audit closes three obsolete pending phrases without
+  relabeling their historical failures. All56 source/eight separate tool/three
+  build/three protected/55report identities match; checklist36/36 is record
+  evidence only. No remaining bounded blocker is found. The62-path source plus
+  plan-record local commit is accepted subject to Root's final index/hooks/path
+  checks; tools and protected files remain excluded, with no feature promotion.

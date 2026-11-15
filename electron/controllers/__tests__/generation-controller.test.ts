@@ -33,6 +33,7 @@ import { withKnowledgeSourceGate } from '../../services/knowledge-source-gate'
 import { ModelExecutionLeaseRegistry } from '../../services/model-execution-lease'
 import { projectAccess } from '../../services/project-access'
 import { projectRuntimeHost } from '../../services/project-runtime'
+import { acquireImportRunParentFlight, assertImportRunParentFlightCurrent } from '../../services/import-stage-flight'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb, onProjectDatabaseBeforeClose } from '../../database'
 import { textHash } from '../../repositories/generation-run-repository'
 import { KnowledgeBaseUnavailableError, knowledgeBaseLoader } from '../../services/knowledge-base-loader'
@@ -57,6 +58,7 @@ const model: ModelProfile = { id: 'fixture', name: '合成模型', provider: 'op
 const sender = { isDestroyed: () => false, send: vi.fn() }
 let root: string, session: ProjectSessionContext
 let openedProject: ReturnType<typeof projectAccess.createProject>
+let generationController: ReturnType<typeof registerGenerationController>
 const request: BeginGenerationRequest = { operation: 'draft', uiActionNonce: 'click', modelId: 'fixture',
   selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['first_chapter_draft'], skillStages: [], output: 'visible-text' }
 const materialDecision = (prompt = '合成初始提示词'): NonNullable<BeginGenerationRequest['materialDecision']> => ({
@@ -67,7 +69,7 @@ const materialDecision = (prompt = '合成初始提示词'): NonNullable<BeginGe
   omitted: [],
 })
 beforeAll(() => {
-  registerGenerationController({ modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, applyProxyConfig: () => {} })
+  generationController = registerGenerationController({ modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, applyProxyConfig: () => {} })
   registerDatabaseController()
 })
 beforeEach(() => {
@@ -97,6 +99,79 @@ function stream(content = '中文候选', reasoning?: string) {
   return fetch
 }
 describe('planning feedback v1 registered IPC', () => {
+  it.each(['drained', 'stale-session', 'nonview-work', 'new-work'] as const)(
+    'waits for current view operations before listing recovery (%s)', async scenario => {
+      const a = projectRuntimeHost.getActiveView()!, oldSession = { ...session }
+      const parent = acquireImportRunParentFlight(a.database, 'fictional-background-reference')
+      const releaseA = projectRuntimeHost.acquireWork(a)
+      const projectB = projectAccess.createProject(root, 'Fiction B')
+      createProjectDatabase(projectB.rootPath)
+      const opened = projectAccess.commitViewSession(projectRuntimeHost.prepareRetainedOpen(projectB), runtime => runtime)
+      const b = opened.value
+      session = { projectId: opened.session.projectId, projectPath: opened.session.rootPath, leaseId: opened.session.leaseId }
+      let releaseView: (() => void) | undefined
+      let releaseOther: (() => void) | undefined
+      try {
+        if (scenario === 'nonview-work') releaseOther = projectRuntimeHost.acquireWork(b)
+        else releaseView = projectRuntimeHost.acquireViewOperation(b)
+        if (scenario === 'new-work') {
+          const original = projectAccess.assertViewContext.bind(projectAccess)
+          let calls = 0
+          vi.spyOn(projectAccess, 'assertViewContext').mockImplementation(context => {
+            const runtime = original(context)
+            if (++calls === 2) releaseOther = projectRuntimeHost.acquireWork(b)
+            return runtime
+          })
+        }
+        const list = mocks.handlers.get('generation:list-recovery')!
+        let state: 'pending' | 'resolved' | 'rejected' = 'pending'
+        const result = list({ sender }, { ...session }).then(value => { state = 'resolved'; return value }, error => { state = 'rejected'; throw error })
+        void result.catch(() => {})
+        await new Promise<void>(resolve => setImmediate(resolve))
+        if (scenario === 'nonview-work') {
+          expect(state).toBe('rejected')
+          await expect(result).rejects.toThrow()
+        } else {
+          expect(state).toBe('pending')
+          if (scenario === 'stale-session') projectAccess.invalidateCurrentSession()
+          releaseView!(); releaseView = undefined
+          if (scenario === 'drained') await expect(result).resolves.toMatchObject({ partial: false })
+          else await expect(result).rejects.toThrow()
+        }
+        assertImportRunParentFlightCurrent(a.database, 'fictional-background-reference', parent.token)
+        expect(() => projectRuntimeHost.assertTaskAvailable(a)).toThrow('PROJECT_RUNTIME_BUSY')
+      } finally {
+        releaseView?.(); releaseOther?.()
+        vi.restoreAllMocks()
+        projectRuntimeHost.activateView(a)
+        session = { ...oldSession, leaseId: projectAccess.beginSession(openedProject).leaseId }
+        projectRuntimeHost.releaseIdle(b)
+        releaseA(); parent.release()
+      }
+    })
+
+  it('lists recovery for the current reference owner without handing off an active whole run', async () => {
+    const runtime = projectRuntimeHost.getActiveView()!, previous = { ...session }
+    generationController.prepareReferenceRun(runtime, { sender } as unknown as Parameters<typeof generationController.prepareReferenceRun>[1], session)
+    const parent = acquireImportRunParentFlight(runtime.database, 'fictional-reference-run')
+    const releaseWork = projectRuntimeHost.acquireWork(runtime)
+    try {
+      const list = mocks.handlers.get('generation:list-recovery')!
+      const otherSender = { isDestroyed: () => false, send: vi.fn() }
+      await expect(list({ sender: otherSender }, session)).rejects.toThrow()
+      await expect(list({ sender }, { ...session, leaseId: 'expired-view' })).rejects.toThrow()
+      await expect(invoke('generation:begin', { ...request, uiActionNonce: 'forbidden-during-reference' })).rejects.toThrow()
+      const before = runtime.database.prepare('SELECT total_changes()').pluck().get()
+      await expect(list({ sender }, session)).resolves.toMatchObject({ planning: [], editors: [], reviews: [], batches: [], drafts: [], partial: false })
+      expect(runtime.database.prepare('SELECT total_changes()').pluck().get()).toBe(before)
+      assertImportRunParentFlightCurrent(runtime.database, 'fictional-reference-run', parent.token)
+      expect(() => projectRuntimeHost.assertTaskAvailable(runtime)).toThrow('PROJECT_RUNTIME_BUSY')
+      generationController.prepareReferenceRun(runtime, { sender } as unknown as Parameters<typeof generationController.prepareReferenceRun>[1], session)
+      session = { ...session, leaseId: projectAccess.beginSession(openedProject).leaseId }
+      await expect(list({ sender }, previous)).rejects.toThrow()
+      await expect(list({ sender }, session)).resolves.toMatchObject({ partial: false })
+    } finally { releaseWork(); parent.release() }
+  })
   async function completedFeedback(nonce = 'fixture') {
     const base = await invoke('planning-feedback:v1:capture', { target: 'coreOutline' })
     const input = { baseId: base.baseId, feedback: 'Keep the facts', constraints: ['Do not alter the setting'] }

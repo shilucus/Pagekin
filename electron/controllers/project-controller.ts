@@ -13,7 +13,7 @@ import {
 } from '../../src/shared/ipc-channels'
 import { DIR_PROMPTS } from '../../src/shared/project-paths'
 import { sameProjectPathKey } from '../../src/shared/project-session-context'
-import { PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../src/shared/project-runtime-contract'
+import { PROJECT_RUNTIME_OPEN_BACKGROUND_VIEW_CHANNEL, PROJECT_RUNTIME_OPEN_VIEW_CHANNEL } from '../../src/shared/project-runtime-contract'
 import {
   resolveWritingLanguage,
 } from '../../src/shared/writing-language'
@@ -530,14 +530,14 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     })
   })
 
-  // Both entrypoints share grant/probe validation and the latest-request queue.
-  const createOpenHandler = (retained: boolean) => async (
+  // Compatibility, raw-retained and managed-background entries share grant/probe validation and the latest-request queue.
+  const createOpenHandler = (mode: 'compatibility' | 'retained' | 'background') => async (
     event: IpcMainInvokeEvent,
     target: ProjectOpenTarget,
     requestToken: string,
   ) => {
     latestProjectOpenRequestToken = requestToken
-    return serializeProjectOpen(async () => {
+    const result = await serializeProjectOpen(async () => {
       // 让已经发出的后续打开请求先登记身份，避免旧请求抢先切换全局数据库。
       await yieldToPendingOpenRequests()
       const isLatestRequest = () => latestProjectOpenRequestToken === requestToken
@@ -558,14 +558,16 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       const superseded = new Error('PROJECT_OPEN_SUPERSEDED')
       try {
         if (rollbackBoundary.kind === 'untrusted') throw new Error('PROJECT_ROLLBACK_UNTRUSTED')
-        if (!retained) projectRuntimeHost.assertCompatibilityOpenAvailable()
+        if (mode === 'compatibility') projectRuntimeHost.assertCompatibilityOpenAvailable()
         const recent = typeof target === 'string'
           ? loadRecentProjects().find(project => project.path === target) : undefined
         const smokePath = process.env.AI_NOVEL_SMOKE_OPEN_PROJECT?.trim()
         // Persisted recent entries are main-owned project references, not arbitrary path authority.
         const projectPath = typeof target === 'string'
           ? recent?.path ?? (smokePath && target === smokePath ? smokePath : null)
-          : externalFileGrants.resolveDirectoryPath({
+          : mode === 'background' ? externalFileGrants.revalidateDirectoryPath({
+            grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
+          }) : externalFileGrants.resolveDirectoryPath({
             grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
           })
         if (!projectPath) throw new Error('PROJECT_OPEN_GRANT_REQUIRED')
@@ -579,6 +581,9 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           }
           const sqlite = probeProjectSqlite({ databasePath: path.join(probedProject.rootPath, '.vela', 'vela.db') })
           if (sqlite.schemaVersion !== 0) throw new Error('LEGACY_IMPORT_UNSUPPORTED_SOURCE')
+          if (mode === 'background' && typeof target !== 'string') externalFileGrants.resolveDirectoryPath({
+            grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
+          })
           legacyImportSource = issueDirectoryGrant(event, probedProject.rootPath, 'legacy-import')
           throw new Error('PROJECT_LEGACY_IMPORT_REQUIRED')
         }
@@ -587,8 +592,19 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         if (recent?.projectId && recent.projectId !== trustedProject.projectId) {
           throw new Error('PROJECT_OPEN_RECENT_IDENTITY_CHANGED')
         }
-        prepared = retained ? projectRuntimeHost.prepareRetainedOpen(trustedProject)
-          : projectRuntimeHost.prepareCompatibilityOpen(trustedProject)
+        const capturedSession = mode === 'background' ? projectAccess.captureCurrentSession() : null
+        prepared = mode === 'background' ? await projectRuntimeHost.prepareBackgroundViewOpenAfterDrain(trustedProject, () => {
+          if (!isLatestRequest()) throw superseded
+          if (capturedSession) projectAccess.assertViewContext({ projectId: capturedSession.projectId,
+            leaseId: capturedSession.leaseId, projectPath: capturedSession.rootPath })
+          else if (projectAccess.captureCurrentSession()) throw new Error('PROJECT_SESSION_STALE')
+          // An external directory grant may be revoked while physical editor work drains.
+          if (typeof target !== 'string' && externalFileGrants.resolveDirectoryPath({
+            grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
+          }) !== projectPath) throw new Error('PROJECT_OPEN_GRANT_REQUIRED')
+        })
+          : mode === 'retained' ? projectRuntimeHost.prepareRetainedOpen(trustedProject)
+            : projectRuntimeHost.prepareCompatibilityOpen(trustedProject)
         const ticket = prepared
         const opened = projectAccess.commitViewSession(ticket, runtime => {
           const openedDatabase = runtime.database
@@ -649,6 +665,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           return { projectData, finalizationRepair }
         })
         prepared = undefined
+        if (mode === 'background') projectRuntimeHost.finishBackgroundViewOpen(ticket)
         opened.value.projectData.sessionLease = opened.session.leaseId
         return {
           success: true,
@@ -702,9 +719,11 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         }
       }
     })
+    return mode === 'background' ? { ...result, backgroundViewsRetained: projectRuntimeHost.hasBackgroundViewsRetained() } : result
   }
-  ipcMain.handle('project:open', createOpenHandler(false))
-  ipcMain.handle(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, createOpenHandler(true))
+  ipcMain.handle('project:open', createOpenHandler('compatibility'))
+  ipcMain.handle(PROJECT_RUNTIME_OPEN_VIEW_CHANNEL, createOpenHandler('retained'))
+  ipcMain.handle(PROJECT_RUNTIME_OPEN_BACKGROUND_VIEW_CHANNEL, createOpenHandler('background'))
 
   // 保存/更新项目配置
   // 注意：这个接口前端可能还传入许多小说配置字段，需要映射到数据库。

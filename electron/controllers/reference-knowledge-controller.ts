@@ -81,6 +81,16 @@ async function authorized(runtime: ProjectRuntime, fresh: () => void, scheduler?
 export function registerReferenceKnowledgeController(scheduler?: GenerationSchedulingAdmission,
   generation?: ReturnType<typeof registerGenerationController>): void {
   if (!lifecycleInstalled) {
+    projectRuntimeHost.registerRetirementGuard(runtime => {
+      const authority = authorities.get(runtime)
+      if (authority && !authority.canRetire()) return false
+      const database = runtime.database
+      if (database.prepare("SELECT 1 FROM reference_embedding_budgets WHERE state='recovery_unknown' OR active_since_ms IS NOT NULL LIMIT 1").get()) return false
+      if (database.prepare("SELECT 1 FROM reference_embedding_dispatches WHERE state IN ('dispatch_marked','transport_unknown') LIMIT 1").get()) return false
+      if (database.prepare(`SELECT 1 FROM import_effect_ledger e JOIN import_runs r ON r.id=e.run_id
+        WHERE r.purpose='reference' AND e.state='unknown' LIMIT 1`).get()) return false
+      return true
+    })
     projectRuntimeHost.onCloseRequested(runtime => {
       runForeground.requestClose(runtime)
       refreshForeground.requestClose(runtime)
@@ -104,6 +114,7 @@ export function registerReferenceKnowledgeController(scheduler?: GenerationSched
         const body = raw[0]
         runId = body.reference.runId
         const runtime = projectAccess.assertViewContext(session)
+        const database = runtime.database, identity = runtime.databaseIdentity, executionEpoch = runtime.executionEpoch
         const fresh = () => {
           if (projectAccess.assertViewContext(session) !== runtime) throw new Error('KNOWLEDGE_BASE_REFERENCE_RESOURCES_CHANGED')
           projectRuntimeHost.assertWorkAvailable(runtime)
@@ -122,11 +133,11 @@ export function registerReferenceKnowledgeController(scheduler?: GenerationSched
           })
           if (run?.status !== 'completed') {
             authority.assertRunAdmission(event.sender, request.reference, request.execution)
-            // Only the authorized run may initialize an owner before acquiring its own legacy claims.
+            // Only the authorized run may initialize its captured owner before acquiring work.
             generation.prepareReferenceRun(runtime, event, session)
           }
         }
-        return await withLegacyProjectOperation(channel, async () => {
+        return await (async () => {
           fresh()
           if (channel === 'reference-run:v1:projection-ack') {
             return runForeground.acknowledge(runtime, event.sender, session, body as ReferenceRunProjectionAck)
@@ -155,9 +166,13 @@ export function registerReferenceKnowledgeController(scheduler?: GenerationSched
               return explainImportRunFailure(code, locale)?.error
                 ?? explainReferenceImportFailure(failure, runId!, locale).error!
             },
-          }, fresh)
+          }, () => {
+            projectRuntimeHost.assertWorkAvailable(runtime)
+            if (runtime.database !== database || runtime.databaseIdentity !== identity || runtime.executionEpoch !== executionEpoch
+              || !database.open) throw new Error('KNOWLEDGE_BASE_REFERENCE_RESOURCES_CHANGED')
+          })
           return { success: true, ...result }
-        })
+        })()
       } catch (error) {
         if (error && typeof error === 'object' && 'secondaryErrors' in error
           && Array.isArray(error.secondaryErrors) && error.secondaryErrors.length) {
@@ -206,6 +221,9 @@ export function registerReferenceKnowledgeController(scheduler?: GenerationSched
         }
         fresh()
         assertKnowledgeBaseStoragePathSupported(runtime.canonicalRoot)
+        if (channel === 'reference-knowledge:v1:refresh-ack' && refreshForeground.hasParent(runtime)) {
+          return await refreshForeground.acknowledge(runtime, event.sender, session, body as ReferenceRefreshAckRequest)
+        }
         return await withLegacyProjectOperation(channel, async () => {
           fresh()
           if (channel === 'reference-knowledge:v1:prepare') {

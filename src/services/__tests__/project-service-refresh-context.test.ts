@@ -49,6 +49,24 @@ afterEach(() => {
 })
 
 describe('ProjectService REFRESH_RESOURCE project identity', () => {
+  it('refreshes only a verified current-view workflow completion, not its original execution lease', async () => {
+    const treeRefresh = vi.spyOn(useProjectStore.getState(), 'refreshFileTree').mockResolvedValue()
+    initProjectService()
+    const payload = { type: 'novel_import', projectPath: projectBPath, runId: 'retained-reference' }
+    globalEventBus.emit('WORKFLOW_COMPLETE', {
+      ...payload, projectSession: { projectId: 'B', leaseId: 'lease-old', projectPath: projectBPath },
+    })
+    await Promise.resolve()
+    expect(treeRefresh).not.toHaveBeenCalled()
+    globalEventBus.emit('WORKFLOW_COMPLETE', {
+      ...payload, projectSession: { projectId: 'B', leaseId: 'lease-B', projectPath: projectBPath },
+    })
+    await vi.waitFor(() => expect(treeRefresh).toHaveBeenCalledOnce())
+    expect(treeRefresh).toHaveBeenCalledWith(projectBPath, undefined, {
+      projectId: 'B', leaseId: 'lease-B', projectPath: projectBPath,
+    })
+  })
+
   it('ignores a delayed same-path refresh after the project lease was replaced', async () => {
     const characterLoad = vi.spyOn(useCharacterStore.getState(), 'load')
       .mockResolvedValue()

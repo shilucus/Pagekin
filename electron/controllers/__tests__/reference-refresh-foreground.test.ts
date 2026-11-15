@@ -77,6 +77,25 @@ describe('foreground reference refresh projection coordinator', () => {
     expect((await operation).message).toBe('IMPORT_RUN_CANCELLED')
     coordinator.release(book.database)
   })
+  it('unblocks an invalidated projection gate but retains the authority tail until it drains', async () => {
+    const coordinator = new ReferenceRefreshForeground(), book = runtime(), sender = new Sender()
+    const drain = deferred(), enteredTail = deferred()
+    let invalid = false
+    execute.mockImplementation(async (_sender, _request, hooks: ReferenceRefreshExecutionHooks) => {
+      try { await hooks.refresh() } finally { enteredTail.resolve(); await drain.promise }
+      return result
+    })
+    const operation = coordinator.execute(book, authority, subject(sender), session, request, () => {
+      if (invalid) throw new Error('IMPORT_RUN_CANCELLED')
+    }).catch(error => error)
+    await vi.waitFor(() => expect(sender.events).toHaveLength(1))
+    invalid = true
+    await Promise.race([enteredTail.promise, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('GATE_STILL_BLOCKED')), 1000))])
+    expect(() => coordinator.release(book.database)).toThrow('GENERATION_OWNER_BUSY')
+    drain.resolve()
+    expect((await operation).message).toBe('IMPORT_RUN_CANCELLED')
+    coordinator.release(book.database)
+  })
   it('turns only a failed ACK into the finite projection failure without accepting arbitrary renderer text', async () => {
     const coordinator = new ReferenceRefreshForeground(), book = runtime(), sender = new Sender()
     execute.mockImplementation(async (_sender, _request, hooks: ReferenceRefreshExecutionHooks) => { await hooks.refresh(); return result })

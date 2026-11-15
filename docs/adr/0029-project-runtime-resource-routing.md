@@ -24,6 +24,85 @@ Ordinary single-book switching must retain the complete existing author workflow
 
 Idle release rejects in-flight resource users before changing phase. After entering closing, synchronous owner flush/suspend and target KB close hooks run before native close and admission removal. Failures remain quarantined as closing and cannot be treated as a successful release or reopened under a second owner. General drain, maintenance coordination and grant revocation remain RUNTIME-002/003 work.
 
+## Managed Background View Switch (2026-11-15)
+
+F2 sections4.4/13.3 and [ADR-0080](0080-main-owned-foreground-reference-whole-run.md)
+extend the author open adapter for an actually admitted reference run. The exact
+`project-runtime:v1:open-background-view` literal uses the existing target-open
+grant, not a current UI lease or an execution grant. It manages its view-retention
+policy separately from raw `open-view`; the raw retained-until-close contract and
+ordinary `project:open` compatibility refusal above are unchanged.
+
+Only after a target successfully commits and publishes its fresh view may this
+adapter release inactive, idle, managed previous views. A failed preparation or
+target transaction never closes another runtime. The actual current view, raw
+explicit retained runtimes, pending tickets, physical resource users and active
+owner/receipt/tool claims are not cleanup candidates. Native identity, canonical
+root, runtime phase and lifecycle/maintenance/restore barriers remain mandatory.
+Retirement guards are synchronous and read-only: active or unresolved claims,
+including unknown work and cleanup debt, retain the runtime; unexpected failures
+remain errors. Preparing retirement, cancelling, revoking, reissuing or discarding
+unstarted authority is not a way to manufacture an idle resource.
+
+This reconciliation runs only at the authorized open lifecycle boundary, not in
+legacy-operation admission or a background work-release callback. Release hooks
+still perform the actual close, and close failures retain quarantine and the
+existing post-COMMIT partial-failure semantics. The main response's required
+`backgroundViewsRetained` reports the actual remaining retention state; the
+renderer uses it only to choose the next open adapter. It is neither authority
+nor a promise that all background work completed. Once managed retained work
+and claims have settled and old views actually close, subsequent ordinary
+single-book compatibility operations are available again.
+
+Current-view FS and explicitly classified DB reads use the actual view runtime
+and hold lifecycle interlocks through physical completion. They do not borrow
+another runtime's resources or enable unadapted generation/domain writers.
+An explicit managed background-view open may wait for those already admitted
+physical view operations to drain. The last release synchronously revalidates
+the captured current view, native/canonical identity, latest open request and
+target admission, then acquires the original prepared-open ticket before new
+view operations can enter. No model, projection ACK or background execution
+claim is part of this wait. The existing five-second bounded UI drain timeout
+rejects only the waiting open; it neither releases physical work nor cancels,
+closes or changes the current book. Callback failures reject their waiter and
+cannot turn an already finished physical operation into a failure. Revoked
+grants, superseded opens and changed identities retain their existing refusal.
+The native-window close coordinator may use that same drain only after the
+exact unsealed view-operation busy refusal, rechecking its original approved
+intent and current session before synchronously starting close-all. Existing
+sealed-close retry and shutdown-upgrade semantics remain direct close-all
+operations, not ordinary work admission; see [ADR-0031](0031-runtime-close-and-maintenance.md).
+For dialog-selected targets, the first directory preflight is non-consuming;
+after drain, the original resolver rechecks scope, sender, lifetime and native
+root identity and consumes exactly one use. Ordinary and raw retained opens
+keep their original consumption path. Non-consuming preflight is not execution
+authority and cannot replace the final resolver or renew an expired grant.
+The background legacy-format handoff also consumes that original directory
+grant exactly once before issuing the separate legacy-import grant; it cannot
+skip consumption because ordinary managed-view preparation is not reached.
+
+The precisely classified `db:recovery-candidate-list` remains an actual-current-
+view repository read, not candidate recording, updating or resolution. The
+existing `db:revision-list`, `db:revision-get-pending` and `db:review-list`
+SELECT readers use the same captured current-view boundary so returning to a
+retained book can display its actual chapter facts. Their directly used
+`db:revision-get-full`, `db:review-get-full` and `db:review-cycle-get` readers
+also remain SELECT/validation projections under that same boundary.
+Revision/review mutations keep their original admission; a read adapter does
+not grant review or merge. The existing generation recovery-list entry may
+similarly wait for current-view
+physical operations before its synchronous legacy-owner initialization or
+handoff, with caller/session/runtime validation repeated at that boundary.
+It still runs the original owner admission and non-view busy checks. Recovery
+or exceptional budget-poison writes are not reclassified as pure reads, and a
+reference owner's existing current-view read branch never waits for its own
+background work or grants a new writer.
+
+Acceptance includes A busy while B-to-C releases idle B, settled A followed by
+ordinary single-book use, claim/unknown retention, failed-target preservation,
+close quarantine and physical view-operation barriers. This bounded adapter is
+not multi-book task scheduling, full import recovery or platform qualification.
+
 ## Persistence And Rollback
 
 No schema, manifest/storage version, persistent grant or archive field is introduced. Verified handle preparation can perform the existing schema migration and WAL setup; aborting an open is not a rollback of those storage admission steps. It must not run import-owner fencing or the controller's domain repairs early. First successful view commit places continuity adoption, required core initialization, duplicate-finalization repair and first fencing in one native SQLite transaction. All fallible session probes happen before publication; only after SQLite COMMIT succeeds are the runtime/view/session pointers published without further I/O. A failed transaction leaves its ticket abortable and does not restore an obsolete view lease. The recent-project file is separate metadata, not a cross-store transaction or authority source.

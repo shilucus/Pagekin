@@ -25,6 +25,8 @@ interface Flight {
   gate: { token: string; batchId: string; decision: ReferenceBlueprintAckRequest['decision'] | null; ready: ReturnType<typeof deferred<void>>; result: ReturnType<typeof deferred<ReferenceBlueprintAckResult>> } | null
   operation: Promise<ReferenceBlueprintResult>
   finished: boolean
+  parentToken?: ImportRunParentFlightToken
+  assertCurrent(): void
 }
 const sameExecution = (left: ReferenceBlueprintRequest['execution'], right: ReferenceBlueprintRequest['execution']) => left.owner === right.owner && left.epoch === right.epoch
 const sameSession = (left: ProjectSessionContext, right: ProjectSessionContext) => left.projectId === right.projectId
@@ -47,10 +49,10 @@ export class ReferenceBlueprintForeground {
     assertCurrent()
     const releaseStage = acquireImportStageFlight(runtime.database, request.runId, 'blueprints', parentToken)
     let releaseWork: () => void
-    try { releaseWork = projectRuntimeHost.acquireLegacyOperation('import-generation:v1:blueprints') }
+    try { releaseWork = parentToken ? projectRuntimeHost.acquireWork(runtime) : projectRuntimeHost.acquireLegacyOperation('import-generation:v1:blueprints') }
     catch (error) { releaseStage(); throw error }
     const flight: Flight = { sender, session: Object.freeze({ ...session }), request: structuredClone(request),
-      stop: new AbortController(), gate: null, operation: undefined!, finished: false }
+      stop: new AbortController(), gate: null, operation: undefined!, finished: false, parentToken, assertCurrent }
     this.flights.set(runtime.database, flight)
     const stop = () => {
       flight.stop.abort()
@@ -97,9 +99,11 @@ export class ReferenceBlueprintForeground {
   acknowledge(runtime: ProjectRuntime, sender: WebContents, session: ProjectSessionContext,
     request: ReferenceBlueprintAckRequest): Promise<ReferenceBlueprintAckResult> {
     const flight = this.flights.get(runtime.database), gate = flight?.gate
-    if (!flight || !gate || flight.sender !== sender || sender.isDestroyed() || !sameSession(flight.session, session)
+    if (!flight || !gate || flight.sender !== sender || sender.isDestroyed()
+      || (flight.parentToken ? flight.session.projectId !== session.projectId || flight.session.projectPath !== session.projectPath : !sameSession(flight.session, session))
       || flight.request.runId !== request.runId || !sameExecution(flight.request.execution, request.execution)
       || gate.token !== request.token || gate.batchId !== request.batchId || gate.decision && gate.decision !== request.decision) throw new Error('GENERATION_IMPORT_ADMISSION_REQUIRED')
+    if (flight.parentToken) { assertImportRunParentFlightAccess(runtime.database, request.runId, flight.parentToken); flight.assertCurrent() }
     if (gate.decision) return gate.result.promise
     gate.decision = request.decision
     if (request.decision === 'accept') { gate.ready.resolve(); gate.result.resolve({ version: 1 }) }

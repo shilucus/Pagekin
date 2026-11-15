@@ -141,6 +141,32 @@ const KNOWLEDGE_DRIVER_OWNED_CHANNELS = new Set([
   'db:import-run-effect-receipt-prepare', 'db:import-run-effect-receipt-commit',
 ])
 
+// These author-view reads use current-project repositories under a captured view/lifecycle lock.
+// This is not admission for workflow mutations, generation or knowledge tooling.
+const CAPTURED_VIEW_DATABASE_READS = new Set([
+  'db:import-run-get',
+  'db:import-run-effect-receipt-get',
+  'db:blueprint-get-all',
+  'db:blueprint-get',
+  'db:blueprint-character-sync-list-pending',
+  'db:blueprint-character-sync-get',
+  'db:character-get-all',
+  'db:character-roster-read',
+  'db:draft-list',
+  'db:draft-list-all',
+  'db:draft-get-meta',
+  'db:draft-get-full',
+  'db:draft-get-latest',
+  'db:draft-get-finalized',
+  'db:recovery-candidate-list',
+  'db:revision-list',
+  'db:review-list',
+  'db:revision-get-pending',
+  'db:review-get-full',
+  'db:revision-get-full',
+  'db:review-cycle-get',
+])
+
 function importChannelLocale(args: unknown[], mayReadDatabase = true): Locale {
   const [first] = args
   if (typeof first === 'object' && first !== null) {
@@ -196,7 +222,9 @@ function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabas
         if (channel !== 'db:close' && MUTATING_DATABASE_CHANNELS.has(channel)) releaseWork = projectRuntimeHost.acquireWork(runtime)
         return await (handler as (runtime: ProjectRuntime, event: unknown, ...handlerArgs: unknown[]) => unknown)(runtime, event, ...args)
       }
-      releaseLegacy = projectRuntimeHost.acquireLegacyOperation(channel)
+      releaseLegacy = CAPTURED_VIEW_DATABASE_READS.has(channel)
+        ? projectRuntimeHost.acquireViewOperation(runtime)
+        : projectRuntimeHost.acquireLegacyOperation(channel)
       mayReadDatabase = true
       return await (handler as (event: unknown, ...handlerArgs: unknown[]) => unknown)(event, ...args)
     } catch (error) {

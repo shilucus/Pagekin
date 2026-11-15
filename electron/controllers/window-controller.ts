@@ -1,9 +1,12 @@
 import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
-import { projectRuntimeHost, type ProjectRuntimeCloseAllOptions } from '../services/project-runtime'
+import { projectAccess } from '../services/project-access'
+import { projectRuntimeHost, type ProjectRuntime, type ProjectRuntimeCloseAllOptions } from '../services/project-runtime'
 
 interface WindowRuntimeClose {
   requestCloseAll(options?: ProjectRuntimeCloseAllOptions): Promise<void>
   finishWindowClose(): void
+  getActiveView(): ProjectRuntime | null
+  runAfterViewOperationsDrained<T>(runtime: ProjectRuntime | null, operation: () => T): Promise<T>
 }
 
 interface WindowCloseGuardState {
@@ -12,6 +15,7 @@ interface WindowCloseGuardState {
   pendingRequestId: string | null
   requestSequence: number
   settling: boolean
+  closeStarted: boolean
   retryable: boolean
   rendererGone: boolean
   runtime: WindowRuntimeClose
@@ -31,7 +35,27 @@ async function finishClose(win: BrowserWindow, state: WindowCloseGuardState): Pr
   if (state.settling) return false
   state.settling = true
   try {
-    await state.runtime.requestCloseAll({ shutdown: state.quitRequested })
+    const runtime = state.runtime.getActiveView()
+    const session = projectAccess.captureCurrentSession()
+    const requestId = state.pendingRequestId
+    try {
+      state.closeStarted = true
+      await state.runtime.requestCloseAll({ shutdown: state.quitRequested })
+    } catch (error) {
+      state.closeStarted = false
+      if (!(error instanceof Error) || error.message !== 'PROJECT_RUNTIME_VIEW_OPERATION_BUSY') throw error
+      let closeOperation!: Promise<void>
+      await state.runtime.runAfterViewOperationsDrained(runtime, () => {
+        if (win.isDestroyed() || closeGuardStates.get(win) !== state || state.pendingRequestId !== requestId || !state.settling || state.approved) {
+          throw new Error('PROJECT_RUNTIME_CLOSE_INTENT_STALE')
+        }
+        if (session) projectAccess.assertCurrentSession(session)
+        else if (projectAccess.captureCurrentSession()) throw new Error('PROJECT_SESSION_STALE')
+        state.closeStarted = true
+        closeOperation = state.runtime.requestCloseAll({ shutdown: state.quitRequested })
+      })
+      await closeOperation
+    }
     state.pendingRequestId = null
     state.approved = true
     if (state.quitRequested) app.quit()
@@ -41,7 +65,7 @@ async function finishClose(win: BrowserWindow, state: WindowCloseGuardState): Pr
     state.retryable = true
     reportCloseFailure(error)
     return false
-  } finally { state.settling = false }
+  } finally { state.closeStarted = false; state.settling = false }
 }
 
 function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindow | null {
@@ -55,6 +79,7 @@ export function installWindowCloseGuard(win: BrowserWindow): void {
     pendingRequestId: null,
     requestSequence: 0,
     settling: false,
+    closeStarted: false,
     retryable: false,
     rendererGone: false,
     runtime: windowRuntime,
@@ -101,7 +126,7 @@ export function registerWindowController(runtime: WindowRuntimeClose = projectRu
         if (!state) continue
         state.quitRequested = true
         // Upgrade an in-flight ordinary window close before it can release its seal.
-        if (state.settling || state.approved) void runtime.requestCloseAll({ shutdown: true }).catch(reportCloseFailure)
+        if (state.closeStarted || state.approved) void runtime.requestCloseAll({ shutdown: true }).catch(reportCloseFailure)
       }
       return
     }

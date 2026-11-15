@@ -7,7 +7,7 @@ import { isReferenceGlobalProgress } from '../../shared/reference-global-contrac
 import { isReferenceBlueprintProgress } from '../../shared/reference-blueprint-contract'
 import { isReferenceKnowledgeProgress } from '../../shared/reference-knowledge-contract'
 import { isReferenceRefreshProgress } from '../../shared/reference-refresh-contract'
-import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
+import { projectSessionContextFromProject, sameProjectPathKey, sameProjectSessionContext } from '../../shared/project-session-context'
 import { useProjectStore } from '../../stores/project-store'
 
 type ChildChannel = 'reference-knowledge:v1:progress' | 'reference-knowledge:v1:refresh-progress'
@@ -36,15 +36,26 @@ export class ReferenceImportProjection {
   private readonly entries = new Map(REFERENCE_RUN_STAGES.map(stage => [stage, deferred<StageEntry>()]))
   private readonly completions = new Map(REFERENCE_RUN_STAGES.map(stage => [stage, deferred<Completion>()]))
   private readonly childEvents = new Map<ChildChannel, unknown[]>()
-  private readonly styleSnapshots = new Map<number, { config?: NovelConfig; error?: unknown }>()
+  private readonly styleSnapshots = new Map<number, Promise<{ config?: NovelConfig; error?: unknown }>>()
   private readonly listeners = new Map<ChildChannel, (value: never) => void>()
   private readonly unsubscriptions: Array<() => void> = []
+  private readonly viewWaiters = new Set<AbortController>()
   private sequence = 0
   private nextStage = 0
   private activeStage: ReferenceRunStage | undefined
+  private admitted = false
+  private failure: unknown
+  private readonly failed = deferred<never>()
   private terminal: Promise<ReferenceRunResponse> | undefined
 
-  constructor(private readonly session: ProjectSessionContext, private readonly request: ReferenceRunRequest, private readonly rootRunId: string) {
+  constructor(
+    private readonly session: ProjectSessionContext,
+    private readonly request: ReferenceRunRequest,
+    private readonly rootRunId: string,
+    private readonly waitForViewCallback: (signal?: AbortSignal) => Promise<ProjectSessionContext>,
+    private readonly onAdmitted?: () => void,
+  ) {
+    void this.failed.promise.catch(() => undefined)
     const child = <C extends ChildChannel>(channel: C) => {
       this.unsubscriptions.push(ipc.on(channel, event => {
         if (!event || typeof event !== 'object' || Array.isArray(event)) return
@@ -64,11 +75,7 @@ export class ReferenceImportProjection {
         if ('leaseId' in value && value.leaseId !== session.leaseId) return
         if (channel === 'import-generation:v1:style-progress' && isReferenceStyleProgress(event) && event.kind === 'opened'
           && !this.styleSnapshots.has(event.sequence)) {
-          try {
-            const project = useProjectStore.getState().currentProject
-            if (!project || !sameProjectSessionContext(session, projectSessionContextFromProject(project))) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
-            this.styleSnapshots.set(event.sequence, { config: structuredClone(project.novelConfig) })
-          } catch (error) { this.styleSnapshots.set(event.sequence, { error }) }
+          this.styleSnapshots.set(event.sequence, this.captureStyleSnapshot())
         }
         const listener = this.listeners.get(channel)
         if (listener) listener(event as never)
@@ -83,6 +90,25 @@ export class ReferenceImportProjection {
     this.unsubscriptions.push(ipc.on('reference-run:v1:progress', event => this.receive(event)))
   }
 
+  private async captureStyleSnapshot(): Promise<{ config?: NovelConfig; error?: unknown }> {
+    const state = useProjectStore.getState()
+    const currentSession = projectSessionContextFromProject(state.currentProject)
+    if (!state.loading && state.currentProject && currentSession?.projectId === this.session.projectId
+      && sameProjectPathKey(currentSession.projectPath, this.session.projectPath) && currentSession.leaseId) {
+      return { config: structuredClone(state.currentProject.novelConfig) }
+    }
+    try {
+      const viewSession = await this.waitForProjectView()
+      const project = useProjectStore.getState().currentProject
+      if (!project || !sameProjectSessionContext(viewSession, projectSessionContextFromProject(project))) {
+        throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
+      }
+      return { config: structuredClone(project.novelConfig) }
+    } catch (error) {
+      return { error }
+    }
+  }
+
   readonly on: typeof ipc.on = <C extends EventChannel>(channel: C, callback: (data: AllEventChannels[C]) => void) => {
     const key = channel as ChildChannel
     this.listeners.set(key, callback as (value: never) => void)
@@ -92,8 +118,37 @@ export class ReferenceImportProjection {
   }
 
   private fail(error: unknown): void {
+    if (this.failure === undefined) {
+      this.failure = error
+      this.failed.reject(error)
+    }
     for (const item of this.entries.values()) item.reject(error)
     for (const item of this.completions.values()) item.reject(error)
+  }
+
+  async waitForProjectView(): Promise<ProjectSessionContext> {
+    const state = useProjectStore.getState()
+    const currentSession = projectSessionContextFromProject(state.currentProject)
+    if (!state.loading && currentSession?.projectId === this.session.projectId
+      && sameProjectPathKey(currentSession.projectPath, this.session.projectPath) && currentSession.leaseId) {
+      const controller = new AbortController()
+      this.viewWaiters.add(controller)
+      try {
+        return await this.waitForViewCallback(controller.signal)
+      } finally {
+        controller.abort()
+        this.viewWaiters.delete(controller)
+      }
+    }
+    if (this.failure !== undefined) throw this.failure
+    const controller = new AbortController()
+    this.viewWaiters.add(controller)
+    try {
+      return await Promise.race([this.waitForViewCallback(controller.signal), this.failed.promise])
+    } finally {
+      controller.abort()
+      this.viewWaiters.delete(controller)
+    }
   }
 
   private receive(event: unknown): void {
@@ -110,6 +165,10 @@ export class ReferenceImportProjection {
     if (event.kind === 'stage-started') {
       if (this.activeStage) { this.fail(new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')); return }
       this.activeStage = stage
+      if (!this.admitted) {
+        this.admitted = true
+        this.onAdmitted?.()
+      }
       this.entries.get(stage)!.resolve({ kind: 'started', run: event.run })
     } else if (event.kind === 'stage-skipped') {
       if (this.activeStage) { this.fail(new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')); return }
@@ -133,10 +192,12 @@ export class ReferenceImportProjection {
 
   entry(stage: ReferenceRunStage): Promise<StageEntry> { return this.entries.get(stage)!.promise }
   completion(stage: ReferenceRunStage): Promise<Completion> { return this.completions.get(stage)!.promise }
-  openedStyle(sequence: number): { config?: NovelConfig; error?: unknown } | undefined { return this.styleSnapshots.get(sequence) }
+  async openedStyle(sequence: number): Promise<{ config?: NovelConfig; error?: unknown } | undefined> {
+    return this.styleSnapshots.get(sequence)
+  }
 
-  async acknowledge(stage: ReferenceRunStage, token: string, decision: 'settled' | 'cancelled' | 'projection-failed'): Promise<void> {
-    const result = await ipc.invokeWithProjectSession(this.session, 'reference-run:v1:projection-ack', {
+  async acknowledge(viewSession: ProjectSessionContext, stage: ReferenceRunStage, token: string, decision: 'settled' | 'cancelled' | 'projection-failed'): Promise<void> {
+    const result = await ipc.invokeWithProjectSession(viewSession, 'reference-run:v1:projection-ack', {
       reference: this.request.reference, execution: this.request.execution, stage, token, decision,
     })
     if (!result || result.version !== 1) throw new Error('KNOWLEDGE_BASE_REFERENCE_EXECUTION_INVALID')
@@ -152,5 +213,10 @@ export class ReferenceImportProjection {
     } finally { this.close() }
   }
 
-  close(): void { for (const unsubscribe of this.unsubscriptions.splice(0)) unsubscribe() }
+  close(): void {
+    if (this.failure === undefined) this.fail(new Error('REFERENCE_PROJECTION_CLOSED'))
+    for (const controller of this.viewWaiters) controller.abort()
+    this.viewWaiters.clear()
+    for (const unsubscribe of this.unsubscriptions.splice(0)) unsubscribe()
+  }
 }

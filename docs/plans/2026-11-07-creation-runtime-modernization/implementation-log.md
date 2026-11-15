@@ -2123,3 +2123,76 @@ The observations below retain their chronological state. The final acceptance at
 - Next: single-reference actual background/view integration without SCHED002
   precondition. Independently investigate author-buffer projection/reattach and
   API production composition; missing feedback design stays a local boundary.
+
+## 2026-11-15 - Stage101: Admitted Reference And Actual View Integration
+
+- Stage100 is committed as `54ea2e74c04b5568c00549308136a640a2f0b6a8`.
+  This slice maps IMPORT001 AC1/2 and partial AC3 plus UI001 to the existing
+  author whole-reference entry, captured main execution and separate actual-A
+  projection/read/ACK. No SCHED002 prerequisite, generic background permission,
+  migration or new visible control is introduced. [Stage101](stage-101-evidence.md)
+  records exact commands, individual source versions and remaining AC.
+- Root owns stores/contracts/ADRs/records/Git; requested Luna/Terra/Sol own
+  renderer/main/scene modules. Agent5 owns captured-view adapters. Nonowners
+  Sol and Agent4 independently review production boundaries and raw results;
+  native/build operations remain serialized. Static call chains use bounded
+  local definitions/imports/calls and tests, not a claimed complete graph/LSP.
+- Earlier broad27files668/668 is retained as an earlier regression, not final
+  acceptance for later edits. Applicable recovery2files149/149, runtime/open
+  2files78/78 and dual-native DB2files65/65 cover subsequent repairs. Unchanged
+  retirement4files103/103 preserves missing-usage unknown refusal. Renderer
+  2files120/120 and view/transport8files120/120 are separate, overlapping
+  packages. Browser4files100/100 uses installed Edge157 with a temporary
+  profile. Latest pure scene64/64 covers the observer, not actual execution.
+- Real one-use-grant, wrapped-async, legacy-handoff, history/detail-reader REDs
+  remain; each minimal repair is retested and independently re-reviewed.
+  Actual desktop attempts one through seven remain distinct. The seventh
+  command exits0 and product assertions pass, but quit.forced is true: stage
+  acceptance is still pending. Its old console ends before quit and cannot
+  establish a close failure cause. Exit result consumers are under separate
+  verification-tool repair; no timeout extension or automatic author approval.
+- Fresh detail-reader build and current type/lint/colors/i18n exit0. Final
+  quit-tool repair retains55-case RED5 -> GREEN55/55 and independent Terra
+  acceptance; Root's six-file tool rerun passes141/141, zero failed/pending.
+  These are tool tests, not desktop close evidence. Eighth actual desktop
+  exits1 despite product assertions: quit timeout10134ms, forced=true,
+  killStatus=completed. Root/Agent4 review three PNGs and post-quit console;
+  close is directly refused with PROJECT_RUNTIME_VIEW_OPERATION_BUSY.
+  There are12fake requests, no observed external requests/writes/residuals;
+  one expected stale recovery read is refused and detail-reader errors are gone.
+  The exact claim owner or a deadlock/dirty-buffer cause is not established.
+  Terra's initial17-case mocked close repair is rejected for blocking real
+  host sealed-close retry. Exact-busy-only repair has genuine seal-aware
+  RED17passed/1failed -> GREEN18/18; the real host file passes51/51 including
+  one new last-release synchronous seal case. Sol independently accepts the
+  frozen controller/test/host-test and ADR0029/0031, closing that P1.
+  Fresh typecheck/lint/colors/i18n/build in stage101-*-close-final.log exit0.
+  Ninth actual stage101-desktop-close-drain exits0 with the same full product
+  assertions and12fake requests; quit resolved2787ms, unforced, kill not-needed,
+  with no observed external requests/writes/residuals within stated coverage.
+  Root/Agent4 inspect raw, post-quit console and all three PNGs; original stale
+  recovery refusal remains, reader/close errors are absent. Full commands are
+  recorded in Stage101. Final56 source paths and eight separate verification
+  tool identities are frozen in the manifest; final record checklist36/36,
+  zero failed/pending, exit0, checks only plan/evidence/DAG consistency. Its
+  exact command/raw identity is in Stage101, not functional acceptance.
+  Agent4's final independent record audit accepts this bounded62-path slice,
+  with all56 source/eight separate tool/three build/three protected/55report
+  identities matching and no unresolved in-scope blocker. Root performs final
+  index/hooks/path checks before the authorized local commit; feature gaps remain.
+  Nothing is staged or committed for Stage101 yet; original protected files
+  remain unchanged. All35 flags stay14historical completed/21in_progress.
+- The user subsequently authorizes the exact loopback8045 Gemini test model
+  with discretionary quota. G-RUN/G-MODEL record execution authorization only,
+  not quality acceptance. A bounded metadata/protocol probe confirms the exact
+  model ID; it is not production creation evidence. Credentials are never
+  written to models.json, argv or records. Separately owned real-feedback
+  tooling and its source hashes will be disclosed rather than silently mixed
+  into this product slice. No real-feedback actual run has occurred here yet.
+- Root partial-feature self-check: original requirements/AC/DAG preserved;
+  actual author/view increment does not stand for full import or UI; sender,
+  source/native/epoch, unknown/no-resend, receipts, single-consumption grants,
+  writer and author-buffer boundaries are retained. Idle/unstarted TTL
+  cleanup, fresh-native registered recovery and complete UI close/recovery
+  presentation remain open. No feature completion or full imitation, speedup,
+  real-model quality, package or target-platform claim follows.

@@ -82,6 +82,8 @@ export interface WorkflowStep {
 export interface WorkflowRun {
   /** 是否已获资格在切换作品后继续在后台执行（UI-001 / ADR-0049）。 */
   backgroundQualified?: boolean
+  /** Narrow renderer projection policy; never a main-process execution grant. */
+  backgroundExecution?: 'reference-run'
   characterProposalBatch?: CharacterProposalBatch
   characterProposalChoices?: CharacterProposalChoices
   id: string
@@ -158,6 +160,10 @@ export interface WorkflowContext {
   projectPath: string
   /** 工作流启动时冻结的 IPC 会话，禁止在执行器内重新读取 currentProject。 */
   projectSession: ProjectSessionContext
+  /** A replacement current-view lease is only for the retained reference projection. */
+  projectionSession?: ProjectSessionContext
+  waitForProjectView?: (signal?: AbortSignal) => Promise<ProjectSessionContext>
+  markReferenceRunAdmitted?: () => void
   generationModelId?: string
   /** 本次写作冻结的每章目标可见单位。 */
   chapterWordsTarget?: number
@@ -208,6 +214,8 @@ export interface WorkflowCompleteAction {
 
 export interface WorkflowDefinition {
   onStarted?: () => void
+  /** Reference-only opt-in; qualification is published after main admission. */
+  backgroundExecution?: 'reference-run'
   /** 可由需要同步订阅事件的调用方预先分配。 */
   runId?: string
   /** Main-validated Agent tool registration, separate from model-editable intent. */
@@ -554,6 +562,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       id: runId,
       projectPath: definition.projectPath,
       projectSession,
+      ...(definition.type === 'novel_import' && definition.backgroundExecution === 'reference-run'
+        ? { backgroundExecution: 'reference-run' as const } : {}),
       writingLanguage,
       uiLocale,
       ...(generationModelId ? { generationModelId } : {}),
@@ -589,6 +599,49 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       cancelled: false,
       pauseRequested: false,
     }
+    if (definition.type === 'novel_import' && definition.backgroundExecution === 'reference-run') {
+      context.markReferenceRunAdmitted = () => {
+        if (isCancellationPending(context)) return
+        const current = get().activeRuns.find(value => value.id === run.id)
+        if (current?.status === 'running' && current.backgroundExecution === 'reference-run') {
+          updateRunById(set, run.id, { backgroundQualified: true })
+        }
+      }
+      context.waitForProjectView = signal => new Promise<ProjectSessionContext>((resolve, reject) => {
+        let settled = false
+        const finish = (session?: ProjectSessionContext) => {
+          if (settled) return
+          settled = true
+          unsubscribeProject?.()
+          unsubscribeWorkflow?.()
+          signal?.removeEventListener('abort', abort)
+          if (session) {
+            context.projectionSession = Object.freeze({ ...session })
+            resolve(context.projectionSession)
+          } else reject(new WorkflowCancelledError(uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.')))
+        }
+        const abort = () => finish()
+        const check = () => {
+          const active = get().activeRuns.find(value => value.id === run.id)
+          if (signal?.aborted || isCancellationPending(context) || !active || !['running', 'paused', 'waiting'].includes(active.status)) {
+            finish()
+            return
+          }
+          const state = useProjectStore.getState()
+          const current = projectSessionContextFromProject(state.currentProject)
+          if (!state.loading && current?.projectId === projectSession.projectId
+            && sameProjectPathKey(current.projectPath, projectSession.projectPath)) finish(current)
+        }
+        const unsubscribeProject = useProjectStore.subscribe(check)
+        const unsubscribeWorkflow = useWorkflowStore.subscribe(check)
+        signal?.addEventListener('abort', abort, { once: true })
+        check()
+      })
+    }
+    const hasRetainedReferenceAdmission = () => definition.backgroundExecution === 'reference-run'
+      && definition.type === 'novel_import'
+      && get().activeRuns.some(value => value.id === run.id && value.backgroundQualified === true
+        && value.backgroundExecution === 'reference-run')
     activeContexts.set(run.id, context)
     if (definition.onCancelRequested) cancelRequestedHooks.set(run.id, definition.onCancelRequested)
     if (definition.type !== 'novel_import' && definition.onCancelledAtBoundary) {
@@ -744,7 +797,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         break
       }
 
-      if (!isCurrentWorkflowSession(definition.projectPath, context.projectSession)) {
+      if (!hasRetainedReferenceAdmission() && !isCurrentWorkflowSession(definition.projectPath, context.projectSession)) {
         updateRunById(set, run.id, {
           status: 'failed',
           error: uiText(context.uiLocale, '项目会话已切换或失效', 'The project session changed or expired.'),
@@ -818,7 +871,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         if (context.cancelled) {
           throw new WorkflowCancelledError(uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.'))
         }
-        if (!isCurrentWorkflowSession(definition.projectPath, context.projectSession)) {
+        if (!hasRetainedReferenceAdmission() && !isCurrentWorkflowSession(definition.projectPath, context.projectSession)) {
           throw new Error(uiText(
             context.uiLocale,
             '项目会话已切换或失效，工作流已停止以避免跨项目写入',
@@ -906,7 +959,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       })
       finalRun = get().activeRuns.find(r => r.id === run.id)
     }
-    if (finalRun && finalRun.status === 'running' && !isCurrentWorkflowSession(
+    if (finalRun && finalRun.status === 'running' && !hasRetainedReferenceAdmission() && !isCurrentWorkflowSession(
       definition.projectPath,
       context.projectSession,
     )) {
@@ -922,7 +975,10 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       finalRun = get().activeRuns.find(r => r.id === run.id)
     }
     if (finalRun && finalRun.status === 'running') {
-      const projectSession = context.projectSession
+      const projectionSession = hasRetainedReferenceAdmission() ? context.projectionSession : undefined
+      const projectSession = projectionSession && !useProjectStore.getState().loading
+        && isCurrentWorkflowSession(definition.projectPath, projectionSession)
+        ? projectionSession : context.projectSession
       updateRunById(set, run.id, { status: 'completed', completedAt: new Date().toISOString() })
       get().addLog('info', uiText(
         context.uiLocale,

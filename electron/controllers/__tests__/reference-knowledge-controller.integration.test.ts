@@ -41,7 +41,7 @@ import { ImportRunRepository } from '../../repositories/import-run-repository'
 import { chunkText } from '../../embedding'
 import { ReferenceImportGrantRepository } from '../../repositories/reference-import-grant-repository'
 import { projectAccess } from '../../services/project-access'
-import { projectRuntimeHost } from '../../services/project-runtime'
+import { projectRuntimeHost, type ProjectRuntime } from '../../services/project-runtime'
 import { getProjectDatabasePath } from '../../services/project-data-locator'
 import { ReferenceKnowledgeAuthority } from '../../services/reference-knowledge-authority'
 import { readPortableRuntimeFreeze } from '../../services/portable-runtime-freeze'
@@ -191,6 +191,9 @@ function removeUnstartedDefaultReferenceRun(): void {
       (mappings[0] as { chapter_number: number }).chapter_number).changes).toBe(1)
 }
 
+let referenceRetirementGuard: (runtime: ProjectRuntime) => boolean
+let referenceRetirementGuardInstalled = false
+
 beforeEach(() => {
   mock.handlers.clear(); mock.selected = 'fictional-a'; mock.afterImport = null
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('FICTIONAL_NETWORK_FORBIDDEN') }))
@@ -207,7 +210,9 @@ beforeEach(() => {
     sourceDisplay: [{ displayName: 'fictional.txt', mediaType: 'text/plain', size: Buffer.byteLength(CONTENT) }],
     chapters: [{ number: 1, title: 'One', content: CONTENT, contentSize: Buffer.byteLength(CONTENT), contentFingerprint: hash(CONTENT) }] })
   subject = sender()
+  const register = referenceRetirementGuardInstalled ? null : vi.spyOn(projectRuntimeHost, 'registerRetirementGuard')
   registerReferenceKnowledgeController(); registerKBController(); registerDatabaseController()
+  if (register) { referenceRetirementGuard = register.mock.calls[0]![0]; referenceRetirementGuardInstalled = true; register.mockRestore() }
 })
 afterEach(() => {
   mock.afterImport = null; vi.restoreAllMocks(); vi.unstubAllGlobals()
@@ -222,6 +227,30 @@ afterEach(() => {
 })
 
 describe('registered reference knowledge controller with real native storage', () => {
+  it('preserves an unstarted issuance and durable unknown during pure retirement checks', async () => {
+    const runtime = projectRuntimeHost.getActiveView()!
+    const first = await prepare()
+    const grants = db.prepare('SELECT * FROM reference_import_grants').all()
+    expect(referenceRetirementGuard(runtime)).toBe(false)
+    expect(db.prepare('SELECT * FROM reference_import_grants').all()).toEqual(grants)
+    await invoke('reference-knowledge:v1:revoke', first.reference, subject, false)
+    expect(referenceRetirementGuard(runtime)).toBe(true)
+    db.prepare("UPDATE reference_embedding_budgets SET state='recovery_unknown'").run()
+    const budget = db.prepare('SELECT * FROM reference_embedding_budgets').all()
+    expect(referenceRetirementGuard(runtime)).toBe(false)
+    expect(db.prepare('SELECT * FROM reference_embedding_budgets').all()).toEqual(budget)
+  })
+  it('retains a legacy unknown reference effect without changing the ledger', () => {
+    const runtime = projectRuntimeHost.getActiveView()!
+    const namespace = db.prepare('SELECT effect_namespace FROM import_runs WHERE id=?').pluck().get(RUN) as string
+    db.prepare(`INSERT INTO import_effect_ledger(run_id,stage,batch_id,effect_namespace,effect_key,state,evidence_kind,diagnostic_code)
+      VALUES(?,'global','__legacy_fictional',?,'fictional-legacy-global-unknown','unknown','terminal','FICTIONAL_UNKNOWN')`)
+      .run(RUN, namespace)
+    const before = db.prepare('SELECT total_changes()').pluck().get()
+    expect(referenceRetirementGuard(runtime)).toBe(false)
+    expect(db.prepare('SELECT total_changes()').pluck().get()).toBe(before)
+    expect(db.prepare("SELECT state FROM import_effect_ledger WHERE run_id=? AND stage='global'").pluck().get(RUN)).toBe('unknown')
+  })
   it.each(['missing-binding', 'different-completed-snapshot', 'same-body-unfinished-cross-root'] as const)(
     'rejects a corrupted full manifest before budget or grant creation (%s)', async corruption => {
       const logicalChapter = ImportRunRepository.listChapterBatch(RUN, { afterChapterNumber: 0, limit: 10 })[0]!
@@ -967,6 +996,20 @@ describe('registered reference knowledge controller with real native storage', (
         .toMatchObject({ spent_requests: 1, active_elapsed_ms: 0, active_since_ms: atSnapshot.active_since_ms, state: 'recovery_unknown' })
       expect(fetchMock).toHaveBeenCalledTimes(1)
       expect(dispatchRows()).toEqual([expect.objectContaining({ state: 'dispatch_marked', settled_at: null })])
+      // Isolate the dispatch SQL branch in this disposable fixture; this is not recovery.
+      db.prepare("UPDATE reference_embedding_budgets SET state='ready',active_since_ms=NULL").run()
+      try {
+        expect(db.prepare('SELECT state,active_since_ms FROM reference_embedding_budgets').get())
+          .toEqual({ state: 'ready', active_since_ms: null })
+        const canRetire = vi.spyOn(ReferenceKnowledgeAuthority.prototype, 'canRetire')
+        const beforeGuard = db.prepare('SELECT total_changes()').pluck().get()
+        expect(referenceRetirementGuard(reopened)).toBe(false)
+        expect(canRetire).toHaveReturnedWith(true)
+        expect(db.prepare('SELECT total_changes()').pluck().get()).toBe(beforeGuard)
+        canRetire.mockRestore()
+      } finally {
+        db.prepare("UPDATE reference_embedding_budgets SET state='recovery_unknown',active_since_ms=?").run(atSnapshot.active_since_ms)
+      }
       expect(count('import_run_knowledge_receipts')).toBe(0)
     } finally {
       gate.resolve(response())
@@ -1018,6 +1061,16 @@ describe('registered reference knowledge controller with real native storage', (
       expect(dispatchRows()).toEqual([expect.objectContaining({
         batch_ordinal: 0, state, http_status: state === 'transport_unknown' ? null : 200, settled_at: expect.any(Number),
       })])
+      if (state === 'transport_unknown') {
+        expect(db.prepare('SELECT state,active_since_ms FROM reference_embedding_budgets').get())
+          .toEqual({ state: 'ready', active_since_ms: null })
+        const canRetire = vi.spyOn(ReferenceKnowledgeAuthority.prototype, 'canRetire')
+        const beforeGuard = db.prepare('SELECT total_changes()').pluck().get()
+        expect(referenceRetirementGuard(projectRuntimeHost.getActiveView()!)).toBe(false)
+        expect(canRetire).toHaveReturnedWith(true)
+        expect(db.prepare('SELECT total_changes()').pluck().get()).toBe(beforeGuard)
+        canRetire.mockRestore()
+      }
       const next = await prepare()
       expect(next.reference.grantId).not.toBe(first.reference.grantId)
       expect(count('reference_import_grants')).toBe(2)

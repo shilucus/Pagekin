@@ -13,7 +13,7 @@
     "inkos": "53adac4e974b54dafda975edc4edd07cad364c18"
   },
   "status": "in_progress",
-  "authorizationScope": "2026-11-15用户再次明确恢复并授权实施F2全部35项功能及范围内代码、测试、文档、ADR、接口和迁移；授权所列pnpm命令、隔离虚构项目持久化验证和主Agent按阶段路径本地add/commit。历史仅文档授权及暂停记录不限制本次实施。真实模型、真实配置/作品、外部状态、平台安装/发布不在授权内；设计、契约、便携恢复、人工批准与实际验收门禁保留。详见implementation-log.md、README第13节及stage-99-evidence.md。",
+  "authorizationScope": "2026-11-15用户再次明确恢复并授权实施F2全部35项功能及范围内代码、测试、文档、ADR、接口和迁移；授权所列pnpm命令、隔离虚构项目持久化验证和主Agent按阶段路径本地add/commit。随后提供本地127.0.0.1:8045端点及Gemini 3.8 Flash (High)，明确授权所需测试权限和自主配额；真实模型验证仅限该端点/模型及隔离虚构项目，凭据不得写入记录或模型配置。历史仅文档授权及暂停记录不限制本次实施。未授权读取真实作品/配置、平台安装、外部发布或任意其他端点；设计、契约、便携恢复、人工批准与实际验收门禁保留。详见implementation-log.md、README第13节及stage-99-evidence.md。",
   "completionPolicy": {
     "featureStatusValues": [
       "not_started",
@@ -70,7 +70,7 @@
     {
       "id": "G-RUN",
       "status": "confirmed",
-      "condition": "2026-11-07用户已明确授权所列pnpm命令及已审查的本地隔离verify:drive场景；执行前逐项核查脚本、副作用和隔离范围，禁止--real-model及超范围副作用。"
+      "condition": "2026-11-15用户恢复所列pnpm命令及已审查的本地隔离verify:drive场景，后续明确授权本地127.0.0.1:8045的Gemini 3.8 Flash (High)真实模型测试与自主配额；仅完成精确端点、凭据不落盘及隔离核查的对应场景可使用真实模型模式，其他场景仍不用--real-model，禁止超范围副作用。"
     },
     {
       "id": "G-CONTRACT",
@@ -99,8 +99,8 @@
     },
     {
       "id": "G-MODEL",
-      "status": "pending",
-      "condition": "真实模型、费用、配置与固定虚构语料另授权；不读取真实作品或暴露秘密，沿现行质量协议评估。"
+      "status": "confirmed",
+      "condition": "2026-11-15用户明确授权本地127.0.0.1:8045的Gemini 3.8 Flash (High)真实模型测试、自主配额及所需测试权限；仅该精确端点/模型与隔离虚构语料，不读取真实作品/配置，不将凭据写入配置、参数或产物，unknown不自动重发。此状态仅确认适用执行授权，不授予质量通过或其他模型/端点资格；效果仍沿现行质量协议评估。"
     },
     {
       "id": "G-PLATFORM",
@@ -1528,6 +1528,30 @@
           "environment": "Fresh isolated Windows x64 Electron44.9.3; fictional10chapter project; loopback fake provider; actual1440x900light PNG viewed by Root and Agent4",
           "result": "One whole execute and five ordered ACKs complete run/grant,10knowledge and4stage receipts,10blueprint effects and4existing draft/finalized rows unchanged;12fake requests, normal quit and no recorded external requests/writes/residuals within observed_before_quit coverage.",
           "limitations": "Single foreground reference observation. Sidebar12 is fixture total, not task output count. Not A-to-B/background, complete imitation, visual comparison, performance, real-model quality, package or target-platform acceptance."
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "54ea2e74c04b5568c00549308136a640a2f0b6a8 + stage-101-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-101-evidence.md; ../../adr/0029-project-runtime-resource-routing.md; ../../adr/0049-background-project-tasks-and-transition-presentation.md; ../../adr/0080-main-owned-foreground-reference-whole-run.md; review-record.md",
+          "environment": "Independent main, renderer and integrated source review; original F2/section13 AC; captured resource and separate actual-view projection contract",
+          "result": "Admitted whole reference keeps original sender/resource/execution while viewing B. Only actual current A new-lease readback/ACK is rebound; generic writers do not borrow its dedicated owner. Managed post-COMMIT retirement preserves physical users, live claims, unknown work and cleanup debt. Fast-path completion-session finding fixed and re-reviewed.",
+          "limitations": "Bounded single-reference view integration, not complete feature acceptance. Idle/unstarted expired issuance cleanup and explicit durable-reopen recovery evidence remain open; no schema, generic background grant, ordinary TTL relaxation or SCHED-002 prerequisite."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "54ea2e74c04b5568c00549308136a640a2f0b6a8 + stage-101-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-101-evidence.md; stage-101-source-manifest.json; .runtime/creation-runtime-modernization/resume-2026-11-15/stage101-main-retest.json; stage101-retirement-usage-four-final.json; stage101-view-transport-retest.json; stage101-renderer-root-final.json; stage101-recovery-view-drain-root-final.json; stage101-view-wrapper-handoff-final.json; stage101-view-author-details-final.json; stage101-scene-details-final.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; serialized fictional native fixtures, actual workflow/store and separate consumer regressions",
+          "result": "Earlier broad main27files668/668 precedes the later recovery/drain changes. Applicable final recovery2files149/149, runtime/open2files78/78 and current-view DB2files65/65 cover those repairs, alongside unchanged retirement4files103/103, Root8files120/120 and renderer2files120/120. Missing-usage unknown still blocks retirement. Final pure scene contract64/64 verifies observer/assertion behavior, not actual Electron execution. Counts overlap; source versions and desktop attempts are separately recorded in Stage101.",
+          "limitations": "Native667/668, retirement98/102, real grant/wrapper/legacy/readers REDs and all desktop failures remain, not relabeled or summed. Broad668 is not a final integrated rerun. Synthetic scene observations do not establish Electron behavior. Idle TTL cleanup and fresh-native registered recovery, full imitation, real-model quality, performance and platform qualification remain open; no feature promotion."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "54ea2e74c04b5568c00549308136a640a2f0b6a8 + stage-101-source-manifest.json final source and separate tool identities",
+          "artifactOrReceipt": "stage-101-evidence.md; stage-101-source-manifest.json; .runtime/creation-runtime-modernization/resume-2026-11-15/stage101-desktop-close-drain/f537-reference-background-10-light.json; review-record.md",
+          "environment": "Windows x64; Electron44.9.3 fresh build; isolated fictional author books/profile; loopback fake provider; light1440x900; Root and independent Agent4 raw/three-PNG review",
+          "result": "Ninth actual desktop exits0: original whole reference execute once, five ordered ACKs, actual held A model request while author edits B, no added offscreen ACK, remaining ACKs on actual new A view lease;10knowledge/four committed stage receipts/10blueprints saved, four original draft/finalized rows unchanged and B edit saved/preserved. Quit resolved2787ms, unforced, kill not-needed;12fake requests, no observed external requests/writes/residuals within recorded coverage. Exact-busy-only close repair has independent Sol review, seal-aware RED17/1 -> GREEN18/18 and actual-host51/51 without host guard changes.",
+          "limitations": "Bounded IMPORT001 AC1/2 and partial AC3 only, not feature completion. Eight prior actual attempts remain, including forced closes. One switched-view stale recovery read is correctly refused. Idle/unstarted TTL cleanup and genuine fresh-native registered stage recovery remain open. Light author scene is not full imitation, unattended offscreen completion, multi-generation, real-model quality, performance, complete network or target-platform qualification. Product commit alone excludes the separately identified verification-tool bytes."
         }
       ]
     },
@@ -2430,6 +2454,30 @@
           "environment": "Windows x64; Electron main project switch and lifecycle controller",
           "result": "project-switch-renderer.integration.test.ts (4/4) passed, A buffer preserved and isolated from B",
           "limitations": "Real-model testing excluded per constraints"
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "54ea2e74c04b5568c00549308136a640a2f0b6a8 + stage-101-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-101-evidence.md; ../../adr/0049-background-project-tasks-and-transition-presentation.md; ../../adr/0080-main-owned-foreground-reference-whole-run.md; review-record.md",
+          "environment": "Independent integrated renderer/store/retained-view review; existing RunSheet background row and Switch & View design evidence only",
+          "result": "Only first validated stage-started admits the marked author whole reference run for view switching. Original execution session stays frozen; actual A projection session is separately published before both fast/delayed wait resolution. Existing background row and switch flow are reused, without new layout, wording or recovery controls.",
+          "limitations": "Author-manuscript import, unadmitted reference and legacy batch retain their protection. No extrapolated design states/viewports or full UI-001 acceptance; close/recovery presentation and other production workflows remain open."
+        },
+        {
+          "type": "browser",
+          "sourceSha": "54ea2e74c04b5568c00549308136a640a2f0b6a8 + stage-101-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-101-evidence.md; .runtime/creation-runtime-modernization/resume-2026-11-15/stage101-browser-retest.json; stage101-view-transport-retest.json; stage101-renderer-root-final.json",
+          "environment": "Windows x64; installed Edge157.0.4341.60 temporary browser profile; actual React/store browser tests and separate deterministic session consumers",
+          "result": "Final browser4files100/100 covers RunSheet, RunCapsule, unsaved transition and import resume. Root view/store120/120 and renderer120/120 separately cover late-event/session isolation and actual workflow completion-session emission; not one claimed end-to-end consumer test.",
+          "limitations": "Earlier full browser92files1343/1343 predates the final fast-path fix and is not a final full-suite rerun. Act warnings and intentional negative diagnostics remain. Browser tests are not actual Electron, visual-equality, performance, real-model or complete feature qualification."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "54ea2e74c04b5568c00549308136a640a2f0b6a8 + stage-101-source-manifest.json final source and separate tool identities",
+          "artifactOrReceipt": "stage-101-evidence.md; stage-101-source-manifest.json; .runtime/creation-runtime-modernization/resume-2026-11-15/stage101-desktop-close-drain/f537-reference-background-10-light.json; review-record.md",
+          "environment": "Fresh isolated Windows x64 Electron44.9.3 author workflow; original RunSheet/library/open controls; fake provider; light1440x900; independent raw and three-PNG review",
+          "result": "Actual A-to-B-to-A author flow preserves saved B text and displays exactly one existing A background row at the settled1/5 prefix while B remains current. Return uses a new actual A view lease, then shows five green steps and matching Run Done/chapter4 without duplicate execute or cross-book buffer projection. Actual ninth run exits0 with normal unforced quit; exact busy-only close coordination preserves renderer approval, current session and direct sealed-close retry/shutdown upgrade.",
+          "limitations": "No new visible design or complete UI001 acceptance. Sidebar12 is fixture total, not10output count. Eight earlier observations/failures remain. Full close/recovery presentation, other production workflows, dark/other viewport qualification and complete feature AC remain open. Existing stale-session refusal and CSP/build warnings are not hidden. Separate worktree tool bytes are disclosed, not silently included in the product commit."
         }
       ]
     },

@@ -249,6 +249,13 @@ export class ExternalFileGrantService {
 
   /** Project services own their internal paths; only the selected root crosses this boundary. */
   resolveDirectoryPath(request: Omit<ExternalFileGrantRequest, 'relativePath'>): string {
+    const directoryPath = this.revalidateDirectoryPath(request)
+    this.resolve(request)
+    return directoryPath
+  }
+
+  /** Main-only preflight repeats directory checks without consuming the eventual operation's one use. */
+  revalidateDirectoryPath(request: Omit<ExternalFileGrantRequest, 'relativePath'>): string {
     const target = this.revalidate(request)
     if (target.scope !== 'directory' || target.relativePath !== '') {
       throw new Error('EXTERNAL_FILE_GRANT_SCOPE_MISMATCH')
@@ -258,7 +265,6 @@ export class ExternalFileGrantService {
       || current.fileIndex !== target.rootIdentity.fileIndex) {
       throw new Error('EXTERNAL_FILE_GRANT_TARGET_CHANGED')
     }
-    this.resolve(request)
     return target.rootPath
   }
 

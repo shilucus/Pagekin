@@ -94,6 +94,83 @@ request or new grant follows from the cleanup-only path.
 
 ## Acceptance
 
+### Retained View Extension (2026-11-15)
+
+F2 sections4.4/13.2/13.3 and ADR-0049 already require an admitted reference run
+to survive viewing another book. This extension replaces only the whole-run
+current-view lifetime restriction above; independent legacy import/generation
+and author-manuscript entry points remain protected. SCHED-002 is not a
+prerequisite. Existing RunSheet background rows and Switch & View presentation
+are reused: opening B no longer cancels an actually admitted A reference run;
+no layout, text, badge, recovery control or new author policy is introduced.
+Design evidence is ADR-0049 and the existing RunSheet/design IA background-run
+regions, not an extrapolation to new states or viewports.
+
+Start still requires the actual current project view, original sender,
+reference/grant/revision, owner/epoch and source/resource admission. A valid
+first whole-run stage-started projection qualifies only that renderer run for
+background viewing. A renderer boolean is never main-process execution
+authority. An unadmitted run, author-manuscript import and legacy batch retain
+their original cancellation/transition protection. Close/create do not gain
+switch-view permission. Retained open preserves runtime resources, not grants.
+
+The production author switch uses the managed background-view adapter in
+[ADR-0029](0029-project-runtime-resource-routing.md), not the permanent raw
+retained-view entry. It reconciles safely retired inactive views only after a
+successful target COMMIT and reports actual retention state. Live issuance,
+unknown work, physical users and owner/receipt/tool claims remain protected;
+neither a renderer flag nor absence of an HTTP request proves retireability.
+The raw explicit retained entry and ordinary compatibility guards are unchanged.
+
+An admitted whole reference run and its trusted children retain the actual
+runtime/database identity/executionEpoch, opaque parent, issuance and physical
+work claims. Their resource liveness is independent of the currently viewed
+book. A dedicated reference owner cannot be borrowed by generic generation
+writes, used to hand off a live owner, issue a new grant or resend unknown work.
+Original execution session, emitted lease, generation handle epoch, model,
+reference and execution identity remain frozen.
+
+The renderer separately waits for a real current A view and obtains its new
+projection lease. Only view-side readback, buffer merge and mechanical ACK use
+that lease; no execution identity is rewritten. Every whole/child ACK checks
+the actual current A runtime, original sender/reference/execution, matching
+gate token and retained parent. Current-view read adapters retain lifecycle
+locking and actual runtime/path checks; they do not enable unmigrated legacy
+background handlers. Reattaching does not execute a second run or fabricate a
+successful receipt.
+
+At author-buffer or canonical projection barriers, an offscreen run waits for
+A to return. Style opened captures only A's real buffer, preserves an existing
+expected snapshot and checks the original dirty-buffer/CAS contract before
+commit. Refresh and global/blueprint readback retain their actual receipt and
+store checks. Configuration publication and view transition cannot overlap a
+physical commit, but must not hold a transition lock while waiting for a view,
+model or ACK. B's database and author buffers must remain isolated. Cancellation,
+revoke, sender destruction, close and terminal failure must release projection
+waiters and drain physical work before the original claims are released.
+
+Returning to A uses the event-driven, bounded physical-view drain in ADR-0029
+before obtaining the original managed-open ticket. It does not await A's
+execution, model response or projection ACK, which can themselves require the
+new A view. B's recovery-candidate read and the returned A view's existing
+revision-list, revision-get-pending and review-list SELECT readers are precisely
+current-view adapted, together with the directly used revision-get-full,
+review-get-full and review-cycle-get SELECT/validation projections, without
+permitting revision/review mutations.
+Generation recovery may initialize its own owner only after current-view
+physical operations settle and the original caller/runtime admission is
+rechecked; it cannot borrow A's owner, drop a non-view busy claim or turn an
+unknown request into new work. No failure notification is hidden to make this
+author navigation appear successful.
+
+This is a bounded A-to-B-to-A contract, not unattended completion while A remains
+offscreen. Acceptance needs the actual author open/save/return chain, new-lease
+ACKs, B preservation, invalid caller/identity/token rejection and cancellation
+cleanup. Crash restart, full stage recovery, concurrent-book scheduling,
+imitation, model quality and platform qualification retain their separate AC.
+
+### Foreground And Retained Checks
+
 Require closed-contract/preload/session checks, coordinator transitions and
 recovery/model checks, renderer single-invoke/projection/dirty-buffer ordering,
 registered real SQLite/Lance controller integration with fictional providers,

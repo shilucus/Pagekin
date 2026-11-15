@@ -953,6 +953,8 @@ export class ReferenceKnowledgeAuthority {
 
   hasIssuance(grantId: string): boolean { return this.issuances.has(grantId) }
 
+  canRetire(): boolean { return this.issuances.size === 0 && this.cleanupFailures.size === 0 }
+
   requestProjectClose(): void {
     const failures: Error[] = []
     for (const issuance of this.issuances.values()) {
