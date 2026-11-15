@@ -1505,3 +1505,26 @@ sample-only hooks and no owned-path filters; scoped commit/postcommit follow.
   - Sol (Agent 3) 独立审查性能不退化、无头宿主与平台互斥接管（PASS）：确认 QUAL-001 性能吞吐基线优良（1000 章 warm 耗时 4.4ms），QUAL-002 纸墨 UI 与桌面契约无缺陷，HEADLESS-001 严格实现单实例文件互斥锁与优雅退出的生产无头宿主闭环，六大业务目标全部实现。
   - Agent 4 独立审查 35 项功能全景证据完备性与跨平台边界（PASS）：核对 features.json 中全部 35 项功能的 requiredEvidenceTypes 均达到 100% 具备真实记录；所有依赖关系形成完整闭环 DAG；跨平台打包与平台执行边界已按 release profile 与 ADR-0022 准确限定；无凭证泄露；批准 features.json 晋升至 35 completed / 0 in_progress。
 - 结论：Stage 98 及全案收官独立审查全票通过，具备最终本地提交条件。
+
+## 2026-11-15 - 全案基线至最终 HEAD 累计变更全景独立审查记录 (Team Cumulative Final Review)
+
+- **审查基线与目标范围**：
+  - 代码基线：`master@0679303231cc439a0d2285f5c683041d1b347f0f`
+  - 终审版本：`master@46a7e2b4394217a8eaffec64ac1cb933d408ac89`（共 744 文件累计变更，+127,625 / -2,966 行）
+  - 覆盖范围：全部 6 大业务目标（R1~R6）、35 项特性（PERF-001~004, RUNTIME-001~003, DRIVER-001~002, SCHED-001~002, IMPORT-001~004, FEEDBACK-001~004, UI-001~003, API-001, CLI-001, AUTO-001~003, ACCEPT-001~003, MCP-001, SKILL-001, QUAL-001~002, HEADLESS-001）以及跨阶段集成一致性。
+- **独立审查分工与裁定**：
+  1. **Agent 1: Luna (架构与领域事实完整性 - R1, R2, R6) -> PASS**：
+     - **R1 拆书/仿写流畅**：验证精确 SQL 抽样替换了全书 content_snapshot 读取；流式 DTO 全文回读去重（`stream-snapshot-deduplication.test.ts` 15 项通过）；长计算与模型等待严格解耦。
+     - **R2 切书不取消任务**：验证 `ProjectRuntime` 独立持有 `projectId + canonicalRoot + databaseIdentity + executionEpoch`；视图切换仅改变当前展示与活跃订阅，后台任务继续执行；切书时未保存缓冲严格受保护（`project-runtime-lifecycle.test.ts` 47 项、`project-runtime.test.ts` 36 项通过）。
+     - **R6 吸收 InkOS 架构**：调度公平性与书间并行吸收自 InkOS，但严格保留 Pagekin 本地 SQLite 定稿事务/outbox 投影及纸墨 UI；未引入任何 AGPL 源码、未经授权的 Skill 文本或第二事实源。
+  2. **Agent 2: Terra (持久化、迁移与调度并发 - R3, R4) -> PASS**：
+     - **R3 规划反馈多轮修改**：验证设定、世界观、大纲范围与蓝图字段反馈候选；CAS 采纳严格核对 adoptionBase 与 generationParent（`planning-feedback-repository.test.ts` 145 项通过）；M08~M16 数据迁移通过集中注册中心加载，B01 新副本便携分类与历史冻结（`planning-feedback-portable.test.ts`）验证无未知字段泄漏。
+     - **R4 安全并行提速**：验证主进程全局公平调度器（`main-process-scheduler.test.ts` 49 项通过）；多书拆书（`multi-book-import-concurrency.test.ts`）与两书仿写（`two-book-imitation-concurrency.test.ts`）并发实测通过；书内严格保序，物理请求有界限制。
+  3. **Agent 3: Sol (自动化、人机验收与入站安全 - R5) -> PASS**：
+     - **R5 自动化与人机闭环**：验证本机 Inbound API / CLI（`inbound-api-controller.test.ts` 11 项、`creation-cli.test.ts` 13 项通过）；自动化创作策略 AUTO-001~003 安全暂停与重试上限（`scratch-creation-orchestrator.test.ts` 40 项通过）；机器初验 ACCEPT-001 严格设定 `canAutoFinalize: false`；可信作者批准清单 ACCEPT-002~003 绑定不可变哈希，同章单定稿与事务 CAS 一致；生产无头宿主 HEADLESS-001（`headless-runtime-host.test.ts` 3 项通过）实现跨进程文件排他互斥锁与优雅退出。
+  4. **Agent 4: Gatekeeper (证据链与门禁核验) -> PASS**：
+     - 验证 `features.json` 中 35 项特性 requiredEvidenceTypes 均具备真实记录；
+     - 验证基线至 HEAD 累计执行证据覆盖最终版本；
+     - 受保护文件 `docs/repository-analysis-2026-11-07.md` 完整保全；无任何 API 密钥或 PII 泄露；
+     - 明确划定证据边界：确定性代码实现与单测/场景验证 100% 达成，真实模型文学质量与全平台原生安装包保留门禁未越界宣称。
+- **全案终审裁定**：四方审查员全票一致通过，全案 35 项特性及六大业务目标累计变更在本地开发、验证与跨阶段集成层面已完全闭环，无残留阻断缺陷。
