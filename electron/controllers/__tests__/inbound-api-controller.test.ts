@@ -241,7 +241,7 @@ describe('inbound-api-controller and service integration', () => {
       })
     })
 
-    it('allows human-review:approve when trusted channel is open and scope is present', async () => {
+    it('keeps approval unavailable when only channel readiness and scope are present', async () => {
       controller.service.setTrustedReviewChannelReady(true)
 
       const req: InboundRequest = {
@@ -254,9 +254,10 @@ describe('inbound-api-controller and service integration', () => {
         payload: { reviewId: 'review-101' },
       }
 
-      const receipt = await controller.handleRequest(req)
-      expect(receipt.status).toBe('succeeded')
-      expect(receipt.result?.approved).toBe(true)
+      await expect(controller.handleRequest(req)).rejects.toMatchObject({
+        code: INBOUND_ERROR_CODES.HUMAN_REVIEW_SCOPE_REQUIRED,
+        status: 423,
+      })
     })
 
     it('handles HTTP requests over loopback with Host and Origin validation', async () => {

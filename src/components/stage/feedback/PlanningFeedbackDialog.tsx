@@ -85,6 +85,8 @@ function PlanningFeedbackDialogInner({
   })
 
   const sessionToCheck = frozenSession
+  const isCurrentInstance = () => instanceActive.current
+    && (!sessionToCheck || isProjectSessionCurrent(sessionToCheck))
   const closeDialog = () => {
     instanceActive.current = false
     onClose()
@@ -168,7 +170,7 @@ function PlanningFeedbackDialogInner({
 
   const handleGenerate = async () => {
     if (!baseId || !resolvedClient || !feedback.trim()) return
-    if (sessionToCheck && !isProjectSessionCurrent(sessionToCheck)) {
+    if (!isCurrentInstance()) {
       toast.error(text('当前项目已切换，已取消生成', 'Project changed, generation cancelled.'))
       return
     }
@@ -195,6 +197,8 @@ function PlanningFeedbackDialogInner({
         uiActionNonce: `author-feedback-${Date.now()}`,
       })
 
+      if (!isCurrentInstance()) return
+
       setCandidates(prev => [...prev, newCandidate])
       setSelectedCandidateId(newCandidate.candidateId)
       setUserEditedText(null)
@@ -204,10 +208,11 @@ function PlanningFeedbackDialogInner({
       setParentCandidateId(null)
       toast.success(text('已生成新候选', 'Generated new candidate.'))
     } catch (err: unknown) {
+      if (!isCurrentInstance()) return
       const reason = displayedErrorMessage(useLocaleStore.getState().locale, err)
       toast.error(text(`生成失败：${reason}`, `Generation failed: ${reason}`))
     } finally {
-      setIsGenerating(false)
+      if (isCurrentInstance()) setIsGenerating(false)
     }
   }
 

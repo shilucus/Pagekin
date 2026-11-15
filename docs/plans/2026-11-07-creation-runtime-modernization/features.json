@@ -1504,6 +1504,30 @@
           "environment": "Actual isolated Windows x64 Electron; fictional10chapter reference; loopback fake provider; inspected1440x900light screenshot",
           "result": "One whole execute and five ordered settled ACKs finish the original run/grant;10knowledge receipts,4committed stage receipts,10blueprints and4existing draft/finalized rows unchanged. Twelve fake requests, normal quit, no observed external requests/writes or residual processes; complete344-file build tree bound in manifest.",
           "limitations": "One foreground fake-provider observation, not A-to-B/multi-book, real-model quality, speedup, visual comparison, package/platform or full35 acceptance."
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "729b8f0b1515269c0634b1308fa1cf1b6c82796d + stage-100-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-100-evidence.md; ../../adr/0080-main-owned-foreground-reference-whole-run.md; review-record.md",
+          "environment": "Independent Agent4 integrated source/ADR/raw review; Root integration and Terra reference implementation",
+          "result": "Accepted original sender/grant/revision/execution admission before lazy owner preparation, with later beginRun/parent guards retained. Failed cancel persistence retains parent/writer; expired cleanup is original-parent/no-child/same-execution only and never renews execution.",
+          "limitations": "Foreground repair only. No generic background grant, schema or ordinary TTL relaxation. Idle expired issuance recovery and complete background/import/imitation qualification remain open; feature stays in_progress/false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "729b8f0b1515269c0634b1308fa1cf1b6c82796d + stage-100-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-100-evidence.md; .runtime/creation-runtime-modernization/resume-2026-11-15/reference-admission-retest.json; import-generation-final.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; serial fictional native SQLite and registered controllers",
+          "result": "Final admission4files76/76 covers six invalid admissions with zero owner preparation, joins/history and cancel-write retry after TTL. Broader17files416/416 precedes final admission edits and covers unchanged repository/generation/stage paths. Final build and quality commands exit0; independent bounded review accepted.",
+          "limitations": "Counts overlap, not summed. SQL typo, real admission RED6 and first63/76 fixture-cleanup failures are retained. No background/A-to-B or complete recovery/feature acceptance; no real model, quality, speedup or platform qualification."
+        },
+        {
+          "type": "electron",
+          "sourceSha": "729b8f0b1515269c0634b1308fa1cf1b6c82796d + stage-100-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-100-evidence.md; .runtime/creation-runtime-modernization/resume-2026-11-15/desktop/f537-reference-whole-10-light.json; f537-reference-whole-10-light.png",
+          "environment": "Fresh isolated Windows x64 Electron44.9.3; fictional10chapter project; loopback fake provider; actual1440x900light PNG viewed by Root and Agent4",
+          "result": "One whole execute and five ordered ACKs complete run/grant,10knowledge and4stage receipts,10blueprint effects and4existing draft/finalized rows unchanged;12fake requests, normal quit and no recorded external requests/writes/residuals within observed_before_quit coverage.",
+          "limitations": "Single foreground reference observation. Sidebar12 is fixture total, not task output count. Not A-to-B/background, complete imitation, visual comparison, performance, real-model quality, package or target-platform acceptance."
         }
       ]
     },
@@ -2521,6 +2545,14 @@
           "environment": "Windows x64; Electron main planning-feedback IPC controller and repository",
           "result": "planning-feedback:v1:* IPC dispatch, CAS adoption and dirty tab buffer retention verified",
           "limitations": "Real-model testing excluded per constraints"
+        },
+        {
+          "type": "browser",
+          "sourceSha": "729b8f0b1515269c0634b1308fa1cf1b6c82796d + stage-100-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-100-evidence.md; .runtime/creation-runtime-modernization/resume-2026-11-15/feedback-browser-retest.json; review-record.md",
+          "environment": "Windows x64; Vitest4.1.12; installed Edge157.0.4341.60 temporary profile; real React/store with fictional IPC",
+          "result": "Final3files54/54 include17 planning cases: late success/error/finally cannot project after close, cross-project change or same-project lease replacement. Existing normal generation/adoption and setup/architecture author buffers remain covered. Final log has no earlier act warnings; independent integrated source/raw review accepted.",
+          "limitations": "No new layout/text/control or author decision. Dirty-buffer initiation, complete history/error/reopen discovery, full state/viewport design and Electron acceptance remain open; UI002 stays in_progress/false. Not a real-model or platform result."
         }
       ]
     },
@@ -2737,6 +2769,14 @@
           "environment": "Windows x64; Electron main inbound API controller and service",
           "result": "inbound-api-controller suites (50/50) passed, localhost loopback, token lifecycle and idempotency verified",
           "limitations": "Approve write endpoint closed until trusted human channel verified"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "729b8f0b1515269c0634b1308fa1cf1b6c82796d + stage-100-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-100-evidence.md; ../../adr/0050-inbound-domain-api-security-and-idempotency-contract.md; .runtime/creation-runtime-modernization/resume-2026-11-15/api-cli-hash-final.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; fictional history and ephemeral loopback; independent Luna/Agent4 review",
+          "result": "Final shared API/CLI6files71/71 pass. New approval cases confirm423 without approval mutation/event/success effects, including repeated/concurrent/missing/foreign requests; original task-token denial, historical success/unknown and same-key mismatch decisions retain priority.",
+          "limitations": "Scope/readiness is not a trusted single-use approval capability. Production start/resume still uncomposed, receipt ownership/history is process memory, trusted approval and actual Electron API execution remain open; feature stays in_progress/false. No model/platform qualification."
         }
       ]
     },
@@ -2829,6 +2869,14 @@
           "environment": "Windows x64; Node/Electron CLI invocation and child process execution",
           "result": "creation-cli.test.ts (13/13) passed, run --wait and stable JSON output verified",
           "limitations": "Approve command fails safe when capability unissued"
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "729b8f0b1515269c0634b1308fa1cf1b6c82796d + stage-100-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-100-evidence.md; ../../adr/0051-creation-cli-driver-receipts-and-human-review-consumption.md; .runtime/creation-runtime-modernization/resume-2026-11-15/api-cli-hash-final.json; .runtime/agent3-cli-payload-hash-red.log; .runtime/agent3-cli-payload-hash-green.log",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; actual controller with fictional history and ephemeral loopback; independent Luna/Agent4 review",
+          "result": "FinalCLI25/25 are included in shared6files71/71, not added. Fresh query keys observe later real controller-recorded events without resending start; cursor progression and classified socket-read retries pass. Receipt shape/identity and exact normalized outer/nested payload hashes reject mismatch; five hash REDs close in25/25 GREEN.",
+          "limitations": "Fictional seeded history is not production creation. No actual desktop API start/wait, restart durability or trusted human approval is delivered; uncomposed start still fails closed. Invalid JSON reports no raw body. CLI001 remains in_progress/false; no model/Electron/platform qualification."
         }
       ]
     },

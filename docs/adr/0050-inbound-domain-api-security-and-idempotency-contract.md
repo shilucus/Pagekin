@@ -88,6 +88,18 @@
   construction. No speculative executor interface, second broker or new public
   capability is introduced by this repair.
 
+## Resumed Approval Boundary (2026-11-15)
+
+The `human_review` scope and channel-readiness flag are necessary checks, not
+the manifest-bound, single-use trusted author capability required by F2 section
+7.7. Until that capability and its actual effect writer are composed, a new
+`human-review:approve` dispatch returns the existing
+`HUMAN_REVIEW_SCOPE_REQUIRED` / HTTP423. It does not change a review item, append
+an approval event or save a successful receipt, including for an unknown or
+foreign review ID. Existing authentication, task ownership and idempotency
+history/unknown/payload-conflict decisions retain their ordering. Historical
+receipt fixtures do not establish a real trusted approval channel.
+
 ## 效果与保证
 - 实现外部 CLI 与工具链对 Pagekin 创作运行时的安全受控调用；
 - 保障单书隔离与人审门禁不可突破；

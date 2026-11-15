@@ -26,6 +26,7 @@ import { ReferenceStyleFailure } from '../services/reference-style-driver'
 import { ReferenceBlueprintFailure } from '../services/reference-blueprint-driver'
 import { importGenerationStopMessage } from '../../src/i18n/app-errors'
 import type { registerGenerationController } from './generation-controller'
+import { ImportRunRepository } from '../repositories/import-run-repository'
 
 const authorities = new Map<ProjectRuntime, ReferenceKnowledgeAuthority>()
 const refreshForeground = new ReferenceRefreshForeground()
@@ -110,6 +111,21 @@ export function registerReferenceKnowledgeController(scheduler?: GenerationSched
         }
         fresh()
         assertKnowledgeBaseStoragePathSupported(runtime.canonicalRoot)
+        if (channel === 'reference-run:v1:execute') {
+          const request = body as ReferenceRunRequest
+          const authority = authorities.get(runtime)
+          if (request.reference.projectId !== runtime.projectId || !authority) {
+            throw new Error('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
+          }
+          const run = ImportRunRepository.get(request.reference.runId, {
+            database: runtime.database, canonicalRoot: runtime.canonicalRoot, projectId: runtime.projectId,
+          })
+          if (run?.status !== 'completed') {
+            authority.assertRunAdmission(event.sender, request.reference, request.execution)
+            // Only the authorized run may initialize an owner before acquiring its own legacy claims.
+            generation.prepareReferenceRun(runtime, event, session)
+          }
+        }
         return await withLegacyProjectOperation(channel, async () => {
           fresh()
           if (channel === 'reference-run:v1:projection-ack') {

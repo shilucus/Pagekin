@@ -15,7 +15,7 @@ import { removeTemporaryTree } from '../../../test/helpers/remove-temporary-tree
 import { projectRuntimeHost, type ProjectRuntime } from '../project-runtime'
 import { ReferenceKnowledgeAuthority, ReferenceKnowledgeExecutionFailure,
   assertReferenceKnowledgeUnmanagedMutationAllowed } from '../reference-knowledge-authority'
-import { acquireImportRunParentFlight, assertImportRunParentFlightCurrent } from '../import-stage-flight'
+import { acquireImportRunParentFlight, acquireImportStageFlight, assertImportRunParentFlightCurrent } from '../import-stage-flight'
 
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
 const apiKey = Buffer.alloc(32, 31)
@@ -187,6 +187,43 @@ describe('main-owned reference knowledge driver', () => {
     expect(ImportRunRepository.get(runId)?.status).toBe('cancelled')
     expect(authority.hasIssuance(prepared.reference.grantId)).toBe(false)
     parent.release()
+  })
+
+  it('cancels an expired original execution only after the child has drained', () => {
+    const parent = acquireImportRunParentFlight(runtime.database, runId)
+    const input = executionRequest()
+    const releaseRun = authority.beginRun(sender, prepared.reference, input.execution, parent.token)
+    const releaseChild = acquireImportStageFlight(runtime.database, runId, 'global', parent.token)
+    runtime.database.prepare('UPDATE import_runs SET lease_expires_at=0 WHERE id=?').run(runId)
+    expect(() => ImportRunRepository.cancelAtBoundary(runId, prepared.execution, runtime)).toThrow('IMPORT_RUN_EXECUTION_STALE')
+    const other = acquireImportRunParentFlight(runtime.database, 'fictional-other-run')
+    expect(() => ImportRunRepository.cancelExpiredReferenceAtBoundary(runId, input.execution, runtime, other.token))
+      .toThrow('GENERATION_OWNER_BUSY')
+    other.release()
+    expect(() => authority.cancelRunAtBoundary(sender, prepared.reference, input.execution, parent.token))
+      .toThrow('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
+    expect(ImportRunRepository.get(runId)?.status).toBe('running')
+    releaseChild()
+    authority.cancelRunAtBoundary(sender, prepared.reference, input.execution, parent.token)
+    expect(ImportRunRepository.get(runId)?.status).toBe('cancelled')
+    releaseRun(); parent.release()
+  })
+
+  it.each(['successor', 'completed'] as const)('does not cancel %s history when the original lease expires', state => {
+    const parent = acquireImportRunParentFlight(runtime.database, runId)
+    const input = executionRequest()
+    const releaseRun = authority.beginRun(sender, prepared.reference, input.execution, parent.token)
+    if (state === 'successor') {
+      runtime.database.prepare('UPDATE import_runs SET execution_owner=?, execution_epoch=execution_epoch+1, lease_expires_at=0 WHERE id=?')
+        .run(randomUUID(), runId)
+    } else {
+      runtime.database.prepare("UPDATE import_runs SET status='completed', stage='completed', lease_expires_at=0 WHERE id=?").run(runId)
+    }
+    const before = runtime.database.prepare('SELECT * FROM import_runs WHERE id=?').get(runId)
+    authority.cancelRunAtBoundary(sender, prepared.reference, input.execution, parent.token)
+    ImportRunRepository.cancelExpiredReferenceAtBoundary(runId, input.execution, runtime, parent.token)
+    expect(runtime.database.prepare('SELECT * FROM import_runs WHERE id=?').get(runId)).toEqual(before)
+    releaseRun(); parent.release()
   })
 
   it.each(['grant', 'cancel'] as const)('retains the parent and retries a failed %s cleanup', failureKind => {

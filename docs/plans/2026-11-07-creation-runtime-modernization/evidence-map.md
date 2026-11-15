@@ -224,6 +224,26 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
   CLI001 each gain2partial records only; entire previous JSON semantics and14/21
   flags remain. No new Electron/browser, model, speedup or platform qualification.
 
+## Stage100 Resumed Entry and Client Repairs
+
+- [Stage100](stage-100-evidence.md) maps IMPORT001/UI002/API001/CLI001 AC to
+  actual reference admission/cleanup, late feedback, fail-closed approval and
+  fresh live polling/hash checks. ADR0050/0051/0080 retain existing contracts;
+  no schema, dependency, automatic approval or generic background permission.
+- Final admission4files76/76, API/CLI6files71/71 and browser3files54/54 are
+  distinct overlapping packages, not summed. Broader17files416/416 precedes
+  final admission; failed SQL/fixture reports, real RED6 and CLI hash RED5 stay
+  available. Quality/source build exit0, with original build warnings retained.
+- Fresh actual isolated Electron10chapter foreground reference observes one
+  execute, five ACKs,10knowledge/4stage receipts,10blueprints and4unchanged
+  draft/finalized rows. Root and Agent4 view1440x900 light PNG. Normal quit has
+  no recorded external requests/writes/residual processes within raw coverage;
+  sidebar12 is fixture total. [Manifest](stage-100-source-manifest.json) binds
+  source/build-entry/protected identities, not a package/platform attestation.
+- Independent review accepts only the repaired boundaries. No feature promoted;
+  14historical completed/21in_progress. No full import/imitation/background,
+  true-model quality, statistical speedup, full design or target qualification.
+
 ## Stage91 Two-Book Observation
 
 - [Stage91](stage-91-evidence.md) registers an isolated existing workflow-batch:v2

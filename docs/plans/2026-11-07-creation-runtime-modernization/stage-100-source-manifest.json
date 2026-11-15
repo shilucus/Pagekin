@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "stage": 100,
+  "sourceSha": "729b8f0b1515269c0634b1308fa1cf1b6c82796d",
+  "productionSourcesChanged": true,
+  "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; Electron44.9.3; Edge157.0.4341.60",
+  "sourceFiles": [
+    { "path": "docs/adr/0050-inbound-domain-api-security-and-idempotency-contract.md", "sha256": "6BC4C5589E660B90F60EA4FC4D4878F52B56AC58B48F715ED42A767D1272B985" },
+    { "path": "docs/adr/0051-creation-cli-driver-receipts-and-human-review-consumption.md", "sha256": "A15A7DE2489457961031C4831DB1A53F0EABD5DA47A50267C1EA2149CB3B8296" },
+    { "path": "docs/adr/0080-main-owned-foreground-reference-whole-run.md", "sha256": "3AB18EA9B1F65C6A96743166068BAF3D310FD3FC37987724F49E9DB2C4DA19BE" },
+    { "path": "electron/controllers/generation-controller.ts", "sha256": "C2371AB12ADFD58A07425FCEE42A01597702E37A1D00D6E39D162E1761C563C1" },
+    { "path": "electron/controllers/reference-knowledge-controller.ts", "sha256": "897F4A20497FEE22737A38E5BD02EC76FDAE80AEF02958FCC95101BE991BE69E" },
+    { "path": "electron/controllers/reference-run-foreground.ts", "sha256": "28076E4DC1413E23A8BDCD1CEAC230A9D04912DA69D37F1EA5B4BC555DBC5FFD" },
+    { "path": "electron/controllers/__tests__/reference-run-foreground.test.ts", "sha256": "24FAA611C8FFE0B8D6D5581DCCA27EE0E9D378EEF5E5AD8CDFCBA37EC482F711" },
+    { "path": "electron/controllers/__tests__/reference-run-driver.integration.test.ts", "sha256": "895BA55F5781C605A139953002F0F5FF2C65448F68BDC5439D8E22BEB2188483" },
+    { "path": "electron/repositories/import-run-repository.ts", "sha256": "A461C5CF2519DC4FAA22CA5DCCE65FDB946A867793D732886120EB5FFB225353" },
+    { "path": "electron/services/reference-knowledge-authority.ts", "sha256": "A143E617E72CCA8A3FF2070B0319CD7D2542F499AC221BC586830FD28C581E27" },
+    { "path": "electron/services/__tests__/reference-knowledge-driver.test.ts", "sha256": "62DD731F5608CF7917E35E233421BF76D603A4165692A1035BDB7BDA306550B2" },
+    { "path": "electron/services/inbound-api-service.ts", "sha256": "E5185CFCF211357F541ECDD9FBF719D9C4B11988711BB5D3A3F9CED9656BE107" },
+    { "path": "electron/controllers/__tests__/inbound-api-controller.approval.test.ts", "sha256": "342655736A198F5DFCB8EBE214CC6F102C3E265D5058BC8B77F027AC5FF6BA5C" },
+    { "path": "electron/controllers/__tests__/inbound-api-controller.test.ts", "sha256": "846F1BBC9EA0B43D552BA9AA7A635BBCB429FAF3A95A64524B09112C25770F1A" },
+    { "path": "electron/controllers/__tests__/inbound-api-controller.idempotency.test.ts", "sha256": "BD3D8F469581C6B503022224A860DCDA988ED4819B9D21E7A1FC18E72898C7DF" },
+    { "path": "scripts/cli/creation-cli.ts", "sha256": "DA9D329498C42C76A73F8B938936F9EAF803F2B2945C6688BD5C9D0055782C1D" },
+    { "path": "scripts/cli/__tests__/creation-cli.test.ts", "sha256": "577541D5A36DB7B2A3C9B2BF3E78A8ACA0813EB8EB61A7D4758D509678AF8024" },
+    { "path": "src/components/stage/feedback/PlanningFeedbackDialog.tsx", "sha256": "2539A0AC27F93A6A20626C80E799FFAFFC2A0A3B4F987579C90867D6F2DAFC8C" },
+    { "path": "src/components/stage/feedback/__tests__/planning-feedback-adoption-session.browser.tsx", "sha256": "314F1D81FCE9D641045E59FB3AEE3E03913F5B7F87C8677993E79369EE933A90" }
+  ],
+  "builtEntries": [
+    { "path": "dist/index.html", "sha256": "9563F170AB98AFBB6E114E04E600340213237736C16A0CEEC6EC611E6D8BEB2F" },
+    { "path": "dist-electron/main.js", "sha256": "9C9CA9C0D323617592E5BA4BDDC0C0F62E48D3678718647B8A7ED6D5F3A38ECB" },
+    { "path": "dist-electron/preload.mjs", "sha256": "699CD2465764FC6090FA1CA93BD9F5967A628A2BCCF3F7894778D85C1E660CEB" }
+  ],
+  "protectedFiles": [
+    { "path": "docs/repository-analysis-2026-11-07.md", "sha256": "BB6866223C596C690E4D2E35C38FAA9EBB05E45084776EE1B285083BAD89A74B" },
+    { "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-evidence.md", "sha256": "5AA85559B9A71022D378CFA7B50EB55E1539BEABD77E1766050D819FA336F1F9" },
+    { "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-source-manifest.json", "sha256": "7AE7D4318C58DC872664BB89BD455A3995A3C02E5C2DE4E2C8FE7D3D9AD48130" }
+  ],
+  "reports": [
+    ".runtime/creation-runtime-modernization/resume-2026-11-15/reference-admission-retest.json",
+    ".runtime/creation-runtime-modernization/resume-2026-11-15/api-cli-hash-final.json",
+    ".runtime/creation-runtime-modernization/resume-2026-11-15/feedback-browser-retest.json",
+    ".runtime/creation-runtime-modernization/resume-2026-11-15/desktop/f537-reference-whole-10-light.json",
+    ".runtime/creation-runtime-modernization/resume-2026-11-15/desktop/f537-reference-whole-10-light.png"
+  ],
+  "limitations": "Local source/build-entry identities, not a complete packaged build-tree or platform attestation. Reports overlap. Foreground fictional reference only; no new completed feature, real model, background, full imitation or trusted approval qualification."
+}

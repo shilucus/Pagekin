@@ -130,6 +130,7 @@ class Sender extends EventEmitter {
 
 let base = '', parent = '', root = '', session: ProjectSessionContext, sender: Sender
 let database: NonNullable<ReturnType<typeof getProjectDb>>
+let generation: ReturnType<typeof registerGenerationController>
 let pending: Promise<unknown> | undefined
 let fetchMock: ReturnType<typeof vi.fn<typeof globalThis.fetch>> | undefined
 
@@ -160,7 +161,7 @@ function verifiedCleanupRoot(): string {
 beforeAll(() => {
   const otherPlanningModel: ModelProfile = { ...planningModel, id: MODEL_B_ID, name: 'Fictional planning B', modelName: MODEL_B_ID }
   const loadModel = (id: string) => id === planningModel.id ? planningModel : id === otherPlanningModel.id ? otherPlanningModel : null
-  const generation = registerGenerationController({ modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel }),
+  generation = registerGenerationController({ modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel }),
     loadModel, applyProxyConfig: () => {}, scheduler })
   registerReferenceKnowledgeController(scheduler, generation)
   registerKBController()
@@ -313,6 +314,31 @@ function acknowledgeMain(event: Extract<ReferenceRunProgress, { kind: 'stage-com
 async function settleAcks() { await Promise.all(sender.acknowledgements) }
 
 describe('registered whole reference-run foreground on isolated native storage', () => {
+  it.each(['grant', 'revision', 'owner', 'epoch', 'sender', 'expired-lease'] as const)(
+    'rejects an invalid %s before admitting or recovering a generation owner', async invalid => {
+      const issued = await prepare()
+      const request: ReferenceRunRequest = { ...runRequest(issued), reference: { ...issued.reference }, execution: executionOf(issued) }
+      if (invalid === 'grant') request.reference.grantId = randomUUID()
+      if (invalid === 'revision') request.reference.revision++
+      if (invalid === 'owner') request.execution.owner = randomUUID()
+      if (invalid === 'epoch') request.execution.epoch++
+      if (invalid === 'expired-lease') database.prepare('UPDATE import_runs SET lease_expires_at=0 WHERE id=?').run(RUN)
+      const caller = invalid === 'sender' ? new Sender() : sender
+      const admit = vi.spyOn(generation, 'prepareReferenceRun')
+      const before = database.prepare('SELECT * FROM generation_runs ORDER BY run_id').all()
+      try {
+        const result = await mocks.handlers.get('reference-run:v1:execute')!({ sender: caller }, request, { ...session })
+        expect(result).toMatchObject({ success: false })
+        expect(admit).not.toHaveBeenCalled()
+        expect(database.prepare('SELECT * FROM generation_runs ORDER BY run_id').all()).toEqual(before)
+      } finally {
+        if (invalid === 'expired-lease') {
+          database.prepare('UPDATE import_runs SET lease_expires_at=? WHERE id=?').run(issued.execution.expiresAt, RUN)
+        }
+        if (caller !== sender) caller.destroy()
+      }
+    }, 30_000)
+
   it('executes and acknowledges all five existing stage owners with committed receipts', async () => {
     const fetch = installProvider()
     const issued = await prepare()
@@ -320,6 +346,7 @@ describe('registered whole reference-run foreground on isolated native storage',
     const result = await execute(runRequest(issued))
     await settleAcks()
 
+    expect(result.success, `reference-run errorCode: ${result.errorCode ?? 'none'}`).toBe(true)
     expect(result).toMatchObject({ success: true, run: { id: RUN, purpose: 'reference', status: 'completed', stage: 'completed' }, execution: null })
     expect(wholeProgress().filter(item => item.kind === 'stage-completed').map(item => item.kind === 'stage-completed' && item.completion.stage))
       .toEqual(['knowledge', 'global', 'style', 'blueprints', 'refresh'])
@@ -545,6 +572,33 @@ describe('registered whole reference-run foreground on isolated native storage',
     expect(await flight).toMatchObject({ success: false, errorCode: 'IMPORT_RUN_CANCELLED' })
     expect(ImportRunRepository.get(RUN)).toMatchObject({ status: 'cancelled', stage: 'global' })
     expect(fetch.mock.calls.filter(([url]) => !String(url).includes('/embeddings'))).toHaveLength(0)
+  }, 60_000)
+
+  it('retains the run until a failed cancellation write is retried during close', async () => {
+    installProvider()
+    const issued = await prepare()
+    sender.holdMainStage = 'knowledge'
+    const flight = execute(runRequest(issued))
+    const gate = await waitForStageCompleted('knowledge')
+    let retriedStatus: string | undefined
+    const cancel = vi.spyOn(ImportRunRepository, 'cancelAtBoundary')
+      .mockImplementationOnce(() => { throw new Error('FICTIONAL_CANCEL_WRITE_FAILED') })
+
+    await acknowledgeMain(gate, 'cancelled')
+    expect(await flight).toMatchObject({ success: false, errorCode: 'IMPORT_RUN_CANCELLED' })
+    expect(ImportRunRepository.get(RUN)).toMatchObject({ status: 'running', stage: 'global' })
+    database.prepare('UPDATE import_runs SET lease_expires_at=0 WHERE id=?').run(RUN)
+    const runtime = projectRuntimeHost.getOpenRuntimes().find(item => item.projectId === session.projectId)!
+    expect(() => projectRuntimeHost.assertTaskAvailable(runtime)).toThrow('PROJECT_RUNTIME_BUSY')
+    const originalExpiredCancel = ImportRunRepository.cancelExpiredReferenceAtBoundary.bind(ImportRunRepository)
+    const expiredCancel = vi.spyOn(ImportRunRepository, 'cancelExpiredReferenceAtBoundary').mockImplementation((...args) => {
+      originalExpiredCancel(...args)
+      retriedStatus = ImportRunRepository.get(RUN)?.status
+    })
+    await projectRuntimeHost.requestClose(runtime)
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(expiredCancel).toHaveBeenCalledTimes(1)
+    expect(retriedStatus).toBe('cancelled')
   }, 60_000)
 
   it('stops at a revoked issuance during the whole-run projection wait', async () => {

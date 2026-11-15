@@ -439,28 +439,12 @@ export class InboundApiService {
       }
 
       case 'human-review:approve': {
-        const reviewId = req.payload.reviewId as string
-        const item = this.reviewItems.get(reviewId)
-        if (item) {
-          item.status = 'approved'
-        }
-
-        return {
-          operationKey,
-          idempotencyKey: req.idempotencyKey,
-          projectId: req.projectId,
-          grantId: req.grantId,
-          command: req.command,
-          payloadHash,
-          status: 'succeeded',
-          result: {
-            reviewId,
-            approved: true,
-            reviewedAt: now,
-          },
-          createdAt: now,
-          completedAt: now,
-        }
+        // Scope and channel readiness do not prove a manifest-bound, single-use author approval.
+        throw new InboundDomainError(
+          INBOUND_ERROR_CODES.HUMAN_REVIEW_SCOPE_REQUIRED,
+          'Human approval execution is unavailable until a trusted single-use approval capability is composed',
+          423,
+        )
       }
 
       default: {

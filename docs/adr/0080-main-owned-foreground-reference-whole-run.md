@@ -68,6 +68,30 @@ Secondary cleanup errors cannot replace the primary operation failure. Only a
 confirmed same-execution cancellation maps a revoked projection wait to the
 existing cancellation result; source/storage/lease failures remain failures.
 
+## Authorized Lazy Owner And Cancellation Retry
+
+The foreground whole-run entry initializes its existing lazy generation owner
+before taking its own legacy work claims. Otherwise the first generation stage
+can reject that same run as busy. Before initialization or owner handoff, the
+original reference authority must synchronously check the issuance sender, full
+reference/revision, execution owner/epoch, current grant/resources and unexpired
+execution lease. This preflight has no domain writes; its existing admission
+guard may briefly hold a SQLite transaction lock. It does not issue or renew
+authority, set a parent claim or replace the later `beginRun` checks. Identical
+in-flight requests may still join. Completed history skips owner initialization
+and retains its original readback/grant recovery validation.
+
+If a cancelled whole run physically settles but its canonical cancellation write
+fails, keep the primary cancellation result and retain the cancellation debt,
+original issuance, parent claim and runtime work claim for close-time retry.
+Do not release them just because the operation promise settled. An expired lease
+does not permit more execution: only this original trusted parent, with no live
+child and the same reference run owner/epoch, may perform an expired-cancellation
+CAS. Portable freeze and captured reference checks remain mandatory; a successor
+or completed run is not changed. Ordinary execution and ordinary cancellation
+still require their existing valid lease. No background eligibility, additional
+request or new grant follows from the cleanup-only path.
+
 ## Acceptance
 
 Require closed-contract/preload/session checks, coordinator transitions and

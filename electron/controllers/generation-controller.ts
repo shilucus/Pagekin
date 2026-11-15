@@ -1018,6 +1018,10 @@ export function registerGenerationController(options: {
 
   // Trusted composition reuses the same authorized owner and child foreground ACKs, never internal IPC calls.
   return {
+    prepareReferenceRun(runtime: ProjectRuntime, event: IpcMainInvokeEvent, session: ProjectSessionContext): void {
+      const owner = authorizedOwner(session, event)
+      if (ownerRuntimes.get(owner) !== runtime) throw new Error('GENERATION_DATABASE_CHANGED')
+    },
     referenceGlobal(runtime: ProjectRuntime, event: IpcMainInvokeEvent, session: ProjectSessionContext,
       request: ReferenceGlobalRequest, parentToken: ImportRunParentFlightToken, assertCurrent: () => void) {
       assertReferenceGlobalRequest(request)

@@ -6,6 +6,7 @@ import {
   type InboundRequest,
   INBOUND_ERROR_CODES,
   InboundDomainError,
+  normalizePayload,
 } from '../../src/shared/inbound-domain-contract'
 
 export const CLI_EXIT_CODES = {
@@ -39,6 +40,27 @@ export function maskSecret(secret?: string): string {
   if (!secret) return '<none>'
   if (secret.length <= 8) return '********'
   return `${secret.slice(0, 4)}...${secret.slice(-4)}`
+}
+
+function isRetryablePollingTransportError(error: unknown): boolean {
+  if (!(error instanceof TypeError) || !error.cause || typeof error.cause !== 'object') return false
+  const code = (error.cause as { code?: unknown }).code
+  return code === 'ECONNRESET' || code === 'UND_ERR_SOCKET'
+}
+
+function readInboundReceipt(value: unknown,
+  expected: Pick<InboundRequest<unknown>, 'command' | 'projectId' | 'grantId' | 'idempotencyKey' | 'payload'>): InboundReceipt {
+  const receipt = value as Partial<InboundReceipt> | null
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)
+    || receipt.command !== expected.command || receipt.projectId !== expected.projectId
+    || receipt.grantId !== expected.grantId || receipt.idempotencyKey !== expected.idempotencyKey
+    || typeof receipt.operationKey !== 'string' || !receipt.operationKey
+    || receipt.payloadHash !== normalizePayload(expected.payload).hash
+    || !Number.isFinite(receipt.createdAt) || typeof receipt.status !== 'string'
+    || !['succeeded', 'failed', 'unknown', 'pending_review', 'cancelled'].includes(receipt.status)) {
+    throw new Error('Invalid inbound receipt response from server')
+  }
+  return receipt as InboundReceipt
 }
 
 export class CreationCli {
@@ -114,7 +136,7 @@ export class CreationCli {
     try {
       data = JSON.parse(text)
     } catch {
-      throw new Error(`Invalid JSON response from server (HTTP ${response.status}): ${text}`)
+      throw new Error(`Invalid JSON response from server (HTTP ${response.status})`)
     }
 
     if (!response.ok) {
@@ -124,7 +146,7 @@ export class CreationCli {
       throw new InboundDomainError(code, message, response.status)
     }
 
-    return data as InboundReceipt
+    return readInboundReceipt(data, requestBody)
   }
 
   /**
@@ -171,6 +193,7 @@ export class CreationCli {
     }
 
     const taskId = (initialReceipt.result?.taskId as string) || ''
+    if (!taskId) return this.handleErrorToResult(new Error('Workflow start response is missing taskId'))
     const collectedEvents: InboundEvent[] = []
     let cursor = 0
 
@@ -181,9 +204,10 @@ export class CreationCli {
           const eventsReceipt = await this.sendRequest(
             'workflow:events',
             { taskId },
-            { sequenceCursor: cursor, idempotencyKey: `events_${taskId}_${cursor}` },
+            { sequenceCursor: cursor },
           )
-          const newEvents = (eventsReceipt.result?.events as InboundEvent[]) || []
+          const newEvents = eventsReceipt.result?.events as InboundEvent[] | undefined
+          if (!Array.isArray(newEvents)) throw new Error('Invalid workflow events response from server')
           for (const ev of newEvents) {
             collectedEvents.push(ev)
             cursor = Math.max(cursor, ev.sequenceNumber)
@@ -210,8 +234,10 @@ export class CreationCli {
               }
             }
           }
-        } catch {
-          // Network hiccup during poll -> retry next tick
+        } catch (error: unknown) {
+          if (!isRetryablePollingTransportError(error)) {
+            return { ...this.handleErrorToResult(error), receipt: initialReceipt, events: collectedEvents }
+          }
         }
       }
 
@@ -220,10 +246,11 @@ export class CreationCli {
         const receiptQuery = await this.sendRequest(
           'workflow:receipt',
           { targetIdempotencyKey: idempotencyKey, targetCommand: 'workflow:start' },
-          { idempotencyKey: `check_receipt_${idempotencyKey}_${Date.now()}` },
         )
 
-        const currentReceipt = (receiptQuery.result?.receipt as InboundReceipt) || initialReceipt
+        const currentReceipt = readInboundReceipt(receiptQuery.result?.receipt, {
+          command: 'workflow:start', projectId: this.projectId, grantId: this.grantId, idempotencyKey, payload,
+        })
         if (currentReceipt.status === 'succeeded') {
           return {
             exitCode: CLI_EXIT_CODES.SUCCESS,
@@ -261,8 +288,10 @@ export class CreationCli {
             events: collectedEvents,
           }
         }
-      } catch {
-        // Continue loop
+      } catch (error: unknown) {
+        if (!isRetryablePollingTransportError(error)) {
+          return { ...this.handleErrorToResult(error), receipt: initialReceipt, events: collectedEvents }
+        }
       }
 
       await new Promise(r => setTimeout(r, pollInterval))
@@ -308,7 +337,6 @@ export class CreationCli {
     const res = await this.sendRequest(
       'workflow:receipt',
       { targetIdempotencyKey, targetCommand },
-      { idempotencyKey: `receipt_${targetIdempotencyKey}` },
     )
     return (res.result?.receipt as InboundReceipt) || res
   }

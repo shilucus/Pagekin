@@ -83,6 +83,7 @@ export class ReferenceRunForeground {
     const parent = acquireImportRunParentFlight(runtime.database, frozen.reference.runId)
     let releaseWork: (() => void) | undefined
     let releaseIssuance: (() => void) | undefined
+    let cancellationDebt = false
     try {
       releaseWork = projectRuntimeHost.acquireLegacyOperation('reference-run:v1:execute')
       // A completed run may only retry the retained original grant, or validate completed history without an issuance.
@@ -97,6 +98,10 @@ export class ReferenceRunForeground {
       stop: new AbortController(), gate: null, operation: undefined!, operationSettled: false,
       cleanup: () => {
         if (flight.finished) return
+        if (cancellationDebt) {
+          authority.cancelRunAtBoundary(sender, frozen.reference, frozen.execution, parent.token)
+          cancellationDebt = false
+        }
         // A failed issuance cleanup retains both the writer fence and runtime work claim for a close-time retry.
         releaseIssuance?.()
         parent.release()
@@ -185,7 +190,10 @@ export class ReferenceRunForeground {
       primaryFailure = error
       if (error instanceof Error && error.message === 'IMPORT_RUN_CANCELLED' && authority.hasIssuance(frozen.reference.grantId)) {
         try { authority.cancelRunAtBoundary(sender, frozen.reference, frozen.execution, parent.token) }
-        catch (cleanupError) { retainSecondaryFailure(error, cleanupError) }
+        catch (cleanupError) {
+          cancellationDebt = true
+          retainSecondaryFailure(error, cleanupError)
+        }
       }
       throw error
     }).finally(() => {
@@ -194,7 +202,7 @@ export class ReferenceRunForeground {
       sender.removeListener('destroyed', stop)
       flight.gate?.ready.reject(new Error('GENERATION_REQUEST_FAILED'))
       flight.gate?.result.reject(new Error('GENERATION_REQUEST_FAILED'))
-      try { flight.cleanup() }
+      try { if (!cancellationDebt) flight.cleanup() }
       catch (cleanupError) {
         if (primaryFailure !== undefined) retainSecondaryFailure(primaryFailure, cleanupError)
         else throw cleanupError

@@ -382,6 +382,15 @@ export class ReferenceKnowledgeAuthority {
     return { run: resumedRun, execution }
   }
 
+  assertRunAdmission(subject: Subject, reference: ReferenceKnowledgeReference, execution: ImportRunExecutionAuthority): void {
+    const issuance = this.require(subject, reference)
+    if (execution.owner !== issuance.execution.owner || execution.epoch !== issuance.execution.epoch) {
+      throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_MISMATCH')
+    }
+    issuance.admission.assertCurrent(this.resources, issuance.runId)
+    ImportRunRepository.assertExecutionAuthority(issuance.runId, issuance.execution, Date.now(), this.context.database)
+  }
+
   beginRun(subject: Subject, reference: ReferenceKnowledgeReference, execution: ImportRunExecutionAuthority,
     parentToken: ImportRunParentFlightToken): () => void {
     assertImportRunParentFlightCurrent(this.context.database, reference.runId, parentToken)
@@ -453,9 +462,13 @@ export class ReferenceKnowledgeAuthority {
     if (issuance.knowledgeActive || issuance.inFlight || hasImportStageChildFlight(this.context.database, issuance.runId)) {
       throw failure('KNOWLEDGE_BASE_REFERENCE_EXECUTION_ACTIVE')
     }
-    const row = this.context.database.prepare('SELECT status, execution_owner, execution_epoch FROM import_runs WHERE id=?')
-      .get(issuance.runId) as { status: string; execution_owner: string; execution_epoch: number } | undefined
+    const row = this.context.database.prepare('SELECT status, execution_owner, execution_epoch, lease_expires_at FROM import_runs WHERE id=?')
+      .get(issuance.runId) as { status: string; execution_owner: string; execution_epoch: number; lease_expires_at: number } | undefined
     if (!row || row.status !== 'running' || row.execution_owner !== execution.owner || row.execution_epoch !== execution.epoch) return
+    if (row.lease_expires_at <= Date.now()) {
+      ImportRunRepository.cancelExpiredReferenceAtBoundary(issuance.runId, issuance.execution, this.context, parentToken)
+      return
+    }
     ImportRunRepository.assertExecutionAuthority(issuance.runId, issuance.execution, Date.now(), this.context.database)
     ImportRunRepository.cancelAtBoundary(issuance.runId, issuance.execution, this.context)
   }

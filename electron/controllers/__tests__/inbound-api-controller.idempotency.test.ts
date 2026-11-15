@@ -108,9 +108,12 @@ describe('inbound fail-closed execution and idempotency', () => {
     controller.service.setTrustedReviewChannelReady(true)
     controller.service.addReviewItem({ reviewId: 'fictional-review', taskId: 'fictional-task', projectId, proposal: {} })
     const approval: InboundRequest = { ...request, token: reviewer.token, command: 'human-review:approve', payload: { reviewId: 'fictional-review' } }
-    const pending = controller.handleRequest(approval)
+    const receipt = fictionalReceipt(approval)
+    seedFictionalPending(controller.service, approval, Promise.resolve(receipt))
+    expect(await controller.handleRequest(approval)).toEqual(receipt)
     await expect(controller.handleRequest({ ...approval, token: request.token })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.HUMAN_REVIEW_SCOPE_REQUIRED })
-    await pending
+    clearFictionalPending(controller.service, approval)
+    seedFictionalReceipt(controller.service, approval)
     await expect(controller.handleRequest({ ...approval, token: request.token })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.HUMAN_REVIEW_SCOPE_REQUIRED })
   })
 

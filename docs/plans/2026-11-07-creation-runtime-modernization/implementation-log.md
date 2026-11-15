@@ -2081,3 +2081,45 @@ The observations below retain their chronological state. The final acceptance at
 - Next executable scope: foreground first-owner admission, cancellation cleanup
   retry after TTL, feedback late-generation projection, inbound fake approval
   rejection and live CLI polls. Their code/tests remain outside this docs commit.
+
+## 2026-11-15 - Stage100: Existing Entry and Client Repairs
+
+- Stage99 is committed as `729b8f0b1515269c0634b1308fa1cf1b6c82796d`;
+  index remained empty and both existing untracked stage-1b3 files were preserved.
+  This source stage changes only the reference admission/cancel cleanup,
+  feedback late-result guards, API fake approval and CLI read/receipt boundaries
+  described in [Stage100](stage-100-evidence.md). No feature is promoted.
+- Root owns integration/shared ADRs/records/Git; requested Luna/Terra/Sol own
+  feedback/reference/API-CLI. Agent4 independently reviews the final integrated
+  source, three ADRs, raw reports and actual desktop JSON/PNG; both the
+  owner-before-auth and CLI hash findings are fixed, retested and re-reviewed.
+  No unresolved in-scope correctness blocker remains for this bounded commit.
+- Actual root commands and exact file lists are in Stage100. Final native
+  admission4files76/76, API/CLI6files71/71 and browser3files54/54 pass, zero
+  failed/pending; broader native17files416/416 precedes final admission changes
+  and is not relabeled a final416 rerun. All counts overlap, not an aggregate.
+  SQL-typo failures, real admission RED6, first wider63/76 fixture cleanup
+  failures, CLI hash RED5 and superseded warnings remain available in raw logs.
+- `corepack pnpm run typecheck`, `corepack pnpm run lint`,
+  `corepack pnpm run check:i18n` and `corepack pnpm run build` exit0; final build
+  includes the later fixture-only TTL finally fix. Existing build warnings stay
+  visible. Final lint/colors exit0 (`lint-stage100-final.log`) and record-only
+  checklist36/36 (`checklist-stage100.json`) cover the scoped final state.
+  Node24.13.0/pnpm11.11.0/Vitest4.1.12/Electron44.9.3; installed Edge157 is used
+  with a temporary test profile, not the user's browser session.
+- Actual authorized `verify:drive` scenario `f537-reference-whole-10`, light,
+  isolated output/dump-dom/console, exits0: one whole execute, five ACKs,
+  completed run/grant,10knowledge and4stage receipts,10blueprint effects and
+  4existing draft/finalized rows unchanged;12fake requests, normal quit, no
+  observed external requests/writes/residuals within recorded coverage. Root
+  and Agent4 inspect1440x900 PNG; sidebar12 is fixture total, not12outputs.
+- Root self-check per IMPORT001/UI002/API001/CLI001: original requirements/AC
+  and protections unchanged; increment and tests/review are bounded as Stage100;
+  each feature retains its listed production/design/recovery gaps and remains
+  in_progress/false. All35 states remain14historical completed/21in_progress,
+  not requalification of14. [Manifest](stage-100-source-manifest.json) binds
+  final source, build entry and protected-file identities. No real-model,
+  performance, packaging, background or complete imitation acceptance follows.
+- Next: single-reference actual background/view integration without SCHED002
+  precondition. Independently investigate author-buffer projection/reattach and
+  API production composition; missing feedback design stays a local boundary.

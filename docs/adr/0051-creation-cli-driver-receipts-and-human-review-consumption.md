@@ -40,6 +40,27 @@
    - CLI 执行 `approve` 时必须显式持有 `human_review` Scope；若仅提供 `task` 凭据，直接报错退出（退出码 5）；
    - 若主进程报告物理人审渠道锁定（HTTP 423 / `HUMAN_REVIEW_SCOPE_REQUIRED`），明确提示等待桌面端开启。
 
+## Resumed Polling Boundary (2026-11-15)
+
+The original start idempotency key identifies the target execution; it is never
+replaced by another start after a polling failure. Each live events or receipt
+query uses its own fresh command key, so server-side immutable replay cannot
+freeze an earlier empty response. The target start identity and sequence cursor
+remain unchanged across a read retry. Same-key server replay is not relaxed.
+
+Only classified fetch `TypeError` socket failures (`ECONNRESET` or
+`UND_ERR_SOCKET`) are retried by the read-poll loop. Authentication, permission,
+unknown, invalid protocol and unclassified failures return the existing failure
+exit code immediately. Every outer receipt binds command/project/grant/key and
+the normalized request payload hash; a nested start receipt binds the original
+start payload, not the receipt-query payload. Missing task ID, events array or
+target receipt is not converted to success or an initial-receipt fallback.
+
+Approval scope and channel readiness do not replace the trusted author capability
+in ADR0050. These repairs cover client/history correctness only; desktop start
+and resume composition, true task completion and trusted human approval remain
+unqualified. The effects below are goals, not current delivery evidence.
+
 ## 效果与保证
 - 实现与桌面 UI 完全对称的命令行驱动能力；
 - 杜绝 CLI 侧越权写库与非法自审；

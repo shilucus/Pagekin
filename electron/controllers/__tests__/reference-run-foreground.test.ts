@@ -205,6 +205,32 @@ describe('whole reference foreground ownership and projection barrier', () => {
     expect(releaseIssuance).toHaveBeenCalledTimes(2)
     expect(mocks.releaseWork).toHaveBeenCalledTimes(1)
   })
+  it('retains the parent and work claim until a failed cancellation write succeeds', async () => {
+    authority.cancelRunAtBoundary.mockImplementationOnce(() => { throw new Error('FICTIONAL_CANCEL_WRITE_FAILED') })
+      .mockImplementationOnce(() => { throw new Error('FICTIONAL_CANCEL_RETRY_FAILED') })
+    mocks.execute.mockImplementation(async options => {
+      await options.hooks.stageCompleted({ stage: 'knowledge', result: { run,
+        execution: { ...request.execution, expiresAt: Date.now() + 60_000 } } })
+      return result()
+    })
+    const flight = start(), event = await completion()
+    await ack(event, 'cancelled')
+    const failure = await flight.catch(error => error)
+    expect(failure).toMatchObject({ message: 'IMPORT_RUN_CANCELLED',
+      secondaryErrors: [expect.objectContaining({ message: 'FICTIONAL_CANCEL_WRITE_FAILED' })] })
+    expect(releaseIssuance).not.toHaveBeenCalled()
+    expect(mocks.releaseWork).not.toHaveBeenCalled()
+    expect(() => assertImportStageUnmanagedMutationAllowed(runtime.database, request.reference.runId)).toThrow('GENERATION_OWNER_BUSY')
+    expect(() => foreground.requestClose(runtime)).toThrow('FICTIONAL_CANCEL_RETRY_FAILED')
+    expect(releaseIssuance).not.toHaveBeenCalled()
+    expect(mocks.releaseWork).not.toHaveBeenCalled()
+    expect(() => assertImportStageUnmanagedMutationAllowed(runtime.database, request.reference.runId)).toThrow('GENERATION_OWNER_BUSY')
+    foreground.requestClose(runtime)
+    expect(authority.cancelRunAtBoundary).toHaveBeenCalledTimes(3)
+    expect(releaseIssuance).toHaveBeenCalledTimes(1)
+    expect(mocks.releaseWork).toHaveBeenCalledTimes(1)
+    expect(() => assertImportStageUnmanagedMutationAllowed(runtime.database, request.reference.runId)).not.toThrow()
+  })
   it('preserves the primary operation error when cleanup also fails', async () => {
     const primary = new Error('FICTIONAL_SOURCE_FAILED')
     releaseIssuance.mockImplementationOnce(() => { throw new Error('FICTIONAL_CANCEL_WRITE_FAILED') })

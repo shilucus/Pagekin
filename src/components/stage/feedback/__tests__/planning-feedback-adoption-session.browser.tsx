@@ -38,7 +38,10 @@ const candidate: PlanningFeedbackCandidate = {
 let container: HTMLDivElement
 let root: Root
 let completeAdoption: () => void
+let completeGeneration: () => void
+let failGeneration: (error: Error) => void
 let adopt: ReturnType<typeof vi.fn>
+let generateCandidate: ReturnType<typeof vi.fn>
 let onAdopted: ReturnType<typeof vi.fn<(text: string, context: PlanningFeedbackAdoptionContext) => void>>
 let onClose: ReturnType<typeof vi.fn<() => void>>
 const originalLocale = useLocaleStore.getState()
@@ -53,6 +56,10 @@ beforeEach(() => {
   mocks.error.mockReset()
   mocks.info.mockReset()
   adopt = vi.fn(() => new Promise<void>(resolve => { completeAdoption = resolve }))
+  generateCandidate = vi.fn(() => new Promise<PlanningFeedbackCandidate>((resolve, reject) => {
+    completeGeneration = () => resolve({ ...candidate, candidateId: 'candidate-2', text: 'late candidate' })
+    failGeneration = reject
+  }))
   onAdopted = vi.fn<(text: string, context: PlanningFeedbackAdoptionContext) => void>()
   onClose = vi.fn<() => void>()
   container = document.createElement('div')
@@ -77,7 +84,7 @@ async function renderDialog(overrides: Partial<PlanningFeedbackDialogProps> = {}
       label="Premise"
       baseText="original"
       projectSession={session}
-      client={{ adopt } as unknown as PlanningFeedbackClient}
+      client={{ adopt, generateCandidate } as unknown as PlanningFeedbackClient}
       initialBaseId="base-1"
       initialCapturedBaseText="original"
       initialCandidates={[candidate]}
@@ -100,12 +107,71 @@ async function beginAdoption() {
   expect(adopt).toHaveBeenCalledTimes(1)
 }
 
+async function beginGeneration() {
+  await renderDialog()
+  const feedback = container.querySelector<HTMLTextAreaElement>('.pf-dialog textarea')!
+  await act(async () => { await userEvent.fill(feedback, 'make a revision') })
+  await clickButton('Generate candidate')
+  expect(generateCandidate).toHaveBeenCalledTimes(1)
+}
+
 async function finishAdoption() {
   await act(async () => { completeAdoption(); await Promise.resolve() })
   expect(adopt).toHaveBeenCalledTimes(1)
 }
 
 describe('planning feedback adoption session', () => {
+  it('publishes a successful generation reply while the original session remains current', async () => {
+    await beginGeneration()
+    await act(async () => { completeGeneration(); await Promise.resolve() })
+    expect(container.querySelector('[role="tab"]:nth-child(2)')).not.toBeNull()
+    expect(mocks.success).toHaveBeenCalledTimes(1)
+    expect(mocks.error).not.toHaveBeenCalled()
+    expect([...container.querySelectorAll('button')].some(button => button.textContent?.includes('Generating…'))).toBe(false)
+  })
+
+  it('suppresses a successful generation reply after the dialog closes', async () => {
+    await beginGeneration()
+    await renderDialog({ isOpen: false })
+    await act(async () => { completeGeneration(); await Promise.resolve() })
+    expect(mocks.success).not.toHaveBeenCalled()
+    expect(mocks.error).not.toHaveBeenCalled()
+  })
+
+  it('suppresses a failed generation reply after the dialog closes', async () => {
+    await beginGeneration()
+    await renderDialog({ isOpen: false })
+    await act(async () => { failGeneration(new Error('SYNTHETIC_FAILURE')); await Promise.resolve() })
+    expect(mocks.success).not.toHaveBeenCalled()
+    expect(mocks.error).not.toHaveBeenCalled()
+  })
+
+  it('suppresses a successful generation reply after the project session changes', async () => {
+    await beginGeneration()
+    setActiveProjectSessionContext(other)
+    await act(async () => { completeGeneration(); await Promise.resolve() })
+    expect(container.querySelector('[role="tab"]:nth-child(2)')).toBeNull()
+    expect(mocks.success).not.toHaveBeenCalled()
+    expect(mocks.error).not.toHaveBeenCalled()
+  })
+
+  it('suppresses a successful generation reply after the same project is reopened with a new lease', async () => {
+    await beginGeneration()
+    setActiveProjectSessionContext(reopened)
+    await act(async () => { completeGeneration(); await Promise.resolve() })
+    expect(container.querySelector('[role="tab"]:nth-child(2)')).toBeNull()
+    expect(mocks.success).not.toHaveBeenCalled()
+    expect(mocks.error).not.toHaveBeenCalled()
+  })
+
+  it('suppresses a failed generation reply after the project session changes', async () => {
+    await beginGeneration()
+    setActiveProjectSessionContext(other)
+    await act(async () => { failGeneration(new Error('SYNTHETIC_FAILURE')); await Promise.resolve() })
+    expect(mocks.error).not.toHaveBeenCalled()
+    expect([...container.querySelectorAll('button')].some(button => button.textContent?.includes('Generating…'))).toBe(true)
+  })
+
   it('suppresses a successful reply after reopening the same project with a new lease', async () => {
     await beginAdoption()
     setActiveProjectSessionContext(reopened)

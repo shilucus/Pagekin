@@ -37,6 +37,7 @@ import type {
 import type { AuthorManuscriptImportPreview } from '../../src/shared/author-manuscript-import'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
+import { assertImportRunParentFlightCurrent, hasImportStageChildFlight, type ImportRunParentFlightToken } from '../services/import-stage-flight'
 import type { ProjectRuntime } from '../services/project-runtime'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from './blueprint-repository'
 import { ImportGlobalFactsRepository } from './import-global-facts-repository'
@@ -2915,6 +2916,29 @@ export class ImportRunRepository {
       `).run(runId)
       if (result.changes === 0) throw new Error('IMPORT_RUN_NOT_CANCELLABLE')
       return this.get(runId, context)!
+    })()
+  }
+
+  static cancelExpiredReferenceAtBoundary(runId: string, execution: ImportRunExecutionAuthority,
+    context: CapturedImportRunContext, parent: ImportRunParentFlightToken): void {
+    const database = db(context)
+    database.transaction(() => {
+      assertImportRunParentFlightCurrent(database, runId, parent)
+      if (hasImportStageChildFlight(database, runId)) throw new Error('GENERATION_OWNER_BUSY')
+      const row = readRunRow(runId, database)
+      if (!row || row.status !== 'running' || row.execution_owner !== execution.owner
+        || row.execution_epoch !== execution.epoch) return
+      assertCapturedReference(row, context)
+      readPortableRuntimeFreeze(context.canonicalRoot).assertMutable('import_runs', runId)
+      const result = database.prepare(`
+        UPDATE import_runs
+        SET status = 'cancelled', resumable = 1, cancel_requested = 1,
+            execution_owner = '', execution_epoch = execution_epoch + 1, lease_expires_at = 0,
+            updated_at = datetime('now')
+        WHERE id = ? AND purpose = 'reference' AND status = 'running'
+          AND execution_owner = ? AND execution_epoch = ? AND lease_expires_at <= ?
+      `).run(runId, execution.owner, execution.epoch, Date.now())
+      if (result.changes !== 1) throw new Error('IMPORT_RUN_EXECUTION_STALE')
     })()
   }
 
