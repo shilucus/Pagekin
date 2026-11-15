@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { releaseCheckedSessionRoot } from '../drive.mjs'
+import { recordQuitOutcome, releaseCheckedSessionRoot, sessionIsClean } from '../drive.mjs'
 
 let base, parent, root
 const links = []
@@ -67,4 +67,15 @@ it('retains an already failed scene without scanning or attempting removal', () 
   expect(stat).not.toHaveBeenCalled()
   expect(errors).toEqual(['original-failure'])
   stat.mockRestore()
+})
+
+it.each(['rejected', 'timeout'])('retains the isolation root when close is %s but PID has exited', outcome => {
+  const quit = { outcome, elapsedMs: 10, forced: false, killStatus: 'not-needed' }
+  const sessionErrors = [], shared = {}
+  recordQuitOutcome(shared, sessionErrors, quit)
+  const clean = sessionIsClean({ failedAt: null, sessionErrors, residualProcesses: [], externalWrites: [], quit: shared.quit })
+  releaseCheckedSessionRoot(root, parent, clean, sessionErrors)
+  expect(clean).toBe(false)
+  expect(fs.existsSync(root)).toBe(true)
+  expect(sessionErrors).toEqual([`DRIVE_APP_QUIT_${outcome.toUpperCase()}`])
 })

@@ -506,12 +506,12 @@ describe('registered foreground reference style', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   }, 30_000)
 
-  it('reuses the original unknown receipt without resending under a new execution owner and epoch', async () => {
+  it.each(['same connection', 'fresh native reopen'] as const)('reuses the original unknown receipt without resending under a new execution owner and epoch after %s', async recovery => {
     const fetch = vi.fn(async () => { throw networkFailure() }); vi.stubGlobal('fetch', fetch)
     const flight = start(), opened = await event('opened')
     await ack(opened)
     expect(await flight).toMatchObject({ success: false, errorCode: 'NETWORK_ERROR' })
-    const db = getProjectDb()!
+    let db = getProjectDb()!
     const attempts = db.prepare('SELECT attempt_id,run_id,root_action_id,invocation_nonce,attempt_json,usage_receipt_json FROM generation_attempts').all() as Array<{
       attempt_id: string; run_id: string; root_action_id: string; invocation_nonce: string; attempt_json: string; usage_receipt_json: string
     }>
@@ -536,6 +536,24 @@ describe('registered foreground reference style', () => {
     expect(original.run.handle).toEqual(opened.handle)
     expect(original.outcome).toMatchObject({ status: 'incomplete', receipt: { failureCode: 'NETWORK_ERROR' } })
     const previousExecution = execution
+    if (recovery === 'fresh native reopen') {
+      const previousRuntime = projectRuntimeHost.getActiveView()!, previousDatabase = db, previousSession = session
+      const identity = db.prepare('SELECT id,root_run_id,effect_namespace,manifest_fingerprint FROM import_runs WHERE id=?').get(runId)
+      await projectRuntimeHost.requestClose(previousRuntime)
+      expect(previousDatabase.open).toBe(false)
+      sender.destroy()
+      initProjectDatabase(session.projectPath)
+      db = getProjectDb()!
+      const runtime = projectRuntimeHost.getActiveView()!, lease = projectAccess.beginViewSession(runtime)
+      session = { projectId: lease.projectId, leaseId: lease.leaseId, projectPath: lease.rootPath }
+      sender = new Sender()
+      expect(runtime).not.toBe(previousRuntime)
+      expect(runtime.databaseIdentity).not.toBe(previousRuntime.databaseIdentity)
+      expect(runtime.executionEpoch).not.toBe(previousRuntime.executionEpoch)
+      expect(session.leaseId).not.toBe(previousSession.leaseId)
+      expect(db).not.toBe(previousDatabase)
+      expect(db.prepare('SELECT id,root_run_id,effect_namespace,manifest_fingerprint FROM import_runs WHERE id=?').get(runId)).toEqual(identity)
+    }
     executionLease = ImportRunRepository.startOrResume(runId, 'fictional-recovery-owner', Date.now(), 60_000).execution
     execution = { owner: executionLease.owner, epoch: executionLease.epoch }
     expect(execution.owner).not.toBe(previousExecution.owner)
@@ -545,18 +563,26 @@ describe('registered foreground reference style', () => {
     const retry = start().finally(() => { settled = true })
     await vi.waitFor(() => expect(settled || sender.events.some(item => item.kind === 'opened')).toBe(true), { timeout: 10_000 })
     const reopened = sender.events.find(item => item.kind === 'opened')
+    let replayHandle = opened.handle
     if (reopened?.kind === 'opened') {
-      expect(reopened.handle).toEqual(opened.handle)
+      expect(reopened.handle).toEqual({ ...opened.handle, epoch: recovery === 'fresh native reopen'
+        ? session.leaseId : opened.handle.epoch })
+      replayHandle = reopened.handle
       await ack(reopened)
     }
     expect(await retry).toMatchObject({ success: false })
-    const recoveredBudget = repository.budget(opened.handle.rootActionId)
+    if (recovery === 'fresh native reopen') {
+      expect(replayHandle.epoch).not.toBe(opened.handle.epoch)
+      await expect(invoke('import-generation:execute', { handle: opened.handle, execution, ordinal: 0, task }))
+        .rejects.toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
+    }
+    const recoveredBudget = new GenerationRunRepository(() => db).budget(opened.handle.rootActionId)
     const recoveredRemaining = Math.max(0, recoveredBudget.policy.maxActiveElapsedMs - recoveredBudget.activeElapsedMs)
     expect(recoveredRemaining).toBeLessThanOrEqual(initialRemaining)
     const recoveredBefore = Date.now()
-    const recovered = await invoke<MainGenerationExecuteReceipt>('import-generation:execute', { handle: opened.handle, execution, ordinal: 0, task })
+    const recovered = await invoke<MainGenerationExecuteReceipt>('import-generation:execute', { handle: replayHandle, execution, ordinal: 0, task })
     const recoveredAfter = Date.now()
-    expect(recovered.run.handle).toEqual(opened.handle)
+    expect(recovered.run.handle).toEqual(replayHandle)
     const { deadlineAt: originalDeadline, ...originalBudget } = original.outcome.receipt.budget
     const { deadlineAt: recoveredDeadline, ...recoveredBudgetReceipt } = recovered.outcome.receipt.budget
     expect(originalDeadline).toBeGreaterThanOrEqual(originalBefore + initialRemaining)
@@ -567,6 +593,7 @@ describe('registered foreground reference style', () => {
     expect({ ...recovered.outcome, receipt: { ...recovered.outcome.receipt, budget: recoveredBudgetReceipt } })
       .toEqual({ ...original.outcome, receipt: { ...original.outcome.receipt, budget: originalBudget } })
     expect(fetch).toHaveBeenCalledTimes(1)
+    expect(db.prepare('SELECT run_id,root_action_id FROM generation_runs').all()).toEqual([{ run_id: opened.handle.runId, root_action_id: opened.handle.rootActionId }])
     expect(db.prepare('SELECT attempt_id,run_id,root_action_id,invocation_nonce,attempt_json,usage_receipt_json FROM generation_attempts').all()).toEqual(attempts)
     expect(ImportRunRepository.getEffectReceipt(runId, 'style', 'done')).toBeNull()
   }, 30_000)

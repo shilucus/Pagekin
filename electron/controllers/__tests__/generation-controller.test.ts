@@ -35,7 +35,7 @@ import { projectAccess } from '../../services/project-access'
 import { projectRuntimeHost } from '../../services/project-runtime'
 import { acquireImportRunParentFlight, assertImportRunParentFlightCurrent } from '../../services/import-stage-flight'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb, onProjectDatabaseBeforeClose } from '../../database'
-import { textHash } from '../../repositories/generation-run-repository'
+import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
 import { KnowledgeBaseUnavailableError, knowledgeBaseLoader } from '../../services/knowledge-base-loader'
 import { LegacyVectorMigrationBlockedError } from '../../services/knowledge-base-migration-error'
 import { GeneratePlotArchitectureCommand } from '../../../src/services/workflows/commands/architecture.command'
@@ -99,6 +99,113 @@ function stream(content = '中文候选', reasoning?: string) {
   return fetch
 }
 describe('planning feedback v1 registered IPC', () => {
+  describe.each(['generation:list', 'planning-feedback:v1:capture'] as const)('%s initial owner admission', channel => {
+    const call = (subject = sender) => mocks.handlers.get(channel)!({ sender: subject },
+      ...(channel === 'planning-feedback:v1:capture' ? [{ target: 'coreOutline' }] : []), { ...session })
+    it.each(['drained', 'stale-session', 'sender-destroyed', 'nonview-work', 'new-work', 'timeout'] as const)(
+      'preserves physical view and original owner boundaries (%s)', async scenario => {
+        const runtime = projectRuntimeHost.getActiveView()!
+        const fetch = stream(), subject = { isDestroyed: vi.fn(() => false), send: vi.fn() }
+        const bases = () => runtime.database.prepare('SELECT COUNT(*) FROM planning_feedback_bases').pluck().get()
+        let releaseView: (() => void) | undefined, releaseOther: (() => void) | undefined
+        if (scenario === 'timeout') vi.useFakeTimers()
+        try {
+          if (scenario === 'nonview-work') releaseOther = projectRuntimeHost.acquireWork(runtime)
+          else releaseView = projectRuntimeHost.acquireViewOperation(runtime)
+          let state: 'pending' | 'resolved' | 'rejected' = 'pending'
+          const result = call(subject).then(value => { state = 'resolved'; return value }, error => { state = 'rejected'; throw error })
+          void result.catch(() => {})
+          if (scenario === 'timeout') await vi.advanceTimersByTimeAsync(0)
+          else await new Promise<void>(resolve => setImmediate(resolve))
+          expect(bases()).toBe(0)
+          if (scenario === 'nonview-work') {
+            expect(state).toBe('rejected')
+            await expect(result).rejects.toThrow()
+          } else {
+            expect(state).toBe('pending')
+            if (scenario === 'stale-session') projectAccess.beginSession(openedProject)
+            if (scenario === 'sender-destroyed') subject.isDestroyed.mockReturnValue(true)
+            if (scenario === 'new-work') releaseOther = projectRuntimeHost.acquireWork(runtime)
+            if (scenario === 'timeout') {
+              await vi.advanceTimersByTimeAsync(5_001)
+              await expect(result).rejects.toThrow()
+              expect(() => projectRuntimeHost.assertTaskAvailable(runtime)).toThrow('PROJECT_RUNTIME_BUSY')
+            } else {
+              releaseView!(); releaseView = undefined
+              if (scenario === 'drained') {
+                const value = await result
+                if (channel === 'planning-feedback:v1:capture') expect(value).toMatchObject({ target: 'coreOutline', projectId: session.projectId })
+                else expect(value).toEqual([])
+              } else await expect(result).rejects.toThrow()
+            }
+          }
+          expect(bases()).toBe(scenario === 'drained' && channel === 'planning-feedback:v1:capture' ? 1 : 0)
+          expect(runtime.database.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
+          expect(fetch).not.toHaveBeenCalled()
+        } finally {
+          releaseView?.(); releaseOther?.()
+          vi.useRealTimers()
+        }
+      })
+
+    it('rejects if the captured runtime closes at the physical drain boundary', async () => {
+      const runtime = projectRuntimeHost.getActiveView()!, fetch = stream()
+      const releaseView = projectRuntimeHost.acquireViewOperation(runtime)
+      let close: Promise<void> | undefined
+      const closing = projectRuntimeHost.runAfterViewOperationsDrained(runtime, () => {
+        expect(runtime.database.prepare('SELECT COUNT(*) FROM planning_feedback_bases').pluck().get()).toBe(0)
+        close = projectRuntimeHost.requestClose(runtime)
+      })
+      const result = call()
+      void result.catch(() => {})
+      try {
+        await new Promise<void>(resolve => setImmediate(resolve))
+      } finally { releaseView() }
+      await closing
+      await expect(result).rejects.toThrow()
+      await close
+      expect(runtime.database.open).toBe(false)
+      expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('does not hand off an active reference owner after the physical view drain', async () => {
+      const runtime = projectRuntimeHost.getActiveView()!, fetch = stream()
+      generationController.prepareReferenceRun(runtime, { sender } as unknown as Parameters<typeof generationController.prepareReferenceRun>[1], session)
+      const parent = acquireImportRunParentFlight(runtime.database, 'fictional-reference-admission')
+      const releaseWork = projectRuntimeHost.acquireWork(runtime), releaseView = projectRuntimeHost.acquireViewOperation(runtime)
+      const result = call()
+      void result.catch(() => {})
+      try {
+        await new Promise<void>(resolve => setImmediate(resolve))
+        releaseView()
+        await expect(result).rejects.toThrow()
+        assertImportRunParentFlightCurrent(runtime.database, 'fictional-reference-admission', parent.token)
+        await expect(invoke('generation:list-recovery')).resolves.toMatchObject({ partial: false })
+        expect(runtime.database.prepare('SELECT COUNT(*) FROM planning_feedback_bases').pluck().get()).toBe(0)
+        expect(fetch).not.toHaveBeenCalled()
+      } finally { releaseView(); releaseWork(); parent.release() }
+    })
+  })
+
+  it('reuses one initial owner for concurrent list and feedback capture after view drain', async () => {
+    const runtime = projectRuntimeHost.getActiveView()!, fetch = stream()
+    const recover = vi.spyOn(GenerationRunRepository.prototype, 'recoverInterrupted')
+    const releaseView = projectRuntimeHost.acquireViewOperation(runtime)
+    const list = invoke('generation:list'), capture = invoke('planning-feedback:v1:capture', { target: 'coreOutline' })
+    void list.catch(() => {}); void capture.catch(() => {})
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(recover).not.toHaveBeenCalled()
+      expect(runtime.database.prepare('SELECT COUNT(*) FROM planning_feedback_bases').pluck().get()).toBe(0)
+      releaseView()
+      await expect(list).resolves.toEqual([])
+      await expect(capture).resolves.toMatchObject({ target: 'coreOutline' })
+      expect(recover).toHaveBeenCalledTimes(1)
+      expect(runtime.database.prepare('SELECT COUNT(*) FROM planning_feedback_bases').pluck().get()).toBe(1)
+      expect(fetch).not.toHaveBeenCalled()
+    } finally { releaseView() }
+  })
+
   it.each(['drained', 'stale-session', 'nonview-work', 'new-work'] as const)(
     'waits for current view operations before listing recovery (%s)', async scenario => {
       const a = projectRuntimeHost.getActiveView()!, oldSession = { ...session }

@@ -16,7 +16,7 @@ import { registerGenerationController } from '../generation-controller'
 import { registerReferenceKnowledgeController } from '../reference-knowledge-controller'
 import { registerKBController } from '../kb-controller'
 import { registerDatabaseController } from '../db-controller'
-import { closeProjectDatabase, getCurrentProjectPath, getProjectDb } from '../../database'
+import { closeProjectDatabase, getCurrentProjectPath, getProjectDb, initProjectDatabase } from '../../database'
 import { ImportRunRepository } from '../../repositories/import-run-repository'
 import { ModelExecutionLeaseRegistry } from '../../services/model-execution-lease'
 import { MainGenerationScheduler } from '../../services/generation-scheduler'
@@ -321,6 +321,60 @@ function acknowledgeMain(event: Extract<ReferenceRunProgress, { kind: 'stage-com
 async function settleAcks() { await Promise.all(sender.acknowledgements) }
 
 describe('registered whole reference-run foreground on isolated native storage', () => {
+  it.each(['knowledge', 'global', 'style', 'blueprints'] as const)(
+    'resumes the original run after a fresh native reopen at the %s projection boundary', async stage => {
+      const fetch = installProvider(), issued = await prepare()
+      sender.holdMainStage = stage
+      const first = execute(runRequest(issued)), gate = await waitForStageCompleted(stage)
+      await acknowledgeMain(gate, 'projection-failed')
+      expect(await first).toMatchObject({ success: false })
+      await settleAcks()
+      const oldRuntime = projectRuntimeHost.getActiveView()!, oldDatabase = database, oldSession = session
+      const identity = database.prepare('SELECT id,root_run_id,effect_namespace,manifest_fingerprint FROM import_runs WHERE id=?').get(RUN)
+      const effects = database.prepare('SELECT * FROM import_effect_ledger WHERE run_id=? ORDER BY stage,batch_id').all(RUN) as Array<{ stage: string; batch_id: string }>
+      const receipts = database.prepare('SELECT * FROM import_run_knowledge_receipts WHERE run_id=? ORDER BY chapter_number').all(RUN)
+      const generations = database.prepare('SELECT run_id,root_action_id FROM generation_runs ORDER BY run_id').all() as Array<{ run_id: string; root_action_id: string }>
+      const attempts = database.prepare('SELECT * FROM generation_attempts ORDER BY attempt_id').all() as Array<{ attempt_id: string }>
+      const oldGrant = database.prepare('SELECT * FROM reference_import_grants WHERE grant_id=?').get(issued.reference.grantId)
+      await projectRuntimeHost.requestClose(oldRuntime)
+      expect(oldDatabase.open).toBe(false)
+      vectorStore.closeConnection(root)
+      sender.destroy()
+      initProjectDatabase(root)
+      database = getProjectDb()!
+      const runtime = projectRuntimeHost.getActiveView()!, lease = projectAccess.beginViewSession(runtime)
+      session = { projectId: lease.projectId, leaseId: lease.leaseId, projectPath: root }
+      sender = new Sender()
+      expect(runtime).not.toBe(oldRuntime)
+      expect(runtime.databaseIdentity).not.toBe(oldRuntime.databaseIdentity)
+      expect(runtime.executionEpoch).not.toBe(oldRuntime.executionEpoch)
+      expect(session.leaseId).not.toBe(oldSession.leaseId)
+      expect(database).not.toBe(oldDatabase)
+      expect(database.prepare('SELECT id,root_run_id,effect_namespace,manifest_fingerprint FROM import_runs WHERE id=?').get(RUN)).toEqual(identity)
+      const recovered = await dispatch<{ reference: ReferenceKnowledgeReference; execution: ImportRunExecutionLease }>(
+        'reference-knowledge:v1:prepare', { operationId: randomUUID(), runId: RUN, executionOwner: randomUUID() }, { ...session })
+      expect(recovered.reference.runId).toBe(issued.reference.runId)
+      expect(recovered.reference.grantId).not.toBe(issued.reference.grantId)
+      expect(recovered.execution.owner).not.toBe(issued.execution.owner)
+      expect(recovered.execution.epoch).toBeGreaterThan(issued.execution.epoch)
+      sender.holdMainStage = 'knowledge'
+      const resumed = execute(runRequest(recovered)), skipped = await waitForStageSkipped('knowledge')
+      expect(wholeProgress().some(item => item.kind === 'stage-started' && item.stage !== 'knowledge')).toBe(false)
+      sender.holdMainStage = null
+      await acknowledgeMain(skipped)
+      expect(await resumed).toMatchObject({ success: true, run: { id: RUN, status: 'completed', stage: 'completed' } })
+      await settleAcks()
+      expect(database.prepare('SELECT id,root_run_id,effect_namespace,manifest_fingerprint FROM import_runs WHERE id=?').get(RUN)).toEqual(identity)
+      expect(database.prepare('SELECT * FROM import_run_knowledge_receipts WHERE run_id=? ORDER BY chapter_number').all(RUN)).toEqual(receipts)
+      for (const effect of effects) expect(database.prepare('SELECT * FROM import_effect_ledger WHERE run_id=? AND stage=? AND batch_id=?').get(RUN, effect.stage, effect.batch_id)).toEqual(effect)
+      for (const generation of generations) expect(database.prepare('SELECT run_id,root_action_id FROM generation_runs WHERE run_id=?').get(generation.run_id)).toEqual(generation)
+      for (const attempt of attempts) expect(database.prepare('SELECT * FROM generation_attempts WHERE attempt_id=?').get(attempt.attempt_id)).toEqual(attempt)
+      expect(database.prepare('SELECT * FROM reference_import_grants WHERE grant_id=?').get(issued.reference.grantId)).toMatchObject({ ...(oldGrant as object), state: 'revoked', revision: issued.reference.revision + 1, revoked_at: expect.any(Number) })
+      expect(database.prepare('SELECT state FROM reference_import_grants WHERE grant_id=?').pluck().get(recovered.reference.grantId)).toBe('completed')
+      expect(fetch.mock.calls.filter(([url]) => !String(url).includes('/embeddings'))).toHaveLength(3)
+      expect(sender.ackErrors).toEqual([])
+    }, 120_000)
+
   it.each(['global', 'style-opened', 'style-commit', 'blueprints', 'refresh'] as const)(
     'requires the reattached A view and exact authority for the %s child gate', async kind => {
       const a = projectRuntimeHost.getActiveView()!, original = { ...session }

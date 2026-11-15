@@ -1,5 +1,4 @@
-// 真实模型场景（--real-model）：生成、审稿、修稿、定稿后处理与嵌入都由硅基流动的 DeepSeek 与 bge-m3 回复。
-// 回复的文风与质量不评判，只断言作者看得到的软件状态与库里的数据。
+// 旧 real-* 场景需要不同的模型能力；当前 --real-model 仅支持本机 generation-only feedback scene。
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -58,6 +57,11 @@ async function read(context, channel, ...args) {
   return context.invoke(context.page, channel, ...args, session.projectPath, session)
 }
 
+export async function invokeFeedback(context, channel, request) {
+  const session = await uiSession(context.app)
+  return context.invoke(context.page, channel, request, session)
+}
+
 /** 预置作品：设定、林岚、8 章蓝图，finalized 里的章以作者原稿定稿导入；接上真实模型后从书房打开。 */
 async function seedBook(context, { finalized = [] } = {}) {
   const { app, page, roots, invoke, reload } = context
@@ -70,7 +74,7 @@ async function seedBook(context, { finalized = [] } = {}) {
   const projectPath = created.projectPath
   context.samplePath = projectPath
   const session = { projectId: created.projectId, projectPath, leaseId: opened.project.sessionLease }
-  await context.installRealModels()
+  await context.installRealGenerationModel()
   const roster = await invoke(page, 'db:character-roster-read', projectPath, session)
   assert.equal((await invoke(page, 'db:character-roster-commit', { operationId: randomUUID(), expectedRevision: roster.revision,
     expectedIdentityRevision: roster.identityRevision, schemaVersion: 1, intent: 'manual_edit',
@@ -283,6 +287,47 @@ async function batchRecovery(page) {
 }
 
 export const REAL_SCENARIOS = {
+  /** 只调用一次 generation：作者在架构的故事前提入口生成候选、明确采用，并核验正式设定与持久收据。 */
+  'real-feedback-adopt': { real: true, shell: 'stage', setup: context => seedBook(context), run: async context => {
+    const { page, shoot } = context
+    const before = await read(context, 'db:project-core-get')
+    await stage.stageButton(page, '架构').click()
+    const premise = page.locator('.arch-section[data-section="premise"]')
+    await premise.getByRole('button', { name: '意见修订', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '意见修订：故事前提' })
+    await dialog.getByRole('textbox', { name: '例如：节奏加快，增加反转，语言风格更具压迫感…', exact: true })
+      .fill('保留林岚、旧港与雾钟，把父亲留下的地图线索写得更悬疑。')
+    await dialog.getByRole('button', { name: '生成候选', exact: true }).click()
+    await dialog.getByRole('button', { name: '采用此候选', exact: true }).waitFor({ state: 'visible', timeout: MODEL_WAIT })
+    const historyBases = await invokeFeedback(context, 'planning-feedback:v1:list-bases', { target: 'premise' })
+    assert.equal(historyBases.length, 1, '本隔离作品只有这次作者反馈底稿')
+    const history = await invokeFeedback(context, 'planning-feedback:v1:read-history', { baseId: historyBases[0].baseId })
+    assert.equal(history.candidates.length, 1, '一次明确生成只产生一个候选')
+    const candidate = history.candidates[0].candidate
+    await shoot('real-feedback-candidate')
+    await dialog.getByRole('button', { name: '采用此候选', exact: true }).click()
+    await dialog.waitFor({ state: 'hidden', timeout: 30_000 })
+
+    const after = await read(context, 'db:project-core-get')
+    const adoptedHistory = await invokeFeedback(context, 'planning-feedback:v1:read-history', { baseId: history.base.baseId })
+    assert.equal(adoptedHistory.candidates.length, 1)
+    assert.equal(adoptedHistory.candidates[0].state, 'adopted')
+    assert.equal(adoptedHistory.adoptions.length, 1, '作者采用产生一条持久收据')
+    assert.equal(adoptedHistory.adoptions[0].candidateId, candidate.candidateId)
+    assert.equal(adoptedHistory.adoptions[0].decisionSource, 'author-action')
+    assert.equal(adoptedHistory.adoptions[0].text, candidate.text)
+    assert.equal(after.premise, candidate.text, '正式故事前提保存为作者明确采用的候选')
+    assert.equal(adoptedHistory.adoptions[0].beforeValue, before.premise, '收据保留采用前的正式事实')
+    const requests = await context.app.evaluate(() => globalThis.__driveModelRequests)
+    assert.equal(requests.length, 1, '场景只 dispatch 一次 generation request，不做重试')
+    assert.ok(requests.every(request => request.path === '/v1/chat/completions'), '没有 embeddings 或其他模型端点')
+    assert.ok(requests.length <= context.maxRealRequests, '物理 generation dispatch 没超过配置预算')
+    await shoot('real-feedback-adopted')
+    return { candidateId: candidate.candidateId, adoptionId: adoptedHistory.adoptions[0].adoptionId,
+      beforeHash: adoptedHistory.adoptions[0].beforeHash, textHash: adoptedHistory.adoptions[0].textHash,
+      requestCount: requests.length, requestPaths: requests.map(request => request.path) }
+  } },
+
   /** 主流程：第 1～3 章逐章写作、AI 审稿、按意见修稿并合并、定稿，后处理三步在真实回复下完成，知识库每块都有向量。 */
   'real-main': { real: true, setup: context => seedBook(context), run: async context => {
     const { page, shoot } = context

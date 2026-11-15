@@ -17,7 +17,7 @@ import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 import { projectRuntimeHost, type ProjectRuntime } from './project-runtime'
 import { referenceEmbeddingBudgetFailure, type ReferenceEmbeddingBudgetPlan } from './reference-embedding-budget-contract'
 import { LEGACY_VECTOR_MIGRATION_BLOCKED } from './knowledge-base-migration-error'
-import { acquireImportStageFlight, assertImportRunParentFlightAccess, assertImportRunParentFlightCurrent,
+import { acquireImportRunParentFlight, acquireImportStageFlight, assertImportRunParentFlightAccess, assertImportRunParentFlightCurrent,
   assertImportStageUnmanagedMutationAllowed, hasImportStageChildFlight, hasImportStageFlight,
   type ImportRunParentFlightToken } from './import-stage-flight'
 
@@ -237,8 +237,18 @@ export class ReferenceKnowledgeAuthority {
         ImportRunRepository.cancelAtBoundary(issuance.runId, issuance.execution, this.context)
       }
     } catch (error) {
-      const current = this.context.database.prepare('SELECT status, execution_owner, execution_epoch FROM import_runs WHERE id=?')
-        .get(issuance.runId) as { status: string; execution_owner: string; execution_epoch: number } | undefined
+      const current = this.context.database.prepare('SELECT status, execution_owner, execution_epoch, lease_expires_at FROM import_runs WHERE id=?')
+        .get(issuance.runId) as { status: string; execution_owner: string; execution_epoch: number; lease_expires_at: number } | undefined
+      if (error instanceof Error && error.message === 'IMPORT_RUN_EXECUTION_STALE'
+        && current?.status === 'running' && current.execution_owner === issuance.execution.owner
+        && current.execution_epoch === issuance.execution.epoch && current.lease_expires_at <= Date.now()
+        && !issuance.resumed && !issuance.wholeActive && !issuance.knowledgeActive && issuance.inFlight === 0
+        && !hasImportStageFlight(this.context.database, issuance.runId)) {
+        const parent = acquireImportRunParentFlight(this.context.database, issuance.runId)
+        try { ImportRunRepository.cancelExpiredReferenceAtBoundary(issuance.runId, issuance.execution, this.context, parent.token) }
+        finally { parent.release() }
+        return
+      }
       if (current && current.execution_owner === issuance.execution.owner && current.execution_epoch === issuance.execution.epoch
         && current.status !== 'completed' && current.status !== 'cancelled') throw error
     }

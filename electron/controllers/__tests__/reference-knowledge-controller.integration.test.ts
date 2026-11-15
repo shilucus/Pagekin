@@ -44,6 +44,7 @@ import { projectAccess } from '../../services/project-access'
 import { projectRuntimeHost, type ProjectRuntime } from '../../services/project-runtime'
 import { getProjectDatabasePath } from '../../services/project-data-locator'
 import { ReferenceKnowledgeAuthority } from '../../services/reference-knowledge-authority'
+import { acquireImportRunParentFlight, acquireImportStageFlight } from '../../services/import-stage-flight'
 import { readPortableRuntimeFreeze } from '../../services/portable-runtime-freeze'
 import { translate } from '../../../src/i18n/core'
 import * as vectorStore from '../../vector-store'
@@ -655,6 +656,140 @@ describe('registered reference knowledge controller with real native storage', (
     expect(count('reference_import_grants')).toBe(1)
     expect(count('import_run_knowledge_receipts')).toBe(0)
     expect(fetch).not.toHaveBeenCalled()
+  })
+  it('cancels an expired unstarted issuance on revoke without dispatching', async () => {
+    const runtime = projectRuntimeHost.getActiveView()!
+    const first = await prepare()
+    db.prepare('UPDATE import_runs SET lease_expires_at=1 WHERE id=?').run(RUN)
+    try {
+      await expect(invoke('reference-knowledge:v1:resume', first.reference)).rejects.toThrow(translate('en-US', 'error.importRunExecutionStale'))
+      expect(db.prepare('SELECT lease_expires_at FROM import_runs WHERE id=?').pluck().get(RUN)).toBe(1)
+      await expect(invoke('reference-knowledge:v1:revoke', first.reference, subject, false))
+        .resolves.toMatchObject({ state: 'revoked' })
+      expect(db.prepare('SELECT status,execution_owner,execution_epoch,lease_expires_at FROM import_runs WHERE id=?').get(RUN))
+        .toEqual({ status: 'cancelled', execution_owner: '', execution_epoch: first.execution.epoch + 1, lease_expires_at: 0 })
+      expect(count('reference_embedding_dispatches')).toBe(0)
+      expect(fetch).not.toHaveBeenCalled()
+    } finally {
+      if (runtime.database.open) {
+        db.prepare("UPDATE import_runs SET lease_expires_at=? WHERE id=? AND status='running'").run(Date.now() + 60_000, RUN)
+        await projectRuntimeHost.requestClose(runtime, { timeoutMs: 5000 })
+      }
+    }
+  })
+  it('cleans an expired unstarted issuance during project close', async () => {
+    const runtime = projectRuntimeHost.getActiveView()!
+    const first = await prepare()
+    db.prepare('UPDATE import_runs SET lease_expires_at=1 WHERE id=?').run(RUN)
+    let saved: unknown
+    const unobserve = projectRuntimeHost.onBeforeRelease(released => {
+      if (released === runtime) saved = db.prepare('SELECT status,execution_owner,execution_epoch FROM import_runs WHERE id=?').get(RUN)
+    })
+    try {
+      await projectRuntimeHost.requestClose(runtime, { timeoutMs: 5000 })
+      expect(saved).toEqual({ status: 'cancelled', execution_owner: '', execution_epoch: first.execution.epoch + 1 })
+      expect(runtime.database.open).toBe(false)
+      expect(fetch).not.toHaveBeenCalled()
+    } finally { unobserve() }
+  })
+  it('retains expired cleanup debt after a write failure and retries it on close', async () => {
+    const runtime = projectRuntimeHost.getActiveView()!
+    const first = await prepare()
+    db.prepare('UPDATE import_runs SET lease_expires_at=1 WHERE id=?').run(RUN)
+    db.exec("CREATE TEMP TRIGGER fixture_block_expired_cancel BEFORE UPDATE OF status ON import_runs WHEN NEW.status='cancelled' BEGIN SELECT RAISE(FAIL, 'fixture-cancel-error'); END")
+    let saved: unknown
+    const unobserve = projectRuntimeHost.onBeforeRelease(released => {
+      if (released === runtime) saved = db.prepare('SELECT status,execution_owner,execution_epoch FROM import_runs WHERE id=?').get(RUN)
+    })
+    try {
+      await expect(invoke('reference-knowledge:v1:revoke', first.reference, subject, false)).rejects.toThrow()
+      expect(referenceRetirementGuard(runtime)).toBe(false)
+      expect(db.prepare('SELECT status,execution_owner,execution_epoch FROM import_runs WHERE id=?').get(RUN))
+        .toEqual({ status: 'running', execution_owner: first.execution.owner, execution_epoch: first.execution.epoch })
+      await expect(projectRuntimeHost.requestClose(runtime, { timeoutMs: 5000 })).rejects.toThrow('KNOWLEDGE_BASE_REFERENCE_CLOSE_CLEANUP_FAILED')
+      db.exec('DROP TRIGGER fixture_block_expired_cancel')
+      await projectRuntimeHost.requestClose(runtime, { timeoutMs: 5000 })
+      expect(saved).toEqual({ status: 'cancelled', execution_owner: '', execution_epoch: first.execution.epoch + 1 })
+      expect(fetch).not.toHaveBeenCalled()
+    } finally {
+      unobserve()
+      if (runtime.database.open) {
+        db.exec('DROP TRIGGER IF EXISTS fixture_block_expired_cancel')
+        await projectRuntimeHost.requestClose(runtime, { timeoutMs: 5000 })
+      }
+    }
+  })
+  it.each(['successor', 'completed'] as const)('does not cancel an expired issuance after %s', async state => {
+    const first = await prepare()
+    if (state === 'successor') db.prepare("UPDATE import_runs SET execution_owner='fixture-successor',execution_epoch=execution_epoch+1,lease_expires_at=1 WHERE id=?").run(RUN)
+    else db.prepare("UPDATE import_runs SET status='completed',stage='completed',execution_owner='',execution_epoch=execution_epoch+1,lease_expires_at=0 WHERE id=?").run(RUN)
+    const before = db.prepare('SELECT * FROM import_runs WHERE id=?').get(RUN)
+    await invoke('reference-knowledge:v1:revoke', first.reference, subject, false)
+    expect(db.prepare('SELECT * FROM import_runs WHERE id=?').get(RUN)).toEqual(before)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it.each(['parent', 'child'] as const)('does not take over an active %s flight for expired cleanup', async kind => {
+    const runtime = projectRuntimeHost.getActiveView()!
+    const first = await prepare()
+    db.prepare('UPDATE import_runs SET lease_expires_at=1 WHERE id=?').run(RUN)
+    const parent = kind === 'parent' ? acquireImportRunParentFlight(db, RUN) : null
+    const releaseChild = kind === 'child' ? acquireImportStageFlight(db, RUN, 'knowledge') : null
+    try {
+      await expect(invoke('reference-knowledge:v1:revoke', first.reference, subject, false)).rejects.toThrow('IMPORT_RUN_EXECUTION_STALE')
+      expect(db.prepare('SELECT status,execution_owner,execution_epoch FROM import_runs WHERE id=?').get(RUN))
+        .toEqual({ status: 'running', execution_owner: first.execution.owner, execution_epoch: first.execution.epoch })
+      expect(referenceRetirementGuard(runtime)).toBe(false)
+      expect(fetch).not.toHaveBeenCalled()
+    } finally {
+      releaseChild?.()
+      parent?.release()
+      await projectRuntimeHost.requestClose(runtime, { timeoutMs: 5000 })
+    }
+  })
+  it('preserves historical unknown budget and effect evidence when an unstarted issuance expires', async () => {
+    const runtime = projectRuntimeHost.getActiveView()!
+    const first = await prepare()
+    db.prepare('UPDATE import_runs SET lease_expires_at=1 WHERE id=?').run(RUN)
+    db.prepare("UPDATE reference_embedding_budgets SET state='recovery_unknown' WHERE root_run_id=?").run(RUN)
+    const namespace = db.prepare('SELECT effect_namespace FROM import_runs WHERE id=?').pluck().get(RUN) as string
+    db.prepare(`INSERT INTO import_effect_ledger(run_id,stage,batch_id,effect_namespace,effect_key,state,evidence_kind,diagnostic_code)
+      VALUES(?,'global','__fixture_unknown',?,'fixture-unknown','unknown','terminal','FICTIONAL_UNKNOWN')`).run(RUN, namespace)
+    const budget = db.prepare('SELECT * FROM reference_embedding_budgets').all()
+    const ledger = db.prepare('SELECT * FROM import_effect_ledger').all()
+    const receipts = db.prepare('SELECT * FROM import_run_knowledge_receipts').all()
+    const dispatches = db.prepare('SELECT * FROM reference_embedding_dispatches').all()
+    await invoke('reference-knowledge:v1:revoke', first.reference, subject, false)
+    expect(db.prepare('SELECT * FROM reference_embedding_budgets').all()).toEqual(budget)
+    expect(db.prepare('SELECT * FROM import_effect_ledger').all()).toEqual(ledger)
+    expect(db.prepare('SELECT * FROM import_run_knowledge_receipts').all()).toEqual(receipts)
+    expect(db.prepare('SELECT * FROM reference_embedding_dispatches').all()).toEqual(dispatches)
+    expect(referenceRetirementGuard(runtime)).toBe(false)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it('preserves a real historical transport-unknown dispatch when a later unstarted issuance expires', async () => {
+    const started = deferred<void>(), finish = deferred<Response>()
+    const fetchMock = vi.fn(() => { started.resolve(); return finish.promise })
+    vi.stubGlobal('fetch', fetchMock)
+    const first = await prepare(), importing = importChapter(first)
+    void importing.catch(() => {})
+    try {
+      await started.promise
+      await invoke('reference-knowledge:v1:revoke', first.reference, subject, false)
+      finish.reject(new Error('FICTIONAL_TRANSPORT_FAILURE'))
+      await denied(importing)
+      expect(dispatchRows()).toEqual([expect.objectContaining({ state: 'transport_unknown' })])
+      const next = await prepare()
+      const dispatches = db.prepare('SELECT * FROM reference_embedding_dispatches').all()
+      const budget = db.prepare('SELECT * FROM reference_embedding_budgets').all()
+      const receipts = db.prepare('SELECT * FROM import_run_knowledge_receipts').all()
+      db.prepare('UPDATE import_runs SET lease_expires_at=1 WHERE id=?').run(RUN)
+      await invoke('reference-knowledge:v1:revoke', next.reference, subject, false)
+      expect(db.prepare('SELECT * FROM reference_embedding_dispatches').all()).toEqual(dispatches)
+      expect(db.prepare('SELECT * FROM reference_embedding_budgets').all()).toEqual(budget)
+      expect(db.prepare('SELECT * FROM import_run_knowledge_receipts').all()).toEqual(receipts)
+      expect(referenceRetirementGuard(projectRuntimeHost.getActiveView()!)).toBe(false)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally { finish.resolve(response()); await importing.catch(() => {}) }
   })
   it('does not allocate a first budget after the legacy start-resume path has already executed the root', async () => {
     const oldStart = mock.handlers.get('db:import-run-start-resume')!

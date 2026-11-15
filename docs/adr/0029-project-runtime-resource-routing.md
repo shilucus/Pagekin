@@ -89,14 +89,18 @@ retained book can display its actual chapter facts. Their directly used
 `db:revision-get-full`, `db:review-get-full` and `db:review-cycle-get` readers
 also remain SELECT/validation projections under that same boundary.
 Revision/review mutations keep their original admission; a read adapter does
-not grant review or merge. The existing generation recovery-list entry may
-similarly wait for current-view
-physical operations before its synchronous legacy-owner initialization or
-handoff, with caller/session/runtime validation repeated at that boundary.
-It still runs the original owner admission and non-view busy checks. Recovery
-or exceptional budget-poison writes are not reclassified as pure reads, and a
-reference owner's existing current-view read branch never waits for its own
-background work or grants a new writer.
+not grant review or merge. Only the existing `generation:list-recovery`,
+`generation:list` and `planning-feedback:v1:capture` entries may similarly
+wait for current-view physical operations before their synchronous legacy-owner
+initialization or handoff, with caller/session/runtime/native identity validation
+repeated at that boundary and after the wait. They still run the original owner
+admission, retirement and non-view busy checks; an already matching legacy owner
+keeps its original path. This is a bounded wait, not a retry or generic channel
+prefix rule. Initial interrupted recovery, exceptional budget-poison writes and
+feedback base capture are not reclassified as pure reads. Capture retains its
+original current-session authorization and native transaction; no base is written
+while waiting. A reference owner's existing current-view read branch never waits
+for its own background work or grants a new writer.
 
 Acceptance includes A busy while B-to-C releases idle B, settled A followed by
 ordinary single-book use, claim/unknown retention, failed-target preservation,

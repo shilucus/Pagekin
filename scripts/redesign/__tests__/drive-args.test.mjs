@@ -124,13 +124,15 @@ it('每次运行得到 parent 下全新的隔离根，canonical 留给应用自�
 it('子进程环境的全部可写根都指向隔离目录', () => {
   const roots = createIsolatedRoots(tempParent())
   const env = isolatedEnvironment(roots, { PATH: 'p', APPDATA: 'C:/real', ELECTRON_RUN_AS_NODE: '1',
-    VITE_DEV_SERVER_URL: 'http://x', AI_NOVEL_SMOKE_OPEN_PROJECT: 'C:/real/project' })
+    VITE_DEV_SERVER_URL: 'http://x', AI_NOVEL_SMOKE_OPEN_PROJECT: 'C:/real/project', PAGEKIN_REAL_MODEL_API_KEY: 'runtime-key' })
   for (const name of ['AI_NOVEL_APP_DATA_HOME', 'AI_NOVEL_LEGACY_SOURCE_HOME', 'AI_NOVEL_VELA_HOME', 'HOME', 'USERPROFILE',
     'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP']) {
     assert.ok(env[name].startsWith(roots.root + path.sep), `${name} 越出隔离根: ${env[name]}`)
   }
   assert.equal(env.PATH, 'p')
-  for (const name of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT']) assert.equal(env[name], undefined)
+  for (const name of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT', 'PAGEKIN_REAL_MODEL_API_KEY']) {
+    assert.equal(env[name], undefined)
+  }
 })
 
 it('baseline-all 的会话恰好覆盖每个场景一次', () => {
@@ -174,8 +176,11 @@ it('启动参数固定中文界面，非中文宿主上场景照样按中文找�
 })
 
 it('外部写入或残留进程时不算干净，隔离目录留着取证', () => {
-  const ok = { failedAt: null, sessionErrors: [], residualProcesses: [], externalWrites: [] }
+  const ok = { failedAt: null, sessionErrors: [], residualProcesses: [], externalWrites: [],
+    quit: { outcome: 'resolved', forced: false, killStatus: 'not-needed' } }
   assert.equal(sessionIsClean(ok), true)
+  assert.equal(sessionIsClean({ ...ok, quit: { ...ok.quit, outcome: 'rejected' } }), false)
+  assert.equal(sessionIsClean({ ...ok, quit: { ...ok.quit, outcome: 'timeout' } }), false)
   assert.equal(sessionIsClean({ ...ok, externalWrites: ['C:/Users/x/AppData/Roaming/ai-novel-writer'] }), false)
   assert.equal(sessionIsClean({ ...ok, residualProcesses: [4242] }), false)
   assert.equal(sessionIsClean({ ...ok, externalWrites: undefined }), false)
@@ -267,12 +272,16 @@ it('空闲内存取各次采样全部进程合计的中位数，按进程类型�
   assert.throws(() => idleMemory([]), /没有采样/)
 })
 
-it('真实模型场景只能带 --real-model 跑，--real-model 也不能用在假模型场景上', () => {
-  assert.equal(parseArgs(['--scenario', 'real-main', '--real-model']).realModel, true)
+it('generation-only real model mode is restricted to the feedback adoption scenario', () => {
+  assert.equal(parseArgs(['--scenario', 'real-feedback-adopt', '--real-model']).realModel, true)
+  assert.equal(parseArgs(['--scenario', 'real-feedback-adopt', '--real-model', '--max-real-requests', '2']).maxRealRequests, 2)
   assert.equal(parseArgs(['--scenario', 'settings']).realModel, false)
-  assert.throws(() => parseArgs(['--scenario', 'real-main']), /real-main 是真实模型场景，要带 --real-model/)
-  assert.throws(() => parseArgs(['--scenario', 'finalize', '--real-model']), /--real-model 只用于真实模型场景/)
-  assert.throws(() => parseArgs(['--scenario', 'real-main', '--real-model', '--api-key', 'sk-x']), /未知参数 --api-key/)
+  assert.throws(() => parseArgs(['--scenario', 'real-feedback-adopt']), /real-feedback-adopt 是真实模型场景，要带 --real-model/)
+  assert.throws(() => parseArgs(['--scenario', 'real-main', '--real-model']), /只支持 real-feedback-adopt/)
+  assert.throws(() => parseArgs(['--scenario', 'real-refs', '--real-model']), /需要其他模型能力，已禁用/)
+  assert.throws(() => parseArgs(['--scenario', 'finalize', '--real-model']), /--real-model 只用于 real-feedback-adopt/)
+  assert.throws(() => parseArgs(['--scenario', 'real-feedback-adopt', '--real-model', '--api-key', 'sk-x']), /未知参数 --api-key/)
+  assert.throws(() => parseArgs(['--scenario', 'real-feedback-adopt', '--real-model', '--max-real-requests', '0']), /必须是正整数/)
 })
 
 it('没构建的应用根直接报错，不去启动 Electron', () => {

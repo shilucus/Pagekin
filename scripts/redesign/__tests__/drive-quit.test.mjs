@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { it, vi } from 'vitest'
 vi.mock('playwright', () => ({ _electron: { launch: () => { throw new Error('UNIT_TEST_MUST_NOT_LAUNCH_ELECTRON') } } }))
-import { captureFixtureRequestCutoff, observeFixtureQuitCutoff, quit } from '../drive.mjs'
+import { assertNormalQuitOutcome, captureFixtureRequestCutoff, observeFixtureQuitCutoff, quit, recordQuitOutcome, sessionIsClean } from '../drive.mjs'
 import { FAKE_MODEL, startFakeModel } from '../fake-model.mjs'
 
 const fakeApp = (child, close) => ({ process: () => child, close })
@@ -45,14 +45,49 @@ it('detects a request received after cutoff and closed before fake acceptance', 
 it('close 失败但进程已自行退出时不再强杀，也不把「not found」当成失败', async () => {
   const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' })
   await once(child, 'exit')
-  const result = await quit(fakeApp(child, () => Promise.reject(new Error('Target page, context or browser has been closed'))))
-  assert.deepEqual(result, { forced: false })
+  const result = await quit(fakeApp(child, () => Promise.reject(new Error('closed [synthetic-private-detail]'))))
+  assert.equal(result.outcome, 'rejected')
+  assert.equal(result.forced, false)
+  assert.equal(result.killStatus, 'not-needed')
+  assert.ok(Number.isFinite(result.elapsedMs) && result.elapsedMs >= 0)
+  assert.equal(JSON.stringify(result).includes('synthetic-private-detail'), false)
 })
 
 it('宽限期内未关闭且进程仍在时强杀整棵进程树', async () => {
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
   const exited = once(child, 'exit')
   const result = await quit(fakeApp(child, () => new Promise(() => {})), 50)
-  assert.deepEqual(result, { forced: true })
+  assert.equal(result.outcome, 'timeout')
+  assert.equal(result.forced, true)
+  assert.equal(result.killStatus, 'completed')
+  assert.ok(result.elapsedMs >= 50)
   await exited
+})
+
+it('已完成关闭的子进程记录 resolved outcome 与耗时', async () => {
+  const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' })
+  await once(child, 'exit')
+  const result = await quit(fakeApp(child, () => Promise.resolve()))
+  assert.deepEqual({ outcome: result.outcome, forced: result.forced, killStatus: result.killStatus },
+    { outcome: 'resolved', forced: false, killStatus: 'not-needed' })
+  assert.ok(Number.isFinite(result.elapsedMs) && result.elapsedMs >= 0)
+})
+
+it('forced close marks the session failed and unclean without retaining a close error', () => {
+  const shared = {}
+  const sessionErrors = []
+  const quitResult = { outcome: 'timeout', elapsedMs: 50, forced: true, killStatus: 'completed' }
+  recordQuitOutcome(shared, sessionErrors, quitResult)
+  assert.deepEqual(shared.quit, quitResult)
+  assert.deepEqual(sessionErrors, ['DRIVE_APP_FORCED_CLOSE'])
+  assert.equal(sessionIsClean({ failedAt: null, sessionErrors, residualProcesses: [], externalWrites: [], quit: quitResult }), false)
+})
+
+it.each(['rejected', 'timeout'])('a dead PID after %s close is not a normal session quit', outcome => {
+  const quitResult = { outcome, elapsedMs: 1, forced: false, killStatus: 'not-needed' }
+  const shared = {}, sessionErrors = []
+  recordQuitOutcome(shared, sessionErrors, quitResult)
+  assert.equal(sessionIsClean({ failedAt: null, sessionErrors, residualProcesses: [], externalWrites: [], quit: quitResult }), false)
+  assert.throws(() => assertNormalQuitOutcome(quitResult), /DRIVE_APP_QUIT_NOT_NORMAL/u)
+  assert.doesNotThrow(() => assertNormalQuitOutcome({ outcome: 'resolved', forced: false, killStatus: 'not-needed' }))
 })

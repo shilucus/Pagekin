@@ -20,7 +20,7 @@ vi.mock('../../utils/config-utils', () => ({ GLOBAL_CONFIG_PATH: 'fictional-glob
   }] }))
 vi.mock('../../utils/remembered-dialog', () => ({ showOpenDialogInLastDirectory: vi.fn() }))
 vi.mock('../../i18n', () => ({ mainText: (_locale: string, _zh: string, en: string) => en, getMainLocale: () => 'en-US' }))
-import { closeProjectDatabase, createProjectDatabase, getCurrentProjectPath, getProjectDb } from '../../database'
+import { closeProjectDatabase, createProjectDatabase, getCurrentProjectPath, getProjectDb, initProjectDatabase } from '../../database'
 import { openCanonicalProjectFixture } from '../../../test/helpers/canonical-project-fixture'
 import { ImportRunRepository } from '../../repositories/import-run-repository'
 import { ReferenceImportGrantRepository } from '../../repositories/reference-import-grant-repository'
@@ -197,6 +197,49 @@ describe('registered foreground reference refresh with native storage', () => {
     expect(subject.events).toEqual(events); expect(complete).toHaveBeenCalledTimes(1)
     expect(grantRow()).toMatchObject({ state: 'completed' })
   })
+  it('reads completed refresh history after a fresh native reopen without reconstructing execution', async () => {
+    const first = start(), event = await projection()
+    await ack(event)
+    expect(await first).toMatchObject({ success: true })
+    const oldRuntime = projectRuntimeHost.getActiveView()!, oldDatabase = db, oldSession = session
+    const savedRun = db.prepare('SELECT * FROM import_runs WHERE id=?').get(RUN)
+    const savedGrant = db.prepare('SELECT * FROM reference_import_grants WHERE grant_id=?').get(issued.reference.grantId)
+    const savedSnapshot = ImportRunRepository.get(RUN)
+    await projectRuntimeHost.requestClose(oldRuntime)
+    expect(oldDatabase.open).toBe(false)
+    vectorStore.closeConnection(root)
+    subject.destroy()
+    initProjectDatabase(root)
+    db = getProjectDb()!
+    const runtime = projectRuntimeHost.getActiveView()!, lease = projectAccess.beginViewSession(runtime)
+    session = { projectId: lease.projectId, leaseId: lease.leaseId, projectPath: root }
+    subject = new Sender()
+    expect(runtime).not.toBe(oldRuntime)
+    expect(runtime.databaseIdentity).not.toBe(oldRuntime.databaseIdentity)
+    expect(runtime.executionEpoch).not.toBe(oldRuntime.executionEpoch)
+    expect(session.leaseId).not.toBe(oldSession.leaseId)
+    expect(db).not.toBe(oldDatabase)
+    db.prepare("UPDATE reference_import_grants SET state='active',completed_at=NULL WHERE grant_id=?").run(issued.reference.grantId)
+    const activeGrant = db.prepare('SELECT * FROM reference_import_grants WHERE grant_id=?').get(issued.reference.grantId)
+    const activeChanges = db.prepare('SELECT total_changes()').pluck().get()
+    expect(await start()).toMatchObject({ success: false, errorCode: 'KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED' })
+    expect(db.prepare('SELECT total_changes()').pluck().get()).toBe(activeChanges)
+    expect(db.prepare('SELECT * FROM import_runs WHERE id=?').get(RUN)).toEqual(savedRun)
+    expect(db.prepare('SELECT * FROM reference_import_grants WHERE grant_id=?').get(issued.reference.grantId)).toEqual(activeGrant)
+    db.prepare("UPDATE reference_import_grants SET state='completed',completed_at=? WHERE grant_id=?").run((savedGrant as { completed_at: number }).completed_at, issued.reference.grantId)
+    const changes = db.prepare('SELECT total_changes()').pluck().get()
+    expect(await invoke<Response>('reference-knowledge:v1:refresh', { reference: { ...issued.reference, grantId: randomUUID() }, execution: authority() })).toMatchObject({ success: false })
+    expect(await invoke<Response>('reference-knowledge:v1:refresh', { reference: { ...issued.reference, revision: issued.reference.revision + 1 }, execution: authority() })).toMatchObject({ success: false })
+    const replay = await start()
+    expect(replay, replay.success ? undefined : replay.errorCode).toMatchObject({ success: true, execution: null, replayed: true })
+    expect(db.prepare('SELECT total_changes()').pluck().get()).toBe(changes)
+    expect(db.prepare('SELECT * FROM import_runs WHERE id=?').get(RUN)).toEqual(savedRun)
+    expect(db.prepare('SELECT * FROM reference_import_grants WHERE grant_id=?').get(issued.reference.grantId)).toEqual(savedGrant)
+    expect(ImportRunRepository.get(RUN)).toEqual(savedSnapshot)
+    expect(subject.events).toEqual([])
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
   it('does not write the run, grant or checkpoint when replaying completed history', async () => {
     const first = start(), event = await projection()
     await ack(event); expect(await first).toMatchObject({ success: true })

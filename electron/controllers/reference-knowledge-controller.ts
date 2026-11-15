@@ -234,10 +234,21 @@ export function registerReferenceKnowledgeController(scheduler?: GenerationSched
             ? (body as ExecuteReferenceKnowledgeRequest).reference
             : body as ReferenceKnowledgeReference
           if (channel === 'reference-knowledge:v1:refresh' || channel === 'reference-knowledge:v1:refresh-ack') {
-            const authority = authorities.get(runtime)
-            if (reference.projectId !== runtime.projectId || !authority) {
+            if (reference.projectId !== runtime.projectId) {
               throw new Error('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
             }
+            let authority = authorities.get(runtime)
+            if (!authority && channel === 'reference-knowledge:v1:refresh') {
+              const run = ImportRunRepository.get(reference.runId, {
+                database: runtime.database, canonicalRoot: runtime.canonicalRoot, projectId: runtime.projectId,
+              })
+              const completed = run?.purpose === 'reference' && run.status === 'completed' && run.stage === 'completed'
+                && runtime.database.prepare(`SELECT 1 FROM reference_import_grants WHERE grant_id=? AND import_run_id=?
+                  AND project_id=? AND revision=? AND state='completed'`).get(reference.grantId, reference.runId, reference.projectId, reference.revision)
+              // Reopen reconstructs only a reader; persisted history never reconstructs an issuance.
+              if (completed) authority = await authorized(runtime, fresh, scheduler)
+            }
+            if (!authority) throw new Error('KNOWLEDGE_BASE_REFERENCE_CAPABILITY_REQUIRED')
             if (channel === 'reference-knowledge:v1:refresh-ack') {
               return refreshForeground.acknowledge(runtime, event.sender, session, body as ReferenceRefreshAckRequest)
             }

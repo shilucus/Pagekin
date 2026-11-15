@@ -9,7 +9,7 @@ import { changedFiles, fetchRoute, filesContaining, fileStamps, guardFetch, real
   summarizeModelRequests }
   from '../real-model.mjs'
 
-const REAL = { fakePort: null, realOrigin: 'https://api.siliconflow.cn' }
+const REAL = { fakePort: null, realOrigin: 'http://127.0.0.1:8045', realApiKey: 'runtime-only-key', maxRealRequests: 1 }
 const FAKE = { fakePort: 4567, realOrigin: null }
 const NONE = { fakePort: null, realOrigin: null }
 
@@ -17,13 +17,16 @@ const parents = []
 afterEach(() => { for (const parent of parents.splice(0)) fs.rmSync(parent, { recursive: true, force: true }) })
 const tempDir = () => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'real-model-')); parents.push(dir); return dir }
 
-it('真实模式只放行 https 的硅基流动 /v1/，其余一律拒绝', () => {
-  assert.equal(fetchRoute('https://api.siliconflow.cn/v1/chat/completions', REAL), 'pass')
-  assert.equal(fetchRoute('https://api.siliconflow.cn/v1/embeddings', REAL), 'pass')
-  for (const href of ['https://api.openai.com/v1/chat/completions', 'http://api.siliconflow.cn/v1/chat/completions',
-    'https://api.siliconflow.cn/models', 'https://api.siliconflow.com/v1/chat/completions', 'https://cloud.siliconflow.cn/v1/x',
-    'http://127.0.0.1:4567/v1/chat/completions', 'https://api.siliconflow.cn.evil.example/v1/x']) {
-    assert.equal(fetchRoute(href, REAL), 'refuse', href)
+it('真实模式只放行固定 loopback 的 chat completion POST', () => {
+  assert.equal(fetchRoute('http://127.0.0.1:8045/v1/chat/completions', REAL, 'POST'), 'pass')
+  for (const [href, method] of [['http://127.0.0.1:8045/v1/chat/completions', 'GET'],
+    ['http://127.0.0.1:8045/v1/chat/completions', 'PUT'], ['http://127.0.0.1:8045/v1/models', 'GET'],
+    ...['https://api.openai.com/v1/chat/completions', 'http://127.0.0.1:8046/v1/chat/completions',
+    'http://localhost:8045/v1/chat/completions', 'http://0.0.0.0:8045/v1/chat/completions',
+    'https://127.0.0.1:8045/v1/chat/completions', 'http://127.0.0.1:8045/models',
+    'http://127.0.0.1:8045/v10/chat/completions', 'http://user:pass@127.0.0.1:8045/v1/chat/completions',
+    'http://127.0.0.1.evil.example:8045/v1/chat/completions'].map(url => [url, 'POST'])]) {
+    assert.equal(fetchRoute(href, REAL, method), 'refuse', `${method} ${href}`)
   }
 })
 
@@ -37,18 +40,87 @@ it('假模型与无夹具的去向与原来一致', () => {
 
 it('源码在主进程里重建后行为不变', () => {
   const rebuilt = (0, eval)(`(${fetchRoute.toString()})`)
-  assert.equal(rebuilt('https://api.siliconflow.cn/v1/embeddings', REAL), 'pass')
-  assert.equal(rebuilt('https://api.openai.com/v1/embeddings', REAL), 'refuse')
+  assert.equal(rebuilt('http://127.0.0.1:8045/v1/chat/completions', REAL, 'POST'), 'pass')
+  assert.equal(rebuilt('https://api.openai.com/v1/embeddings', REAL, 'POST'), 'refuse')
 })
 
-it('两个档案都指向硅基流动，Key 只出现在 apiKey 字段', () => {
-  const profiles = realModelProfiles('sk-test-secret')
-  for (const profile of Object.values(profiles)) {
-    assert.equal(profile.baseUrl, 'https://api.siliconflow.cn/v1')
-    assert.equal(profile.apiKey, 'sk-test-secret')
-    assert.equal(JSON.stringify({ ...profile, apiKey: '' }).includes('sk-test-secret'), false)
-  }
-  assert.deepEqual([profiles.generation.purposes, profiles.embedding.purposes], [['generation'], ['embedding']])
+it('只构造 generation profile，API key 是非秘密占位符', () => {
+  const profiles = realModelProfiles()
+  assert.deepEqual(Object.keys(profiles), ['generation'])
+  assert.deepEqual({ provider: profiles.generation.provider, protocol: profiles.generation.protocol,
+    baseUrl: profiles.generation.baseUrl, modelName: profiles.generation.modelName,
+    purposes: profiles.generation.purposes }, {
+    provider: 'custom', protocol: 'openai', baseUrl: 'http://127.0.0.1:8045/v1',
+    modelName: 'gemini-3.8-flash-high', purposes: ['generation'],
+  })
+  assert.equal(profiles.generation.apiKey, 'pagekin-drive-placeholder')
+  assert.equal(JSON.stringify(profiles).includes('runtime-only-key'), false)
+})
+
+it('真实 loopback 注入只替换 Authorization，保留 init headers/options 并强制手动重定向', async () => {
+  const sink = { externalRequests: [], modelRequests: [] }
+  let captured
+  const guarded = guardFetch(async (input, options) => {
+    captured = { input, options }
+    return { status: 200 }
+  }, fetchRoute, REAL, sink)
+  const controller = new AbortController()
+  const body = '{"model":"gemini-3.8-flash-high"}'
+  const headers = new Headers({ authorization: 'Bearer pagekin-drive-placeholder', 'content-type': 'application/json', 'x-correlation': 'fictional' })
+  const options = { method: 'POST', headers, body, signal: controller.signal, redirect: 'follow' }
+  await guarded('http://127.0.0.1:8045/v1/chat/completions', options)
+  assert.equal(captured.input, 'http://127.0.0.1:8045/v1/chat/completions')
+  assert.equal(new Headers(captured.options.headers).get('authorization'), 'Bearer runtime-only-key')
+  assert.equal(new Headers(captured.options.headers).get('content-type'), 'application/json')
+  assert.equal(new Headers(captured.options.headers).get('x-correlation'), 'fictional')
+  assert.equal(captured.options.method, 'POST')
+  assert.equal(captured.options.body, body)
+  assert.equal(captured.options.signal, controller.signal)
+  assert.equal(captured.options.redirect, 'manual')
+  assert.equal(options.redirect, 'follow', 'caller options are not mutated')
+  assert.equal(JSON.stringify(sink).includes('runtime-only-key'), false)
+})
+
+it('真实 Request 输入保留 Request/init 字段并用当前 memory key 替换有效 Authorization', async () => {
+  const sink = { externalRequests: [], modelRequests: [] }
+  let captured
+  const guarded = guardFetch(async (input, options) => {
+    captured = { input, options }
+    return { status: 200 }
+  }, fetchRoute, REAL, sink)
+  const request = new Request('http://127.0.0.1:8045/v1/chat/completions', {
+    method: 'POST', headers: { authorization: 'Bearer stale-placeholder', 'x-request': 'kept' }, body: '{"request":true}',
+  })
+  const options = { headers: [['authorization', 'Bearer pagekin-drive-placeholder'], ['x-init', 'kept']], redirect: 'follow' }
+  await guarded(request, options)
+  assert.equal(captured.input, request)
+  assert.equal(new Headers(captured.options.headers).get('authorization'), 'Bearer runtime-only-key')
+  assert.equal(new Headers(captured.options.headers).get('x-init'), 'kept')
+  assert.equal(new Headers(captured.options.headers).get('x-request'), null, 'init.headers replace Request headers per fetch semantics')
+  assert.equal(captured.options.redirect, 'manual')
+  assert.equal(options.redirect, 'follow')
+})
+
+it('真实请求达到配置上限后在第二次 dispatch 前 fail closed', async () => {
+  const sink = { externalRequests: [], modelRequests: [] }
+  let calls = 0
+  const guarded = guardFetch(async () => { calls++; return { status: 200 } }, fetchRoute, REAL, sink)
+  await guarded('http://127.0.0.1:8045/v1/chat/completions', { method: 'POST' })
+  await assert.rejects(guarded('http://127.0.0.1:8045/v1/chat/completions', { method: 'POST' }), /DRIVE_REAL_REQUEST_BUDGET_EXHAUSTED/)
+  assert.equal(calls, 1)
+  assert.equal(sink.realRequestsDispatched, 1)
+  assert.equal(sink.modelRequests.length, 1)
+  assert.equal(JSON.stringify(sink).includes('runtime-only-key'), false)
+})
+
+it('冷启动后的 sink 从会话已用预算继续，不因应用重启而清零', async () => {
+  const sink = { externalRequests: [], modelRequests: [] }
+  let calls = 0
+  const guarded = guardFetch(async () => { calls++; return { status: 200 } }, fetchRoute,
+    { ...REAL, realRequestsUsed: 1 }, sink)
+  await assert.rejects(guarded('http://127.0.0.1:8045/v1/chat/completions', { method: 'POST' }), /DRIVE_REAL_REQUEST_BUDGET_EXHAUSTED/)
+  assert.equal(calls, 0)
+  assert.equal(sink.realRequestsDispatched, 1)
 })
 
 it('逐字节找出含密钥的文件，空密钥直接报错', () => {
@@ -115,7 +187,8 @@ it('真实模式不跟随重定向：302 指向别的源时拒绝，目标源收
   try {
     const sink = { externalRequests: [], modelRequests: [] }
     const realOrigin = `http://127.0.0.1:${redirect.address().port}`
-    const guarded = guardFetch(fetch, fetchRoute, { fakePort: null, realOrigin }, sink)
+    const testRoute = href => new URL(href).origin === realOrigin ? 'pass' : 'refuse'
+    const guarded = guardFetch(fetch, testRoute, { fakePort: null, realOrigin, realApiKey: 'runtime-only-key', maxRealRequests: 1 }, sink)
     await assert.rejects(guarded(`${realOrigin}/v1/chat/completions`, { method: 'POST', body: '{"messages":[]}' }), /DRIVE_EXTERNAL_FETCH_REFUSED/)
     assert.deepEqual(targetHits, [])
     assert.deepEqual(sink.externalRequests, [`http://127.0.0.1:${target.address().port}`])

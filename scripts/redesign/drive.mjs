@@ -59,13 +59,15 @@ const IDLE_SAMPLES = 5
 const IDLE_SAMPLE_INTERVAL_MS = 1_000
 export const SHELF_BOOKS = 20
 const ALL_SCENARIOS = [...Object.keys(SCENARIOS), 'baseline-all', ...PREPARED_SESSIONS]
-const USAGE = `用法: node scripts/redesign/drive.mjs --scenario <名称> [--theme light|dark] [--shell writer|stage] [--out <目录>] [--dump-dom] [--console] [--video] [--app-root <目录>] [--real-model]
---real-model 只用于 real-* 场景，密钥从环境变量 ${REAL_KEY_ENV} 读
+const REAL_GENERATION_SCENARIO = 'real-feedback-adopt'
+const USAGE = `用法: node scripts/redesign/drive.mjs --scenario <名称> [--theme light|dark] [--shell writer|stage] [--out <目录>] [--dump-dom] [--console] [--video] [--app-root <目录>] [--real-model] [--max-real-requests <次数>]
+--real-model 目前只用于 ${REAL_GENERATION_SCENARIO}，密钥从环境变量 ${REAL_KEY_ENV} 读
+--max-real-requests 真实模型物理请求上限（默认 1）
 场景: ${ALL_SCENARIOS.join(', ')}`
 
 export function parseArgs(argv) {
   const options = { scenario: null, theme: 'light', shell: null, out: path.join(repository, '.runtime', 'redesign-baseline'),
-    dumpDom: false, console: false, video: false, appRoot: repository, realModel: false }
+    dumpDom: false, console: false, video: false, appRoot: repository, realModel: false, maxRealRequests: 1 }
   const valueOf = (flag, index) => {
     const value = argv[index + 1]
     if (value === undefined || value.startsWith('--')) throw new Error(`${flag} 缺少取值\n${USAGE}`)
@@ -79,6 +81,11 @@ export function parseArgs(argv) {
     else if (arg === '--shell') options.shell = valueOf(arg, index++)
     else if (arg === '--out') options.out = path.resolve(valueOf(arg, index++))
     else if (arg === '--app-root') options.appRoot = path.resolve(valueOf(arg, index++))
+    else if (arg === '--max-real-requests') {
+      const value = valueOf(arg, index++)
+      if (!/^\d+$/u.test(value) || Number(value) < 1 || !Number.isSafeInteger(Number(value))) throw new Error('--max-real-requests 必须是正整数')
+      options.maxRealRequests = Number(value)
+    }
     else if (arg === '--dump-dom') options.dumpDom = true
     else if (arg === '--console') options.console = true
     else if (arg === '--video') options.video = true
@@ -88,9 +95,14 @@ export function parseArgs(argv) {
   if (!ALL_SCENARIOS.includes(options.scenario)) throw new Error(`未知或缺少场景 ${options.scenario}\n${USAGE}`)
   if (!THEMES.includes(options.theme)) throw new Error(`--theme 只接受 ${THEMES.join('|')}`)
   if (options.shell !== null && !SHELLS.includes(options.shell)) throw new Error(`--shell 只接受 ${SHELLS.join('|')}`)
-  if (Boolean(SCENARIOS[options.scenario]?.real) !== options.realModel) {
-    throw new Error(options.realModel ? `--real-model 只用于真实模型场景，${options.scenario} 不是` : `${options.scenario} 是真实模型场景，要带 --real-model`)
+  if (SCENARIOS[options.scenario]?.real && options.scenario !== REAL_GENERATION_SCENARIO) {
+    throw new Error(`真实模型模式当前只支持 ${REAL_GENERATION_SCENARIO}；${options.scenario} 需要其他模型能力，已禁用`)
   }
+  if (options.scenario === REAL_GENERATION_SCENARIO && !options.realModel) throw new Error(`${options.scenario} 是真实模型场景，要带 --real-model`)
+  if (options.realModel && options.scenario !== REAL_GENERATION_SCENARIO) {
+    throw new Error(`--real-model 只用于 ${REAL_GENERATION_SCENARIO}，${options.scenario} 不是`)
+  }
+  if (options.maxRealRequests !== 1 && !options.realModel) throw new Error('--max-real-requests 只用于 --real-model')
   return options
 }
 
@@ -107,7 +119,7 @@ export function isolatedEnvironment(roots, base = process.env) {
   const env = { ...base, AI_NOVEL_APP_DATA_HOME: roots.canonical, AI_NOVEL_LEGACY_SOURCE_HOME: roots.legacy,
     AI_NOVEL_VELA_HOME: roots.legacy, HOME: roots.home, USERPROFILE: roots.home, APPDATA: roots.appData,
     LOCALAPPDATA: roots.localAppData, TEMP: roots.temp, TMP: roots.temp }
-  for (const name of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT', 'AI_NOVEL_SMOKE_PROJECT_MARKER']) delete env[name]
+  for (const name of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT', 'AI_NOVEL_SMOKE_PROJECT_MARKER', REAL_KEY_ENV]) delete env[name]
   return env
 }
 
@@ -203,19 +215,23 @@ async function kill(app) {
 
 /** close 失败时进程可能已自行退出，这时 taskkill 报「not found」；进程已不存在即视为已退出，不算强杀。 */
 export async function quit(app, graceMs = 10_000) {
+  const startedAt = Date.now()
   const pid = app.process().pid
   let timer
-  const closed = await Promise.race([app.close().then(() => true).catch(() => false),
-    new Promise(resolve => { timer = setTimeout(() => resolve(false), graceMs) })])
+  const closeOutcome = await Promise.race([
+    Promise.resolve().then(() => app.close()).then(() => 'resolved', () => 'rejected'),
+    new Promise(resolve => { timer = setTimeout(() => resolve('timeout'), graceMs) }),
+  ])
   clearTimeout(timer)
-  if (closed || !pid || !isAlive(pid)) return { forced: false }
+  const forced = Boolean(pid && isAlive(pid))
+  let killStatus = 'not-needed'
+  if (!forced) return { outcome: closeOutcome, elapsedMs: Date.now() - startedAt, forced, killStatus }
+  killStatus = 'failed'
   try {
-    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
-    else process.kill(pid, 'SIGKILL')
-  } catch (error) {
-    if (isAlive(pid)) throw error
-  }
-  return { forced: true }
+    await kill(app)
+    killStatus = 'completed'
+  } catch { /* Keep low-level process errors and paths out of the quit result. */ }
+  return { outcome: closeOutcome, elapsedMs: Date.now() - startedAt, forced, killStatus }
 }
 
 /**
@@ -246,8 +262,26 @@ export function assertBuilt(appRoot) {
 }
 
 /** 外部写入与残留进程都要留着隔离目录取证；只有全部检查通过才删。 */
-export function sessionIsClean({ failedAt, sessionErrors, residualProcesses, externalWrites }) {
+const isNormalQuitOutcome = outcome => outcome?.outcome === 'resolved'
+  && outcome.forced === false && outcome.killStatus === 'not-needed'
+
+export function sessionIsClean({ failedAt, sessionErrors, residualProcesses, externalWrites, quit }) {
   return failedAt === null && sessionErrors.length === 0 && residualProcesses?.length === 0 && externalWrites?.length === 0
+    && isNormalQuitOutcome(quit)
+}
+
+export function recordQuitOutcome(shared, sessionErrors, outcome) {
+  shared.quit = outcome
+  if (outcome?.killStatus === 'failed') sessionErrors.push('DRIVE_APP_FORCE_CLOSE_FAILED')
+  else if (outcome?.forced) sessionErrors.push('DRIVE_APP_FORCED_CLOSE')
+  else if (outcome?.outcome === 'rejected') sessionErrors.push('DRIVE_APP_QUIT_REJECTED')
+  else if (outcome?.outcome === 'timeout') sessionErrors.push('DRIVE_APP_QUIT_TIMEOUT')
+  else if (!isNormalQuitOutcome(outcome)) sessionErrors.push('DRIVE_APP_QUIT_UNKNOWN')
+}
+
+export function assertNormalQuitOutcome(outcome) {
+  if (isNormalQuitOutcome(outcome)) return
+  throw new Error('DRIVE_APP_QUIT_NOT_NORMAL')
 }
 
 export async function launch({ roots, appRoot, fetchPolicy = { fakePort: null, realOrigin: null }, diagnostics, failureBase, failureEvidence, shelfBooks = 0, renderTiming = false, performanceBaseline = false }) {
@@ -258,11 +292,13 @@ export async function launch({ roots, appRoot, fetchPolicy = { fakePort: null, r
   const app = await electron.launch({ cwd: appRoot, args: launchArgs(roots), env, timeout: TIMEOUT })
   let page
   try {
-    // 本机检索模型直接把 base_url 配成假服务的本机地址，这类请求原样放行；真实模式只放行硅基流动，只记路径、状态与耗时。
+    // Fake requests stay on their isolated local server; real requests use the exact allowlisted loopback origin.
+    // This instruments main-process fetch after Electron launch; it is not a claim about startup or renderer traffic.
     await app.evaluate((_, { route, guard, policy }) => {
-      const sink = { externalRequests: [], modelRequests: [] }
+      const sink = { externalRequests: [], modelRequests: [], realRequestsDispatched: policy.realRequestsUsed ?? 0 }
       globalThis.__driveExternalRequests = sink.externalRequests
       globalThis.__driveModelRequests = sink.modelRequests
+      globalThis.__driveModelSink = sink
       globalThis.fetch = (0, eval)(`(${guard})`)(globalThis.fetch, (0, eval)(`(${route})`), policy, sink)
     }, { route: fetchRoute.toString(), guard: guardFetch.toString(), policy: fetchPolicy })
     if (!performanceBaseline) {
@@ -382,10 +418,18 @@ async function applyAppearance(page, appearance) {
  */
 async function prepareProfile({ roots, appRoot, diagnostics, failureBase, failureEvidence }, appearance, shelfBooks = 0) {
   const prepared = await launch({ roots, appRoot, diagnostics, failureBase, failureEvidence })
+  let preparationFailed = false
+  let preparationError
   try {
     await applyAppearance(prepared.page, appearance)
     if (shelfBooks > 0) await seedShelf(prepared, roots, shelfBooks)
-  } finally { await quit(prepared.app) }
+  } catch (error) {
+    preparationFailed = true
+    preparationError = error
+  }
+  const quitOutcome = await quit(prepared.app).catch(() => ({ outcome: 'rejected', forced: false, killStatus: 'failed' }))
+  if (preparationFailed) throw preparationError
+  assertNormalQuitOutcome(quitOutcome)
 }
 
 /** 用公开 IPC 新建 count 部作品；新建即进入最近项目，书房的书架上就有 count 本书。 */
@@ -597,7 +641,7 @@ export async function finalizeSessionObservations({ app, context, shared, restar
 
 /**
  * 一个会话一次冷启动：先跑首个截图点的 setup，再依次 run、截图、after。隔离与进程检查按会话做，结果抄进每一项。
- * realKey 只在真实模式下有：由 installRealModels 交给应用存进隔离目录的模型配置，会话结束时连同配置文件一起删掉。
+ * realKey 仅由 main-process fetch guard 在内存中使用；持久化模型 profile 只含占位符。
  */
 async function runSession(sessionName, names, options, realKey = null, roots = createIsolatedRoots(scratchParent())) {
   const before = snapshotRealProfiles()
@@ -616,8 +660,10 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
   let context
   const restartRequests = []
   const modelLog = []
+  let realRequestsUsed = 0
   const failureEvidence = []
-  const fetchPolicy = () => ({ fakePort: fake?.port ?? null, realOrigin: realKey ? REAL_ORIGIN : null })
+  const fetchPolicy = () => ({ fakePort: fake?.port ?? null, realOrigin: realKey ? REAL_ORIGIN : null,
+    realApiKey: realKey, maxRealRequests: options.maxRealRequests, realRequestsUsed })
   let currentAppRoot = options.appRoot
   const shell = names.map(name => SCENARIOS[name]?.shell).find(Boolean) ?? options.shell
   try {
@@ -634,7 +680,7 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
       await applyAppearance(launched.page, { theme: options.theme, shell })
       shared.shell = await shellShown(launched.page)
       context = {
-        ...launched, roots, invoke, fake, diagnostics,
+        ...launched, roots, invoke, fake, diagnostics, maxRealRequests: options.maxRealRequests,
         /** 场景中途多拍一张图，与收尾截图放在同一目录。 */
         shoot: name => shoot(context.page, `${base(name)}.png`),
         reload: () => context.page.reload().then(() => waitForShell(context.page, TIMEOUT)),
@@ -643,23 +689,24 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
          * killed: true 时模拟进程被杀：Windows 用 taskkill /T /F 结束整棵进程树，其他平台只向主进程发 SIGKILL。不走正常退出，也就跳过「重启前应用没有正常退出」的断言。
          */
         restart: async ({ appRoot = currentAppRoot, beforeLaunch, killed = false } = {}) => {
+          if (realKey && names.includes(REAL_GENERATION_SCENARIO)) throw new Error(`${REAL_GENERATION_SCENARIO} 不允许应用重启，以维持单会话 generation 预算`)
           restartRequests.push(...await launched.app.evaluate(() => globalThis.__driveExternalRequests))
           modelLog.push(...await launched.app.evaluate(() => globalThis.__driveModelRequests))
+          realRequestsUsed = await launched.app.evaluate(() => globalThis.__driveModelSink?.realRequestsDispatched ?? 0)
           await recording?.pause()
           if (killed) await kill(launched.app)
-          else assert.equal((await quit(launched.app)).forced, false, '重启前应用没有正常退出')
+          else assertNormalQuitOutcome(await quit(launched.app))
           await beforeLaunch?.()
           launched = await launch({ roots, appRoot, fetchPolicy: fetchPolicy(), diagnostics, failureBase, failureEvidence, performanceBaseline })
           currentAppRoot = appRoot
           Object.assign(context, launched)
           await recording?.resume(context.page)
         },
-        /** 真实模式：把硅基流动的生成与检索模型存进应用并设为默认。 */
-        installRealModels: async () => {
+        /** Store only the generation profile; the fetch guard injects the runtime key in memory. */
+        installRealGenerationModel: async () => {
           assert.ok(realKey, '只有 --real-model 的会话能接真实模型')
-          const { generation, embedding } = realModelProfiles(realKey)
-          for (const [channel, value] of [['llm:save-model', generation], ['llm:save-model', embedding],
-            ['llm:set-default-model', generation.id], ['llm:set-default-embedding-model', embedding.id]]) {
+          const { generation } = realModelProfiles()
+          for (const [channel, value] of [['llm:save-model', generation], ['llm:set-default-model', generation.id]]) {
             const result = await invoke(context.page, channel, value)
             assert.equal(result?.success, true, `${channel} 失败：${result?.error ?? ''}`)
           }
@@ -706,13 +753,14 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
     sessionErrors.push(...final.errors.map(error => performanceBaseline ? performanceMessageOf(error, 'cleanup', 'driver_finalize') : messageOf(error)))
     if (final.performanceBaseline && current !== null) results[current].measured = final.performanceBaseline
     if (performanceBaseline && realKey && diagnostics.some(line => line.includes(realKey))) sessionErrors.push('诊断日志里出现了密钥，写盘前已遮蔽')
-    if (options.console) writeConsoleLog(`${base(sessionName)}.console.log`, performanceBaseline
-      ? [`PERFORMANCE_DIAGNOSTICS_REDACTED:${diagnostics.length}`] : diagnostics, sessionErrors, realKey)
     if (launched && realKey) await harvestModelLog(launched.app, modelLog, sessionErrors)
     const fixtureCutoff = performanceBaseline && fake ? captureFixtureRequestCutoff(fake) : null
     const cleanupMessage = error => performanceBaseline
       ? performanceMessageOf(error, 'cleanup', 'quit', shared.failureDiagnostics ??= []) : messageOf(error)
-    if (launched) shared.quit = await quit(launched.app).catch(error => { sessionErrors.push(cleanupMessage(error)); return null })
+    if (launched) {
+      const quitOutcome = await quit(launched.app).catch(() => ({ outcome: 'rejected', elapsedMs: null, forced: false, killStatus: 'failed' }))
+      recordQuitOutcome(shared, sessionErrors, quitOutcome)
+    }
     await fake?.close().catch(error => { sessionErrors.push(cleanupMessage(error)) })
     if (fake) shared.modelRequests = fake.requests.length
     if (performanceBaseline && fake) {
@@ -728,13 +776,16 @@ async function runSession(sessionName, names, options, realKey = null, roots = c
       }
     }
     if (realKey) finishRealSession({ shared, sessionErrors, modelLog, canonical: roots.canonical })
+    if (options.console) writeConsoleLog(`${base(sessionName)}.console.log`, performanceBaseline
+      ? [`PERFORMANCE_DIAGNOSTICS_REDACTED:${diagnostics.length}`] : diagnostics, sessionErrors, realKey)
   }
   try {
     shared.residualProcesses = await residualProcesses(roots.userData)
     Object.assign(shared, profileWrites(before))
   } catch (error) { sessionErrors.push(performanceBaseline
     ? performanceMessageOf(error, 'cleanup', 'cleanup', shared.failureDiagnostics ??= []) : messageOf(error)) }
-  const clean = sessionIsClean({ failedAt, sessionErrors, residualProcesses: shared.residualProcesses, externalWrites: shared.externalWrites })
+  const clean = sessionIsClean({ failedAt, sessionErrors, residualProcesses: shared.residualProcesses,
+    externalWrites: shared.externalWrites, quit: shared.quit })
   releaseCheckedSessionRoot(roots.root, scratchParent(), clean, sessionErrors)
   return results.map((result, index) => {
     const errors = [result.error, failedAt !== null && index > failedAt ? `未运行：本会话的 ${names[failedAt]} 先失败` : null, ...sessionErrors]

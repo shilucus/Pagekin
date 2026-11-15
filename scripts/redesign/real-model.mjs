@@ -1,22 +1,20 @@
-// 真实模型模式（--real-model）：应用的生成与嵌入请求发往硅基流动，凭据只发往这一个端点。
+// 真实模型模式（--real-model）：只让隔离应用的生成请求发往授权的本机 endpoint。
 import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const REAL_KEY_ENV = 'SILICONFLOW_API_KEY'
-export const REAL_ORIGIN = 'https://api.siliconflow.cn'
+export const REAL_KEY_ENV = 'PAGEKIN_REAL_MODEL_API_KEY'
+export const REAL_ORIGIN = 'http://127.0.0.1:8045'
 const REAL_BASE_URL = `${REAL_ORIGIN}/v1`
-export const REAL_GENERATION_MODEL = 'deepseek-ai/DeepSeek-V4-Flash'
-export const REAL_EMBEDDING_MODEL = 'BAAI/bge-m3'
+export const REAL_GENERATION_MODEL = 'gemini-3.8-flash-high'
+export const REAL_MODEL_KEY_PLACEHOLDER = 'pagekin-drive-placeholder'
 
-/** 与设置页新建的硅基流动模型同形：生成模型按预设的输出上限，检索模型用预设的 bge-m3 与默认切块。 */
-export function realModelProfiles(apiKey) {
-  const common = { provider: 'siliconflow', protocol: 'openai', baseUrl: REAL_BASE_URL, apiKey, temperature: 0.7 }
+/** The persisted profile carries only a placeholder; guardFetch injects the runtime key at the approved loopback endpoint. */
+export function realModelProfiles() {
+  const common = { provider: 'custom', protocol: 'openai', baseUrl: REAL_BASE_URL, apiKey: REAL_MODEL_KEY_PLACEHOLDER, temperature: 0.7 }
   return {
-    generation: { ...common, id: 'realtest-generation', name: '真实测试生成模型', modelName: REAL_GENERATION_MODEL,
+    generation: { ...common, id: 'realtest-generation', name: 'Gemini 3.8 Flash (High)', modelName: REAL_GENERATION_MODEL,
       maxTokens: 16_384, purposes: ['generation'], reasoningOverride: 'auto' },
-    embedding: { ...common, id: 'realtest-embedding', name: '真实测试检索模型', modelName: REAL_EMBEDDING_MODEL,
-      maxTokens: 0, purposes: ['embedding'], embeddingOptions: { chunkSize: 500, chunkOverlap: 50, batchSize: 50 } },
   }
 }
 
@@ -24,10 +22,11 @@ export function realModelProfiles(apiKey) {
  * 主进程 fetch 的去向：pass 原样发出，fake 改道本机假服务，refuse 拒绝。
  * 源码会被送进 Electron 主进程重建，函数体不能引用外部变量。
  */
-export function fetchRoute(href, { fakePort, realOrigin }) {
+export function fetchRoute(href, { fakePort, realOrigin }, method = 'GET') {
   const url = new URL(href)
+  if (realOrigin !== null) return realOrigin === 'http://127.0.0.1:8045' && url.origin === realOrigin
+    && !url.username && !url.password && url.pathname === '/v1/chat/completions' && method.toUpperCase() === 'POST' ? 'pass' : 'refuse'
   if (fakePort !== null && url.origin === `http://127.0.0.1:${fakePort}`) return 'pass'
-  if (realOrigin !== null) return url.origin === realOrigin && url.pathname.startsWith('/v1/') ? 'pass' : 'refuse'
   if (fakePort !== null && url.origin === 'https://api.openai.com' && url.pathname.startsWith('/v1/')) return 'fake'
   return 'refuse'
 }
@@ -40,23 +39,39 @@ export function fetchRoute(href, { fakePort, realOrigin }) {
 export function guardFetch(originalFetch, route, policy, sink) {
   return async (input, options) => {
     const url = new URL(String(input instanceof Request ? input.url : input))
-    const decision = route(url.href, policy)
+    const method = options?.method ?? (input instanceof Request ? input.method : 'GET')
+    const decision = route(url.href, policy, method)
     if (decision === 'refuse') {
       sink.externalRequests.push(url.origin)
       throw new Error('DRIVE_EXTERNAL_FETCH_REFUSED')
     }
     const started = Date.now()
+    const isReal = policy.realOrigin !== null && decision === 'pass' && url.origin === policy.realOrigin
+    let requestOptions = options
+    if (isReal) {
+      if (typeof policy.realApiKey !== 'string' || !policy.realApiKey) throw new Error('DRIVE_REAL_KEY_MISSING')
+      if (!Number.isSafeInteger(policy.maxRealRequests) || policy.maxRealRequests < 1) throw new Error('DRIVE_REAL_REQUEST_BUDGET_INVALID')
+      if (!Number.isSafeInteger(policy.realRequestsUsed ?? 0) || (policy.realRequestsUsed ?? 0) < 0) throw new Error('DRIVE_REAL_REQUEST_BUDGET_INVALID')
+      sink.realRequestsDispatched ??= policy.realRequestsUsed ?? 0
+      if (sink.realRequestsDispatched >= policy.maxRealRequests) throw new Error('DRIVE_REAL_REQUEST_BUDGET_EXHAUSTED')
+      sink.realRequestsDispatched++
+      const headers = options && Object.hasOwn(options, 'headers')
+        ? new Headers(options.headers)
+        : new Headers(input instanceof Request ? input.headers : undefined)
+      headers.set('Authorization', `Bearer ${policy.realApiKey}`)
+      requestOptions = { ...options, headers, redirect: 'manual' }
+    }
     const record = status => sink.modelRequests.push({ path: url.pathname, status, ms: Date.now() - started })
     let response
     try {
       response = await originalFetch(decision === 'fake' ? `http://127.0.0.1:${policy.fakePort}${url.pathname}` : input,
-        policy.realOrigin === null ? options : { ...options, redirect: 'manual' })
+        isReal ? requestOptions : policy.realOrigin === null ? options : { ...options, redirect: 'manual' })
     } catch (error) {
       record(String(error?.name ?? 'error'))
       throw error
     }
     record(response.status)
-    if (policy.realOrigin !== null && [301, 302, 303, 307, 308].includes(response.status)) {
+    if (isReal && [301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get('location')
       sink.externalRequests.push(location ? new URL(location, url).origin : `${url.origin}（重定向没有 Location）`)
       throw new Error('DRIVE_EXTERNAL_FETCH_REFUSED')
