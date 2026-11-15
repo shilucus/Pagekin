@@ -84,7 +84,7 @@ export interface InboundReceipt {
   grantId: string
   command: InboundCommand
   payloadHash: string
-  status: 'succeeded' | 'failed' | 'unknown' | 'pending_review'
+  status: 'succeeded' | 'failed' | 'cancelled' | 'unknown' | 'pending_review'
   result?: Record<string, unknown>
   error?: {
     code: string

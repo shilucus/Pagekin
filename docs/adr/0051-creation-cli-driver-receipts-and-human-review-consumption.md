@@ -56,6 +56,12 @@ the normalized request payload hash; a nested start receipt binds the original
 start payload, not the receipt-query payload. Missing task ID, events array or
 target receipt is not converted to success or an initial-receipt fallback.
 
+The shared `InboundReceipt.status` includes `cancelled`, matching the original
+exit-code-2 contract above. This corrects a type omission, not a new execution
+state, server cancellation capability or authorization. A typed receipt
+regression is included in the existing `src` typecheck scope; `scripts/cli` is
+not included by the current root TypeScript configuration.
+
 Approval scope and channel readiness do not replace the trusted author capability
 in ADR0050. These repairs cover client/history correctness only; desktop start
 and resume composition, true task completion and trusted human approval remain

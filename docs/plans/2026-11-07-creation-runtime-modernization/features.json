@@ -2865,6 +2865,22 @@
           "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; fictional history and ephemeral loopback; independent Luna/Agent4 review",
           "result": "Final shared API/CLI6files71/71 pass. New approval cases confirm423 without approval mutation/event/success effects, including repeated/concurrent/missing/foreign requests; original task-token denial, historical success/unknown and same-key mismatch decisions retain priority.",
           "limitations": "Scope/readiness is not a trusted single-use approval capability. Production start/resume still uncomposed, receipt ownership/history is process memory, trusted approval and actual Electron API execution remain open; feature stays in_progress/false. No model/platform qualification."
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "09675d1a859686e9882672bb3a6c6516e536f83b + stage-104-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-104-evidence.md; ../../adr/0050-inbound-domain-api-security-and-idempotency-contract.md; review-record.md#2026-11-15-stage104-api-scope-and-executable-client-review",
+          "environment": "Windows x64; independent Sol API scope review; current registered controller and original authorization/replay contract",
+          "result": "Task or admin scope is required for project/workflow commands after authentication/project checks and before pending/cache/unknown decisions. Review-only/empty scope cannot replay those commands; exact command whitelist and human-review isolation remain.",
+          "limitations": "Partial original AC1/3 repair only; no trusted external author issuer, production listener/executor or durable task/history. Start/resume503 and approve423 remain; API001 stays in_progress/false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "09675d1a859686e9882672bb3a6c6516e536f83b + stage-104-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-104-evidence.md; .runtime/creation-runtime-modernization/resume-2026-11-15/api-task-scope-red.json; .runtime/creation-runtime-modernization/resume-2026-11-15/stage104-api-cli-contract-final.json",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; registered API and ephemeral fictional loopback",
+          "result": "Seven scope behavior REDs close; final six API/MCP files69/69 are included in Root eight-file231/231,0failed/pending,exit0. Current typecheck/lint/colors/i18n/source build exit0, with earlier lint failure and build warnings retained.",
+          "limitations": "Counts overlap CLI/shared reports. Tests and source build do not prove actual Electron API task execution, persistence, quality or platform qualification; no feature promotion."
         }
       ]
     },
@@ -2965,6 +2981,22 @@
           "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; actual controller with fictional history and ephemeral loopback; independent Luna/Agent4 review",
           "result": "FinalCLI25/25 are included in shared6files71/71, not added. Fresh query keys observe later real controller-recorded events without resending start; cursor progression and classified socket-read retries pass. Receipt shape/identity and exact normalized outer/nested payload hashes reject mismatch; five hash REDs close in25/25 GREEN.",
           "limitations": "Fictional seeded history is not production creation. No actual desktop API start/wait, restart durability or trusted human approval is delivered; uncomposed start still fails closed. Invalid JSON reports no raw body. CLI001 remains in_progress/false; no model/Electron/platform qualification."
+        },
+        {
+          "type": "contract_review",
+          "sourceSha": "09675d1a859686e9882672bb3a6c6516e536f83b + stage-104-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-104-evidence.md; ../../adr/0051-creation-cli-driver-receipts-and-human-review-consumption.md; review-record.md#2026-11-15-stage104-api-scope-and-executable-client-review",
+          "environment": "Windows x64; independent Terra review of final executable/client/package alias and Root shared receipt/test/ADR paths",
+          "result": "Executable remains a client only. Explicit literal loopback, env or bounded single-credential stdin, command whitelist and pre-JSON redaction are accepted. Missing receipt/events, approval and initial non-success terminal findings close. Shared cancelled type matches original exit2 without new execution capability.",
+          "limitations": "Root tsconfig covers src/electron, not scripts/cli. Redirect:error has wiring review but no real302 regression. Production issuer/start/history/wait and trusted approval remain open; CLI001 stays in_progress/false."
+        },
+        {
+          "type": "deterministic",
+          "sourceSha": "09675d1a859686e9882672bb3a6c6516e536f83b + stage-104-source-manifest.json final source identities",
+          "artifactOrReceipt": "stage-104-evidence.md; .runtime/creation-runtime-modernization/resume-2026-11-15/stage104-api-cli-contract-final.json; stage104-cancel-receipt-type-red.log; stage104-cli-script-help.log",
+          "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; actual CLI child process and ephemeral loopback with fictional history",
+          "result": "Final CLI62/62 and shared100/100 are included in eight-file231/231,0failed/pending,exit0. Actual typed TS2322 RED becomes typecheck GREEN; alias help exits0 without dispatch. Prior implementation/review REDs remain; current lint/colors/i18n/source build exit0.",
+          "limitations": "Actual executable/HTTP client tests are not real desktop creation or trusted approval. Counts overlap API evidence; source build is not packaging/platform, and separate model scenes confer no CLI quality qualification."
         }
       ]
     },

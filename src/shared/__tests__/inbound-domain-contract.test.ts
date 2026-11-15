@@ -3,6 +3,7 @@ import {
   INBOUND_COMMANDS,
   INBOUND_ERROR_CODES,
   InboundDomainError,
+  type InboundReceipt,
   normalizePayload,
   validateHostHeader,
   validateInboundRequest,
@@ -10,6 +11,22 @@ import {
 } from '../inbound-domain-contract'
 
 describe('inbound-domain-contract', () => {
+  it('preserves cancelled in a typed execution receipt', () => {
+    const receipt: InboundReceipt = {
+      operationKey: 'fictional-cancelled-operation',
+      idempotencyKey: 'fictional-cancelled-start',
+      projectId: 'fictional-project',
+      grantId: 'fictional-grant',
+      command: 'workflow:start',
+      payloadHash: normalizePayload({ chapterNumber: 3 }).hash,
+      status: 'cancelled',
+      createdAt: 1,
+      completedAt: 2,
+    }
+
+    expect(JSON.parse(JSON.stringify(receipt)).status).toBe('cancelled')
+  })
+
   describe('normalizePayload', () => {
     it('produces identical hash regardless of key order', () => {
       const obj1 = { b: 2, a: 1, c: { y: 'hello', x: 'world' } }

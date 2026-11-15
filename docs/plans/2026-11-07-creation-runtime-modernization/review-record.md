@@ -1687,3 +1687,36 @@ and final-version reruns before their own scoped commits.
   Root confirms actual typecheck/lint/colors/i18n/build exit0 with build warnings
   preserved. Final manifest/record-only checklist and independent record audit
   still precede the scoped local commit; unrelated concurrent work is excluded.
+
+## 2026-11-15 Stage104 API Scope And Executable Client Review
+
+- Sol independently accepts Terra's two API identities: exact whitelist,
+  authentication and project checks precede task/admin scope; missing or
+  review-only scope fails before pending/cache/unknown replay. Human-review
+  checks remain distinct. No listener/executor or trusted author grant is
+  invented; start/resume503 and approval423 remain. Actual scope RED7 closes
+  in registered six-file69/69 and Root eight-file231/231 final.
+- Terra independently reviews Agent5's final three CLI identities and Root's
+  one-line package alias. Actual entry is a pure HTTP client, not an API or DB
+  launcher. Literal endpoint validation, bounded env/stdin credentials,
+  command-specific flags and pre-serialization two-secret redaction remain.
+  Findings on missing nested receipt, malformed events, approval terminal
+  mapping and initial non-success before taskId/polling all close in retained
+  REDs and final62/62. Initial succeeded is not accepted as completed creation.
+  The real302 regression remains absent; redirect:error is static wiring only.
+- Terra independently accepts Root's shared cancelled union, no-cast src test
+  and ADR0051 synchronization. Original exit2 is the authority, not a new state
+  or cancellation capability. Actual RED log contains only TS2322/exit2, then
+  Root typecheck exits0; shared100/100 is in final231/231. Current root tsconfig
+  does not cover scripts/cli, and records do not claim it does.
+- Root actual current typecheck/lint/colors/i18n/source build exits0, with first
+  lint failure and existing Vite warnings retained. Source/test/child-process
+  and static evidence are separated from unexecuted production creation,
+  model quality and platforms. Partial five-question check retains both flags
+  false and15/35; no unrelated dependency or headless/policy prerequisite added.
+  Sol's independent final record/source audit accepts the9source/6record slice:
+  75 initial hashes match, actual231/231/RED/quality/helper limitations are
+  accurate and concurrent tools/product follow-up/protected files are excluded.
+  Actual metadata36/36,0failed/pending and same-name stdout log are read; Root
+  appends their identities and changed record hashes for a narrow final recheck.
+  The scoped local commit remains Root's next action, not a feature promotion.

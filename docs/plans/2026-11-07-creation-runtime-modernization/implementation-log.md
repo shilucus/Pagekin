@@ -2258,3 +2258,53 @@ The observations below retain their chronological state. The final acceptance at
   `corepack pnpm test scripts/__tests__/creation-runtime-feature-evidence.test.ts --reporter=json --outputFile=.runtime/creation-runtime-modernization/resume-2026-11-15/checklist-stage102-final.json`.
   Exit0,36/36,0failed/pending; same-name stdout log retained. This is metadata
   consistency, not a replacement for the accepted native/author/model evidence.
+
+## 2026-11-15 - Stage104: Executable Client And Task Scope
+
+- Stage102 committed as `09675d1a859686e9882672bb3a6c6516e536f83b`.
+  Its postcommit139 reviewed identities matched; index stayed empty and the
+  three protected files stayed unchanged. This supersedes its historical
+  pending-commit wording, not its failed/raw evidence. Checklist15/35 remains.
+- [Stage104](stage-104-evidence.md) freezes the API001/CLI001 partial slice:
+  actual Node client/alias, literal explicit loopback/env-or-stdin credentials,
+  command options, credential redaction, terminal mappings, missing receipt/
+  events refusal, and project/workflow task-or-admin scope before replay.
+  Exact owned nine source paths exclude concurrent imitation/real-model tools,
+  their product follow-up and all three protected files. No new executor,
+  listener, arbitrary grant, approval, dependency or feature is introduced.
+- Root actual eight-file231/231,0failed/pending,exit0 is in
+  R/stage104-api-cli-contract-final.json/log. API69,CLI62,shared100 overlap
+  earlier reports; R is the existing resume-2026-11-15 runtime directory.
+  Exact command and each retained RED/intermediate/final are in Stage104.
+  CLI real child/env/stdin/ephemeral HTTP tests are not production creation.
+- Root adds a no-cast typed cancelled receipt test in src. Actual compiler RED
+  exits2 with only TS2322, then only the shared union is corrected per original
+  ADR0051 exit2. Root current typecheck/lint/colors/i18n/build exit0 in
+  stage104-*-retest.log. CLI files are not typechecked by root tsconfig. First
+  lint exit1 from two separately owned imitation-tool unused bindings remains;
+  Luna's fix plus actual retest closes it. Vite build warnings remain explicit.
+- Actual `corepack pnpm run creation:cli help --json` exits0 without endpoint
+  or dispatch. Final combined command is the exact eight-file list in Stage104;
+  the four quality commands are `corepack pnpm run typecheck`, `lint`,
+  `check:i18n`, `build` with the run prefix preserved for each. No installer,
+  package, remote or real-author data operation is performed for this slice.
+- Sol independently accepts Terra's API scope/precedence changes; Terra accepts
+  Agent5's final CLI and Root's three contract/test/ADR paths. Findings on
+  missing receipt, malformed events, approval status and initial non-success
+  before polling all close in actual62/62 and combined231/231. Root's partial
+  five-question self-check keeps both features in_progress/false: production
+  author issuer/executor, persistent task/history and true desktop run/wait are
+  still gaps. Human approval remains423; uncomposed start/resume remains503.
+- Final manifest, metadata checklist and independent record/index/path audit
+  precede the exact-owned-path local commit. The commit SHA/postcommit identity
+  check will be recorded in the next update. No routine permission is pending;
+  independent complete imitation and same-base real feedback continue under
+  their separately reviewed scopes rather than being counted from this slice.
+- Actual record-only check:
+  `corepack pnpm test scripts/__tests__/creation-runtime-feature-evidence.test.ts --reporter=json --outputFile=.runtime/creation-runtime-modernization/resume-2026-11-15/checklist-stage104-final.json`.
+  Exit0,36/36,0failed/pending; same-name stdout log retained. Structured parent
+  comparison finds no non-evidence field change in any of the35 features.
+- Sol independently accepts the9source/6record content/path audit after all75
+  initial source/report/build/protected/record identities match. Metadata raw
+  and affected record identities are appended for final narrow recheck; no
+  unreviewed scope or unresolved client/scope correctness blocker remains.

@@ -150,6 +150,14 @@ export class InboundApiService {
       )
     }
 
+    if (!req.command.startsWith('human-review:') && !token.scopes.includes('task') && !token.scopes.includes('admin')) {
+      throw new InboundDomainError(
+        INBOUND_ERROR_CODES.INSUFFICIENT_SCOPE,
+        'task scope required for project and workflow commands',
+        403,
+      )
+    }
+
     // Human review scope isolation: task tokens CANNOT perform review approvals
     if (req.command === 'human-review:approve') {
       if (!token.scopes.includes('human_review')) {

@@ -1,0 +1,360 @@
+{
+  "schemaVersion": 1,
+  "stage": 104,
+  "sourceSha": "09675d1a859686e9882672bb3a6c6516e536f83b",
+  "productionSourcesChanged": true,
+  "environment": "Windows x64; Node24.13.0; Corepack pnpm11.11.0; Vitest4.1.12; source build, no packaging qualification",
+  "scope": "Partial API001/CLI001 executable client and task-scope correctness only. No completion, production executor/listener, persistent task history or trusted human capability.",
+  "sourceFiles": [
+    {
+      "path": "electron/services/inbound-api-service.ts",
+      "sha256": "67BFAD3B13FDBDA29149BEA13DF48F5BC9FDDF177CDFA53D66CBFD4293B708DE"
+    },
+    {
+      "path": "electron/controllers/__tests__/inbound-api-controller.approval.test.ts",
+      "sha256": "C1443A93A5A945E44566A3614700E9E1308A48AB68370A5665FDF34D03A7A9A3"
+    },
+    {
+      "path": "scripts/cli/creation-cli.ts",
+      "sha256": "852ADDC7DF2C500DA3BD3E6E7CD2B7FA847A1E77AE0373F6C91387AA4F06C4EB"
+    },
+    {
+      "path": "scripts/cli/creation-cli-main.ts",
+      "sha256": "266B67680927C8244CFF3D66484BC6DB9DA412CC83CB790CB20A4B4A5D3F43D9"
+    },
+    {
+      "path": "scripts/cli/__tests__/creation-cli.test.ts",
+      "sha256": "12E67B08E5A11E7263E56CF6C875522232D1EBFB562024B0A48644D58B699B2C"
+    },
+    {
+      "path": "package.json",
+      "sha256": "C658D7DC11B105DD8AC7B69BF1331A0F2F642736C1108BD77DA2BF22AB255459"
+    },
+    {
+      "path": "src/shared/inbound-domain-contract.ts",
+      "sha256": "7028281B060841BCAFAF0B3501DFE8271D047F94A69E390DDC53E849BBEC192C"
+    },
+    {
+      "path": "src/shared/__tests__/inbound-domain-contract.test.ts",
+      "sha256": "B7A884F29ABF7C86E4B90A58FD66E3ACCBD70E1957B2882C9C1D982D6ECF330E"
+    },
+    {
+      "path": "docs/adr/0051-creation-cli-driver-receipts-and-human-review-consumption.md",
+      "sha256": "F89E8D2AA9B88F70C000FE66C98B575CD1B9B5036A40044FBF05018AAA399684"
+    }
+  ],
+  "unchangedDependencies": [
+    {
+      "path": "electron/controllers/inbound-api-controller.ts",
+      "sha256": "D2035A381831F4C238F689C23EC10932B77CB4DAFA3B4EED5FCB73EA6144E1C2"
+    },
+    {
+      "path": "electron/services/inbound-mcp-adapter.ts",
+      "sha256": "EC91884386D4C5C8C58049038C234CEBC202B36D9197FF234EA9A521CA30ED97"
+    },
+    {
+      "path": "electron/controllers/__tests__/inbound-api-history-fixture.ts",
+      "sha256": "D33B1EE735BB2D72D90CE1745313EEAA72FFA8F876771F93F6CCF979A84978EC"
+    },
+    {
+      "path": "electron/controllers/__tests__/inbound-api-controller.test.ts",
+      "sha256": "846F1BBC9EA0B43D552BA9AA7A635BBCB429FAF3A95A64524B09112C25770F1A"
+    },
+    {
+      "path": "electron/controllers/__tests__/inbound-api-controller.ownership.test.ts",
+      "sha256": "0DF7CEF4376175B93872EBF96B5ABDE277E03D50FEE10F6D4554CEB28E78252C"
+    },
+    {
+      "path": "electron/controllers/__tests__/inbound-api-controller.idempotency.test.ts",
+      "sha256": "BD3D8F469581C6B503022224A860DCDA988ED4819B9D21E7A1FC18E72898C7DF"
+    },
+    {
+      "path": "electron/controllers/__tests__/inbound-api-controller.headers.test.ts",
+      "sha256": "6C179C509F8D52AC17EFF19E6498FDF59C24B3D12B2AD4B2D02817B21AA84CDE"
+    },
+    {
+      "path": "electron/services/__tests__/inbound-mcp-adapter.test.ts",
+      "sha256": "BFD68884BF12C8016E1015D6124BF270B0E58D62C1A1D9AC2E838F2523B134AB"
+    },
+    {
+      "path": "docs/adr/0050-inbound-domain-api-security-and-idempotency-contract.md",
+      "sha256": "6BC4C5589E660B90F60EA4FC4D4878F52B56AC58B48F715ED42A767D1272B985"
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "08AFD1773C886F2204AA348A9703E82C07F476781E88EF2BF833727632ECBBEA"
+    },
+    {
+      "path": "scripts/__tests__/creation-runtime-feature-evidence.test.ts",
+      "sha256": "0CA582E88BD8A2468892D0EB5D86324F42DEED400C029DDB725815B7F0057F5A"
+    }
+  ],
+  "separateConcurrentToolsExcludedFromCommit": [
+    {
+      "path": "scripts/redesign/f537-scenarios.mjs",
+      "sha256": "EA47D3FCE840A99AA29FCE6BCEA88A14A9D0401CD8ECA68E1196DDCA1CF0BBBC"
+    },
+    {
+      "path": "scripts/redesign/reference-imitation-scenario.mjs",
+      "sha256": "141ECEAAE315B42B95EF340315843CC29908476FEFC39C91991FAE1894259523"
+    },
+    {
+      "path": "scripts/redesign/__tests__/reference-imitation-scenario.test.mjs",
+      "sha256": "74FC5EA515C40A8BF230229AAE2655D82C66886A5002B16BE8B0B521FDBFC6D9"
+    },
+    {
+      "path": "scripts/redesign/drive.mjs",
+      "sha256": "F8DB4C558768549D46D3BB6DB4495A0AF2DC2682C448A3BC86F445C83A219F6F"
+    },
+    {
+      "path": "scripts/redesign/real-scenarios.mjs",
+      "sha256": "37BE7A138672F65CF0717B3E030F76D0AAB761013B8DB7648337C5B5A9BDE2DE"
+    },
+    {
+      "path": "scripts/redesign/__tests__/drive-args.test.mjs",
+      "sha256": "6EA631B94DF30562AEE889B60B768374A1EC75F6ADCFCCD583E2D40504095CA9"
+    },
+    {
+      "path": "scripts/redesign/__tests__/real-feedback-scene.test.mjs",
+      "sha256": "BC9E44BE5C9DEF95745581C9E4341C5CF46FF3FC8EC52E1992746BCBA3D505B1"
+    }
+  ],
+  "concurrentProductWorkExcludedFromCommit": [
+    "electron/controllers/project-controller.ts",
+    "electron/controllers/__tests__/project-controller-open-atomicity.test.ts"
+  ],
+  "buildEntries": [
+    {
+      "path": "dist/index.html",
+      "sha256": "ED9B1C5960C6D23B814D314870AFC43F4C24B432D27AF9A1284251F01F25B458"
+    },
+    {
+      "path": "dist-electron/main.js",
+      "sha256": "924D229C5609C7743566586A196D5A96F66F26418C7C027049E5A7766C340539"
+    },
+    {
+      "path": "dist-electron/preload.mjs",
+      "sha256": "B4F954B48DA2075181BDF4E14B926B0702750844CA4E69A382F4975E6B0EE580"
+    }
+  ],
+  "protectedFiles": [
+    {
+      "path": "docs/repository-analysis-2026-11-07.md",
+      "sha256": "BB6866223C596C690E4D2E35C38FAA9EBB05E45084776EE1B285083BAD89A74B"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-evidence.md",
+      "sha256": "5AA85559B9A71022D378CFA7B50EB55E1539BEABD77E1766050D819FA336F1F9"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-1b3-source-manifest.json",
+      "sha256": "7AE7D4318C58DC872664BB89BD455A3995A3C02E5C2DE4E2C8FE7D3D9AD48130"
+    }
+  ],
+  "rawReports": [
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/api-task-scope-green.json",
+      "sha256": "58BFA8D90D91B76D2F4B0286D2C0967D33A5F055143BB6FC1D25DB27F1697E4B"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/api-task-scope-red.json",
+      "sha256": "9CA1E42B60EC7DD9DC846DC92FCFE4F69D7CBD5CD7691ED8C3D20FF74C8F7E09"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/api-task-scope-six-final.json",
+      "sha256": "502DD07F6E3DBD92120C3BFAA90BB34DA91AA221C9394F2FAEEAEF6E549B150E"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-api-cli-contract-final.json",
+      "sha256": "1FEB2A74993FDF8F7257BDD21B90F8C8BD6D7E84AC397A9EC46CEFC96DCA972B"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-api-cli-contract-final.log",
+      "sha256": "39BF28B6889ABF1D03E7B596813C2AF4530F3C32BA59419D3AB960CFCD8DB4E0"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-api-cli-current-final.json",
+      "sha256": "833967C29423DE6C4B81B8DCFF8CBDA8DD11782A214556D620DC617A08A64656"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-api-cli-current-final.log",
+      "sha256": "C714064EE2E70DA1797ACF7945DBB64FFD4802BE9E9804FC0DA61EA0A96CD5B2"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-build-final.log",
+      "sha256": "9F249FC3277305C88BC4AF9F55E8D5798B3A49FDDF868A6718916584249122EA"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-build-retest.log",
+      "sha256": "151DF1DFAAE01B00366E84A5FA57AA2221EC693E8DD67E0EE93BB702569E5C91"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cancel-receipt-type-red.log",
+      "sha256": "B7C57E399FB88564F834024BB70690709B1E31D3E881722E0EE277E2F80874D5"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-entry-final.json",
+      "sha256": "FA3767560234EA4568476B2E646C2718F6FBAED3DD5A9A0388FD63C23A7A7E0D"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-entry-final.log",
+      "sha256": "EF8DEBDE3A9384EDA38A1CF0FCDA267D901589E1C8E6ADDAB804898ADBC04DFF"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-entry-first.json",
+      "sha256": "73F1BB3401C56C9AA959997D591D75B9C64027300F07457819E8A6A75DB947FB"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-entry-first.log",
+      "sha256": "3968DF9CCD886E81F262AB079EBB68340F8977763BBDD1C302B07F3D0FCFD3E4"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-entry-red.json",
+      "sha256": "C5748524B7DEB8F4025301A4EADF9D3B656153532ACC0FD98FBE3276110CFAD5"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-entry-red.log",
+      "sha256": "556D3C454843D3DCE51CCA8B28937123F81F75190B31B3C8940DCE4FA0663012"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-initial-terminal-final.json",
+      "sha256": "5A4915433B51C3924BAD8EDB6139C2E183E0036458241EB2CE0404D7C6939C1F"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-initial-terminal-final.log",
+      "sha256": "8393029F75691E8455330BDF3BEF55991C3F05554DE9D44CC367DD5E5A4B22F8"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-initial-terminal-red.json",
+      "sha256": "29FA904D825C4F32342FF18374D0444F7CCE1CDC169E977384AF2D81B42CDD79"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-initial-terminal-red.log",
+      "sha256": "DBBC740228A5F4CD1F3264045A0EB0050D2BE275A6EE22162F68ECFC8C0768AF"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-review-final.json",
+      "sha256": "90EFB4A8BF7B2B881A3616D00726632524239A561B7EA3B7859CB41A6D579E1F"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-review-final.log",
+      "sha256": "89636515E8BF644753A56444E5A5FBBF7E7F794F296F1FD0121B28DB6E9DDA6E"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-review-red.json",
+      "sha256": "0497D14D7780B6453FDA76C2ACCCF2C11F5D2E11CDA7D22BF7EF2BAAD50C3FF1"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-review-red.log",
+      "sha256": "A66337D1CAC75A9179FBE2AC5D8BCDECE6B6A33705CF2E5A9217576A7FD992B4"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-script-help.log",
+      "sha256": "7A075B992911EC2DCC0A1A59A282694D435DDFD2D36B8A018A454108A812225D"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-terminal-closed-final.json",
+      "sha256": "D35F4FAE4A6FBBF2B262AA6241E3660AAD182291D643A133FE8B0C9D0CA91FCF"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-terminal-closed-final.log",
+      "sha256": "82A472B8AAE9EFF71BBEB01ED79D5A0E8FE16B28FBD4A6FDBAD767296386428A"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-terminal-final.json",
+      "sha256": "3A45E5995DAEF9C3B533DBD2E8876A87913593162F1A86C1761EFC50A3FD1485"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-terminal-final.log",
+      "sha256": "91D86EE48EEBCBBC038B8B8BA3DCEA0C7BC5A94DC05B16754E663960B6F3E251"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-terminal-red.json",
+      "sha256": "5C04576AD846308243F5FA05A90D2EA9E249E90373BAC6AEED38983CE9FBA4A2"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-cli-terminal-red.log",
+      "sha256": "5ABFD06FCA14B4811DE93BDE7E9135C95EAA71C6DBE8E9B4F7D28307BDCC3617"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-i18n-final.log",
+      "sha256": "6489B03D41065EAE402D5D45720054F5F9C9D05C6634766645977450B1365AC1"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-i18n-retest.log",
+      "sha256": "A93D702F5AFE69F813BBA3D5D7DD6660C7238F4D8EC516D6532B979BABC29D69"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-lint-final.log",
+      "sha256": "7D64ABB79287A6101358F1A09CE2EC9BB51383CBA7DFCF78B610D5789BB679A6"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-lint-retest.log",
+      "sha256": "F1C58721D752BBA80070A28A1B39ADB706FC3141AE9787223AEC78E911006B08"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-typecheck-final.log",
+      "sha256": "986478D1A6AA6B687BDD42527CAF0718ECE9028D8096A7B9F7EEE425868865DB"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-typecheck-retest.log",
+      "sha256": "041905C4A1E3C7487EE251F0EE247E581388CD280F269DC6BC632D41F1423377"
+    }
+  ],
+  "planRecords": [
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/stage-104-evidence.md",
+      "sha256": "DCC98A3823BBFAEB8DEABD3CF18C2234CBDE99DB97EB7A64F46427AF9956025F"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/features.json",
+      "sha256": "4CEB96D43837365A0685ACE16E7C5A5DEB621822CEF78872F6B29084AB89507F"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/implementation-log.md",
+      "sha256": "1C1C41DAC0747ADE5F2FE344ACA6954ED1038F0E22003CBCD46524D2986AAC91"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/evidence-map.md",
+      "sha256": "7AB0E1CD55BD3041C0EA7A82C56360A12081B3557AF018D553EEDCDE7CD7D46C"
+    },
+    {
+      "path": "docs/plans/2026-11-07-creation-runtime-modernization/review-record.md",
+      "sha256": "B34C522B3757A479DEB12A3FC4DA01EA238DA402D76D9005D26EFF3B68E27220"
+    }
+  ],
+  "metadataReports": [
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/checklist-stage104-final.json",
+      "sha256": "FC2481CDE66ACEAC3FD3813FED2CBCC48A5A59E32266E6EDFC720C00FC9DA4FE"
+    },
+    {
+      "path": ".runtime/creation-runtime-modernization/resume-2026-11-15/checklist-stage104-final.log",
+      "sha256": "CD3D604478F35D929D0F63BF82EF7941B06C698208B5481A43750E7D1B48DFBD"
+    }
+  ],
+  "validation": {
+    "finalReport": ".runtime/creation-runtime-modernization/resume-2026-11-15/stage104-api-cli-contract-final.json",
+    "files": 8,
+    "passed": 231,
+    "failed": 0,
+    "pending": 0,
+    "exitCode": 0,
+    "typeRedExitCode": 2,
+    "typecheckExitCode": 0,
+    "lintExitCode": 0,
+    "i18nExitCode": 0,
+    "buildExitCode": 0,
+    "actualAliasHelpExitCode": 0,
+    "typecheckExcludesCli": true,
+    "completedFeatures": 15,
+    "remainingFeatures": 20
+  },
+  "limitations": [
+    "Source identities bind the reviewed nine-path slice and separately named unchanged dependencies, not all current worktree files.",
+    "Quality/build reports were produced before separately owned project-reopen follow-up; excluded pending tools/product work is not committed or qualified by Stage104.",
+    "CLI child/loopback and seeded history tests are not production desktop task execution, durable history, trusted approval, model quality, speedup or platform evidence.",
+    "Existing build warnings and first lint failure remain; actual HTTP302 regression absent.",
+    "Final metadata identities bind the record checklist, which verifies schema/DAG/evidence labels, not runtime or feature acceptance."
+  ]
+}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { INBOUND_ERROR_CODES, type InboundRequest } from '../../../src/shared/inbound-domain-contract'
 import { InboundApiController } from '../inbound-api-controller'
-import { fictionalStateCounts, seedFictionalReceipt } from './inbound-api-history-fixture'
+import { clearFictionalPending, fictionalReceipt, fictionalStateCounts, seedFictionalPending, seedFictionalReceipt, seedFictionalTask } from './inbound-api-history-fixture'
 
 function fixture() {
   const controller = new InboundApiController()
@@ -23,6 +23,29 @@ function fixture() {
 }
 
 describe('inbound approval without a trusted single-use capability', () => {
+  it.each(['project:get', 'project:list', 'workflow:start', 'workflow:resume', 'workflow:get', 'workflow:events', 'workflow:receipt'] as const)(
+    'requires task scope before dispatching or replaying %s', async command => {
+      const { controller, request } = fixture()
+      const task = controller.service.issueToken({ callerId: request.callerId, scopes: ['task'], allowedProjectIds: [request.projectId] })
+      const empty = controller.service.issueToken({ callerId: request.callerId, scopes: [], allowedProjectIds: [request.projectId] })
+      const action: InboundRequest = { ...request, token: task.token, command, idempotencyKey: `scope-${command}`,
+        payload: { taskId: 'fictional-task-a', targetIdempotencyKey: 'fictional-start' } }
+      seedFictionalTask(controller.service, action, 'fictional-task-a')
+      const before = fictionalStateCounts(controller.service)
+      for (const token of [request.token, empty.token]) {
+        await expect(controller.handleRequest({ ...action, token })).rejects.toMatchObject({
+          code: INBOUND_ERROR_CODES.INSUFFICIENT_SCOPE, status: 403,
+        })
+      }
+      expect(fictionalStateCounts(controller.service)).toEqual(before)
+      seedFictionalReceipt(controller.service, action)
+      for (const token of [request.token, empty.token]) {
+        await expect(controller.handleRequest({ ...action, token })).rejects.toMatchObject({
+          code: INBOUND_ERROR_CODES.INSUFFICIENT_SCOPE, status: 403,
+        })
+      }
+    },
+  )
   it.each(['fictional-review-a', 'fictional-review-b', 'fictional-missing-review'])(
     'rejects %s without mutating local or foreign reviews or caching an approval', async reviewId => {
       const { controller, request, reviews } = fixture()
@@ -39,7 +62,8 @@ describe('inbound approval without a trusted single-use capability', () => {
       }
       expect(fictionalStateCounts(controller.service)).toEqual(counts)
       expect(await Promise.all(['fictional-project-a', 'fictional-project-b'].map(reviews))).toEqual(before)
-      const receipt = await controller.handleRequest({ ...request, command: 'workflow:receipt',
+      const task = controller.service.issueToken({ callerId: request.callerId, scopes: ['task'], allowedProjectIds: [request.projectId] })
+      const receipt = await controller.handleRequest({ ...request, token: task.token, command: 'workflow:receipt',
         idempotencyKey: 'fictional-query-approval', payload: {
           targetCommand: 'human-review:approve', targetIdempotencyKey: request.idempotencyKey,
         } })
@@ -55,6 +79,30 @@ describe('inbound approval without a trusted single-use capability', () => {
       code: INBOUND_ERROR_CODES.HUMAN_REVIEW_SCOPE_REQUIRED, status: 403,
     })
     expect(fictionalStateCounts(controller.service)).toEqual({ owners: 0, receipts: 0, pending: 0 })
+  })
+
+  it.each(['task', 'admin'] as const)('preserves %s project access and the unavailable executor', async scope => {
+    const { controller, request } = fixture()
+    const token = controller.service.issueToken({ callerId: request.callerId, scopes: [scope], allowedProjectIds: [request.projectId] })
+    await expect(controller.handleRequest({ ...request, token: token.token, command: 'project:get', payload: {} }))
+      .resolves.toMatchObject({ status: 'succeeded' })
+    await expect(controller.handleRequest({ ...request, token: token.token, command: 'workflow:start',
+      idempotencyKey: 'fictional-start', payload: {} })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.COMMAND_NOT_ALLOWED, status: 503 })
+  })
+
+  it('checks scope before pending and unknown history while keeping authentication and project checks first', async () => {
+    const { controller, request } = fixture()
+    const task = controller.service.issueToken({ callerId: request.callerId, scopes: ['task'], allowedProjectIds: [request.projectId] })
+    const unauthorizedProject = controller.service.issueToken({ callerId: request.callerId, scopes: [], allowedProjectIds: ['other-project'] })
+    const action: InboundRequest = { ...request, token: task.token, command: 'workflow:start', idempotencyKey: 'fictional-history', payload: {} }
+    seedFictionalPending(controller.service, action, Promise.resolve(fictionalReceipt(action)))
+    await expect(controller.handleRequest({ ...action, token: request.token })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.INSUFFICIENT_SCOPE, status: 403 })
+    clearFictionalPending(controller.service, action)
+    seedFictionalReceipt(controller.service, action, 'unknown')
+    await expect(controller.handleRequest({ ...action, token: request.token })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.INSUFFICIENT_SCOPE, status: 403 })
+    await expect(controller.handleRequest({ ...action, token: task.token })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.UNKNOWN_STATUS_NON_RETRYABLE, status: 409 })
+    await expect(controller.handleRequest({ ...action, token: unauthorizedProject.token })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.PROJECT_GRANT_INVALID, status: 403 })
+    await expect(controller.handleRequest({ ...action, token: 'fictional-invalid' })).rejects.toMatchObject({ code: INBOUND_ERROR_CODES.UNAUTHORIZED_TOKEN, status: 401 })
   })
 
   it.each(['succeeded', 'unknown'] as const)('retains fictional %s historical idempotency decisions without a new approval', async status => {

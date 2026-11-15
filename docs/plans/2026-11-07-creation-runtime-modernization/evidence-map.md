@@ -330,3 +330,32 @@ Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac
   evidence remain separate. Concurrent API/CLI/new imitation work is excluded
   from this stage's owned paths and acceptance. Final record checklist is only
   schema/source/hash/DAG consistency, not product or model-quality evidence.
+
+## Stage104 Executable CLI And Inbound Task Scope
+
+- [Stage104](stage-104-evidence.md) and its [manifest](stage-104-source-manifest.json)
+  bind only nine API/CLI/contract/script/ADR source paths and exact current
+  dependencies/reports. Project/workflow scope is checked before pending/cache/
+  unknown; task or admin does not grant human approval. Exact whitelist and
+  authentication/project precedence remain. Six registered API/MCP files69/69
+  are included in Root's final eight-file231/231, not added again.
+- The actual Node executable/client alias accepts explicit literal loopback
+  endpoint and named env or bounded stdin credentials; no secret argv, config
+  discovery, listener, SQLite or second workflow engine. CLI62/62 exercises real
+  child/loopback boundaries. Terminal status/missing receipt/malformed events
+  and initial non-success review findings close with retained behavior REDs.
+  The actual alias help exits0 with no HTTP dispatch. HTTP302 behavior is
+  statically wired with redirect:error, not independently run in a302 test.
+- Root's no-cast typed cancelled receipt first produces only compiler TS2322,
+  exit2. The shared type is synchronized with ADR0051's existing exit2, not a
+  new execution state/cancel capability. Contract100/100 and final typecheck
+  pass; root TypeScript includes src/electron, not scripts/cli. Actual final
+  lint/colors/i18n/source build exit0; the first lint failure and build warnings
+  remain. These are distinct from unexecuted production creation or targets.
+- Sol independently accepts API scope ordering; Terra accepts final CLI and
+  Root receipt/ADR changes. Root's partial self-check keeps API001/CLI001 false:
+  author-to-caller issuer, production executor/listener, durable history and
+  actual desktop run/wait remain. Approval423/start-resume503 stay. No full
+  feature, new policy, SCHED/headless prerequisite, quality or platform claim.
+  Checklist stays15/35; Stage102's actual local commit is09675d1, with postcommit
+  139 reviewed identities matched and index/protected files preserved then.

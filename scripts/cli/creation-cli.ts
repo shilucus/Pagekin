@@ -7,7 +7,7 @@ import {
   INBOUND_ERROR_CODES,
   InboundDomainError,
   normalizePayload,
-} from '../../src/shared/inbound-domain-contract'
+} from '../../src/shared/inbound-domain-contract.ts'
 
 export const CLI_EXIT_CODES = {
   SUCCESS: 0,
@@ -23,6 +23,7 @@ export type CliExitCode = (typeof CLI_EXIT_CODES)[keyof typeof CLI_EXIT_CODES]
 export interface CreationCliConfig {
   endpoint: string
   token?: string
+  humanReviewToken?: string
   callerId?: string
   projectId?: string
   grantId?: string
@@ -48,6 +49,17 @@ function isRetryablePollingTransportError(error: unknown): boolean {
   return code === 'ECONNRESET' || code === 'UND_ERR_SOCKET'
 }
 
+function receiptExitCode(status: string): CliExitCode {
+  switch (status) {
+    case 'succeeded': return CLI_EXIT_CODES.SUCCESS
+    case 'failed': return CLI_EXIT_CODES.FAILED
+    case 'cancelled': return CLI_EXIT_CODES.CANCELLED
+    case 'unknown': return CLI_EXIT_CODES.UNKNOWN
+    case 'pending_review': return CLI_EXIT_CODES.PENDING_REVIEW
+    default: throw new Error('Invalid inbound receipt status from server')
+  }
+}
+
 function readInboundReceipt(value: unknown,
   expected: Pick<InboundRequest<unknown>, 'command' | 'projectId' | 'grantId' | 'idempotencyKey' | 'payload'>): InboundReceipt {
   const receipt = value as Partial<InboundReceipt> | null
@@ -66,6 +78,7 @@ function readInboundReceipt(value: unknown,
 export class CreationCli {
   private readonly endpoint: string
   private readonly token: string
+  private readonly humanReviewToken: string
   private readonly callerId: string
   private readonly projectId: string
   private readonly grantId: string
@@ -74,6 +87,7 @@ export class CreationCli {
   constructor(config: CreationCliConfig) {
     this.endpoint = config.endpoint.replace(/\/+$/, '')
     this.token = config.token || process.env.PAGEKIN_API_TOKEN || ''
+    this.humanReviewToken = config.humanReviewToken || process.env.PAGEKIN_HUMAN_REVIEW_TOKEN || ''
     this.callerId = config.callerId || 'pagekin-cli'
     this.projectId = config.projectId || ''
     this.grantId = config.grantId || ''
@@ -124,6 +138,7 @@ export class CreationCli {
 
     const response = await this.fetch(url, {
       method: 'POST',
+      redirect: 'error',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
@@ -183,12 +198,19 @@ export class CreationCli {
       return this.handleErrorToResult(err)
     }
 
-    // Check if initial submission failed or finished in unknown terminal state
+    // Unknown cannot be polled or automatically resubmitted.
     if (initialReceipt.status === 'unknown') {
       return {
         exitCode: CLI_EXIT_CODES.UNKNOWN,
         receipt: initialReceipt,
         error: 'Initial submission ended in non-retryable unknown state',
+      }
+    }
+    if (initialReceipt.status !== 'succeeded') {
+      return {
+        exitCode: receiptExitCode(initialReceipt.status),
+        receipt: initialReceipt,
+        error: initialReceipt.error?.message,
       }
     }
 
@@ -317,7 +339,9 @@ export class CreationCli {
       { taskId, afterSequence: options.afterSequence ?? 0 },
       { sequenceCursor: options.afterSequence },
     )
-    return (res.result?.events as InboundEvent[]) || []
+    const events = res.result?.events as InboundEvent[] | undefined
+    if (!Array.isArray(events)) throw new Error('Invalid workflow events response from server')
+    return events
   }
 
   /**
@@ -338,7 +362,12 @@ export class CreationCli {
       'workflow:receipt',
       { targetIdempotencyKey, targetCommand },
     )
-    return (res.result?.receipt as InboundReceipt) || res
+    const receipt = res.result?.receipt as InboundReceipt | undefined
+    if (!receipt) {
+      throw new Error(res.error ? `[${res.error.code}] ${res.error.message}`
+        : 'Workflow receipt response is missing target receipt')
+    }
+    return receipt
   }
 
   /**
@@ -355,7 +384,7 @@ export class CreationCli {
         { token: options.humanReviewToken },
       )
       return {
-        exitCode: CLI_EXIT_CODES.SUCCESS,
+        exitCode: receiptExitCode(receipt.status),
         receipt,
       }
     } catch (err: unknown) {
@@ -368,10 +397,11 @@ export class CreationCli {
    * formats stdout JSON, masks all credentials, and returns structured result with exitCode.
    */
   async executeCli(argv: string[]): Promise<{ exitCode: CliExitCode; output: string }> {
-    const parsed = parseCliArgs(argv)
-    const isJson = parsed.flags.json ?? true
+    const isJson = true
+    const secrets = [this.token, this.humanReviewToken]
 
     try {
+      const parsed = parseCliArgs(argv)
       const command = parsed.positionals[0] || 'help'
 
       switch (command) {
@@ -379,8 +409,8 @@ export class CreationCli {
           const receipt = await this.submit(parsed.payload, {
             idempotencyKey: parsed.flags.idempotencyKey,
           })
-          const out = formatOutput({ command, status: receipt.status, receipt }, isJson, this.token)
-          return { exitCode: CLI_EXIT_CODES.SUCCESS, output: out }
+          const out = formatOutput({ command, status: receipt.status, receipt }, isJson, secrets)
+          return { exitCode: receiptExitCode(receipt.status), output: out }
         }
 
         case 'run': {
@@ -390,15 +420,15 @@ export class CreationCli {
             const receipt = await this.submit(parsed.payload, {
               idempotencyKey: parsed.flags.idempotencyKey,
             })
-            const out = formatOutput({ command, status: receipt.status, receipt }, isJson, this.token)
-            return { exitCode: CLI_EXIT_CODES.SUCCESS, output: out }
+            const out = formatOutput({ command, status: receipt.status, receipt }, isJson, secrets)
+            return { exitCode: receiptExitCode(receipt.status), output: out }
           }
 
           const res = await this.runAndWait(parsed.payload, {
             idempotencyKey: parsed.flags.idempotencyKey,
             timeoutMs: parsed.flags.timeout ? Number(parsed.flags.timeout) : undefined,
           })
-          const out = formatOutput(res, isJson, this.token)
+          const out = formatOutput(res, isJson, secrets)
           return { exitCode: res.exitCode, output: out }
         }
 
@@ -406,30 +436,30 @@ export class CreationCli {
           const taskId = parsed.flags.taskId || (parsed.positionals[1] ?? '')
           const after = parsed.flags.after ? Number(parsed.flags.after) : 0
           const evs = await this.events(taskId, { afterSequence: after })
-          const out = formatOutput({ taskId, events: evs }, isJson, this.token)
+          const out = formatOutput({ taskId, events: evs }, isJson, secrets)
           return { exitCode: CLI_EXIT_CODES.SUCCESS, output: out }
         }
 
         case 'receipt': {
           const key = parsed.flags.idempotencyKey || (parsed.positionals[1] ?? '')
           const rc = await this.getReceipt(key)
-          const out = formatOutput({ receipt: rc }, isJson, this.token)
-          return { exitCode: CLI_EXIT_CODES.SUCCESS, output: out }
+          const out = formatOutput({ receipt: rc }, isJson, secrets)
+          return { exitCode: receiptExitCode(rc.status), output: out }
         }
 
         case 'resume': {
           const taskId = parsed.flags.taskId || (parsed.positionals[1] ?? '')
           const rc = await this.resume(taskId)
-          const out = formatOutput({ receipt: rc }, isJson, this.token)
-          return { exitCode: CLI_EXIT_CODES.SUCCESS, output: out }
+          const out = formatOutput({ receipt: rc }, isJson, secrets)
+          return { exitCode: receiptExitCode(rc.status), output: out }
         }
 
         case 'approve': {
           const reviewId = parsed.flags.reviewId || (parsed.positionals[1] ?? '')
           const res = await this.approve(reviewId, {
-            humanReviewToken: parsed.flags.humanReviewToken || parsed.flags.token,
+            humanReviewToken: this.humanReviewToken || undefined,
           })
-          const out = formatOutput(res, isJson, this.token)
+          const out = formatOutput(res, isJson, secrets)
           return { exitCode: res.exitCode, output: out }
         }
 
@@ -453,19 +483,28 @@ Options:
   --taskId <id>          Workflow task identifier
   --reviewId <id>        Review item identifier
   --after <seq>          Events sequence cursor
-  --token <token>        Authentication token (or use PAGEKIN_API_TOKEN)
-  --endpoint <url>       Local domain API endpoint`
-          return { exitCode: CLI_EXIT_CODES.SUCCESS, output: help }
+  --endpoint <url>       Explicit local domain API endpoint
+  --projectId <id>       Authorized project identifier
+  --grantId <id>         Existing project grant identifier
+  --callerId <id>        Caller identity (default pagekin-cli)
+  --idempotencyKey <key> Original execution identity
+  --timeout <ms>         run --wait timeout in milliseconds
+  --token-stdin          Read task credential from stdin instead of PAGEKIN_API_TOKEN
+  --human-review-token-stdin Read review credential instead of PAGEKIN_HUMAN_REVIEW_TOKEN
+
+Credentials never belong in argv. Only one credential can be read from stdin per invocation.`
+          return { exitCode: CLI_EXIT_CODES.SUCCESS, output: formatOutput({ help }, isJson, secrets) }
         }
       }
     } catch (err: unknown) {
       const errRes = this.handleErrorToResult(err)
-      const out = formatOutput(errRes, isJson, this.token)
+      const out = formatOutput(errRes, isJson, secrets)
       return { exitCode: errRes.exitCode, output: out }
     }
   }
 
   private handleErrorToResult(err: unknown): CliRunResult {
+    if (err instanceof CliArgumentError) return { exitCode: err.exitCode, error: err.message }
     if (err instanceof InboundDomainError) {
       if (
         err.code === INBOUND_ERROR_CODES.UNAUTHORIZED_TOKEN ||
@@ -492,13 +531,29 @@ Options:
   }
 }
 
-function parseCliArgs(argv: string[]): {
+const VALUE_FLAGS = ['endpoint', 'callerId', 'projectId', 'grantId', 'idempotencyKey',
+  'timeout', 'after', 'chapterId', 'taskId', 'reviewId'] as const
+const BOOLEAN_FLAGS = ['json', 'wait', 'token-stdin', 'human-review-token-stdin'] as const
+type CliFlags = Partial<Record<(typeof VALUE_FLAGS)[number], string>>
+  & Partial<Record<(typeof BOOLEAN_FLAGS)[number], true>>
+
+export class CliArgumentError extends Error {
+  readonly exitCode: CliExitCode
+
+  constructor(message: string, exitCode: CliExitCode = CLI_EXIT_CODES.FAILED) {
+    super(message)
+    this.name = 'CliArgumentError'
+    this.exitCode = exitCode
+  }
+}
+
+export function parseCliArgs(argv: string[]): {
   positionals: string[]
-  flags: Record<string, string | boolean>
+  flags: CliFlags
   payload: Record<string, unknown>
 } {
   const positionals: string[] = []
-  const flags: Record<string, string | boolean> = {}
+  const flags: CliFlags = {}
   const payload: Record<string, unknown> = {}
 
   let i = 0
@@ -506,27 +561,69 @@ function parseCliArgs(argv: string[]): {
     const arg = argv[i]!
     if (arg.startsWith('--')) {
       const flagName = arg.slice(2)
-      if (i + 1 < argv.length && !argv[i + 1]!.startsWith('--')) {
-        flags[flagName] = argv[i + 1]!
-        payload[flagName] = argv[i + 1]!
-        i += 2
-      } else {
-        flags[flagName] = true
-        i += 1
+      if (['token', 'humanReviewToken'].includes(flagName.split('=')[0]!)) {
+        throw new CliArgumentError('CLI_CREDENTIAL_ARGV_FORBIDDEN: use named environment variables or stdin',
+          CLI_EXIT_CODES.AUTH_OR_PERMISSION_ERROR)
       }
+      if (Object.hasOwn(flags, flagName)) throw new CliArgumentError('CLI_DUPLICATE_OPTION')
+      if ((VALUE_FLAGS as readonly string[]).includes(flagName)) {
+        const value = argv[i + 1]
+        if (!value || value.startsWith('--')) throw new CliArgumentError('CLI_OPTION_VALUE_REQUIRED')
+        flags[flagName as (typeof VALUE_FLAGS)[number]] = value
+        i += 2
+      } else if ((BOOLEAN_FLAGS as readonly string[]).includes(flagName)) {
+        flags[flagName as (typeof BOOLEAN_FLAGS)[number]] = true
+        i += 1
+      } else throw new CliArgumentError('CLI_UNKNOWN_OPTION')
     } else {
+      if (arg.startsWith('-')) throw new CliArgumentError('CLI_UNKNOWN_OPTION')
       positionals.push(arg)
       i += 1
     }
   }
 
+  const command = positionals[0] || 'help'
+  const commandFlags: Record<string, readonly string[]> = {
+    submit: ['chapterId', 'taskId', 'idempotencyKey'],
+    run: ['chapterId', 'taskId', 'idempotencyKey', 'wait', 'timeout'],
+    events: ['taskId', 'after'], receipt: ['idempotencyKey'],
+    resume: ['taskId'], approve: ['reviewId'], help: [],
+  }
+  if (!Object.hasOwn(commandFlags, command)) throw new CliArgumentError('CLI_UNKNOWN_COMMAND')
+  const globalFlags = ['json', 'endpoint', 'callerId', 'projectId', 'grantId', 'token-stdin', 'human-review-token-stdin']
+  for (const name of Object.keys(flags)) {
+    if (!globalFlags.includes(name) && !commandFlags[command]!.includes(name)) {
+      throw new CliArgumentError('CLI_OPTION_NOT_ALLOWED_FOR_COMMAND')
+    }
+  }
+  const targetFlag = ({ events: 'taskId', receipt: 'idempotencyKey', resume: 'taskId', approve: 'reviewId' } as const)[
+    command as 'events' | 'receipt' | 'resume' | 'approve']
+  if (positionals.length > (targetFlag ? 2 : 1)) throw new CliArgumentError('CLI_EXTRA_POSITIONAL')
+  if (targetFlag && (!flags[targetFlag] && !positionals[1])) throw new CliArgumentError('CLI_TARGET_REQUIRED')
+  if (targetFlag && flags[targetFlag] && positionals[1]) throw new CliArgumentError('CLI_AMBIGUOUS_TARGET')
+  if (flags.timeout && !flags.wait) throw new CliArgumentError('CLI_TIMEOUT_REQUIRES_WAIT')
+  for (const name of ['timeout', 'after'] as const) {
+    if (flags[name] !== undefined && (!/^\d+$/.test(flags[name]!) || !Number.isSafeInteger(Number(flags[name]))
+      || Number(flags[name]) < (name === 'timeout' ? 1 : 0))) throw new CliArgumentError('CLI_INVALID_NUMBER')
+  }
+  if (flags.chapterId) payload.chapterId = flags.chapterId
+  if (flags.taskId && (command === 'submit' || command === 'run')) payload.taskId = flags.taskId
   return { positionals, flags, payload }
 }
 
-function formatOutput(data: unknown, isJson: boolean, sensitiveToken?: string): string {
-  let str = isJson ? JSON.stringify(data, null, 2) : String(data)
-  if (sensitiveToken && sensitiveToken.length > 4) {
-    str = str.replaceAll(sensitiveToken, maskSecret(sensitiveToken))
+function formatOutput(data: unknown, isJson: boolean, credentials: string[]): string {
+  const secrets = [...new Set(credentials.filter(Boolean))].sort((a, b) => b.length - a.length)
+  function redactText(text: string): string {
+    for (const secret of secrets) text = text.replaceAll(secret, '[REDACTED_SECRET]')
+    return text
   }
-  return str
+  function redact(value: unknown): unknown {
+    if (typeof value === 'string') return redactText(value)
+    if (Array.isArray(value)) return value.map(redact)
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, entry]) => [redactText(key), redact(entry)]))
+    }
+    return value
+  }
+  return isJson ? JSON.stringify(redact(data), null, 2) : redactText(String(data))
 }
