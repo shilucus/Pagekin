@@ -4,6 +4,8 @@
 
 Pagekin 基线 `0679303231cc439a0d2285f5c683041d1b347f0f`；InkOS 基线 `53adac4e974b54dafda975edc4edd07cad364c18`。已有测试/CI/历史资格不是本轮 PASS。主方案见 [README](README.md)。
 
+2026-11-15 恢复核对：[Stage99](stage-99-evidence.md) 纠正 Stage93–98 对 21 项功能的无充分依据完成晋升，历史有效子证据保留。`workflow-background-qualification.ts` 明确排除 `novel_import`；`inbound-api-service.ts` 的未组合 start/resume 仍返回 503；release profile、CI 配置及 Node helper 测试不构成完整 Electron、模型质量或三目标平台证据。以下历史定位/结果均须结合其来源版本与限制使用。
+
 ## Pagekin
 
 | ID | 定位 | 确认的静态事实 |

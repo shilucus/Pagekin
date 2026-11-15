@@ -2052,3 +2052,32 @@ The observations below retain their chronological state. The final acceptance at
 - **当前事实源状态**:
   - `features.json`: 35 completed / 0 in_progress / 0 blocked / 0 not_started。
   - 本地代码库处于完全自洽、可运行、可交付、可回归的完成态。
+
+## 2026-11-15 - Stage99: Resume and Correct Unsupported Completion
+
+- User explicitly resumes all original35 features and the listed validation /
+  scoped local Git commands. Prior pauses are historical; current design,
+  contract, model, platform and trustworthy approval gates remain unchanged.
+- Entry `master@7b39b1962bfdc07abca87ec9530a62d7cee189af`; index empty,
+  tracked tree clean, two existing stage-1b3 untracked evidence files preserved.
+  Root owns shared records/Git; Luna/terra/sol use the requested models for
+  feedback/import/API and CLI; Agent4 provides independent review.
+- Current static author-entry/source/commit audit disproves Stage93-98's21
+  completion promotions. Exact comparison with Stage92 confirms the21-item set;
+  status/passes return to in_progress/false. All old evidence, AC, DAG, gates,
+  required evidence types and schema are preserved. The other14 completion
+  markers are carried forward, not newly qualified. See [Stage99](stage-99-evidence.md).
+- Independent Agent4 reviews both the raw sources and structured feature diff:
+  no AC/dependency relaxation, no evidence deletion, exact21 correction accepted.
+  README records resumed authorization and its content hash is rebound.
+- Actual command from repository root: `corepack pnpm test scripts/__tests__/creation-runtime-feature-evidence.test.ts --reporter=json --outputFile=.runtime/creation-runtime-modernization/resume-2026-11-15/checklist.json`.
+  Exit0,36/36. This is record/hash/DAG consistency only, not product acceptance.
+  Node24.13.0/Corepack pnpm11.11.0; no install, real model/project or remote action.
+- Stage self-check: original requirements/AC unchanged; actual increment is
+  truthful completion state, not new functionality; independent review and
+  checklist cover this correction; all mandatory functional gaps remain open;
+  no feature promoted. Earlier full35/quality/platform completion assertions are
+  superseded wherever they exceed their actual evidence, not silently erased.
+- Next executable scope: foreground first-owner admission, cancellation cleanup
+  retry after TTL, feedback late-generation projection, inbound fake approval
+  rejection and live CLI polls. Their code/tests remain outside this docs commit.

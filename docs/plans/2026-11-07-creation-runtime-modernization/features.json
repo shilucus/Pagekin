@@ -4,7 +4,7 @@
   "planSource": {
     "path": "README.md",
     "version": "F2",
-    "sha256": "D6FD2A043364A8BC6CF3579B6D2F0D0BC1C144B458505FFC003837430C7E4D78"
+    "sha256": "EDBEF0F953516EC9160F8AE39F6E44EC6AB271EDCA85EA689C473C114AC1C331"
   },
   "evidenceMap": "evidence-map.md",
   "reviewRecord": "review-record.md",
@@ -13,7 +13,7 @@
     "inkos": "53adac4e974b54dafda975edc4edd07cad364c18"
   },
   "status": "in_progress",
-  "authorizationScope": "2026-11-07本轮用户明确授权实施F2全部35项功能及范围内代码、测试、文档、ADR、版本化接口和迁移；授权所列pnpm命令、隔离虚构项目持久化验证和主Agent按阶段路径本地add/commit。真实模型、真实配置/作品、外部状态、平台安装/发布不在授权内；设计、契约、便携恢复、人工批准与实际验收门禁保留。2026-11-15用户要求停止检查偏移，随后仅要求review结论及更新计划/清单；当前产品开发、项目运行与Git提交继续暂停，本文件不自行恢复这些动作。详见implementation-log.md及README第13节。",
+  "authorizationScope": "2026-11-15用户再次明确恢复并授权实施F2全部35项功能及范围内代码、测试、文档、ADR、接口和迁移；授权所列pnpm命令、隔离虚构项目持久化验证和主Agent按阶段路径本地add/commit。历史仅文档授权及暂停记录不限制本次实施。真实模型、真实配置/作品、外部状态、平台安装/发布不在授权内；设计、契约、便携恢复、人工批准与实际验收门禁保留。详见implementation-log.md、README第13节及stage-99-evidence.md。",
   "completionPolicy": {
     "featureStatusValues": [
       "not_started",
@@ -1107,8 +1107,8 @@
         "performance",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -1254,8 +1254,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -1554,8 +1554,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -1837,8 +1837,8 @@
         "performance",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -1928,8 +1928,8 @@
         "performance",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -2348,8 +2348,8 @@
         "browser",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -2447,8 +2447,8 @@
         "browser",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -2566,8 +2566,8 @@
         "browser",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -2663,8 +2663,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -2779,8 +2779,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -2877,8 +2877,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -2967,8 +2967,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -3080,8 +3080,8 @@
         "electron",
         "model_quality"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -3194,8 +3194,8 @@
         "electron",
         "model_quality"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -3303,8 +3303,8 @@
         "browser",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -3415,8 +3415,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -3501,8 +3501,8 @@
         "deterministic",
         "electron"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -3605,8 +3605,8 @@
         "deterministic",
         "agent_workflow"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -3708,8 +3708,8 @@
         "electron",
         "model_quality"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -3817,8 +3817,8 @@
         "electron",
         "platform"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
@@ -3929,8 +3929,8 @@
         "electron",
         "platform"
       ],
-      "status": "completed",
-      "passes": true,
+      "status": "in_progress",
+      "passes": false,
       "evidence": [
         {
           "type": "static",
